@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=League+Spartan:wght@700&family=Roboto+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  /* Brand Guidelines Helgen (Canva): primarios #2C3C5B / #51F3DA, secundario #0AC5A8 */
+  :root { --azul:#2C3C5B; --aqua:#51F3DA; --teal:#0AC5A8; --cielo:#F2F4F7; --gris:#6B7280; --borde:#E5E7EB; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:'Roboto Mono',monospace; background:var(--cielo); color:#1F2937; font-size:13px; }
+  h1, h2, .btn, nav button { font-family:'League Spartan',Arial,sans-serif; }
+  header { background:var(--azul); color:#fff; padding:14px 24px; display:flex; align-items:center; gap:24px; flex-wrap:wrap;
+           border-bottom:3px solid var(--aqua); }
+  header img { height:30px; display:block; }
+  header h1 { font-size:16px; margin:0; letter-spacing:2px; color:var(--aqua); }
+  nav button { background:none; border:none; color:#A9B4C8; font-size:14px; cursor:pointer; padding:6px 10px; border-radius:6px; }
+  nav button.activo { background:rgba(255,255,255,.12); color:#fff; }
+  main { max-width:1100px; margin:24px auto; padding:0 16px; }
+  .modulo { background:#fff; border-radius:10px; padding:20px; margin-bottom:16px; border:1px solid var(--borde); }
+  .modulo h2 { margin:0 0 14px; font-size:15px; color:var(--azul); border-bottom:2px solid var(--teal); padding-bottom:6px; display:inline-block; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+  label { display:block; font-size:12px; color:var(--gris); margin-bottom:4px; }
+  input, textarea, select { width:100%; padding:8px 10px; border:1px solid var(--borde); border-radius:6px; font:inherit; }
+  select { background:#fff; }
+  input:focus, textarea:focus, select:focus { outline:2px solid var(--teal); border-color:transparent; }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; font-size:11px; text-transform:uppercase; color:var(--gris); padding:6px; border-bottom:1px solid var(--borde); }
+  td { padding:4px; }
+  td.num, th.num { text-align:right; white-space:nowrap; }
+  .btn { background:var(--teal); color:var(--azul); border:none; padding:10px 18px; border-radius:6px; font-weight:bold; cursor:pointer; font-size:14px; }
+  .btn:hover { background:var(--aqua); }
+  .btn:disabled { opacity:.5; cursor:wait; }
+  .btn-sec { background:#fff; color:var(--azul); border:1px solid var(--azul); }
+  .btn-sec:hover { background:var(--cielo); }
+  .quitar { background:none; border:none; color:#DC2626; cursor:pointer; font-size:18px; }
+  .totales { margin-left:auto; width:320px; }
+  .totales div { display:flex; justify-content:space-between; padding:6px 0; }
+  .totales .total { background:var(--azul); color:var(--aqua); padding:10px 12px; border-radius:6px; font-size:18px; font-weight:bold; }
+  .aviso { padding:12px 14px; border-radius:6px; margin-bottom:16px; display:none; }
+  .aviso.ok { background:#E6FBF7; border:1px solid var(--teal); display:block; }
+  .aviso.error { background:#FEE2E2; border:1px solid #DC2626; display:block; }
+  .oculto { display:none; }
+  .fila-cat { cursor:pointer; }
+  .fila-cat:hover td { background:var(--cielo); }
+  .fila-cat.editando td { background:#E6FBF7; }
+  .acciones { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:12px; }
+  .nota { font-size:12px; color:var(--gris); }
+  .sat { margin-top:16px; padding:14px; border:1px dashed var(--borde); border-radius:8px; background:#FAFBFC; }
+  .sat-titulo { font-size:12px; font-weight:bold; color:var(--azul); margin-bottom:10px; }
+  .sat-op { display:flex; gap:12px; align-items:center; padding:7px 10px; border:1px solid var(--borde); border-radius:6px;
+            margin-top:6px; cursor:pointer; background:#fff; }
+  .sat-op:hover { border-color:var(--teal); background:#E6FBF7; }
+  .sat-op b { min-width:80px; }
+  .sat-razon { display:block; color:#5B6B85; font-size:12px; margin-top:2px; }
+  a { color:var(--azul); font-weight:bold; }
+</style>
+</head>
+<body>
+<header>
+  <img src="<?!= LOGO_HELGEN_BLANCO ?>" alt="Helgen">
+  <h1>COTIZADOR</h1>
+  <nav>
+    <button id="tabNueva" class="activo" onclick="verTab('nueva')">Nueva cotización</button>
+    <button id="tabHist" onclick="verTab('hist')">Historial</button>
+    <button id="tabCat" onclick="verTab('cat')">Catálogo</button>
+  </nav>
+</header>
+
+<main>
+  <div id="aviso" class="aviso"></div>
+
+  <!-- ===== NUEVA COTIZACIÓN ===== -->
+  <section id="vistaNueva">
+    <div class="modulo">
+      <h2>1 · Datos del cliente</h2>
+      <div class="grid">
+        <div><label>Línea de negocio *</label>
+          <select id="marca">
+            <option value="helgen">Helgen</option>
+            <option value="energy">Helgen Energy (paneles solares)</option>
+          </select></div>
+        <div><label>Nombre / Contacto *</label>
+          <input id="cNombre" list="clientesList" autocomplete="off" placeholder="Escribe o elige un cliente">
+          <datalist id="clientesList"></datalist>
+          <div id="cInfo" class="nota" style="margin-top:4px"></div></div>
+        <div><label>Empresa</label><input id="cEmpresa"></div>
+        <div><label>RFC</label><input id="cRfc" maxlength="13"></div>
+        <div><label>Correo</label><input id="cEmail" type="email"></div>
+        <div><label>Teléfono</label><input id="cTel"></div>
+        <div><label>Dirección / Obra</label><input id="cDir"></div>
+      </div>
+    </div>
+
+    <div class="modulo">
+      <h2>2 · Conceptos</h2>
+      <datalist id="catalogo"></datalist>
+      <datalist id="claves"></datalist>
+      <table>
+        <thead><tr>
+          <th style="width:100px">Clave</th><th>Descripción</th><th style="width:80px">Unidad</th>
+          <th class="num" style="width:90px">Cant.</th><th class="num" style="width:130px">P. Unitario</th>
+          <th class="num" style="width:130px">Importe</th><th style="width:30px"></th>
+        </tr></thead>
+        <tbody id="filas"></tbody>
+      </table>
+      <button class="btn btn-sec" style="margin-top:10px" onclick="agregarFila()">+ Agregar concepto</button>
+    </div>
+
+    <div class="modulo">
+      <h2>3 · Resumen</h2>
+      <div style="display:flex; gap:24px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:260px;">
+          <label>Notas para el cliente (opcional)</label>
+          <textarea id="notas" rows="4"></textarea>
+        </div>
+        <div class="totales">
+          <div><span>Subtotal</span><span id="tSub">$0.00</span></div>
+          <div><span id="lblIva">IVA (16%)</span><span id="tIva">$0.00</span></div>
+          <div class="total"><span>TOTAL</span><span id="tTot">$0.00</span></div>
+          <button id="btnGuardar" class="btn" style="width:100%; margin-top:12px" onclick="guardar()">Guardar y generar PDF</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== HISTORIAL ===== -->
+  <section id="vistaHist" class="oculto">
+    <div class="modulo">
+      <h2>Historial de cotizaciones</h2>
+      <input id="buscar" placeholder="Buscar por folio, cliente o empresa…" oninput="buscarDebounce()" style="margin-bottom:12px">
+      <table>
+        <thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Empresa</th><th class="num">Total</th><th>Elaboró</th><th>PDF</th></tr></thead>
+        <tbody id="hist"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===== CATÁLOGO ===== -->
+  <section id="vistaCat" class="oculto">
+    <div class="modulo">
+      <h2 id="tituloProd">Agregar producto</h2>
+      <div class="grid">
+        <div><label>Clave *</label><input id="pClave" maxlength="30" placeholder="Ej. CAR-7KW"></div>
+        <div style="grid-column:span 2"><label>Descripción *</label><input id="pDesc"></div>
+        <div><label>Unidad</label><input id="pUni" value="PZA"></div>
+        <div><label>Precio unitario sin IVA *</label><input id="pPrecio" type="number" min="0" step="0.01" style="text-align:right"></div>
+      </div>
+
+      <div class="sat">
+        <div class="sat-titulo">Datos para facturación (SAT) · uso interno de contabilidad, no aparecen en el PDF</div>
+        <div class="grid">
+          <div><label>Clave SAT (producto/servicio)</label><input id="pSat" maxlength="8" inputmode="numeric" placeholder="8 dígitos"></div>
+          <div><label>Unidad SAT</label><input id="pUniSat" list="unidadesSat" maxlength="3" placeholder="Ej. H87, E48"><datalist id="unidadesSat"></datalist></div>
+          <div style="grid-column:span 2"><label>Buscar en el catálogo del SAT</label>
+            <div style="display:flex; gap:8px"><input id="satBusca" placeholder="Se toma de la descripción; puedes cambiar las palabras">
+            <button class="btn btn-sec" onclick="sugerirSat()" style="white-space:nowrap">Sugerir clave SAT</button></div></div>
+        </div>
+        <div id="satRes"></div>
+      </div>
+      <div class="acciones">
+        <button id="btnProd" class="btn" onclick="guardarProd()">Guardar en catálogo</button>
+        <button class="btn btn-sec" onclick="limpiarProd()">Nuevo / Cancelar</button>
+        <span class="nota">Haz clic en un producto de la lista para editarlo.</span>
+      </div>
+    </div>
+
+    <div class="modulo">
+      <h2 id="tituloLista">Productos</h2>
+      <div class="acciones" style="margin:0 0 12px">
+        <input id="buscarCat" placeholder="Buscar por clave o descripción…" oninput="pintarCatalogo()" style="flex:1; min-width:220px">
+        <a id="linkCat" href="#" target="_blank" class="oculto">Abrir en Google Sheets</a>
+      </div>
+      <table>
+        <thead><tr><th style="width:130px">Clave</th><th>Descripción</th><th style="width:80px">Unidad</th><th class="num" style="width:150px">Precio sin IVA</th><th style="width:110px">Clave SAT</th></tr></thead>
+        <tbody id="listaCat"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+  let IVA = 0.16, CATALOGO = [], CLIENTES = [];
+  // Un id por cotización: si el envío se repite, el servidor devuelve el mismo folio en vez de crear otro.
+  const nuevoId = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(36).slice(2));
+  let ID_SOLICITUD = nuevoId();
+
+  const $ = id => document.getElementById(id);
+  const r2 = n => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+  const mxn = n => r2(n).toLocaleString('es-MX', { style:'currency', currency:'MXN' });
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  // ---- Arranque ----
+  google.script.run.withSuccessHandler(d => {
+    IVA = d.ivaTasa; CATALOGO = d.catalogo;
+    recibirClientes(d.clientes);
+    $('lblIva').textContent = 'IVA (' + Math.round(IVA * 100) + '%)';
+    pintarDatalists();
+    agregarFila();
+  }).withFailureHandler(mostrarError).getDatosIniciales();
+
+  // ---- Conceptos ----
+  function agregarFila() {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td><input class="clave" list="claves"></td>' +
+      '<td><input class="desc" list="catalogo" placeholder="Escribe o elige del catálogo"></td>' +
+      '<td><input class="uni" value="PZA"></td>' +
+      '<td><input class="cant" type="number" min="0" step="any" value="1" style="text-align:right"></td>' +
+      '<td><input class="pu" type="number" min="0" step="0.01" value="0" style="text-align:right"></td>' +
+      '<td class="num imp">$0.00</td>' +
+      '<td><button class="quitar" title="Quitar">×</button></td>';
+    // Al elegir por descripción o por clave se llenan clave, unidad y precio desde el catálogo
+    const aplicar = p => {
+      if (!p) return;
+      tr.querySelector('.clave').value = p.clave; tr.querySelector('.desc').value = p.descripcion;
+      tr.querySelector('.uni').value = p.unidad; tr.querySelector('.pu').value = p.precio;
+    };
+    tr.querySelector('.desc').addEventListener('change', e => { aplicar(CATALOGO.find(x => x.descripcion === e.target.value)); recalcular(); });
+    tr.querySelector('.clave').addEventListener('change', e => { aplicar(buscarClave(e.target.value)); recalcular(); });
+    tr.querySelectorAll('input').forEach(i => i.addEventListener('input', recalcular));
+    tr.querySelector('.quitar').onclick = () => { tr.remove(); recalcular(); };
+    $('filas').appendChild(tr);
+    tr.querySelector('.desc').focus();
+  }
+
+  function leerItems() {
+    return [...$('filas').querySelectorAll('tr')].map(tr => ({
+      clave: tr.querySelector('.clave').value,
+      descripcion: tr.querySelector('.desc').value,
+      unidad: tr.querySelector('.uni').value,
+      cantidad: Number(tr.querySelector('.cant').value) || 0,
+      precio: Number(tr.querySelector('.pu').value) || 0,
+      _tr: tr,
+    }));
+  }
+
+  function recalcular() {
+    let sub = 0;
+    leerItems().forEach(it => {
+      const imp = r2(it.cantidad * r2(it.precio));
+      it._tr.querySelector('.imp').textContent = mxn(imp);
+      sub += imp;
+    });
+    sub = r2(sub);
+    const iva = r2(sub * IVA);
+    $('tSub').textContent = mxn(sub); $('tIva').textContent = mxn(iva); $('tTot').textContent = mxn(sub + iva);
+  }
+
+  // ---- Guardar ----
+  function guardar() {
+    const payload = {
+      cliente: { nombre:$('cNombre').value, empresa:$('cEmpresa').value, rfc:$('cRfc').value,
+                 email:$('cEmail').value, telefono:$('cTel').value, direccion:$('cDir').value },
+      items: leerItems().map(({_tr, ...it}) => it),
+      notas: $('notas').value,
+      marca: $('marca').value,
+      idSolicitud: ID_SOLICITUD,
+    };
+    if ($('btnGuardar').disabled) return;
+    $('btnGuardar').disabled = true; $('btnGuardar').textContent = 'Generando PDF…';
+    google.script.run
+      .withSuccessHandler(r => {
+        aviso('ok', 'Cotización <b>' + esc(r.folio) + '</b> guardada · Total ' + mxn(r.total) +
+              ' · <a href="' + esc(r.url) + '" target="_blank">Abrir PDF</a>');
+        limpiar();
+      })
+      .withFailureHandler(mostrarError)
+      .guardarCotizacion(payload);
+  }
+
+  function limpiar() {
+    ['cNombre','cEmpresa','cRfc','cEmail','cTel','cDir','notas'].forEach(id => $(id).value = '');
+    $('filas').innerHTML = ''; agregarFila(); recalcular();
+    $('cInfo').textContent = '';
+    google.script.run.withSuccessHandler(recibirClientes).getClientes(); // incluye al cliente recién guardado
+    ID_SOLICITUD = nuevoId();
+    $('btnGuardar').disabled = false; $('btnGuardar').textContent = 'Guardar y generar PDF';
+  }
+
+  // ---- Historial ----
+  let tBusq;
+  function buscarDebounce() { clearTimeout(tBusq); tBusq = setTimeout(cargarHistorial, 300); }
+  function cargarHistorial() {
+    $('hist').innerHTML = '<tr><td colspan="7">Cargando…</td></tr>';
+    google.script.run.withSuccessHandler(lista => {
+      $('hist').innerHTML = lista.length ? lista.map(c =>
+        '<tr><td><b>' + esc(c.folio) + '</b></td><td>' + esc(c.fecha) + '</td><td>' + esc(c.cliente) + '</td><td>' +
+        esc(c.empresa) + '</td><td class="num">' + esc(c.total) + '</td><td>' + esc(c.elaboro) + '</td><td>' +
+        (c.pdf ? '<a href="' + esc(c.pdf) + '" target="_blank">Ver</a>' : '') + '</td></tr>').join('')
+        : '<tr><td colspan="7">Sin resultados.</td></tr>';
+    }).withFailureHandler(mostrarError).listarCotizaciones($('buscar').value);
+  }
+
+  // ---- Clientes que ya cotizaron (salen de la hoja Cotizaciones) ----
+  const CAMPOS_CLIENTE = { cNombre:'nombre', cEmpresa:'empresa', cRfc:'rfc', cEmail:'email', cTel:'telefono', cDir:'direccion' };
+
+  function recibirClientes(lista) {
+    CLIENTES = lista || [];
+    $('clientesList').innerHTML = CLIENTES.map(c =>
+      '<option value="' + esc(c.etiqueta) + '" label="' + esc([c.empresa, c.rfc].filter(Boolean).join(' · ') || 'Cliente registrado') + '">').join('');
+  }
+
+  function autorrellenarCliente() {
+    const v = $('cNombre').value.trim().toLowerCase();
+    const c = v && CLIENTES.find(x => x.etiqueta.toLowerCase() === v);
+    if (!c) { $('cInfo').textContent = ''; return; }
+    Object.keys(CAMPOS_CLIENTE).forEach(id => $(id).value = c[CAMPOS_CLIENTE[id]] || '');
+    $('cInfo').textContent = 'Cliente registrado · ' + c.cotizaciones + (c.cotizaciones === 1 ? ' cotización' : ' cotizaciones') +
+      (c.ultimaFecha ? ' · última ' + c.ultimaFecha : '');
+  }
+  $('cNombre').addEventListener('change', autorrellenarCliente);
+  $('cNombre').addEventListener('input', () => { if (CLIENTES.some(x => x.etiqueta === $('cNombre').value)) autorrellenarCliente(); });
+
+  // ---- Catálogo ----
+  let CLAVE_EDITANDO = '';
+  const buscarClave = c => CATALOGO.find(x => x.clave.toUpperCase() === String(c || '').trim().toUpperCase());
+
+  function pintarDatalists() {
+    $('catalogo').innerHTML = CATALOGO.map(p =>
+      '<option value="' + esc(p.descripcion) + '" label="' + esc(p.clave + ' · ' + mxn(p.precio)) + '">').join('');
+    $('claves').innerHTML = CATALOGO.map(p =>
+      '<option value="' + esc(p.clave) + '" label="' + esc(p.descripcion + ' · ' + mxn(p.precio)) + '">').join('');
+  }
+
+  function cargarCatalogo() {
+    $('listaCat').innerHTML = '<tr><td colspan="5">Cargando…</td></tr>';
+    google.script.run.withSuccessHandler(recibirCatalogo).withFailureHandler(mostrarError).getCatalogo();
+  }
+
+  function recibirCatalogo(r) {
+    CATALOGO = r.productos;
+    $('linkCat').href = r.url; $('linkCat').classList.remove('oculto');
+    if (r.unidadesSat && r.unidadesSat.length) {
+      $('unidadesSat').innerHTML = r.unidadesSat.map(u => '<option value="' + esc(u[0]) + '" label="' + esc(u[1]) + '">').join('');
+    }
+    pintarDatalists(); pintarCatalogo();
+  }
+
+  function pintarCatalogo() {
+    const q = $('buscarCat').value.toLowerCase().trim();
+    const lista = CATALOGO.filter(p => !q || (p.clave + ' ' + p.descripcion).toLowerCase().includes(q));
+    $('tituloLista').textContent = 'Productos (' + CATALOGO.length + ')';
+    $('listaCat').innerHTML = lista.length ? lista.map(p =>
+      '<tr class="fila-cat' + (p.clave === CLAVE_EDITANDO ? ' editando' : '') + '" data-clave="' + esc(p.clave) + '">' +
+      '<td><b>' + esc(p.clave) + '</b></td><td>' + esc(p.descripcion) + '</td><td>' + esc(p.unidad) + '</td>' +
+      '<td class="num">' + mxn(p.precio) + '</td>' +
+      '<td>' + (p.claveSat ? esc(p.claveSat) + (p.unidadSat ? ' · ' + esc(p.unidadSat) : '') : '<span class="nota">Pendiente</span>') + '</td></tr>').join('')
+      : '<tr><td colspan="5">' + (CATALOGO.length ? 'Sin resultados.' : 'El catálogo está vacío. Agrega el primer producto arriba.') + '</td></tr>';
+    $('listaCat').querySelectorAll('.fila-cat').forEach(tr => tr.onclick = () => editarProd(tr.dataset.clave));
+  }
+
+  function editarProd(clave) {
+    const p = buscarClave(clave); if (!p) return;
+    CLAVE_EDITANDO = p.clave;
+    $('pClave').value = p.clave; $('pDesc').value = p.descripcion; $('pUni').value = p.unidad; $('pPrecio').value = p.precio;
+    $('pSat').value = p.claveSat || ''; $('pUniSat').value = p.unidadSat || ''; $('satBusca').value = ''; $('satRes').innerHTML = '';
+    $('tituloProd').textContent = 'Editar producto ' + p.clave;
+    $('btnProd').textContent = 'Guardar cambios';
+    pintarCatalogo(); window.scrollTo(0, 0); $('pDesc').focus();
+  }
+
+  function limpiarProd() {
+    CLAVE_EDITANDO = '';
+    ['pClave','pDesc','pPrecio','pSat','pUniSat','satBusca'].forEach(id => $(id).value = ''); $('pUni').value = 'PZA';
+    $('satRes').innerHTML = '';
+    $('tituloProd').textContent = 'Agregar producto';
+    $('btnProd').textContent = 'Guardar en catálogo'; $('btnProd').disabled = false;
+    pintarCatalogo();
+  }
+
+  function guardarProd() {
+    if ($('btnProd').disabled) return;
+    const prod = { clave:$('pClave').value, descripcion:$('pDesc').value, unidad:$('pUni').value,
+                   precio:$('pPrecio').value, claveSat:$('pSat').value, unidadSat:$('pUniSat').value,
+                   claveOriginal:CLAVE_EDITANDO };
+    const editando = !!CLAVE_EDITANDO;
+    $('btnProd').disabled = true;
+    google.script.run.withSuccessHandler(r => {
+      recibirCatalogo(r);
+      aviso('ok', 'Producto <b>' + esc(r.clave) + '</b> ' + (editando ? 'actualizado' : 'agregado') + ' en el catálogo.');
+      limpiarProd();
+    }).withFailureHandler(err => { $('btnProd').disabled = false; mostrarError(err); }).guardarProducto(prod);
+  }
+
+  // ---- Sugerencias de clave SAT ----
+  function sugerirSat() {
+    const q = $('satBusca').value.trim() || $('pDesc').value.trim();
+    if (!q) { aviso('error', 'Escribe la descripción del producto o palabras para buscar en el catálogo del SAT.'); return; }
+    $('satBusca').value = q;
+    $('satRes').innerHTML = '<div class="nota" style="margin-top:8px">Buscando en el catálogo del SAT…</div>';
+    google.script.run.withSuccessHandler(lista => {
+      $('satRes').innerHTML = lista.length
+        ? '<div class="nota" style="margin-top:10px">' + (lista[0].razon ? 'Sugeridas con IA. ' : '') +
+          'Elige la que mejor describa el producto (contabilidad debe validarla):</div>' +
+          lista.map(o => '<div class="sat-op" data-clave="' + esc(o.clave) + '"><b>' + esc(o.clave) + '</b><span>' + esc(o.descripcion) +
+            (o.razon ? '<small class="sat-razon">' + esc(o.razon) + '</small>' : '') + '</span></div>').join('')
+        : '<div class="nota" style="margin-top:8px">Sin coincidencias. Prueba con otras palabras (p. ej. el tipo de producto o "servicio de …").</div>';
+      $('satRes').querySelectorAll('.sat-op').forEach(d => d.onclick = () => {
+        $('pSat').value = d.dataset.clave; $('satRes').innerHTML = '';
+      });
+    }).withFailureHandler(err => { $('satRes').innerHTML = ''; mostrarError(err); }).sugerirClavesSat(q);
+  }
+  $('satBusca').addEventListener('keydown', e => { if (e.key === 'Enter') sugerirSat(); });
+
+  // ---- UI ----
+  function verTab(t) {
+    $('vistaNueva').classList.toggle('oculto', t !== 'nueva');
+    $('vistaHist').classList.toggle('oculto', t !== 'hist');
+    $('vistaCat').classList.toggle('oculto', t !== 'cat');
+    $('tabCat').classList.toggle('activo', t === 'cat');
+    $('tabNueva').classList.toggle('activo', t === 'nueva');
+    $('tabHist').classList.toggle('activo', t === 'hist');
+    if (t === 'hist') cargarHistorial();
+    if (t === 'cat') cargarCatalogo();
+    $('aviso').className = 'aviso';
+  }
+  function aviso(tipo, html) { const a = $('aviso'); a.className = 'aviso ' + tipo; a.innerHTML = html; window.scrollTo(0, 0); }
+  function mostrarError(err) {
+    aviso('error', esc(err && err.message ? err.message : err));
+    $('btnGuardar').disabled = false; $('btnGuardar').textContent = 'Guardar y generar PDF';
+  }
+</script>
+</body>
+</html>

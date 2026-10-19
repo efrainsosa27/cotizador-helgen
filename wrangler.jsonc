@@ -1,0 +1,9 @@
+// Página de acceso al cotizador en Cloudflare (Worker solo con archivos estáticos, sin código).
+// Publicar: npx wrangler@4 deploy
+{
+  "name": "cotizador-helgen",
+  "compatibility_date": "2026-10-19",
+  "assets": {
+    "directory": "./web"
+  }
+}

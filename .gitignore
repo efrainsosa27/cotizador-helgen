@@ -1,0 +1,25 @@
+# Dependencias de Node (se reinstalan con `npm install`)
+node_modules/
+
+# Archivos temporales de Wrangler (Cloudflare)
+.wrangler/
+
+# Basura de macOS (los "Icon" son archivos vacíos de carpetas con ícono)
+Icon?
+.DS_Store
+
+# Credenciales y secretos: nunca subirlos
+.env
+.env.*
+.dev.vars
+.clasprc.json
+*.pem
+*.key
+*.p12
+credentials*.json
+client_secret*.json
+service-account*.json
+
+# Registros
+*.log
+npm-debug.log*
