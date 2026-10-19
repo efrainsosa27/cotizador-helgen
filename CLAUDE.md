@@ -66,8 +66,10 @@ para que un `clasp push` desde ella no pise la API con código viejo; no volver 
 Git inicializado el 19/10/2026 (rama `main`; nombre y correo configurados solo en este repositorio). El `.gitignore`
 excluye `node_modules/`, `.wrangler/`, `Icon`, `.DS_Store` y archivos de credenciales (`.env`, `.clasprc.json`, `*.pem`…).
 Respaldo en el repositorio **privado** de GitHub `https://github.com/efrainsosa27/cotizador-helgen.git` (remoto `origin`).
-En esta Mac no hay `gh` ni llave SSH: el primer `git push` lo hace el usuario con su usuario y un token personal de GitHub
-(se guarda en el llavero de macOS con `osxkeychain`). Primer push hecho el 19/10/2026.
+Primer push hecho el 19/10/2026 con un token personal (llavero `osxkeychain`). Desde el 19/10/2026 git usa **GitHub CLI**:
+`gh` v2.102.0 en `~/.local/bin/gh` (binario oficial de `cli/cli`, sin Homebrew porque pide administrador; `~/.zprofile`
+agrega `~/.local/bin` al `PATH`), sesión `efrainsosa27` con `gh auth login --web` y `gh auth setup-git` (en `~/.gitconfig`,
+solo para github.com). `git push` ya no pide token. Sin llave SSH. Si la sesión expira: `gh auth login --hostname github.com --git-protocol https --web`.
 Si `git fetch` falla con `bad object refs/Icon`, macOS dejó archivos `Icon` vacíos dentro de `.git`; borrarlos con
 `find .git -name $'Icon\r' -size 0 -delete`.
 
