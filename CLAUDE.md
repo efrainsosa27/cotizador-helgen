@@ -38,7 +38,12 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 
 Los IDs que usa el código están en **Script Properties** del proyecto `1GsH8Dja…` (ver §5). Esta tabla es solo referencia.
 
-## 3. Archivos del proyecto (carpeta local `~/Downloads/cotizador-helgen`)
+## 3. Archivos del proyecto (carpeta local oficial `~/Proyectos/cotizador-helgen`)
+
+**Carpeta oficial desde el 19/10/2026: `~/Proyectos/cotizador-helgen`** (abrir aquí las sesiones de Claude Code).
+Antes estaba en `~/Downloads/cotizador-helgen` (se mandó a la Papelera tras copiarla y verificarla).
+`~/Proyectos/VIEJA-NO-USAR-cotizador-helgen-web` es una copia vieja (mañana del 19/10, antes de la sesión con token):
+**no trabajar ahí**; su `.clasp.json` apunta a `1GsH8Dja…` y un `clasp push` desde ella pisaría la API con código viejo.
 
 | Archivo | Para qué |
 |---|---|
@@ -57,7 +62,9 @@ Los IDs que usa el código están en **Script Properties** del proyecto `1GsH8Dj
 | `package.json` | Solo `@google/clasp` como dependencia de desarrollo. |
 | `Icon` | Archivo vacío de macOS; ignorarlo. |
 
-No hay git inicializado en la carpeta.
+Git inicializado el 19/10/2026 (rama `main`; nombre y correo configurados solo en este repositorio). El `.gitignore`
+excluye `node_modules/`, `.wrangler/`, `Icon`, `.DS_Store` y archivos de credenciales (`.env`, `.clasprc.json`, `*.pem`…).
+Respaldo en un repositorio **privado** de GitHub (pendiente de crear al escribir esto).
 
 ## 4. Funciones de `Code.js`
 
@@ -216,8 +223,8 @@ Actualizado, Actualizó, Clave SAT, Unidad SAT. A:C y G:H en formato texto.
 ### 6.7 Drive
 - La app usa **IDs, no rutas**: se pueden mover o renombrar archivos. Rompe: copiar-y-borrar (cambia el ID), borrar, renombrar
   las pestañas `Cotizaciones`/`Config`, sacar o renombrar las subcarpetas de año, perder acceso de edición de efrain@helgen.tech.
-- **Peligro:** la carpeta local `~/Downloads` (incluida esta carpeta del proyecto) se sincroniza a Drive en una carpeta
-  "Downloads" (`1BBB4vyr9WW1TowC6Uemtd3K6V7_NitAh`). No mover ni borrar esas copias desde Drive: afectaría la carpeta local.
+- La carpeta local `~/Downloads` se sincroniza a Drive en una carpeta "Downloads" (`1BBB4vyr9WW1TowC6Uemtd3K6V7_NitAh`).
+  Por eso el proyecto se sacó de ahí a `~/Proyectos/cotizador-helgen` (§3). No volver a guardar el proyecto en `~/Downloads`.
 - Google Drive para escritorio está montado en `~/Library/CloudStorage/GoogleDrive-efrain@helgen.tech/Mi unidad/`:
   sirve para dejar archivos en Drive (así se subieron los CSV del SAT).
 
