@@ -67,7 +67,9 @@ Git inicializado el 19/10/2026 (rama `main`; nombre y correo configurados solo e
 excluye `node_modules/`, `.wrangler/`, `Icon`, `.DS_Store` y archivos de credenciales (`.env`, `.clasprc.json`, `*.pem`…).
 Respaldo en el repositorio **privado** de GitHub `https://github.com/efrainsosa27/cotizador-helgen.git` (remoto `origin`).
 En esta Mac no hay `gh` ni llave SSH: el primer `git push` lo hace el usuario con su usuario y un token personal de GitHub
-(se guarda en el llavero de macOS con `osxkeychain`).
+(se guarda en el llavero de macOS con `osxkeychain`). Primer push hecho el 19/10/2026.
+Si `git fetch` falla con `bad object refs/Icon`, macOS dejó archivos `Icon` vacíos dentro de `.git`; borrarlos con
+`find .git -name $'Icon\r' -size 0 -delete`.
 
 ## 4. Funciones de `Code.js`
 
@@ -285,6 +287,14 @@ npx --yes wrangler@4 deploy
   con `npx clasp logs` o en el editor (Ejecuciones). Los datos se pueden revisar en solo lectura con el conector de Drive.
 - Al agregar funciones que llamen servicios de Google, extender los simulacros de `tests/`. Si la interfaz necesita una
   función nueva, agregarla a `API_FUNCIONES`.
+
+### Regla de trabajo: guardar y publicar
+Al terminar **cualquier** cambio:
+1. `git commit` con una descripción clara (en español) de qué cambió y por qué, y `git push` a GitHub (`origin main`).
+2. Si se modificó el código de Apps Script (`Code.js`, `Logo.js`, `Index.html`, `appsscript.json`), **recordarle al usuario**
+   publicar la API: `npx clasp push --force` y `npx clasp deploy --deploymentId AKfycbwBjF7…` (comandos completos arriba).
+3. Si se modificó algo en `web/`, **recordarle al usuario** publicar la interfaz: `npx --yes wrangler@4 deploy`.
+El commit y el push no publican nada: el equipo sigue usando la versión anterior hasta publicar con clasp o wrangler.
 
 ## 9. Pendientes e ideas
 - **Renombrar en Drive / Apps Script (lo hace el usuario):** proyecto `1GsH8Dja…` → "Cotizador Helgen (código de la app)";
