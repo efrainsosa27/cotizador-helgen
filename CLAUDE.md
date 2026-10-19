@@ -43,7 +43,8 @@ Los IDs que usa el código están en **Script Properties** del proyecto `1GsH8Dj
 **Carpeta oficial desde el 19/10/2026: `~/Proyectos/cotizador-helgen`** (abrir aquí las sesiones de Claude Code).
 Antes estaba en `~/Downloads/cotizador-helgen` (se mandó a la Papelera tras copiarla y verificarla).
 `~/Proyectos/VIEJA-NO-USAR-cotizador-helgen-web` es una copia vieja (mañana del 19/10, antes de la sesión con token):
-**no trabajar ahí**; su `.clasp.json` apunta a `1GsH8Dja…` y un `clasp push` desde ella pisaría la API con código viejo.
+**no trabajar ahí**. Su `.clasp.json` (que apunta a `1GsH8Dja…`) se renombró a `.clasp.json.desactivado` el 19/10/2026
+para que un `clasp push` desde ella no pise la API con código viejo; no volver a renombrarlo.
 
 | Archivo | Para qué |
 |---|---|
@@ -64,7 +65,9 @@ Antes estaba en `~/Downloads/cotizador-helgen` (se mandó a la Papelera tras cop
 
 Git inicializado el 19/10/2026 (rama `main`; nombre y correo configurados solo en este repositorio). El `.gitignore`
 excluye `node_modules/`, `.wrangler/`, `Icon`, `.DS_Store` y archivos de credenciales (`.env`, `.clasprc.json`, `*.pem`…).
-Respaldo en un repositorio **privado** de GitHub (pendiente de crear al escribir esto).
+Respaldo en el repositorio **privado** de GitHub `https://github.com/efrainsosa27/cotizador-helgen.git` (remoto `origin`).
+En esta Mac no hay `gh` ni llave SSH: el primer `git push` lo hace el usuario con su usuario y un token personal de GitHub
+(se guarda en el llavero de macOS con `osxkeychain`).
 
 ## 4. Funciones de `Code.js`
 
