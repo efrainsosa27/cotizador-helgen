@@ -136,7 +136,7 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   B.dialogos.confirmar=true; B.run("aceptarCot('HLG-2026-0011')"); await esperar();
   const ma=B.llamadas.filter(c=>c.funcion==='marcarAceptada');
   assert.equal(ma.length,3); assert.deepEqual(ma[2].args,['PRY-2026-0001','HLG-2026-0011',true]);
-  assert(/Energy: esquema fijo/.test(B.$('cobEsqNota').textContent)&&!/input/.test(B.$('cobEsquema').innerHTML),'Energy no editable');
+  assert(/Solo el administrador lo puede cambiar/.test(B.$('cobEsqNota').textContent)&&!/input/.test(B.$('cobEsquema').innerHTML),'Energy no editable para Tania');
   assert(/\$1,392\.00 MXN/.test(B.$('cobEsquema').innerHTML),'monto 60% de 2320');
   assert(/Contrato firmado/.test(B.$('cobContrato').innerHTML)&&B.$('cobFormPago').classList.contains('oculto'));
 
@@ -173,6 +173,19 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   B.dialogos.prompt='Se capturó dos veces'; B.run("cancelarPagoCob('PAG-2026-0001')"); await esperar();
   assert.deepEqual(B.llamadas.find(c=>c.funcion==='cancelarPago').args,['PAG-2026-0001','Se capturó dos veces']);
   assert(/No tienes permiso de cobranza/.test(B.$('aviso').innerHTML));
+  // Administrador en un contrato de Energy sin firmar: edita el esquema con motivo obligatorio
+  const energyAdmin=vista({contrato:{cotizacion:'HLG-2026-0011',marca:'energy',moneda:'MXN',subtotal:2000,iva:320,total:2320,estado:'Aceptada'},
+    esquema:[{etapa:'Anticipo',porcentaje:60},{etapa:'Instalación',porcentaje:30},{etapa:'Encendido del sistema',porcentaje:10}],
+    esquemaEditable:true,esquemaPideMotivo:true});
+  B.run('pintarCobranza('+JSON.stringify(energyAdmin)+')');
+  assert(/<input/.test(B.$('cobEsquema').innerHTML)&&/cobMotivoEsq/.test(B.$('cobEsqAcciones').innerHTML)&&/motivo queda registrado/.test(B.$('cobEsqNota').textContent));
+  B.$('cobMotivoEsq').value=''; B.run('guardarEsquemaCob()'); await esperar();
+  assert(/motivo del cambio/.test(B.$('aviso').innerHTML)); assert(!B.llamadas.some(c=>c.funcion==='guardarEsquema'));
+  B.respuestas.guardarEsquema={ok:true,datos:energyAdmin};
+  B.run("editarEtapa(0,'porcentaje','50'); editarEtapa(1,'porcentaje','40')");
+  B.$('cobMotivoEsq').value='Negociado con el cliente'; B.run('guardarEsquemaCob()'); await esperar();
+  const ge=B.llamadas.find(c=>c.funcion==='guardarEsquema').args;
+  assert.deepEqual([ge[0],ge[1].map(e=>e.porcentaje),ge[2]],['PRY-2026-0001',['50','40',10],'Negociado con el cliente']);
   // Administrador: ve el desbloqueo
   B.run('pintarCobranza('+JSON.stringify({...firmada,puedeDesbloquear:true})+')');
   assert(/Desbloquear contrato/.test(B.$('cobContrato').innerHTML));

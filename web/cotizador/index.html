@@ -907,9 +907,10 @@
     // Esquema
     $('cobModEsquema').classList.toggle('oculto', !c);
     ESQ = (v.esquema || []).map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje }));
-    $('cobEsqNota').textContent = !c ? '' : v.esquemaEditable
-      ? 'Helgen: puedes cambiar nombres, porcentajes y número de etapas hasta firmar el contrato. Deben sumar 100%.'
-      : c.marca === 'energy' && !firmado ? 'Helgen Energy: esquema fijo (60% / 30% / 10%).' : 'Esquema bloqueado por el contrato firmado.';
+    $('cobEsqNota').textContent = !c ? '' : firmado ? 'Esquema bloqueado por el contrato firmado.'
+      : v.esquemaPideMotivo ? 'Helgen Energy: solo el administrador cambia este esquema; el motivo queda registrado. Deben sumar 100%.'
+      : v.esquemaEditable ? 'Helgen: puedes cambiar nombres, porcentajes y número de etapas hasta firmar el contrato. Deben sumar 100%.'
+      : 'Helgen Energy: esquema 60% / 30% / 10%. Solo el administrador lo puede cambiar.';
     pintarEsquema();
 
     // Pagos
@@ -958,7 +959,9 @@
         '</td><td>' + (edit && ESQ.length > 1 ? '<button type="button" class="quitar" title="Quitar etapa" onclick="quitarEtapa(' + i + ')">×</button>' : '') + '</td></tr>';
     }).join('') + (ESQ.length ? '<tr><td></td><td><b>Suma</b></td><td class="num"><b' + (Math.abs(suma - 100) > 0.001 ? ' class="aviso-moneda"' : '') + '>' +
       suma + '%</b></td><td class="num"><b>' + dinero(total, mon) + '</b></td><td colspan="4"></td></tr>' : '');
-    $('cobEsqAcciones').innerHTML = edit ? '<button type="button" class="btn btn-sec" onclick="agregarEtapa()">+ Agregar etapa</button>' +
+    $('cobEsqAcciones').innerHTML = edit ? (v.esquemaPideMotivo ? '<div style="flex:1;min-width:260px"><label>Motivo del cambio (queda registrado) *</label>' +
+      '<input id="cobMotivoEsq" maxlength="500" placeholder="Ej. El cliente negoció 50% de anticipo"></div>' : '') +
+      '<button type="button" class="btn btn-sec" onclick="agregarEtapa()">+ Agregar etapa</button>' +
       '<button type="button" class="btn" id="btnEsquema" onclick="guardarEsquemaCob()">Guardar esquema</button>' : '';
   }
   // Al editar un nombre no se vuelve a pintar (no se pierde el cursor); el % sí actualiza montos y suma
@@ -984,7 +987,9 @@
     });
   }
   function guardarEsquemaCob() {
-    accionCob('btnEsquema', 'guardarEsquema', [COB.proyecto.folio, ESQ.map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje }))],
+    const motivo = COB.esquemaPideMotivo ? $('cobMotivoEsq').value.trim() : '';
+    if (COB.esquemaPideMotivo && !motivo) { mostrarError('Escribe el motivo del cambio al esquema de Helgen Energy.'); return; }
+    accionCob('btnEsquema', 'guardarEsquema', [COB.proyecto.folio, ESQ.map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje })), motivo],
       v => { pintarCobranza(v); aviso('ok', 'Esquema de pagos guardado.'); });
   }
   function firmarCob() {

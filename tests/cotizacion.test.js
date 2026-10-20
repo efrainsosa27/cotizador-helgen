@@ -90,6 +90,13 @@ if (ctx.monedaDeCotizacion) {
   assert(u.includes('TOTAL USD')&&!u.includes('TOTAL MXN')&&u.includes('USD (dólares estadounidenses)'));
   assert(u.includes('DÓLARES')&&u.includes('/100 USD)')&&!u.includes('PESOS'));
   assert(h.includes('TOTAL MXN')&&h.includes('M.N.')&&!h.includes('dólares'),'MXN sin cambios');
+  // Encabezados de columna con la moneda solo en USD
+  assert(u.includes('P. Unitario (USD)</th>')&&u.includes('Importe (USD)</th>'));
+  assert(h.includes('>P. Unitario</th>')&&h.includes('>Importe</th>')&&!h.includes('(USD)'),'MXN sin moneda en columnas');
+  // Términos: el mismo bloque completo que en MXN (Energy: 4 renglones, texto idéntico, incluido "$300 MXN")
+  const bloque=x=>x.slice(x.indexOf('TÉRMINOS Y CONDICIONES'),x.indexOf('</ul>'));
+  assert.equal(li(u),4); assert.equal(bloque(u),bloque(e),'USD muestra los mismos términos que MXN');
+  assert(bloque(u).includes('$300 MXN por metro'));
   fs.writeFileSync(process.argv[3]+'/usd.html',u);
 }
 console.log('OK');

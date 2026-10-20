@@ -1167,7 +1167,8 @@ function vistaCobranza_(libro, proyecto) {
     esquema: d.etapas,
     resumen: resumen,
     pagos: d.pagos.map(p => { const o = Object.assign({}, p); delete o.fila; return o; }).reverse(),
-    esquemaEditable: !!c && c.estado !== ESTADO_FIRMADO && c.marca !== 'energy',
+    esquemaEditable: !!c && c.estado !== ESTADO_FIRMADO && (c.marca !== 'energy' || esAdminDesbloqueo_()),
+    esquemaPideMotivo: !!c && c.estado !== ESTADO_FIRMADO && c.marca === 'energy' && esAdminDesbloqueo_(),
     puedePagar: !!c && c.estado === ESTADO_FIRMADO,
     puedeDesbloquear: !!c && c.estado === ESTADO_FIRMADO && esAdminDesbloqueo_(),
     metodos: METODOS_PAGO,
@@ -1226,15 +1227,17 @@ function marcarAceptada(proyectoFolio, cotizacionFolio, confirmado) {
         vigentes[0].monedaProyecto + '.');
     }
 
-    // Esquema: Helgen Energy siempre 60/30/10; Helgen conserva el que ya tenga (o el sugerido)
+    // Esquema: al pasar a Helgen Energy se pone el 60/30/10 (después solo el administrador lo cambia); entre cotizaciones
+    // de la misma línea, o de Energy a Helgen, se conserva el que ya tenga
     const porOmision = esquemaPorOmision();
     const igualAlDeOmision = d.etapas.length === porOmision.length &&
       d.etapas.every((e, i) => e.etapa === porOmision[i].etapa && e.porcentaje === porOmision[i].porcentaje);
-    if (cot.marca === 'energy' && d.etapas.length && !igualAlDeOmision && !confirmado) {
-      return { confirmar: true, mensaje: 'La cotización ' + cot.folio + ' es de Helgen Energy: su esquema de pagos es fijo ' +
-        '(60% Anticipo, 30% Instalación, 10% Encendido del sistema) y reemplazará el esquema actual. ¿Continuar?' };
+    const pasaAEnergy = cot.marca === 'energy' && (!c || c.marca !== 'energy');
+    if (pasaAEnergy && d.etapas.length && !igualAlDeOmision && !confirmado) {
+      return { confirmar: true, mensaje: 'La cotización ' + cot.folio + ' es de Helgen Energy: su esquema de pagos es ' +
+        '60% Anticipo, 30% Instalación, 10% Encendido del sistema, y reemplazará el esquema actual. ¿Continuar?' };
     }
-    const etapas = cot.marca === 'energy' || !d.etapas.length ? porOmision : d.etapas;
+    const etapas = pasaAEnergy || !d.etapas.length ? porOmision : d.etapas;
 
     const t = textoCelda;
     const fila = [proyecto.folio, cot.folio, MARCAS[cot.marca], cot.moneda, cot.subtotal, cot.iva, cot.total, ESTADO_ACEPTADA,
@@ -1251,10 +1254,14 @@ function marcarAceptada(proyectoFolio, cotizacionFolio, confirmado) {
   });
 }
 
-/** Guarda el esquema de pagos (solo Helgen y solo antes de firmar). */
-function guardarEsquema(proyectoFolio, etapas) {
+/**
+ * Guarda el esquema de pagos (solo antes de firmar). Helgen: rol de cobranza. Helgen Energy (60/30/10 por omisión): solo
+ * ADMIN_DESBLOQUEO, con motivo que queda en la Bitacora.
+ */
+function guardarEsquema(proyectoFolio, etapas, motivo) {
   exigirCobranza_();
   const limpio = validarEsquema(etapas);
+  const m = String(motivo || '').trim();
   const libro = libroCobranza_();
   return conCandado_(() => {
     const proyecto = proyectoParaCobranza_(proyectoFolio);
@@ -1262,9 +1269,16 @@ function guardarEsquema(proyectoFolio, etapas) {
     const c = d.contrato;
     if (!c) throw new Error('Primero marca la cotización aceptada del proyecto.');
     if (c.estado === ESTADO_FIRMADO) throw new Error('Contrato firmado: el esquema de pagos ya no se puede cambiar.');
-    if (c.marca === 'energy') throw new Error('El esquema de Helgen Energy es fijo (60% / 30% / 10%).');
+    if (c.marca === 'energy') {
+      if (!esAdminDesbloqueo_()) throw errorPermiso_('El esquema de Helgen Energy solo lo puede cambiar el administrador.');
+      if (m.length < 5) throw new Error('Escribe el motivo del cambio al esquema de Helgen Energy.');
+      if (m.length > 500) throw new Error('El motivo debe tener máximo 500 caracteres.');
+    }
+    const antes = d.etapas.map(e => e.etapa + ' ' + e.porcentaje + '%').join(' · ');
     escribirEsquema_(d.hojas.esquemas, proyecto.folio, limpio, c.total);
-    bitacora_(libro, 'Editar esquema de pagos', proyecto.folio, limpio.map(e => e.etapa + ' ' + e.porcentaje + '%').join(' · '));
+    bitacora_(libro, c.marca === 'energy' ? 'Editar esquema de pagos (Helgen Energy)' : 'Editar esquema de pagos', proyecto.folio,
+      limpio.map(e => e.etapa + ' ' + e.porcentaje + '%').join(' · ') + (antes ? ' (antes ' + antes + ')' : ''),
+      c.marca === 'energy' ? m : '');
     SpreadsheetApp.flush();
     return vistaCobranza_(libro, proyecto);
   });
@@ -2201,7 +2215,9 @@ function construirHtmlPdf(d, cfg, logoUrl) {
     '<table class="conceptos"><tr>' +
     '<th class="c" style="width:22px;">#</th><th style="width:60px;">Clave</th><th>Descripción</th>' +
     '<th class="c" style="width:45px;">Unidad</th><th class="r" style="width:45px;">Cant.</th>' +
-    '<th class="r" style="width:80px;">P. Unitario</th><th class="r" style="width:85px;">Importe</th></tr>' +
+    (d.moneda === 'USD'
+      ? '<th class="r" style="width:95px;">P. Unitario (USD)</th><th class="r" style="width:95px;">Importe (USD)</th></tr>'
+      : '<th class="r" style="width:80px;">P. Unitario</th><th class="r" style="width:85px;">Importe</th></tr>') +
     filas + '</table>' +
 
     // Módulo 3: Totales

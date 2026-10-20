@@ -138,6 +138,7 @@ const cH=cot(p1,1000);                               // Helgen MXN: total 1160
 const cE=cot(p1,2000,{marca:'energy'});              // Energy MXN: total 2320
 const cU=cot(p1,500,{moneda:'USD'});                 // USD en el mismo proyecto
 const cBarata=cot(p1,100);                           // 116
+const cE2=cot(p1,1000,{marca:'energy'});             // otra de Energy: total 1160
 const cOtro=cot(p2,862.07,{moneda:'USD'});           // Proyecto USD: total 1000.00
 const sinProy=cot('',50);
 
@@ -166,8 +167,8 @@ assert.deepEqual(Object.keys(LC.pest).sort(),['Bitacora','Contratos','Esquemas',
 const H=n=>LC.pest[n].m, bit=()=>H('Bitacora').slice(1);
 
 let v=ok('tania','getCobranzaProyecto',p1.toLowerCase());
-assert.equal(v.contrato,null); assert.deepEqual(v.cotizaciones.map(c=>c.folio),[cH,cE,cU,cBarata]);
-assert.deepEqual(v.cotizaciones.map(c=>c.moneda+'/'+c.marca),['MXN/helgen','MXN/energy','USD/helgen','MXN/helgen']);
+assert.equal(v.contrato,null); assert.deepEqual(v.cotizaciones.map(c=>c.folio),[cH,cE,cU,cBarata,cE2]);
+assert.deepEqual(v.cotizaciones.map(c=>c.moneda+'/'+c.marca),['MXN/helgen','MXN/energy','USD/helgen','MXN/helgen','MXN/energy']);
 assert.equal(v.puedePagar,false);
 falla('tania','firmarContrato',[p1,HOY_ISO],/Primero marca la cotización aceptada/);
 falla('tania','guardarEsquema',[p1,P.esquemaPorOmision()],/Primero marca/);
@@ -191,11 +192,27 @@ assert.equal(H('Contratos')[1][1],cH,'sin confirmar no cambia');
 v=ok('tania','marcarAceptada',p1,cE,true);
 assert.deepEqual([v.contrato.cotizacion,v.contrato.marca,v.contrato.total],[cE,'energy',2320]);
 assert.deepEqual(v.resumen.etapas.map(e=>e.etapa+':'+e.monto),['Anticipo:1392','Instalación:696','Encendido del sistema:232']);
-assert.equal(v.esquemaEditable,false);
-falla('tania','guardarEsquema',[p1,[{etapa:'A',porcentaje:100}]],/Helgen Energy es fijo/);
-// De regreso a Helgen: conserva el 60/30/10 (ahora editable), sin pedir confirmación
+assert.deepEqual([v.esquemaEditable,v.esquemaPideMotivo],[false,false],'Tania no edita el de Energy');
+// Esquema de Energy: solo el administrador y con motivo (queda en la Bitacora)
+falla('tania','guardarEsquema',[p1,[{etapa:'A',porcentaje:100}],'el cliente lo pidió'],/solo lo puede cambiar el administrador/,'PERMISO');
+v=ok('efrain','getCobranzaProyecto',p1); assert.deepEqual([v.esquemaEditable,v.esquemaPideMotivo],[true,true]);
+falla('efrain','guardarEsquema',[p1,[{etapa:'Anticipo',porcentaje:50},{etapa:'Cierre',porcentaje:50}]],/motivo del cambio/);
+falla('efrain','guardarEsquema',[p1,[{etapa:'Anticipo',porcentaje:50},{etapa:'Cierre',porcentaje:40}],'negociado'],/suman 90%/);
+v=ok('efrain','guardarEsquema',p1,[{etapa:'Anticipo',porcentaje:50},{etapa:'Cierre',porcentaje:50}],'El cliente negoció 50% de anticipo');
+assert.deepEqual(v.resumen.etapas.map(e=>e.etapa+':'+e.monto),['Anticipo:1160','Cierre:1160']);
+const be=bit().filter(b=>b[2]==='Editar esquema de pagos (Helgen Energy)').pop();
+assert.deepEqual([be[1],be[5]],['efrain@helgen.tech','El cliente negoció 50% de anticipo']);
+assert(/Anticipo 50% · Cierre 50% \(antes Anticipo 60% · Instalación 30% · Encendido del sistema 10%\)/.test(be[4]));
+// Otra cotización de Energy: conserva el esquema que puso el administrador (sin pedir confirmación)
+v=ok('tania','marcarAceptada',p1,cE2);
+assert.equal(v.confirmar,undefined); assert.deepEqual(v.resumen.etapas.map(e=>e.monto),[580,580]);
+// De regreso a Helgen: conserva el esquema (ahora editable por cobranza), sin pedir confirmación
 v=ok('tania','marcarAceptada',p1,cH);
-assert.equal(v.confirmar,undefined); assert.deepEqual(v.resumen.etapas.map(e=>e.monto),[696,348,116]);
+assert.equal(v.confirmar,undefined); assert.deepEqual(v.resumen.etapas.map(e=>e.monto),[580,580]);
+assert.deepEqual([v.esquemaEditable,v.esquemaPideMotivo],[true,false]);
+v=ok('tania','guardarEsquema',p1,P.esquemaPorOmision());
+assert.deepEqual(v.resumen.etapas.map(e=>e.monto),[696,348,116]);
+assert.equal(bit().pop()[5],'','en Helgen el cambio no pide motivo');
 assert.equal(H('Contratos').length,2,'una sola aceptada por proyecto');
 
 // Firma: fecha obligatoria y no futura

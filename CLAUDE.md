@@ -155,8 +155,9 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 ### 4.5.2 Cobranza (sección 4.2 del archivo; ver §6.11)
 - Todas empiezan con `exigirCobranza_()` (token + correo en `ROL_COBRANZA`; si no, `errorPermiso_` → `codigo: "PERMISO"`).
 - *(UI)* `listarProyectosCobranza(busqueda)` (todos los estados + estado del contrato), `getCobranzaProyecto(folio)`,
-  `marcarAceptada(proyecto, cotizacion, confirmado)` (si es Energy y reemplaza un esquema distinto al 60/30/10 devuelve
-  `{confirmar, mensaje}` sin cambiar nada), `guardarEsquema(proyecto, etapas)`, `firmarContrato(proyecto, 'AAAA-MM-DD')`,
+  `marcarAceptada(proyecto, cotizacion, confirmado)` (al pasar de Helgen a Energy pone el 60/30/10; si eso reemplaza un esquema
+  distinto devuelve `{confirmar, mensaje}` sin cambiar nada; entre cotizaciones de la misma línea conserva el esquema),
+  `guardarEsquema(proyecto, etapas, motivo)` (Energy: solo `ADMIN_DESBLOQUEO` y motivo obligatorio en la Bitacora), `firmarContrato(proyecto, 'AAAA-MM-DD')`,
   `desbloquearContrato(proyecto, motivo)` (además `esAdminDesbloqueo_`), `registrarPago(p)` (con `comprobante.datos` en base64
   e idempotencia `PAG_<idSolicitud>`), `cancelarPago(folio, motivo)`. Las que cambian algo usan `conCandado_` y devuelven la vista
   (`vistaCobranza_`).
@@ -371,8 +372,9 @@ Cobranza: `ROL_COBRANZA` (correos separados por coma: efrain@, tania@, leo@), `A
 - **Aceptada:** una por proyecto; se puede cambiar hasta firmar. Monto contratado = total **con IVA**; subtotal de referencia.
   **Línea de negocio y moneda del proyecto salen de la aceptada.** Si ya hay pagos (tras un desbloqueo), la nueva aceptada debe
   tener la misma moneda.
-- **Esquema:** Helgen Energy **fijo** 60% Anticipo / 30% Instalación / 10% Encendido del sistema (el servidor rechaza editarlo);
-  Helgen: mismas etapas como sugerencia, editables (nombres, % y número de etapas, 1–10) hasta firmar. Suma exacta 100%.
+- **Esquema:** Helgen Energy: 60% Anticipo / 30% Instalación / 10% Encendido del sistema; **solo `ADMIN_DESBLOQUEO` lo edita**,
+  con motivo obligatorio que queda en la Bitacora (con el esquema anterior). Helgen: mismas etapas como sugerencia, editables por
+  el rol de cobranza (nombres, % y número de etapas, 1–10). En ambos casos solo antes de firmar y con suma exacta de 100%.
 - **Contrato firmado** (fecha, no futura): bloquea aceptada, monto y esquema. No se puede firmar si lo pagado supera el nuevo
   monto. **Desbloqueo:** solo `ADMIN_DESBLOQUEO`, motivo obligatorio; vuelve a "Aceptada", conserva los pagos y queda en Bitacora.
 - **Pagos:** solo con contrato firmado; comprobante **obligatorio** (PDF/JPG/PNG/HEIC, máx. 10 MB, tipo revisado por contenido) en
@@ -382,7 +384,9 @@ Cobranza: `ROL_COBRANZA` (correos separados por coma: efrain@, tania@, leo@), `A
   obligatorio (pesos por dólar) y se guarda el monto aplicado en la moneda del proyecto: **nunca se suman MXN y USD**.
 - **Cancelar pago:** rol de cobranza, con motivo; el pago queda como Cancelado (nunca se borra) y deja de contar.
 - **USD en cotizaciones:** el catálogo está en pesos: en USD la interfaz llena clave y descripción, y el precio se captura a mano
-  (no se convierte con tipo de cambio). El PDF dice "Moneda: USD (dólares estadounidenses)", "TOTAL USD" e importe con letra en dólares.
+  (no se convierte con tipo de cambio). El PDF dice "Moneda: USD (dólares estadounidenses)", columnas "P. Unitario (USD)" e
+  "Importe (USD)", "TOTAL USD" e importe con letra en dólares. **Términos y condiciones: el mismo bloque que en MXN, sin cambios**
+  (incluido "$300 MXN por metro" en Energy; decisión del usuario, 20/10/2026).
 
 ## 7. Reglas del proyecto (no romper)
 1. Los totales SIEMPRE se recalculan en el servidor (`normalizarCotizacion`). El navegador solo muestra una vista previa.
@@ -466,7 +470,6 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - **Acceso del dominio a la Base de datos y a la carpeta maestra** (lector para todo helgen.tech): se queda por ahora; revisarlo
   junto con la idea "cada vendedor ve solo sus cotizaciones" (quitarlo impide abrir los PDF desde el Historial).
 - Tania y Leo eran **editores** de la Base de datos (20/10/2026); el usuario los baja a lector.
-- Los T&C de Helgen Energy dicen "$300 MXN por metro" también en cotizaciones USD: confirmar con el usuario si se ajusta.
 - Mover el proyecto de prueba (ya sin deployment, §10.5) a la carpeta `1w-T05ql…` junto a los "ARCHIVO PRUEBAS" (lo hace el usuario).
 
 ## 10. Interfaz web y sesión con Google
