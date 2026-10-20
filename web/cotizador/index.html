@@ -62,6 +62,10 @@
   .sat-op:hover { border-color:var(--teal); background:#E6FBF7; }
   .sat-op b { min-width:80px; }
   .sat-razon { display:block; color:#5B6B85; font-size:12px; margin-top:2px; }
+  /* Proyecto de la cotización (opcional) */
+  .proy { margin-top:16px; padding-top:14px; border-top:1px dashed var(--borde); }
+  .proy-fila { display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; }
+  .proy-fila > div { flex:1; min-width:240px; }
   a { color:var(--azul); font-weight:bold; }
   /* Sesión con Google (solo cuentas @helgen.tech) */
   .usuario { margin-left:auto; display:flex; align-items:center; gap:12px; font-size:12px; color:#D5DCE8; }
@@ -116,7 +120,7 @@
   <!-- ===== NUEVA COTIZACIÓN ===== -->
   <section id="vistaNueva">
     <div class="modulo">
-      <h2>1 · Datos del cliente</h2>
+      <h2>1 · Cliente y proyecto</h2>
       <div class="grid">
         <div><label>Línea de negocio *</label>
           <select id="marca">
@@ -132,6 +136,29 @@
         <div><label>Correo</label><input id="cEmail" type="email"></div>
         <div><label>Teléfono</label><input id="cTel"></div>
         <div><label>Dirección / Obra</label><input id="cDir"></div>
+      </div>
+
+      <!-- Proyecto (opcional): vacío = "Sin proyecto" -->
+      <div class="proy">
+        <div class="proy-fila">
+          <div><label>Proyecto (opcional)</label>
+            <input id="proyecto" list="proyectosList" autocomplete="off" placeholder="Sin proyecto · busca por folio, cliente o nombre">
+            <datalist id="proyectosList"></datalist></div>
+          <button type="button" class="btn btn-sec" onclick="abrirNuevoProyecto()">+ Nuevo proyecto</button>
+        </div>
+        <div id="proyInfo" class="nota" style="margin-top:4px"></div>
+        <div id="nuevoProy" class="sat oculto">
+          <div class="sat-titulo">Nuevo proyecto · cliente: <span id="npCliente"></span></div>
+          <div class="grid">
+            <div><label>Nombre del proyecto *</label><input id="npNombre" maxlength="80" placeholder="Ej. Techo solar planta 2"></div>
+            <div><label>Ubicación</label><input id="npUbicacion" maxlength="200" placeholder="Ciudad, dirección u obra"></div>
+          </div>
+          <div class="acciones">
+            <button type="button" id="btnProy" class="btn" onclick="crearProyecto()">Crear proyecto</button>
+            <button type="button" class="btn btn-sec" onclick="cerrarNuevoProyecto()">Cancelar</button>
+            <span class="nota">El cliente es el de "Nombre / Contacto": elígelo de la lista o escribe uno nuevo.</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -171,9 +198,9 @@
   <section id="vistaHist" class="oculto">
     <div class="modulo">
       <h2>Historial de cotizaciones</h2>
-      <input id="buscar" placeholder="Buscar por folio, cliente o empresa…" oninput="buscarDebounce()" style="margin-bottom:12px">
+      <input id="buscar" placeholder="Buscar por folio, cliente, empresa o proyecto…" oninput="buscarDebounce()" style="margin-bottom:12px">
       <table>
-        <thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Empresa</th><th class="num">Total</th><th>Vendedor</th><th>PDF</th></tr></thead>
+        <thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Empresa</th><th class="num">Total</th><th>Vendedor</th><th>Proyecto</th><th>PDF</th></tr></thead>
         <tbody id="hist"></tbody>
       </table>
     </div>
@@ -375,10 +402,11 @@
 <script src="https://accounts.google.com/gsi/client" async onload="iniciarGis()" onerror="errorGis()"></script>
 
 <script>
-  let IVA = 0.16, CATALOGO = [], CLIENTES = [];
+  let IVA = 0.16, CATALOGO = [], CLIENTES = [], PROYECTOS = [];
   // Un id por cotización: si el envío se repite, el servidor devuelve el mismo folio en vez de crear otro.
   const nuevoId = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(36).slice(2));
   let ID_SOLICITUD = nuevoId();
+  let ID_PROYECTO = nuevoId(); // igual que ID_SOLICITUD, para "Crear proyecto"
 
   const $ = id => document.getElementById(id);
   const r2 = n => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -389,6 +417,7 @@
   google.script.run.withSuccessHandler(d => {
     IVA = d.ivaTasa; CATALOGO = d.catalogo;
     recibirClientes(d.clientes);
+    recibirProyectos(d.proyectos);
     $('lblIva').textContent = 'IVA (' + Math.round(IVA * 100) + '%)';
     pintarDatalists();
     agregarFila();
@@ -450,13 +479,20 @@
       items: leerItems().map(({_tr, ...it}) => it),
       notas: $('notas').value,
       marca: $('marca').value,
+      proyectoFolio: '',
       idSolicitud: ID_SOLICITUD,
     };
     if ($('btnGuardar').disabled) return;
+    if ($('proyecto').value.trim()) {
+      const p = proyectoElegido();
+      if (!p) { mostrarError('Elige un proyecto de la lista o deja el campo vacío para cotizar sin proyecto.'); return; }
+      payload.proyectoFolio = p.folio;
+    }
     $('btnGuardar').disabled = true; $('btnGuardar').textContent = 'Generando PDF…';
     google.script.run
       .withSuccessHandler(r => {
         aviso('ok', 'Cotización <b>' + esc(r.folio) + '</b> guardada · Total ' + mxn(r.total) +
+              (r.proyectoFolio ? ' · Proyecto <b>' + esc(r.proyectoFolio) + '</b>' : '') +
               ' · <a href="' + esc(r.url) + '" target="_blank">Abrir PDF</a>');
         limpiar();
       })
@@ -468,7 +504,9 @@
     ['cNombre','cEmpresa','cRfc','cEmail','cTel','cDir','notas'].forEach(id => $(id).value = '');
     $('filas').innerHTML = ''; agregarFila(); recalcular();
     $('cInfo').textContent = '';
+    $('proyecto').value = ''; pintarProyInfo(); cerrarNuevoProyecto();
     google.script.run.withSuccessHandler(recibirClientes).getClientes(); // incluye al cliente recién guardado
+    google.script.run.withSuccessHandler(recibirProyectos).listarProyectos('', false); // y proyectos de otros vendedores
     ID_SOLICITUD = nuevoId();
     $('btnGuardar').disabled = false; $('btnGuardar').textContent = 'Guardar y generar PDF';
   }
@@ -477,13 +515,14 @@
   let tBusq;
   function buscarDebounce() { clearTimeout(tBusq); tBusq = setTimeout(cargarHistorial, 300); }
   function cargarHistorial() {
-    $('hist').innerHTML = '<tr><td colspan="7">Cargando…</td></tr>';
+    $('hist').innerHTML = '<tr><td colspan="8">Cargando…</td></tr>';
     google.script.run.withSuccessHandler(lista => {
       $('hist').innerHTML = lista.length ? lista.map(c =>
         '<tr><td><b>' + esc(c.folio) + '</b></td><td>' + esc(c.fecha) + '</td><td>' + esc(c.cliente) + '</td><td>' +
         esc(c.empresa) + '</td><td class="num">' + esc(c.total) + '</td><td>' + esc(c.vendedor || c.elaboro) + '</td><td>' +
+        (c.proyecto === 'Sin proyecto' ? '<span class="nota">Sin proyecto</span>' : esc(c.proyecto)) + '</td><td>' +
         (c.pdf ? '<a href="' + esc(c.pdf) + '" target="_blank">Ver</a>' : '') + '</td></tr>').join('')
-        : '<tr><td colspan="7">Sin resultados.</td></tr>';
+        : '<tr><td colspan="8">Sin resultados.</td></tr>';
     }).withFailureHandler(mostrarError).listarCotizaciones($('buscar').value);
   }
 
@@ -506,6 +545,83 @@
   }
   $('cNombre').addEventListener('change', autorrellenarCliente);
   $('cNombre').addEventListener('input', () => { if (CLIENTES.some(x => x.etiqueta === $('cNombre').value)) autorrellenarCliente(); });
+
+  // ---- Proyectos (opcional al cotizar) ----
+  // La opción de la lista es "PRY-2026-0001 — Cliente — Nombre" (así se puede buscar por cualquiera de los tres)
+  const etiquetaProyecto = p => p.folio + ' — ' + p.cliente + ' — ' + p.nombre;
+
+  function recibirProyectos(lista) {
+    PROYECTOS = lista || [];
+    $('proyectosList').innerHTML = PROYECTOS.map(p =>
+      '<option value="' + esc(etiquetaProyecto(p)) + '" label="' + esc(p.ubicacion || 'Proyecto activo') + '">').join('');
+    pintarProyInfo();
+  }
+
+  /** Proyecto que corresponde a lo escrito (etiqueta completa o solo el folio); null si no hay. */
+  function proyectoElegido() {
+    const v = $('proyecto').value.trim();
+    const folio = (v.match(/^PRY-\d{4}-\d{4}/i) || [''])[0].toUpperCase();
+    return (folio && PROYECTOS.find(p => p.folio === folio)) || null;
+  }
+
+  function pintarProyInfo() {
+    const v = $('proyecto').value.trim(), p = proyectoElegido();
+    $('proyInfo').textContent = p ? 'Proyecto activo' + (p.ubicacion ? ' · ' + p.ubicacion : '') + ' · desde ' + p.fecha
+      : v ? 'Elige un proyecto de la lista (solo aparecen los activos) o deja el campo vacío.'
+      : 'Sin proyecto: el PDF se guarda en la carpeta del año, como siempre.';
+  }
+
+  /** Al elegir un proyecto con "Nombre / Contacto" vacío, se llena con su cliente. */
+  function alElegirProyecto() {
+    pintarProyInfo();
+    const p = proyectoElegido();
+    if (!p) return;
+    $('proyecto').value = etiquetaProyecto(p);
+    if ($('cNombre').value.trim()) return;
+    const c = CLIENTES.find(x => x.id === p.clienteId);
+    if (c) { $('cNombre').value = c.etiqueta; autorrellenarCliente(); return; }
+    const [nombre, empresa] = p.cliente.split(' — ');
+    $('cNombre').value = nombre || ''; $('cEmpresa').value = empresa || '';
+  }
+  $('proyecto').addEventListener('change', alElegirProyecto);
+  $('proyecto').addEventListener('input', () => { if (proyectoElegido() && $('proyecto').value.includes(' — ')) alElegirProyecto(); else pintarProyInfo(); });
+
+  function abrirNuevoProyecto() {
+    $('nuevoProy').classList.remove('oculto');
+    pintarClienteProyecto();
+    $('npNombre').focus();
+  }
+  function cerrarNuevoProyecto() {
+    $('nuevoProy').classList.add('oculto');
+    $('npNombre').value = ''; $('npUbicacion').value = '';
+  }
+  function pintarClienteProyecto() {
+    const n = $('cNombre').value.trim(), e = $('cEmpresa').value.trim();
+    $('npCliente').textContent = n ? n + (e ? ' — ' + e : '') : '(primero escribe o elige el cliente arriba)';
+  }
+  ['cNombre', 'cEmpresa'].forEach(id => $(id).addEventListener('input', pintarClienteProyecto));
+
+  function crearProyecto() {
+    if (!$('cNombre').value.trim()) { mostrarError('Primero elige o escribe el cliente en "Nombre / Contacto".'); return; }
+    if (!$('npNombre').value.trim()) { mostrarError('Escribe el nombre del proyecto.'); return; }
+    if ($('btnProy').disabled) return;
+    $('btnProy').disabled = true; $('btnProy').textContent = 'Creando carpeta…';
+    const listo = () => { $('btnProy').disabled = false; $('btnProy').textContent = 'Crear proyecto'; };
+    google.script.run
+      .withSuccessHandler(p => {
+        listo(); ID_PROYECTO = nuevoId();
+        recibirProyectos([p].concat(PROYECTOS.filter(x => x.folio !== p.folio)));
+        $('proyecto').value = etiquetaProyecto(p); pintarProyInfo(); cerrarNuevoProyecto();
+        aviso('ok', 'Proyecto <b>' + esc(p.folio) + '</b> creado y elegido para esta cotización · ' +
+              '<a href="' + esc(p.url) + '" target="_blank">Abrir carpeta</a>');
+      })
+      .withFailureHandler(err => { listo(); mostrarError(err); })
+      .crearProyecto({
+        nombre: $('npNombre').value, ubicacion: $('npUbicacion').value,
+        cliente: { nombre: $('cNombre').value, empresa: $('cEmpresa').value, rfc: $('cRfc').value },
+        idSolicitud: ID_PROYECTO,
+      });
+  }
 
   // ---- Catálogo ----
   let CLAVE_EDITANDO = '';

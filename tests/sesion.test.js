@@ -8,13 +8,14 @@ src=src.replace(/const CLIENT_ID_GOOGLE = '[^']*';/,"const CLIENT_ID_GOOGLE = '"
 function hoja(m){return{m,getLastRow:()=>m.length,getDataRange:()=>({getValues:()=>m.map(r=>r.slice()),getDisplayValues:()=>m.map(r=>r.map(x=>x instanceof Date?'19/10/2026':String(x??'')))}),
  appendRow:a=>m.push(a),
  getRange:(r,c,nr=1,nc=1)=>typeof r==='string'?{setNumberFormat(){}}:({
-  getValues:()=>m.slice(r-1,r-1+nr).map(x=>{const f=x.slice(c-1,c-1+nc);while(f.length<nc)f.push('');return f}),
+  getValues:()=>Array.from({length:nr},(_,i)=>{const f=(m[r-1+i]||[]).slice(c-1,c-1+nc);while(f.length<nc)f.push('');return f}),
   setValues(vs){vs.forEach((x,i)=>{m[r-1+i]=m[r-1+i]||[];x.forEach((y,j)=>m[r-1+i][c-1+j]=y)});return this},
-  setFontWeight(){return this},setBackground(){return this},setFontColor(){return this}})}}
+  setFontWeight(){return this},setBackground(){return this},setFontColor(){return this},setDataValidation(){return this}})}}
 const cfg=hoja([['Clave','Valor'],['PREFIJO_FOLIO','HLG'],['IVA_TASA',0.16]]);
 // Hoja con una fila vieja (sin columnas vendedor_*)
 const cot=hoja([['Folio','Fecha','Cliente','Empresa','RFC','Correo','Teléfono','Subtotal','IVA','Total','Elaboró','PDF','Conceptos (JSON)','Notas','Marca','Dirección'],
   ['HLG-2026-0001','x','Viejo','','','','',1,0.16,1.16,'antes@helgen.tech','u','[]','','Helgen','']]);
+let pry=null;
 const props={SPREADSHEET_ID:'x',FOLDER_ID:'y',CATALOGO_ID:'c'},cache={};
 const ahora=Math.floor(Date.now()/1000);
 const BUENO={aud:CID,iss:'https://accounts.google.com',exp:String(ahora+3000),email:'Ana.Lopez@helgen.tech',email_verified:'true',hd:'helgen.tech',given_name:'Ana',family_name:'López Díaz'};
@@ -32,7 +33,9 @@ const ctx={console,Date,JSON,
  UrlFetchApp:{fetch:url=>{fetches++;const t=decodeURIComponent(url.split('id_token=')[1]);const c=tokens[t];
   return{getResponseCode:()=>c?200:400,getContentText:()=>JSON.stringify(c||{error:'invalid_token'})}}},
  ContentService:{MimeType:{JSON:'json'},createTextOutput:t=>({t,setMimeType(){return this}})},
- SpreadsheetApp:{flush(){},openById:id=>id==='c'?{getSheetByName:()=>hoja([['Clave','Descripción','Unidad','Precio unitario (sin IVA)','Actualizado','Actualizó','Clave SAT','Unidad SAT']]),getUrl:()=>'cat'}:{getSheetByName:n=>n==='Config'?cfg:cot}},
+ SpreadsheetApp:{flush(){},openById:id=>id==='c'?{getSheetByName:()=>hoja([['Clave','Descripción','Unidad','Precio unitario (sin IVA)','Actualizado','Actualizó','Clave SAT','Unidad SAT']]),getUrl:()=>'cat'}:{getSheetByName:n=>n==='Config'?cfg:n==='Proyectos'?pry:cot,
+   insertSheet:n=>pry=Object.assign(hoja([]),{setFrozenRows(){},getMaxRows:()=>1000,setColumnWidth(){}})},
+  newDataValidation:()=>{const b={requireValueInList:()=>b,setAllowInvalid:()=>b,setHelpText:()=>b,build:()=>({})};return b}},
  DriveApp:{getFolderById:()=>({getFoldersByName:()=>({hasNext:()=>true,next:()=>({createFile:()=>({getUrl:()=>'u'})})})})},
 };
 vm.createContext(ctx); vm.runInContext(src,ctx);
@@ -60,16 +63,18 @@ assert.equal(cot.m.length,filasAntes,'sin sesión no se guarda nada');
 assert.equal(post('no es json').ok,false);
 assert.equal(post({funcion:'setup',token:'t-bueno'}).error,'Función no permitida: setup.');
 assert.equal(post({funcion:'guardarCotizacion',args:[base]}).codigo,'SESION');
+assert.equal(post({funcion:'crearProyecto',args:[{nombre:'X',cliente:{nombre:'Y'}}]}).codigo,'SESION');
+assert.equal(post({funcion:'listarProyectos',args:['']}).codigo,'SESION');
 
 // --- Guardar con token válido: vendedor del token, aunque el navegador mande otro ---
 fetches=0;
 const r=post({funcion:'guardarCotizacion',token:'t-bueno',
   args:[{...base,idSolicitud:'ok1',vendedor_email:'impostor@helgen.tech',vendedor:{email:'impostor@helgen.tech',nombre:'X'},elaboro:'impostor@helgen.tech'}]});
 assert(r.ok,r.error); assert.equal(r.datos.folio,'HLG-2026-0002');
-const enc=cot.m[0]; assert.deepEqual(enc.slice(16),['vendedor_email','vendedor_nombre','vendedor_apellido']);
+const enc=cot.m[0]; assert.deepEqual(enc.slice(16),['vendedor_email','vendedor_nombre','vendedor_apellido','proyecto_folio']);
 const fila=cot.m[cot.m.length-1];
 assert.equal(fila[10],'ana.lopez@helgen.tech','Elaboró = correo del token');
-assert.deepEqual(fila.slice(16),['ana.lopez@helgen.tech','Ana','López Díaz']);
+assert.deepEqual(fila.slice(16),['ana.lopez@helgen.tech','Ana','López Díaz',''],'sin proyecto = columna T vacía');
 assert(!JSON.stringify(fila).includes('impostor'));
 // Caché: el token ya se verificó (en la llamada a setup); no se vuelve a consultar a Google
 assert.equal(post({funcion:'listarCotizaciones',args:[''],token:'t-bueno'}).ok,true); assert.equal(fetches,0);
@@ -82,6 +87,10 @@ assert.equal(h[0].vendedor,'Ana López Díaz'); assert.equal(h[1].vendedor,'ante
 // Datos iniciales: usuario = correo del token
 const d=post({funcion:'getDatosIniciales',args:[],token:'t-bueno'}).datos;
 assert.equal(d.usuario,'ana.lopez@helgen.tech'); assert.equal(d.vendedor.nombre,'Ana');
+assert.deepEqual([...d.proyectos],[]); assert.equal(pry.m[0][0],'Folio','la pestaña Proyectos se crea sola');
+assert.equal(cot.m[0][0],'Folio'); assert.equal(cot.m[0][19],'proyecto_folio','Cotizaciones no se toca al crear Proyectos');
+assert.equal(h[1].proyecto,'Sin proyecto');
+assert.throws(()=>ctx.crearProyecto({nombre:'X',cliente:{nombre:'Y'}}),/Inicia sesión/);
 // Fuera de doPost (sin token) guardar se rechaza
 assert.throws(()=>ctx.guardarCotizacion({...base,idSolicitud:'directo'}),/Inicia sesión/);
 // doGet ya no sirve la app

@@ -13,7 +13,7 @@ Desde el **19/10/2026** (§11) la interfaz se sirve desde **Cloudflare** y habla
 2. El servidor **recalcula** subtotal, IVA y total, asigna un **folio único** `HLG-AAAA-0001` y genera el **PDF**.
 3. El PDF se guarda en Drive (carpeta por año) y la cotización queda como una fila en Google Sheets, con el vendedor del token.
 
-Además: historial con búsqueda, catálogo de productos con precios (Google Sheets aparte), clientes sugeridos con
+Además: **proyectos** (opcionales: folio `PRY-AAAA-0001` y carpeta propia en Drive; §6.9), historial con búsqueda, catálogo de productos con precios (Google Sheets aparte), clientes sugeridos con
 autorrelleno, y claves SAT internas por producto para contabilidad (con sugerencias por palabras o con IA).
 
 **Helgen Energy** es la submarca de paneles solares: mismo folio y diseño, pero sus propios Términos y Condiciones.
@@ -56,7 +56,7 @@ para que un `clasp push` desde ella no pise la API con código viejo; no volver 
 | `.claspignore` | Lista blanca: solo se suben `Code.js`, `Logo.js`, `Index.html`, `appsscript.json` (excluye `anterior/`). |
 | `web/` | Portada (`index.html`, `logo-helgen-blanco.png`) y la interfaz real `web/cotizador/index.html` (§10). No se sube a Apps Script. `.assetsignore` excluye `Icon`/`.DS_Store`. |
 | `wrangler.jsonc` | Publica `web/` en Cloudflare como Worker solo de archivos estáticos. |
-| `tests/` | Pruebas en Node con servicios de Google simulados (ver §8). No se suben. Aceptan `Code.js` (actual) o `Code.gs` (anterior). |
+| `tests/` | Pruebas en Node con servicios de Google simulados (ver §8). No se suben. `cotizacion.test.js` acepta `Code.js` (actual) o `Code.gs` (anterior). |
 | `anterior/` | Código del proyecto viejo (@9), su `.clasp.json` (`1X-qSKgv…`), `LEEME.md` con cómo regresar y el CLAUDE.md previo a la migración. No tocar salvo para regresar. |
 | `herramientas/extraer-catalogos-sat.js` | Convierte el Excel oficial del SAT en los CSV que importa la app (ver §6.5). |
 | `GUIA.md` | Guía para personas (instalación inicial). Desactualizada: describe el proyecto anterior. |
@@ -123,17 +123,36 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 - `guardarCotizacion(payload)` *(UI)* — exige vendedor verificado (si no, error de sesión); normaliza, agrega clave/unidad SAT
   a cada concepto que venga del catálogo (si falla, guarda igual), toma el candado, revisa idempotencia (`payload.idSolicitud`
   en `CacheService`, 6 h), asigna folio, genera PDF, lo guarda en la carpeta del año, reescribe encabezados si no coinciden con
-  `ENCABEZADOS_COTIZACIONES` y agrega la fila. Devuelve `{folio, url, total}`.
-- `siguienteFolio_(prefijo, hojaCot)` — `max(CONSECUTIVO_AAAA, mayor folio del año en la hoja) + 1`.
+  `ENCABEZADOS_COTIZACIONES` y agrega la fila. Devuelve `{folio, url, total, proyectoFolio}`.
+  Si viene `payload.proyectoFolio`, dentro del candado valida que el proyecto exista y esté `Activo` (si no, error y no se
+  gasta folio) y guarda el PDF en `<carpeta del proyecto>/Cotizaciones` en lugar de la carpeta del año.
+- `siguienteFolio_(prefijo, hoja, baseContador)` — `max(<baseContador>AAAA, mayor folio del año en la hoja) + 1`.
+  `baseContador` = `CONSECUTIVO_` (cotizaciones, por omisión) o `CONSECUTIVO_PROY_` (proyectos).
 - `carpetaDelAnio_(anio)` — subcarpeta `2026`, `2027`… dentro de la carpeta de PDF (la busca **por nombre**).
 - `logoDataUrl_(fileId)` — logo de Drive si `LOGO_FILE_ID` tiene valor; si no, `LOGO_HELGEN_AZUL`.
+
+### 4.5.1 Proyectos (sección 4.1 del archivo)
+- `hojaProyectos_()` — pestaña `Proyectos` de la base de datos; la crea sola (lista desplegable de Estado en G) y reescribe
+  solo la fila 1 si faltan encabezados (`ENCABEZADOS_PROYECTOS`).
+- `listarProyectos(busqueda, incluirInactivos)` *(UI)* — busca por folio, cliente o nombre; por omisión solo `Activo`; máx. 50,
+  recientes primero. No devuelve `carpeta_id`.
+- `crearProyecto(p)` *(UI)* — exige vendedor; `normalizarProyecto`; candado + idempotencia (`PRY_<idSolicitud>`, 6 h);
+  folio `PRY-AAAA-NNNN`; **primero** crea la carpeta y **después** la fila (estado `Activo`). Devuelve `{folio, …, url}`.
+- `buscarProyecto_(hoja, folio)`, `carpetaProyectos_()` (`PROYECTOS_FOLDER_ID`; si falta o está en la Papelera la crea en la
+  carpeta maestra = padre de la base de datos), `subcarpeta_(padre, nombre)` (por nombre, ignora la Papelera, crea si falta),
+  `crearCarpetaProyecto_`, `subcarpetaProyecto_(proyecto, nombreSub)` (ver §6.9).
+- `getDatosIniciales()` incluye `proyectos` (activos; si falla, `[]` y la app carga igual).
 
 ### 4.6 Lógica pura (sin Google; se prueba en Node)
 - `redondear(n)`, `formatoMoneda(n)`, `escaparHtml(s)`, `importeConLetra(n)` ("MIL CIENTO SESENTA PESOS 02/100 M.N.").
 - `normalizarCotizacion(p, ivaTasa)` — limpia cliente/conceptos, exige nombre y ≥1 concepto, calcula importes y totales, `marca`.
 - `formatearFolio`, `maxConsecutivo(folios, prefijo, anio)`.
-- `clientesDesdeFilas(filas)` — agrupa por nombre+empresa normalizados (sin acentos/mayúsculas/espacios), la fila más
-  reciente manda, un dato vacío no borra uno anterior; `etiqueta` = nombre, o "nombre — empresa" si el nombre se repite.
+- `clientesDesdeFilas(filas)` — agrupa por nombre+empresa normalizados (`textoNormal`), la fila más
+  reciente manda, un dato vacío no borra uno anterior; `etiqueta` = nombre, o "nombre — empresa" si el nombre se repite;
+  `id` = `idCliente`.
+- `idCliente(c)` — RFC válido y no genérico (`RFC_GENERICOS`: XAXX010101000, XEXX010101000); si no, `SIN-RFC:nombre|empresa`
+  normalizados. `normalizarProyecto(p)`, `nombreCarpetaProyecto(folio, cliente, nombre)` (quita `/ \ : * ? " < > |`),
+  `proyectosDesdeFilas`, `filtrarProyectos`.
 - `normalizarProducto(p)`, `indiceDeClave(claves, clave)`.
 - `terminosParaPdf(cfg, marca)` — renglones de T&C de la marca; agrega la línea de vigencia si falta.
 - `textoCelda(s)` — antepone `'` a texto que empiece con `= + - @` para que Sheets no lo lea como fórmula.
@@ -146,7 +165,10 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 Tres pestañas: **Nueva cotización**, **Historial**, **Catálogo**. Funciones principales: `agregarFila`, `leerItems`,
 `recalcular` (vista previa; el servidor recalcula), `guardar`, `limpiar`, `cargarHistorial`, `recibirClientes`,
 `autorrellenarCliente`, `pintarDatalists`, `cargarCatalogo`, `pintarCatalogo`, `editarProd`, `guardarProd`, `sugerirSat`, `verTab`.
-Autocompletado con `<datalist>`: clientes (en "Nombre"), productos por descripción y por clave, unidades SAT.
+Proyectos (módulo "1 · Cliente y proyecto"): `recibirProyectos`, `proyectoElegido`, `alElegirProyecto` (si "Nombre" está vacío,
+lo llena buscando el cliente por `cliente_id`), `abrirNuevoProyecto`, `crearProyecto` (usa el cliente de los campos de arriba).
+Autocompletado con `<datalist>`: clientes (en "Nombre"), proyectos activos (`PRY-… — cliente — nombre`), productos por
+descripción y por clave, unidades SAT.
 Capa de sesión y `fetch` en `<script id="api-web">` (§10.2).
 
 ## 5. Dónde se guardan los datos
@@ -156,7 +178,8 @@ Capa de sesión y `fetch` en `<script id="api-web">` (§10.2).
 📁 Cotizador Helgen
    ├─ 📊 Cotizador Helgen — Base de datos     (Cotizaciones, Config)
    ├─ 📊 Catálogo Helgen                       (Catalogo)
-   ├─ 📁 Cotizaciones Helgen (PDF) / 📁 2026 / HLG-2026-0001 - Cliente.pdf
+   ├─ 📁 Cotizaciones Helgen (PDF) / 📁 2026 / HLG-2026-0001 - Cliente.pdf      (cotizaciones "Sin proyecto")
+   ├─ 📁 Proyectos / 📁 2026 / 📁 PRY-2026-0001 — Cliente — Nombre / Cotizaciones, Órdenes de compra, Pagos
    ├─ 📁 Catálogos SAT / SAT_c_ClaveProdServ.csv, SAT_c_ClaveUnidad.csv, 📊 Catálogos SAT (CFDI 4.0)
    ├─ 📁 Respaldos 2026-10-19                  (copias antes de la migración)
    └─ 📜 Cotizador Helgen (código de la app)   ← proyecto ANTERIOR, en desuso
@@ -164,10 +187,11 @@ Capa de sesión y `fetch` en `<script id="api-web">` (§10.2).
 El proyecto de la API (`1GsH8Dja…`) está en la carpeta `1w-T05ql62SXxsm3z4u-xCpMjcdXc0b0p` (antes "PRUEBAS — Cotizador web"),
 junto con los archivos de prueba que ya no se usan (§9).
 
-**Pestaña `Cotizaciones`** (19 columnas, 1 fila por cotización): Folio, Fecha, Cliente, Empresa, RFC, Correo, Teléfono,
+**Pestaña `Cotizaciones`** (20 columnas, 1 fila por cotización): Folio, Fecha, Cliente, Empresa, RFC, Correo, Teléfono,
 Subtotal, IVA, Total, Elaboró, PDF (link), Conceptos (JSON: clave, descripcion, unidad, cantidad, precio, importe y, si vienen
 del catálogo, claveSat/unidadSat), Notas, Marca (Helgen / Helgen Energy), Dirección, `vendedor_email`, `vendedor_nombre`,
-`vendedor_apellido`. Las columnas P:S se agregaron el 19/10/2026 (§11); las filas 0001–0004 no las tienen llenas.
+`vendedor_apellido`, `proyecto_folio` (T; vacío = "Sin proyecto"). Las columnas P:S se agregaron el 19/10/2026 (§11); las
+filas 0001–0004 no las tienen llenas. La T se agregó con Proyectos (10/2026): las filas anteriores quedan vacías y no se mueven.
 `guardarCotizacion` reescribe la fila de encabezados si no coincide con `ENCABEZADOS_COTIZACIONES`.
 
 **Pestaña `Config`** (Clave | Valor, columna B en formato texto): `EMPRESA_NOMBRE` (Helgen Servicios Especializados),
@@ -175,11 +199,16 @@ del catálogo, claveSat/unidadSat), Notas, Marca (Helgen / Helgen Energy), Direc
 `PREFIJO_FOLIO` (HLG), `IVA_TASA` (0.16), `VIGENCIA_DIAS` (15), `MONEDA`, `LOGO_FILE_ID` (vacío = logo de `Logo.js`),
 `TERMINOS_HELGEN`, `TERMINOS_ENERGY` (un término por renglón dentro de la celda).
 
+**Pestaña `Proyectos`** (1 fila por proyecto): Folio (`PRY-AAAA-NNNN`), Fecha, Nombre, Cliente ("nombre — empresa"),
+`cliente_id` (ver `idCliente`), Ubicación, Estado (Activo/Cerrado/Cancelado; **se cambia con la lista desplegable en la hoja**,
+no hay pantalla), `carpeta_id`, `vendedor_email`, `vendedor_nombre`, `vendedor_apellido`.
+
 **"Catálogo Helgen" / pestaña `Catalogo`**: Clave (única, mayúsculas), Descripción, Unidad, Precio unitario (sin IVA),
 Actualizado, Actualizó, Clave SAT, Unidad SAT. A:C y G:H en formato texto.
 
 **Script Properties** del proyecto `1GsH8Dja…` (Configuración del proyecto en el editor):
 `SPREADSHEET_ID`, `FOLDER_ID`, `CATALOGO_ID`, `SAT_ID`, `CONSECUTIVO_AAAA` (p. ej. `CONSECUTIVO_2026`),
+`PROYECTOS_FOLDER_ID` y `CONSECUTIVO_PROY_AAAA` (se crean solos con el primer proyecto),
 `ANTHROPIC_API_KEY` (opcional; activa la IA para claves SAT; el proyecto anterior no la tenía). Nunca poner la API key en el código.
 
 ## 6. Decisiones tomadas (y por qué)
@@ -242,6 +271,28 @@ Actualizado, Actualizó, Clave SAT, Unidad SAT. A:C y G:H en formato texto.
 - Publicar siempre sobre el mismo deployment (misma `API_URL`). Nunca `clasp deploy` sin `--deploymentId`.
 - Si se agrega un servicio nuevo de Google, el dueño debe autorizar el permiso una vez desde el editor (`UrlFetchApp` ya está autorizado).
 
+### 6.9 Proyectos
+- **Opcionales al cotizar** ("Sin proyecto" por omisión). Solo se pueden elegir proyectos `Activo`; el servidor lo vuelve a revisar.
+- **No hay hoja de clientes**: el cliente del proyecto es el de "Datos del cliente" (mismo datalist y autorrelleno; uno nuevo se
+  escribe ahí, como siempre). Se guarda como texto + `cliente_id` (RFC o `SIN-RFC:nombre|empresa`, ver `idCliente`). Si después
+  se le agrega RFC al cliente, su `id` cambia a ese RFC y los proyectos viejos conservan el `SIN-RFC:…`.
+- Folio propio con contador `CONSECUTIVO_PROY_AAAA` bajo el **mismo** candado de script que las cotizaciones.
+- **Subcarpetas que se reparan solas:** las subcarpetas de un proyecto se buscan **por nombre**. Si alguien borra (Papelera) o
+  renombra `Cotizaciones`, `Órdenes de compra` o `Pagos`, la próxima vez que se necesite el sistema **crea una nueva** con el
+  nombre correcto (la renombrada se queda como está, con sus archivos). Si se borra la carpeta completa del proyecto, se
+  vuelve a crear (con sus 3 subcarpetas) y se actualiza `carpeta_id` en la hoja. Igual con `Proyectos` y su carpeta de año.
+  Renombrar la carpeta **del proyecto** sí se puede (se usa por ID).
+- Las cotizaciones viejas no se mueven ni se ligan a proyectos.
+
+### 6.10 Modelo futuro (fase 2; NO construido)
+- Pestañas `OrdenesCompra`, `Pagos` y `Gastos` en la base de datos, cada una con su folio (`OC-`, `PAG-`, `GAS-AAAA-NNNN`),
+  contador `CONSECUTIVO_<TIPO>_AAAA` (usar `siguienteFolio_(prefijo, hoja, 'CONSECUTIVO_OC_')`), columna **`proyecto_folio`**
+  y `vendedor_*` del token. Crear las pestañas con el patrón de `hojaProyectos_()` (encabezados que se migran solos).
+- Archivos en `subcarpetaProyecto_(proyecto, 'Órdenes de compra' | 'Pagos')`. Gastos aún no tiene subcarpeta: agregarla a
+  `SUBCARPETAS_PROYECTO` cuando se construya (los proyectos viejos la obtienen sola por §6.9).
+- **Monto contratado:** la fase 2 necesitará marcar una cotización como **"Aceptada"** (columna de estatus en `Cotizaciones`)
+  para definir el monto contratado del proyecto, contra el que se comparan órdenes de compra, pagos y gastos.
+
 ## 7. Reglas del proyecto (no romper)
 1. Los totales SIEMPRE se recalculan en el servidor (`normalizarCotizacion`). El navegador solo muestra una vista previa.
 2. Redondeo a 2 decimales por renglón (`redondear`). IVA = subtotal × tasa.
@@ -263,11 +314,12 @@ Actualizado, Actualizó, Clave SAT, Unidad SAT. A:C y G:H en formato texto.
 ## 8. Cómo trabajar
 
 ```bash
-# Pruebas (Node, servicios de Google simulados). Correr las cuatro antes de subir.
+# Pruebas (Node, servicios de Google simulados). Correr las cinco antes de subir.
 mkdir -p /tmp/salida-pdf && node tests/cotizacion.test.js Code.js /tmp/salida-pdf   # folios, idempotencia, marcas, Config, clientes; deja helgen.html / energy.html
 node tests/catalogo.test.js .                                  # catálogo: migración, alta, edición, duplicados
 node tests/sat.test.js . "$HOME/Library/CloudStorage/GoogleDrive-efrain@helgen.tech/Mi unidad/Cotizador Helgen/Catálogos SAT"
 node tests/sesion.test.js .                                    # token en doPost, vendedor_* (vendedor falso se ignora)
+node tests/proyectos.test.js .                                 # folio PRY, carpetas, proyecto_folio, subcarpetas que se reparan
 node tests/probar-busqueda-sat.js Code.js "<ruta>/SAT_c_ClaveProdServ.csv"   # ver qué sugiere la búsqueda por palabras
 
 # Subir y publicar la API (misma API_URL)
@@ -310,6 +362,7 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - Si Helgen Energy tiene logo/colores propios, aplicarlos solo a sus cotizaciones.
 - `GUIA.md` describe el proyecto anterior; actualizarla si se va a usar.
 - Ideas mencionadas: enviar PDF por correo, duplicar cotización, estatus (Enviada/Aceptada/Rechazada), descuentos por renglón.
+- Proyectos fase 2: órdenes de compra, pagos, gastos y cotización "Aceptada" (§6.10).
 
 ## 10. Interfaz web y sesión con Google
 

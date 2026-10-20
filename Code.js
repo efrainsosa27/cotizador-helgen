@@ -93,6 +93,8 @@ const API_FUNCIONES = {
   guardarProducto: guardarProducto,
   guardarCotizacion: guardarCotizacion,
   sugerirClavesSat: sugerirClavesSat,
+  listarProyectos: listarProyectos,
+  crearProyecto: crearProyecto,
 };
 
 /**
@@ -168,7 +170,7 @@ const CONFIG_EJEMPLO_ANTERIOR = {
 const ENCABEZADOS_COTIZACIONES = [
   'Folio', 'Fecha', 'Cliente', 'Empresa', 'RFC', 'Correo', 'Teléfono',
   'Subtotal', 'IVA', 'Total', 'Elaboró', 'PDF', 'Conceptos (JSON)', 'Notas', 'Marca', 'Dirección',
-  'vendedor_email', 'vendedor_nombre', 'vendedor_apellido'
+  'vendedor_email', 'vendedor_nombre', 'vendedor_apellido', 'proyecto_folio'
 ];
 
 function setup() {
@@ -546,9 +548,20 @@ function getDatosIniciales() {
     marcas: MARCAS,
     catalogo: getCatalogo_(),
     clientes: getClientes(),
+    proyectos: proyectosParaInicio_(),
     usuario: usuarioActual_(),
     vendedor: VENDEDOR_,
   };
+}
+
+/** Proyectos activos para el buscador. Si fallan, la app carga igual (se puede cotizar "Sin proyecto"). */
+function proyectosParaInicio_() {
+  try {
+    return listarProyectos('', false);
+  } catch (e) {
+    console.warn('Sin lista de proyectos: ' + e.message);
+    return [];
+  }
 }
 
 /**
@@ -571,12 +584,14 @@ function listarCotizaciones(busqueda) {
   const datos = hoja.getDataRange().getDisplayValues().slice(1).reverse();
   const q = String(busqueda || '').toLowerCase().trim();
   return datos
-    .filter(r => !q || (r[0] + ' ' + r[2] + ' ' + r[3]).toLowerCase().includes(q))
+    .filter(r => !q || (r[0] + ' ' + r[2] + ' ' + r[3] + ' ' + (r[19] || '')).toLowerCase().includes(q))
     .slice(0, 100)
     .map(r => ({
       folio: r[0], fecha: r[1], cliente: r[2], empresa: r[3], total: r[9], elaboro: r[10], pdf: r[11],
       // Filas anteriores a la sesión con Google no tienen vendedor: se muestra el correo de "Elaboró"
       vendedor: [r[17], r[18]].filter(Boolean).join(' ') || r[16] || r[10] || '',
+      // Filas anteriores a Proyectos (o cotizadas sin proyecto)
+      proyecto: r[19] || 'Sin proyecto',
     }));
 }
 
@@ -603,6 +618,8 @@ function guardarCotizacion(payload) {
   const idSolicitud = String((payload && payload.idSolicitud) || '').slice(0, 64);
   const cache = CacheService.getScriptCache();
   const claveCache = idSolicitud ? 'REQ_' + idSolicitud : '';
+  // Proyecto opcional: vacío = "Sin proyecto" (el PDF va a la carpeta del año, como antes)
+  const proyectoFolio = String((payload && payload.proyectoFolio) || '').trim().toUpperCase();
 
   const lock = LockService.getScriptLock();
   // Evita folios duplicados si dos personas guardan a la vez
@@ -613,6 +630,18 @@ function guardarCotizacion(payload) {
     if (claveCache) {
       const previo = cache.get(claveCache);
       if (previo) return JSON.parse(previo);
+    }
+
+    // El proyecto se valida dentro del candado: que exista y siga Activo
+    let carpetaPdf = null;
+    if (proyectoFolio) {
+      const proyecto = buscarProyecto_(hojaProyectos_(), proyectoFolio);
+      if (!proyecto) throw new Error('No existe el proyecto ' + proyectoFolio + '. Elige otro o cotiza sin proyecto.');
+      if (proyecto.estado !== 'Activo') {
+        throw new Error('El proyecto ' + proyectoFolio + ' está ' + proyecto.estado.toLowerCase() +
+          ': ya no se le pueden agregar cotizaciones.');
+      }
+      carpetaPdf = subcarpetaProyecto_(proyecto, 'Cotizaciones');
     }
 
     const hojaCot = db_().getSheetByName('Cotizaciones');
@@ -628,9 +657,10 @@ function guardarCotizacion(payload) {
     const html = construirHtmlPdf(datos, cfg, logoDataUrl_(cfg.LOGO_FILE_ID));
     const nombre = folio + ' - ' + (datos.cliente.empresa || datos.cliente.nombre) + '.pdf';
     const pdf = Utilities.newBlob(html, 'text/html', folio + '.html').getAs('application/pdf').setName(nombre);
-    const archivo = carpetaDelAnio_(ahora.getFullYear()).createFile(pdf);
+    const archivo = (carpetaPdf || carpetaDelAnio_(ahora.getFullYear())).createFile(pdf);
 
-    // Registro (Marca, Dirección y vendedor_* se agregaron después: se ponen los encabezados que falten)
+    // Registro (Marca, Dirección, vendedor_* y proyecto_folio se agregaron después: se reescribe solo la fila 1
+    // de encabezados; las filas de datos no se mueven y las viejas quedan vacías en las columnas nuevas)
     const nCols = ENCABEZADOS_COTIZACIONES.length;
     const actuales = hojaCot.getRange(1, 1, 1, nCols).getValues()[0];
     if (ENCABEZADOS_COTIZACIONES.some((h, i) => actuales[i] !== h)) {
@@ -643,11 +673,11 @@ function guardarCotizacion(payload) {
       t(datos.cliente.email), t(datos.cliente.telefono),
       datos.subtotal, datos.iva, datos.total, datos.elaboro, archivo.getUrl(),
       JSON.stringify(datos.items), t(datos.notas), MARCAS[datos.marca], t(datos.cliente.direccion),
-      t(vendedor.email), t(vendedor.nombre), t(vendedor.apellido),
+      t(vendedor.email), t(vendedor.nombre), t(vendedor.apellido), proyectoFolio,
     ]);
     SpreadsheetApp.flush();
 
-    const resultado = { folio: folio, url: archivo.getUrl(), total: datos.total };
+    const resultado = { folio: folio, url: archivo.getUrl(), total: datos.total, proyectoFolio: proyectoFolio };
     if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
     return resultado;
   } finally {
@@ -660,11 +690,12 @@ function guardarCotizacion(payload) {
  * Toma el mayor entre el contador guardado y el último folio registrado en la hoja,
  * así no se repite aunque alguien borre o edite el contador en Script Properties.
  */
-function siguienteFolio_(prefijo, hojaCot) {
+function siguienteFolio_(prefijo, hoja, baseContador) {
   const props = PropertiesService.getScriptProperties();
   const anio = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy');
-  const clave = 'CONSECUTIVO_' + anio;
-  const filas = hojaCot.getLastRow() > 1 ? hojaCot.getRange(2, 1, hojaCot.getLastRow() - 1, 1).getValues() : [];
+  // Cotizaciones: CONSECUTIVO_AAAA; proyectos: CONSECUTIVO_PROY_AAAA (cada tipo de folio lleva su contador)
+  const clave = (baseContador || 'CONSECUTIVO_') + anio;
+  const filas = hoja.getLastRow() > 1 ? hoja.getRange(2, 1, hoja.getLastRow() - 1, 1).getValues() : [];
   const enHoja = maxConsecutivo(filas.map(r => r[0]), prefijo, anio);
   const n = Math.max(Number(props.getProperty(clave) || 0), enHoja) + 1;
   props.setProperty(clave, String(n));
@@ -686,6 +717,174 @@ function logoDataUrl_(fileId) {
   } catch (e) {
     return LOGO_HELGEN_AZUL;
   }
+}
+
+// ====== 4.1 PROYECTOS ======
+// Pestaña "Proyectos" en la base de datos + carpeta "Cotizador Helgen/Proyectos/AAAA/<folio> — <cliente> — <nombre>/".
+// Lo que se agregue después (OrdenesCompra, Pagos, Gastos) se liga por proyecto_folio (ver CLAUDE.md).
+
+const ENCABEZADOS_PROYECTOS = [
+  'Folio', 'Fecha', 'Nombre', 'Cliente', 'cliente_id', 'Ubicación', 'Estado', 'carpeta_id',
+  'vendedor_email', 'vendedor_nombre', 'vendedor_apellido'
+];
+const COL_ESTADO_PROYECTO = 7;   // G
+const COL_CARPETA_PROYECTO = 8;  // H
+const ESTADOS_PROYECTO = ['Activo', 'Cerrado', 'Cancelado'];
+const SUBCARPETAS_PROYECTO = ['Cotizaciones', 'Órdenes de compra', 'Pagos'];
+const PREFIJO_PROYECTO = 'PRY';
+
+/**
+ * Pestaña "Proyectos". La primera vez la crea (encabezados + lista desplegable de Estado);
+ * si le faltan encabezados nuevos, reescribe solo la fila 1.
+ */
+function hojaProyectos_() {
+  const ss = db_();
+  let hoja = ss.getSheetByName('Proyectos');
+  if (!hoja) {
+    try {
+      hoja = ss.insertSheet('Proyectos');
+    } catch (e) {
+      // Otra petición la acaba de crear
+      hoja = ss.getSheetByName('Proyectos');
+      if (!hoja) throw e;
+    }
+    hoja.setFrozenRows(1);
+    hoja.getRange('A:H').setNumberFormat('@');
+    hoja.getRange('B:B').setNumberFormat('dd/MM/yyyy HH:mm');
+    hoja.getRange(2, COL_ESTADO_PROYECTO, hoja.getMaxRows() - 1, 1).setDataValidation(
+      SpreadsheetApp.newDataValidation().requireValueInList(ESTADOS_PROYECTO, true).setAllowInvalid(false)
+        .setHelpText('Estado del proyecto: Activo, Cerrado o Cancelado.').build());
+    hoja.setColumnWidth(3, 260); hoja.setColumnWidth(4, 260); hoja.setColumnWidth(6, 220);
+  }
+  const n = ENCABEZADOS_PROYECTOS.length;
+  const actuales = hoja.getRange(1, 1, 1, n).getValues()[0];
+  if (ENCABEZADOS_PROYECTOS.some((h, i) => actuales[i] !== h)) {
+    hoja.getRange(1, 1, 1, n).setValues([ENCABEZADOS_PROYECTOS])
+      .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+  }
+  return hoja;
+}
+
+/** Proyectos con búsqueda por folio, cliente o nombre. Por omisión solo los Activos; los más recientes primero. */
+function listarProyectos(busqueda, incluirInactivos) {
+  const hoja = hojaProyectos_();
+  const filas = hoja.getLastRow() > 1
+    ? hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
+  return filtrarProyectos(proyectosDesdeFilas(filas), busqueda, incluirInactivos, 50)
+    .map(p => ({ folio: p.folio, nombre: p.nombre, cliente: p.cliente, clienteId: p.clienteId,
+      ubicacion: p.ubicacion, estado: p.estado, fecha: p.fecha }));
+}
+
+/** Proyecto por folio (con su número de fila), o null. */
+function buscarProyecto_(hoja, folio) {
+  const buscado = String(folio || '').trim().toUpperCase();
+  if (!buscado || hoja.getLastRow() < 2) return null;
+  const filas = hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues();
+  const lista = proyectosDesdeFilas(filas);
+  for (let i = 0; i < lista.length; i++) {
+    if (lista[i].folio.toUpperCase() === buscado) return Object.assign(lista[i], { hoja: hoja, fila: i + 2 });
+  }
+  return null;
+}
+
+/**
+ * Alta de proyecto (desde "Nuevo proyecto" en la interfaz). p = {nombre, ubicacion, cliente:{nombre, empresa, rfc},
+ * idSolicitud}. Folio PRY-AAAA-NNNN bajo el mismo candado que las cotizaciones; primero crea la carpeta y luego la
+ * fila, para que no quede un proyecto registrado sin carpeta.
+ */
+function crearProyecto(p) {
+  const vendedor = VENDEDOR_;
+  if (!vendedor) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + ' para crear proyectos.');
+  const datos = normalizarProyecto(p);
+
+  const idSolicitud = String((p && p.idSolicitud) || '').slice(0, 64);
+  const cache = CacheService.getScriptCache();
+  const claveCache = idSolicitud ? 'PRY_' + idSolicitud : '';
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    throw new Error('El sistema está ocupado guardando otro registro. Intenta de nuevo en unos segundos.');
+  }
+  try {
+    if (claveCache) {
+      const previo = cache.get(claveCache);
+      if (previo) return JSON.parse(previo);
+    }
+
+    const hoja = hojaProyectos_();
+    const folio = siguienteFolio_(PREFIJO_PROYECTO, hoja, 'CONSECUTIVO_PROY_');
+    const ahora = new Date();
+    const carpeta = crearCarpetaProyecto_(folio, datos, ahora.getFullYear());
+
+    const t = textoCelda;
+    hoja.appendRow([
+      folio, ahora, t(datos.nombre), t(datos.cliente), t(datos.clienteId), t(datos.ubicacion), 'Activo', carpeta.getId(),
+      t(vendedor.email), t(vendedor.nombre), t(vendedor.apellido),
+    ]);
+    SpreadsheetApp.flush();
+
+    const resultado = { folio: folio, nombre: datos.nombre, cliente: datos.cliente, clienteId: datos.clienteId,
+      ubicacion: datos.ubicacion, estado: 'Activo', url: carpeta.getUrl() };
+    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
+    return resultado;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Carpeta "Proyectos" junto a la base de datos (en la carpeta maestra). Se crea sola y se guarda en PROYECTOS_FOLDER_ID. */
+function carpetaProyectos_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('PROYECTOS_FOLDER_ID');
+  if (id) {
+    try {
+      const f = DriveApp.getFolderById(id);
+      if (!f.isTrashed()) return f;
+    } catch (e) { /* se borró: se vuelve a crear abajo */ }
+  }
+  const padres = DriveApp.getFileById(props.getProperty('SPREADSHEET_ID')).getParents();
+  const maestra = padres.hasNext() ? padres.next() : DriveApp.getRootFolder();
+  const carpeta = subcarpeta_(maestra, 'Proyectos');
+  props.setProperty('PROYECTOS_FOLDER_ID', carpeta.getId());
+  return carpeta;
+}
+
+/** Subcarpeta por nombre (ignora las que están en la Papelera); si no existe, la crea. */
+function subcarpeta_(padre, nombre) {
+  const it = padre.getFoldersByName(nombre);
+  while (it.hasNext()) {
+    const f = it.next();
+    if (!f.isTrashed()) return f;
+  }
+  return padre.createFolder(nombre);
+}
+
+/** Proyectos/AAAA/<folio> — <cliente> — <nombre>/ con sus subcarpetas. */
+function crearCarpetaProyecto_(folio, datos, anio) {
+  const carpetaAnio = subcarpeta_(carpetaProyectos_(), String(anio));
+  const carpeta = carpetaAnio.createFolder(nombreCarpetaProyecto(folio, datos.cliente, datos.nombre));
+  SUBCARPETAS_PROYECTO.forEach(s => carpeta.createFolder(s));
+  return carpeta;
+}
+
+/**
+ * Subcarpeta de un proyecto ("Cotizaciones", "Órdenes de compra", "Pagos"…). Se busca por nombre: si alguien la
+ * borró o la renombró, se crea una nueva. Si falta la carpeta del proyecto, se vuelve a crear y se actualiza
+ * carpeta_id en la hoja.
+ */
+function subcarpetaProyecto_(proyecto, nombreSub) {
+  let carpeta = null;
+  try {
+    carpeta = proyecto.carpetaId ? DriveApp.getFolderById(proyecto.carpetaId) : null;
+    if (carpeta && carpeta.isTrashed()) carpeta = null;
+  } catch (e) { carpeta = null; }
+  if (!carpeta) {
+    const anio = Number(String(proyecto.folio).split('-')[1]) || new Date().getFullYear();
+    carpeta = crearCarpetaProyecto_(proyecto.folio, proyecto, anio);
+    proyecto.carpetaId = carpeta.getId();
+    if (proyecto.hoja && proyecto.fila) proyecto.hoja.getRange(proyecto.fila, COL_CARPETA_PROYECTO).setValue(carpeta.getId());
+  }
+  return subcarpeta_(carpeta, nombreSub);
 }
 
 // ====== 5. LÓGICA PURA (sin servicios de Google; se puede probar fuera) ======
@@ -751,8 +950,7 @@ function maxConsecutivo(folios, prefijo, anio) {
  * Columnas: 0 Folio, 1 Fecha, 2 Cliente, 3 Empresa, 4 RFC, 5 Correo, 6 Teléfono, 15 Dirección.
  */
 function clientesDesdeFilas(filas) {
-  const normal = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase().replace(/\s+/g, ' ').trim();
+  const normal = textoNormal;
   const mapa = {};
   (filas || []).forEach((r, i) => {
     const nombre = String(r[2] || '').trim();
@@ -773,9 +971,77 @@ function clientesDesdeFilas(filas) {
   lista.forEach(c => { const n = normal(c.nombre); porNombre[n] = (porNombre[n] || 0) + 1; });
   lista.forEach(c => {
     c.etiqueta = porNombre[normal(c.nombre)] > 1 && c.empresa ? c.nombre + ' — ' + c.empresa : c.nombre;
+    c.id = idCliente(c);
     delete c.orden;
   });
   return lista;
+}
+
+/** Texto sin acentos, en minúsculas y con espacios simples (para comparar nombres). */
+function textoNormal(s) {
+  return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+// RFC genéricos del SAT (público en general / extranjeros): los comparten muchos clientes, no identifican a nadie
+const RFC_GENERICOS = ['XAXX010101000', 'XEXX010101000'];
+
+/**
+ * Identificador de un cliente (no hay hoja de clientes: salen de Cotizaciones). El RFC si es válido y no genérico;
+ * si no, "SIN-RFC:" + nombre|empresa normalizados (la misma llave con que clientesDesdeFilas agrupa).
+ */
+function idCliente(c) {
+  const rfc = String((c && c.rfc) || '').replace(/[\s-]/g, '').toUpperCase();
+  if (/^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/.test(rfc) && RFC_GENERICOS.indexOf(rfc) === -1) return rfc;
+  return 'SIN-RFC:' + textoNormal(c && c.nombre) + '|' + textoNormal(c && c.empresa);
+}
+
+/** Valida y limpia un proyecto nuevo. El cliente se guarda como "nombre — empresa" más su cliente_id. */
+function normalizarProyecto(p) {
+  const nombre = String((p && p.nombre) || '').trim().replace(/\s+/g, ' ');
+  const ubicacion = String((p && p.ubicacion) || '').trim();
+  const c = (p && p.cliente) || {};
+  const cli = { nombre: String(c.nombre || '').trim(), empresa: String(c.empresa || '').trim(),
+    rfc: String(c.rfc || '').trim().toUpperCase() };
+  if (!nombre) throw new Error('El nombre del proyecto es obligatorio.');
+  if (nombre.length > 80) throw new Error('El nombre del proyecto debe tener máximo 80 caracteres.');
+  if (ubicacion.length > 200) throw new Error('La ubicación debe tener máximo 200 caracteres.');
+  if (!cli.nombre) throw new Error('Elige o escribe el cliente del proyecto (en "Datos del cliente").');
+  return {
+    nombre: nombre, ubicacion: ubicacion,
+    cliente: cli.empresa && textoNormal(cli.empresa) !== textoNormal(cli.nombre) ? cli.nombre + ' — ' + cli.empresa : cli.nombre,
+    clienteId: idCliente(cli),
+  };
+}
+
+/** "PRY-2026-0001 — Cliente — Nombre", sin caracteres que Drive o Windows no acepten, máximo 150 caracteres. */
+function nombreCarpetaProyecto(folio, cliente, nombre) {
+  const limpio = s => String(s || '').replace(/[\/\\:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim();
+  const cli = limpio(cliente).slice(0, 60);
+  return [limpio(folio), cli, limpio(nombre)].filter(Boolean).join(' — ').slice(0, 150).trim();
+}
+
+/** Filas de la pestaña Proyectos (sin encabezado) → objetos. Columnas en ENCABEZADOS_PROYECTOS. */
+function proyectosDesdeFilas(filas) {
+  return (filas || []).filter(r => String(r[0] || '').trim()).map(r => ({
+    folio: String(r[0]).trim(),
+    fecha: r[1] instanceof Date
+      ? [r[1].getDate(), r[1].getMonth() + 1].map(x => String(x).padStart(2, '0')).join('/') + '/' + r[1].getFullYear()
+      : String(r[1] || ''),
+    nombre: String(r[2] || ''), cliente: String(r[3] || ''), clienteId: String(r[4] || ''),
+    ubicacion: String(r[5] || ''),
+    estado: String(r[6] || '').trim() || 'Activo',
+    carpetaId: String(r[7] || ''),
+  }));
+}
+
+/** Busca por folio, cliente o nombre (sin acentos ni mayúsculas); más recientes primero; máximo n. */
+function filtrarProyectos(lista, busqueda, incluirInactivos, n) {
+  const q = textoNormal(busqueda);
+  return (lista || []).slice().reverse()
+    .filter(p => incluirInactivos || p.estado === 'Activo')
+    .filter(p => !q || textoNormal(p.folio + ' ' + p.cliente + ' ' + p.nombre).includes(q))
+    .slice(0, n || 50);
 }
 
 // ---- Búsqueda en catálogos del SAT (c_ClaveProdServ / c_ClaveUnidad) ----
