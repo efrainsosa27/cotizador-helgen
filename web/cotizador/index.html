@@ -84,6 +84,20 @@
   #gisBoton { display:flex; justify-content:center; min-height:44px; }
   #loginMsg { margin:14px 0 0; color:#B91C1C; font-size:12px; }
   #loginMsg:empty { display:none; }
+  /* Cobranza */
+  .chip { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:bold; border:1px solid var(--borde); }
+  .chip.firmado { background:#E6FBF7; border-color:var(--teal); color:var(--azul); }
+  .chip.aceptada { background:#FFF7E6; border-color:#F5B544; color:#7A4B00; }
+  .chip.cancelado { background:#FEE2E2; border-color:#DC2626; color:#991B1B; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin-bottom:14px; }
+  .tile { border:1px solid var(--borde); border-radius:8px; padding:10px 12px; }
+  .tile span { display:block; font-size:11px; color:var(--gris); text-transform:uppercase; }
+  .tile b { font-size:16px; color:var(--azul); }
+  .barra { height:8px; background:var(--cielo); border-radius:4px; overflow:hidden; min-width:80px; }
+  .barra i { display:block; height:100%; background:var(--teal); }
+  .fila-cancelada td { color:var(--gris); text-decoration:line-through; }
+  .fila-cancelada td:last-child { text-decoration:none; }
+  .aviso-moneda { color:#B45309; font-weight:bold; }
 </style>
 </head>
 <body>
@@ -94,6 +108,7 @@
     <button id="tabNueva" class="activo" onclick="verTab('nueva')">Nueva cotización</button>
     <button id="tabHist" onclick="verTab('hist')">Historial</button>
     <button id="tabCat" onclick="verTab('cat')">Catálogo</button>
+    <button id="tabCob" class="oculto" onclick="verTab('cob')">Cobranza</button>
   </nav>
   <div id="usuario" class="usuario oculto">
     <span id="usuarioNombre"></span>
@@ -126,6 +141,11 @@
           <select id="marca">
             <option value="helgen">Helgen</option>
             <option value="energy">Helgen Energy (paneles solares)</option>
+          </select></div>
+        <div><label>Moneda *</label>
+          <select id="moneda" onchange="cambiarMoneda()">
+            <option value="MXN">MXN · pesos mexicanos</option>
+            <option value="USD">USD · dólares estadounidenses</option>
           </select></div>
         <div><label>Nombre / Contacto *</label>
           <input id="cNombre" list="clientesList" autocomplete="off" placeholder="Escribe o elige un cliente">
@@ -175,6 +195,7 @@
         <tbody id="filas"></tbody>
       </table>
       <button class="btn btn-sec" style="margin-top:10px" onclick="agregarFila()">+ Agregar concepto</button>
+      <div id="notaMoneda" class="nota" style="margin-top:8px"></div>
     </div>
 
     <div class="modulo">
@@ -187,7 +208,7 @@
         <div class="totales">
           <div><span>Subtotal</span><span id="tSub">$0.00</span></div>
           <div><span id="lblIva">IVA (16%)</span><span id="tIva">$0.00</span></div>
-          <div class="total"><span>TOTAL</span><span id="tTot">$0.00</span></div>
+          <div class="total"><span id="lblTot">TOTAL MXN</span><span id="tTot">$0.00</span></div>
           <button id="btnGuardar" class="btn" style="width:100%; margin-top:12px" onclick="guardar()">Guardar y generar PDF</button>
         </div>
       </div>
@@ -244,6 +265,65 @@
       <table>
         <thead><tr><th style="width:130px">Clave</th><th>Descripción</th><th style="width:80px">Unidad</th><th class="num" style="width:150px">Precio sin IVA</th><th style="width:110px">Clave SAT</th></tr></thead>
         <tbody id="listaCat"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===== COBRANZA (solo rol de cobranza; el servidor lo vuelve a revisar en cada llamada) ===== -->
+  <section id="vistaCob" class="oculto">
+    <div class="modulo">
+      <h2>1 · Proyecto y contrato</h2>
+      <div class="proy-fila">
+        <div><label>Proyecto</label>
+          <input id="cobProyecto" list="cobProyectosList" autocomplete="off" placeholder="Busca por folio, cliente o nombre">
+          <datalist id="cobProyectosList"></datalist></div>
+        <button type="button" class="btn btn-sec" onclick="cargarProyectosCob()">Actualizar lista</button>
+      </div>
+      <div id="cobInfo" class="nota" style="margin-top:6px">Elige un proyecto para ver su contrato, esquema y pagos.</div>
+      <div id="cobDetalle" class="oculto">
+        <table style="margin-top:12px">
+          <thead><tr><th>Cotización</th><th>Fecha</th><th>Línea</th><th>Moneda</th><th class="num">Subtotal</th><th class="num">Total con IVA</th><th>PDF</th><th></th></tr></thead>
+          <tbody id="cobCots"></tbody>
+        </table>
+        <div id="cobContrato" class="sat"></div>
+      </div>
+    </div>
+
+    <div id="cobModEsquema" class="modulo oculto">
+      <h2>2 · Esquema de pagos</h2>
+      <div id="cobEsqNota" class="nota" style="margin-bottom:8px"></div>
+      <table>
+        <thead><tr><th style="width:30px">#</th><th>Etapa</th><th class="num" style="width:110px">%</th><th class="num">Monto</th>
+          <th class="num">Pagado</th><th class="num">Saldo</th><th style="width:120px">Avance</th><th style="width:30px"></th></tr></thead>
+        <tbody id="cobEsquema"></tbody>
+      </table>
+      <div id="cobEsqAcciones" class="acciones"></div>
+    </div>
+
+    <div id="cobModPagos" class="modulo oculto">
+      <h2>3 · Pagos</h2>
+      <div id="cobResumen" class="tiles"></div>
+      <div id="cobFormPago" class="sat oculto">
+        <div class="sat-titulo">Registrar pago · el comprobante es obligatorio (PDF o imagen, máx. 10 MB)</div>
+        <div class="grid">
+          <div><label>Fecha del pago *</label><input id="pgFecha" type="date"></div>
+          <div><label>Monto *</label><input id="pgMonto" type="number" min="0" step="0.01" style="text-align:right"></div>
+          <div><label>Moneda del pago *</label><select id="pgMoneda" onchange="pintarTipoCambio()"><option>MXN</option><option>USD</option></select></div>
+          <div id="pgTcCaja" class="oculto"><label>Tipo de cambio del día (pesos por dólar) *</label><input id="pgTc" type="number" min="0" step="0.0001" style="text-align:right"></div>
+          <div><label>Método *</label><select id="pgMetodo"></select></div>
+          <div><label>Referencia</label><input id="pgRef" maxlength="100" placeholder="Clave de rastreo, folio o núm. de cheque"></div>
+          <div><label>Etapa *</label><select id="pgEtapa"></select></div>
+          <div><label>Comprobante *</label><input id="pgArchivo" type="file" accept="application/pdf,image/jpeg,image/png,image/heic,.pdf,.jpg,.jpeg,.png,.heic"></div>
+        </div>
+        <div class="acciones">
+          <button type="button" id="btnPago" class="btn" onclick="registrarPago()">Registrar pago</button>
+          <span class="nota">Si el pago excede su etapa, el excedente pasa a la siguiente.</span>
+        </div>
+      </div>
+      <div id="cobSinPagos" class="nota"></div>
+      <table style="margin-top:12px">
+        <thead><tr><th>Folio</th><th>Fecha</th><th class="num">Monto</th><th class="num">Aplicado</th><th>Método / referencia</th><th>Etapa</th><th>Registró</th><th>Comprobante</th><th></th></tr></thead>
+        <tbody id="cobPagos"></tbody>
       </table>
     </div>
   </section>
@@ -406,7 +486,7 @@
 <script src="https://accounts.google.com/gsi/client" async onload="iniciarGis()" onerror="errorGis()"></script>
 
 <script>
-  let IVA = 0.16, CATALOGO = [], CLIENTES = [], PROYECTOS = [];
+  let IVA = 0.16, CATALOGO = [], CLIENTES = [], PROYECTOS = [], PERMISOS = {};
   // Un id por cotización: si el envío se repite, el servidor devuelve el mismo folio en vez de crear otro.
   const nuevoId = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(36).slice(2));
   let ID_SOLICITUD = nuevoId();
@@ -415,6 +495,10 @@
   const $ = id => document.getElementById(id);
   const r2 = n => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
   const mxn = n => r2(n).toLocaleString('es-MX', { style:'currency', currency:'MXN' });
+  // Importe con su moneda ("$1,160.00 MXN" / "$1,000.00 USD"); nunca se suman monedas distintas
+  const dinero = (n, moneda) => r2(n).toLocaleString('es-MX', { minimumFractionDigits:2, maximumFractionDigits:2 })
+    .replace(/^(-?)/, '$1$') + ' ' + (moneda || 'MXN');
+  const monedaActual = () => $('moneda').value === 'USD' ? 'USD' : 'MXN';
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
   // ---- Arranque ----
@@ -422,6 +506,9 @@
     IVA = d.ivaTasa; CATALOGO = d.catalogo;
     recibirClientes(d.clientes);
     recibirProyectos(d.proyectos);
+    // La pestaña Cobranza solo se muestra con permiso; el servidor lo revisa en cada llamada
+    PERMISOS = d.permisos || {};
+    $('tabCob').classList.toggle('oculto', !PERMISOS.cobranza);
     $('lblIva').textContent = 'IVA (' + Math.round(IVA * 100) + '%)';
     pintarDatalists();
     agregarFila();
@@ -442,7 +529,10 @@
     const aplicar = p => {
       if (!p) return;
       tr.querySelector('.clave').value = p.clave; tr.querySelector('.desc').value = p.descripcion;
-      tr.querySelector('.uni').value = p.unidad; tr.querySelector('.pu').value = p.precio;
+      tr.querySelector('.uni').value = p.unidad;
+      // El catálogo está en pesos: en una cotización en USD el precio se captura a mano
+      if (monedaActual() === 'USD') { tr.querySelector('.pu').value = ''; tr.querySelector('.pu').placeholder = 'USD'; tr.querySelector('.pu').focus(); }
+      else tr.querySelector('.pu').value = p.precio;
     };
     tr.querySelector('.desc').addEventListener('change', e => { aplicar(CATALOGO.find(x => x.descripcion === e.target.value)); recalcular(); });
     tr.querySelector('.clave').addEventListener('change', e => { aplicar(buscarClave(e.target.value)); recalcular(); });
@@ -467,12 +557,23 @@
     let sub = 0;
     leerItems().forEach(it => {
       const imp = r2(it.cantidad * r2(it.precio));
-      it._tr.querySelector('.imp').textContent = mxn(imp);
+      it._tr.querySelector('.imp').textContent = dinero(imp, monedaActual());
       sub += imp;
     });
     sub = r2(sub);
-    const iva = r2(sub * IVA);
-    $('tSub').textContent = mxn(sub); $('tIva').textContent = mxn(iva); $('tTot').textContent = mxn(sub + iva);
+    const iva = r2(sub * IVA), m = monedaActual();
+    $('tSub').textContent = dinero(sub, m); $('tIva').textContent = dinero(iva, m); $('tTot').textContent = dinero(sub + iva, m);
+    $('lblTot').textContent = 'TOTAL ' + m;
+  }
+
+  function cambiarMoneda() {
+    const usd = monedaActual() === 'USD';
+    const conPrecio = leerItems().some(it => it.precio > 0);
+    $('notaMoneda').innerHTML = usd
+      ? '<span class="aviso-moneda">Cotización en USD:</span> el catálogo llena clave y descripción; captura los precios en dólares.' +
+        (conPrecio ? ' <span class="aviso-moneda">Revisa los precios que ya capturaste: los del catálogo están en pesos.</span>' : '')
+      : '';
+    recalcular();
   }
 
   // ---- Guardar ----
@@ -483,6 +584,7 @@
       items: leerItems().map(({_tr, ...it}) => it),
       notas: $('notas').value,
       marca: $('marca').value,
+      moneda: monedaActual(),
       proyectoFolio: '',
       idSolicitud: ID_SOLICITUD,
     };
@@ -495,7 +597,7 @@
     $('btnGuardar').disabled = true; $('btnGuardar').textContent = 'Generando PDF…';
     google.script.run
       .withSuccessHandler(r => {
-        aviso('ok', 'Cotización <b>' + esc(r.folio) + '</b> guardada · Total ' + mxn(r.total) +
+        aviso('ok', 'Cotización <b>' + esc(r.folio) + '</b> guardada · Total ' + dinero(r.total, r.moneda) +
               (r.proyectoFolio ? ' · Proyecto <b>' + esc(r.proyectoFolio) + '</b>' : '') +
               ' · <a href="' + esc(r.url) + '" target="_blank">Abrir PDF</a>');
         limpiar();
@@ -519,6 +621,7 @@
     ['cNombre','cEmpresa','cRfc','cEmail','cTel','cDir','notas'].forEach(id => $(id).value = '');
     $('filas').innerHTML = ''; agregarFila(); recalcular();
     $('cInfo').textContent = '';
+    $('moneda').value = 'MXN'; cambiarMoneda();
     $('proyecto').value = ''; pintarProyInfo(); cerrarNuevoProyecto();
     google.script.run.withSuccessHandler(recibirClientes).getClientes(); // incluye al cliente recién guardado
     google.script.run.withSuccessHandler(recibirProyectos).listarProyectos('', false); // y proyectos de otros vendedores
@@ -534,7 +637,7 @@
     google.script.run.withSuccessHandler(lista => {
       $('hist').innerHTML = lista.length ? lista.map(c =>
         '<tr><td><b>' + esc(c.folio) + '</b></td><td>' + esc(c.fecha) + '</td><td>' + esc(c.cliente) + '</td><td>' +
-        esc(c.empresa) + '</td><td class="num">' + esc(c.total) + '</td><td>' + esc(c.vendedor || c.elaboro) + '</td><td>' +
+        esc(c.empresa) + '</td><td class="num">' + esc(c.total) + ' ' + esc(c.moneda || 'MXN') + '</td><td>' + esc(c.vendedor || c.elaboro) + '</td><td>' +
         (c.proyecto === 'Sin proyecto' ? '<span class="nota">Sin proyecto</span>' : esc(c.proyecto)) + '</td><td>' +
         (c.pdf ? '<a href="' + esc(c.pdf) + '" target="_blank">Ver</a>' : '') + '</td></tr>').join('')
         : '<tr><td colspan="8">Sin resultados.</td></tr>';
@@ -729,16 +832,230 @@
   }
   $('satBusca').addEventListener('keydown', e => { if (e.key === 'Enter') sugerirSat(); });
 
+
+  // ---- Cobranza (solo rol de cobranza) ----
+  let COB_PROYECTOS = [], COB = null, ESQ = [], ID_PAGO = nuevoId();
+  const MARCA_TXT = { helgen: 'Helgen', energy: 'Helgen Energy' };
+  const etiquetaCob = p => p.folio + ' — ' + p.cliente + ' — ' + p.nombre;
+
+  function cargarProyectosCob() {
+    google.script.run.withSuccessHandler(lista => {
+      COB_PROYECTOS = lista || [];
+      $('cobProyectosList').innerHTML = COB_PROYECTOS.map(p =>
+        '<option value="' + esc(etiquetaCob(p)) + '" label="' + esc((p.contrato ? 'Contrato: ' + p.contrato : 'Sin aceptada') +
+        (p.estado !== 'Activo' ? ' · ' + p.estado : '')) + '">').join('');
+    }).withFailureHandler(mostrarError).listarProyectosCobranza('');
+  }
+
+  function proyectoCobElegido() {
+    const folio = ($('cobProyecto').value.trim().match(/^PRY-\d{4}-\d{4}/i) || [''])[0].toUpperCase();
+    return (folio && COB_PROYECTOS.find(p => p.folio === folio)) || null;
+  }
+  $('cobProyecto').addEventListener('change', () => { const p = proyectoCobElegido(); if (p) abrirProyectoCob(p.folio); });
+
+  function abrirProyectoCob(folio) {
+    $('cobInfo').textContent = 'Cargando…';
+    google.script.run.withSuccessHandler(pintarCobranza).withFailureHandler(mostrarError).getCobranzaProyecto(folio);
+  }
+
+  /** Pinta todo a partir de la respuesta del servidor (vistaCobranza_). */
+  function pintarCobranza(v) {
+    COB = v;
+    const c = v.contrato, r = v.resumen, firmado = c && c.estado === 'Firmado';
+    const mon = c ? c.moneda : 'MXN';
+    $('cobProyecto').value = etiquetaCob(v.proyecto);
+    $('cobInfo').innerHTML = '<b>' + esc(v.proyecto.folio) + '</b> · ' + esc(v.proyecto.cliente) + ' · ' + esc(v.proyecto.nombre) +
+      (v.proyecto.estado !== 'Activo' ? ' · <span class="chip cancelado">' + esc(v.proyecto.estado) + '</span>' : '') +
+      ' · Contrato: ' + (c ? '<span class="chip ' + (firmado ? 'firmado' : 'aceptada') + '">' + esc(c.estado) + '</span>' : 'sin cotización aceptada');
+    $('cobDetalle').classList.remove('oculto');
+
+    // Cotizaciones del proyecto: una sola aceptada
+    $('cobCots').innerHTML = v.cotizaciones.length ? v.cotizaciones.map(q => {
+      const esAceptada = c && c.cotizacion === q.folio;
+      return '<tr><td><b>' + esc(q.folio) + '</b></td><td>' + esc(q.fecha) + '</td><td>' + esc(MARCA_TXT[q.marca]) + '</td><td>' + esc(q.moneda) +
+        '</td><td class="num">' + dinero(q.subtotal, q.moneda) + '</td><td class="num">' + dinero(q.total, q.moneda) + '</td><td>' +
+        (q.pdf ? '<a href="' + esc(q.pdf) + '" target="_blank">Ver</a>' : '') + '</td><td>' +
+        (esAceptada ? '<span class="chip ' + (firmado ? 'firmado' : 'aceptada') + '">Aceptada</span>'
+          : firmado ? '' : '<button type="button" class="btn btn-sec" onclick="aceptarCot(\'' + esc(q.folio) + '\')">Marcar aceptada</button>') +
+        '</td></tr>';
+    }).join('') : '<tr><td colspan="8" class="nota">Este proyecto no tiene cotizaciones.</td></tr>';
+
+    // Contrato
+    let h = '';
+    if (!c) h = '<span class="nota">Marca la cotización aceptada para definir el monto contratado.</span>';
+    else {
+      h = '<div class="sat-titulo">Monto contratado: ' + dinero(c.total, mon) + ' (con IVA) · subtotal ' + dinero(c.subtotal, mon) +
+        ' · ' + esc(MARCA_TXT[c.marca]) + '</div>';
+      if (firmado) {
+        h += '<div>Contrato firmado el <b>' + esc(c.fechaFirma) + '</b> · registró ' + esc(c.firmadoPor) +
+          '. La cotización aceptada, el monto y el esquema ya no se pueden cambiar.</div>';
+        if (v.puedeDesbloquear) {
+          h += '<div style="margin-top:10px"><label>Motivo del desbloqueo (queda registrado) *</label>' +
+            '<input id="cobMotivo" maxlength="500" placeholder="Ej. Se firmó con la cotización equivocada"></div>' +
+            '<div class="acciones"><button type="button" class="btn btn-sec" id="btnDesbloquear" onclick="desbloquearCob()">Desbloquear contrato</button></div>';
+        }
+      } else {
+        h += '<div class="proy-fila" style="margin-top:8px"><div style="max-width:220px"><label>Fecha de firma *</label>' +
+          '<input id="cobFechaFirma" type="date" max="' + esc(v.hoy) + '" value="' + esc(v.hoy) + '"></div>' +
+          '<button type="button" class="btn" id="btnFirmar" onclick="firmarCob()">Contrato firmado</button></div>' +
+          '<div class="nota" style="margin-top:6px">Al firmar se bloquean la cotización aceptada, el monto contratado y el esquema de pagos. ' +
+          'Después ya no se podrán agregar cotizaciones al proyecto.</div>';
+      }
+    }
+    $('cobContrato').innerHTML = h;
+
+    // Esquema
+    $('cobModEsquema').classList.toggle('oculto', !c);
+    ESQ = (v.esquema || []).map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje }));
+    $('cobEsqNota').textContent = !c ? '' : v.esquemaEditable
+      ? 'Helgen: puedes cambiar nombres, porcentajes y número de etapas hasta firmar el contrato. Deben sumar 100%.'
+      : c.marca === 'energy' && !firmado ? 'Helgen Energy: esquema fijo (60% / 30% / 10%).' : 'Esquema bloqueado por el contrato firmado.';
+    pintarEsquema();
+
+    // Pagos
+    $('cobModPagos').classList.toggle('oculto', !c);
+    $('cobResumen').innerHTML = r ? [['Contratado (con IVA)', dinero(r.contratado, mon)], ['Subtotal (referencia)', dinero(r.subtotal, mon)],
+      ['Pagado', dinero(r.pagado, mon)], ['Saldo', dinero(r.saldo, mon)], ['Avance', r.avance + '%']]
+      .map(([k, x]) => '<div class="tile"><span>' + k + '</span><b>' + x + '</b></div>').join('') : '';
+    $('cobFormPago').classList.toggle('oculto', !v.puedePagar);
+    $('cobSinPagos').textContent = c && !v.puedePagar ? 'Los pagos se registran cuando el contrato está firmado.' : '';
+    if (v.puedePagar) {
+      $('pgFecha').max = v.hoy; if (!$('pgFecha').value) $('pgFecha').value = v.hoy;
+      $('pgMoneda').value = mon;
+      $('pgMetodo').innerHTML = (v.metodos || []).map(m => '<option>' + esc(m) + '</option>').join('');
+      $('pgEtapa').innerHTML = (r ? r.etapas : []).map((e, i) => '<option value="' + (i + 1) + '">' + (i + 1) + ' · ' + esc(e.etapa) +
+        ' (saldo ' + dinero(e.saldo, mon) + ')</option>').join('');
+      const pendiente = r && r.etapas.findIndex(e => e.saldo > 0);
+      if (pendiente >= 0) $('pgEtapa').value = String(pendiente + 1);
+      pintarTipoCambio();
+    }
+    $('cobPagos').innerHTML = (v.pagos || []).map(p => '<tr' + (p.estado === 'Cancelado' ? ' class="fila-cancelada" title="' +
+      esc('Cancelado por ' + p.canceladoPor + ': ' + p.motivoCancelacion) + '"' : '') + '><td><b>' + esc(p.folio) + '</b></td><td>' + esc(p.fecha) +
+      '</td><td class="num">' + dinero(p.monto, p.monedaPago) + (p.tipoCambio ? '<div class="nota">TC ' + esc(p.tipoCambio) + '</div>' : '') +
+      '</td><td class="num">' + dinero(p.montoAplicado, p.monedaProyecto) + '</td><td>' + esc(p.metodo) + (p.referencia ? ' · ' + esc(p.referencia) : '') +
+      '</td><td>' + esc(p.etapa) + '</td><td>' + esc(p.registro) + '</td><td>' +
+      (p.comprobanteUrl ? '<a href="' + esc(p.comprobanteUrl) + '" target="_blank">Ver</a>' : '') + '</td><td>' +
+      (p.estado === 'Vigente' ? '<button type="button" class="quitar" title="Cancelar pago" onclick="cancelarPagoCob(\'' + esc(p.folio) + '\')">×</button>'
+        : '<span class="chip cancelado">Cancelado</span>') + '</td></tr>').join('');
+  }
+
+  function pintarEsquema() {
+    const v = COB, edit = v && v.esquemaEditable, mon = v && v.contrato ? v.contrato.moneda : 'MXN';
+    const total = v && v.contrato ? v.contrato.total : 0;
+    const res = v && v.resumen ? v.resumen.etapas : [];
+    const suma = r2(ESQ.reduce((s, e) => s + (Number(e.porcentaje) || 0), 0));
+    // Vista previa de montos (el servidor los recalcula): la última etapa se queda con los centavos
+    let acum = 0;
+    const montos = ESQ.map((e, i) => { const m = i === ESQ.length - 1 ? r2(total - acum) : r2(total * (Number(e.porcentaje) || 0) / 100); acum = r2(acum + m); return m; });
+    $('cobEsquema').innerHTML = ESQ.map((e, i) => {
+      const x = res[i] || {};
+      return '<tr><td>' + (i + 1) + '</td><td>' + (edit ? '<input value="' + esc(e.etapa) + '" maxlength="40" oninput="editarEtapa(' + i + ',\'etapa\',this.value)">' : esc(e.etapa)) +
+        '</td><td class="num">' + (edit ? '<input type="number" min="0" max="100" step="0.01" style="text-align:right" value="' + esc(e.porcentaje) +
+        '" oninput="editarEtapa(' + i + ',\'porcentaje\',this.value)">' : esc(e.porcentaje) + '%') +
+        '</td><td class="num">' + dinero(montos[i], mon) + '</td><td class="num">' + (x.pagado != null ? dinero(x.pagado, mon) : '') +
+        '</td><td class="num">' + (x.saldo != null ? dinero(x.saldo, mon) : '') + '</td><td>' +
+        (x.avance != null ? '<div class="barra" title="' + x.avance + '%"><i style="width:' + Math.max(0, Math.min(100, x.avance)) + '%"></i></div>' : '') +
+        '</td><td>' + (edit && ESQ.length > 1 ? '<button type="button" class="quitar" title="Quitar etapa" onclick="quitarEtapa(' + i + ')">×</button>' : '') + '</td></tr>';
+    }).join('') + (ESQ.length ? '<tr><td></td><td><b>Suma</b></td><td class="num"><b' + (Math.abs(suma - 100) > 0.001 ? ' class="aviso-moneda"' : '') + '>' +
+      suma + '%</b></td><td class="num"><b>' + dinero(total, mon) + '</b></td><td colspan="4"></td></tr>' : '');
+    $('cobEsqAcciones').innerHTML = edit ? '<button type="button" class="btn btn-sec" onclick="agregarEtapa()">+ Agregar etapa</button>' +
+      '<button type="button" class="btn" id="btnEsquema" onclick="guardarEsquemaCob()">Guardar esquema</button>' : '';
+  }
+  // Al editar un nombre no se vuelve a pintar (no se pierde el cursor); el % sí actualiza montos y suma
+  function editarEtapa(i, campo, valor) { ESQ[i][campo] = valor; if (campo === 'porcentaje') pintarEsquemaSinFoco(); }
+  function pintarEsquemaSinFoco() { const a = document.activeElement, idx = a && a.closest && a.closest('tr') ? [...$('cobEsquema').children].indexOf(a.closest('tr')) : -1;
+    pintarEsquema(); if (idx >= 0) { const inp = $('cobEsquema').children[idx].querySelector('input[type=number]'); if (inp) { inp.focus(); const l = inp.value.length; try { inp.setSelectionRange(l, l); } catch (e) {} } } }
+  function agregarEtapa() { if (ESQ.length >= 10) { mostrarError('Máximo 10 etapas.'); return; } ESQ.push({ etapa: '', porcentaje: 0 }); pintarEsquema(); }
+  function quitarEtapa(i) { ESQ.splice(i, 1); pintarEsquema(); }
+
+  // Botones que llaman al servidor: se desactivan mientras responde
+  function accionCob(boton, funcion, args, alExito) {
+    const b = boton && $(boton);
+    if (b) { if (b.disabled) return; b.disabled = true; }
+    const listo = () => { if (b) b.disabled = false; };
+    google.script.run.withSuccessHandler(x => { listo(); (alExito || pintarCobranza)(x); })
+      .withFailureHandler(err => { listo(); mostrarError(err); })[funcion](...args);
+  }
+
+  function aceptarCot(folio, confirmado) {
+    accionCob(null, 'marcarAceptada', [COB.proyecto.folio, folio, !!confirmado], v => {
+      if (v && v.confirmar) { if (window.confirm(v.mensaje)) aceptarCot(folio, true); return; }
+      pintarCobranza(v); aviso('ok', 'Cotización <b>' + esc(folio) + '</b> marcada como aceptada.');
+    });
+  }
+  function guardarEsquemaCob() {
+    accionCob('btnEsquema', 'guardarEsquema', [COB.proyecto.folio, ESQ.map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje }))],
+      v => { pintarCobranza(v); aviso('ok', 'Esquema de pagos guardado.'); });
+  }
+  function firmarCob() {
+    const fecha = $('cobFechaFirma').value;
+    if (!fecha) { mostrarError('Captura la fecha de firma.'); return; }
+    if (!window.confirm('¿Registrar el contrato de ' + COB.proyecto.folio + ' como firmado el ' + fecha + '? ' +
+      'Después ya no se podrán cambiar la cotización aceptada, el monto ni el esquema de pagos.')) return;
+    accionCob('btnFirmar', 'firmarContrato', [COB.proyecto.folio, fecha], v => { pintarCobranza(v); cargarProyectosCob(); aviso('ok', 'Contrato firmado.'); });
+  }
+  function desbloquearCob() {
+    const motivo = $('cobMotivo').value.trim();
+    if (!motivo) { mostrarError('Escribe el motivo del desbloqueo.'); return; }
+    accionCob('btnDesbloquear', 'desbloquearContrato', [COB.proyecto.folio, motivo], v => { pintarCobranza(v); cargarProyectosCob(); aviso('ok', 'Contrato desbloqueado. Quedó registrado el motivo.'); });
+  }
+  function cancelarPagoCob(folio) {
+    const motivo = window.prompt('Motivo para cancelar el pago ' + folio + ' (queda registrado; el pago no se borra):');
+    if (motivo == null) return;
+    if (!motivo.trim()) { mostrarError('Escribe el motivo de la cancelación.'); return; }
+    accionCob(null, 'cancelarPago', [folio, motivo], v => { pintarCobranza(v); aviso('ok', 'Pago <b>' + esc(folio) + '</b> cancelado.'); });
+  }
+
+  function pintarTipoCambio() {
+    const distinta = COB && COB.contrato && $('pgMoneda').value !== COB.contrato.moneda;
+    $('pgTcCaja').classList.toggle('oculto', !distinta);
+    if (!distinta) $('pgTc').value = '';
+  }
+
+  /** Lee el archivo como base64 (sin el prefijo data:). */
+  function leerArchivo(archivo) {
+    return new Promise((ok, mal) => {
+      const lector = new FileReader();
+      lector.onload = () => ok(String(lector.result).split(',')[1] || '');
+      lector.onerror = () => mal(new Error('No se pudo leer el comprobante.'));
+      lector.readAsDataURL(archivo);
+    });
+  }
+
+  function registrarPago() {
+    const archivo = $('pgArchivo').files && $('pgArchivo').files[0];
+    if (!archivo) { mostrarError('Adjunta el comprobante de pago (PDF o imagen).'); return; }
+    if (archivo.size > 10 * 1024 * 1024) { mostrarError('El comprobante pesa más de 10 MB. Reduce la imagen o el PDF.'); return; }
+    if ($('btnPago').disabled) return;
+    $('btnPago').disabled = true; $('btnPago').textContent = 'Subiendo comprobante…';
+    const listo = () => { $('btnPago').disabled = false; $('btnPago').textContent = 'Registrar pago'; };
+    leerArchivo(archivo).then(datos => {
+      google.script.run.withSuccessHandler(r => {
+        listo(); ID_PAGO = nuevoId();
+        ['pgMonto', 'pgTc', 'pgRef', 'pgArchivo'].forEach(id => $(id).value = '');
+        pintarCobranza(r.vista);
+        aviso('ok', 'Pago <b>' + esc(r.folio) + '</b> registrado · <a href="' + esc(r.url) + '" target="_blank">Ver comprobante</a>');
+      }).withFailureHandler(err => { listo(); mostrarError(err); }).registrarPago({
+        proyectoFolio: COB.proyecto.folio, fecha: $('pgFecha').value, monto: $('pgMonto').value, monedaPago: $('pgMoneda').value,
+        tipoCambio: $('pgTc').value, metodo: $('pgMetodo').value, referencia: $('pgRef').value, etapaOrden: Number($('pgEtapa').value),
+        comprobante: { nombre: archivo.name, datos: datos }, idSolicitud: ID_PAGO,
+      });
+    }, err => { listo(); mostrarError(err); });
+  }
+
   // ---- UI ----
   function verTab(t) {
     $('vistaNueva').classList.toggle('oculto', t !== 'nueva');
     $('vistaHist').classList.toggle('oculto', t !== 'hist');
     $('vistaCat').classList.toggle('oculto', t !== 'cat');
+    $('vistaCob').classList.toggle('oculto', t !== 'cob');
+    $('tabCob').classList.toggle('activo', t === 'cob');
     $('tabCat').classList.toggle('activo', t === 'cat');
     $('tabNueva').classList.toggle('activo', t === 'nueva');
     $('tabHist').classList.toggle('activo', t === 'hist');
     if (t === 'hist') cargarHistorial();
     if (t === 'cat') cargarCatalogo();
+    if (t === 'cob') cargarProyectosCob();
     $('aviso').className = 'aviso';
   }
   function aviso(tipo, html) { const a = $('aviso'); a.className = 'aviso ' + tipo; a.innerHTML = html; window.scrollTo(0, 0); }

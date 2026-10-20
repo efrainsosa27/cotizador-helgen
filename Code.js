@@ -95,6 +95,15 @@ const API_FUNCIONES = {
   sugerirClavesSat: sugerirClavesSat,
   listarProyectos: listarProyectos,
   crearProyecto: crearProyecto,
+  // Cobranza (solo ROL_COBRANZA; cada función lo revisa)
+  listarProyectosCobranza: listarProyectosCobranza,
+  getCobranzaProyecto: getCobranzaProyecto,
+  marcarAceptada: marcarAceptada,
+  guardarEsquema: guardarEsquema,
+  firmarContrato: firmarContrato,
+  desbloquearContrato: desbloquearContrato,
+  registrarPago: registrarPago,
+  cancelarPago: cancelarPago,
 };
 
 /**
@@ -124,7 +133,7 @@ function doPost(e) {
   } catch (err) {
     respuesta = { ok: false, error: err && err.message ? err.message : String(err) };
     if (err && err.sesion) respuesta.codigo = 'SESION';
-    else if (err && err.codigo) respuesta.codigo = err.codigo; // p. ej. 'PROYECTO' (ver errorProyecto_)
+    else if (err && err.codigo) respuesta.codigo = err.codigo; // 'PROYECTO' (errorProyecto_), 'PERMISO' (errorPermiso_)
   } finally {
     VENDEDOR_ = null;
   }
@@ -171,7 +180,7 @@ const CONFIG_EJEMPLO_ANTERIOR = {
 const ENCABEZADOS_COTIZACIONES = [
   'Folio', 'Fecha', 'Cliente', 'Empresa', 'RFC', 'Correo', 'Teléfono',
   'Subtotal', 'IVA', 'Total', 'Elaboró', 'PDF', 'Conceptos (JSON)', 'Notas', 'Marca', 'Dirección',
-  'vendedor_email', 'vendedor_nombre', 'vendedor_apellido', 'proyecto_folio'
+  'vendedor_email', 'vendedor_nombre', 'vendedor_apellido', 'proyecto_folio', 'moneda'
 ];
 
 function setup() {
@@ -552,6 +561,8 @@ function getDatosIniciales() {
     proyectos: proyectosParaInicio_(),
     usuario: usuarioActual_(),
     vendedor: VENDEDOR_,
+    // Solo para mostrar u ocultar la pestaña Cobranza; cada función de cobranza lo vuelve a revisar
+    permisos: { cobranza: esCobranza_(), desbloqueo: esAdminDesbloqueo_() },
   };
 }
 
@@ -595,6 +606,7 @@ function listarCotizaciones(busqueda) {
       vendedor: vendedorDeFila(r, nombres),
       // Filas anteriores a Proyectos (o cotizadas sin proyecto)
       proyecto: r[19] || 'Sin proyecto',
+      moneda: r[20] || 'MXN', // filas anteriores a USD: pesos
     }));
 }
 
@@ -644,6 +656,10 @@ function guardarCotizacion(payload) {
         throw errorProyecto_('El proyecto ' + proyectoFolio + ' está ' + proyecto.estado.toLowerCase() +
           ': ya no se le pueden agregar cotizaciones.');
       }
+      // Fase 2: con contrato firmado ya no se cotiza dentro del proyecto (se revisará con los adicionales)
+      if (foliosConContratoFirmado_()[proyecto.folio.toUpperCase()]) {
+        throw errorProyecto_('Proyecto con contrato firmado: no admite cotizaciones nuevas.');
+      }
       carpetaPdf = subcarpetaProyecto_(proyecto, 'Cotizaciones');
     }
 
@@ -676,11 +692,12 @@ function guardarCotizacion(payload) {
       t(datos.cliente.email), t(datos.cliente.telefono),
       datos.subtotal, datos.iva, datos.total, datos.elaboro, archivo.getUrl(),
       JSON.stringify(datos.items), t(datos.notas), MARCAS[datos.marca], t(datos.cliente.direccion),
-      t(vendedor.email), t(vendedor.nombre), t(vendedor.apellido), proyectoFolio,
+      t(vendedor.email), t(vendedor.nombre), t(vendedor.apellido), proyectoFolio, datos.moneda,
     ]);
     SpreadsheetApp.flush();
 
-    const resultado = { folio: folio, url: archivo.getUrl(), total: datos.total, proyectoFolio: proyectoFolio };
+    const resultado = { folio: folio, url: archivo.getUrl(), total: datos.total, moneda: datos.moneda,
+      proyectoFolio: proyectoFolio };
     if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
     return resultado;
   } finally {
@@ -733,7 +750,9 @@ const ENCABEZADOS_PROYECTOS = [
 const COL_ESTADO_PROYECTO = 7;   // G
 const COL_CARPETA_PROYECTO = 8;  // H
 const ESTADOS_PROYECTO = ['Activo', 'Cerrado', 'Cancelado'];
-const SUBCARPETAS_PROYECTO = ['Cotizaciones', 'Órdenes de compra', 'Pagos'];
+// Sin "Pagos": los comprobantes van en la carpeta de cobranza (no visible para todo el dominio). Los proyectos
+// creados antes la conservan; no se borra.
+const SUBCARPETAS_PROYECTO = ['Cotizaciones', 'Órdenes de compra'];
 const PREFIJO_PROYECTO = 'PRY';
 
 /**
@@ -773,7 +792,10 @@ function listarProyectos(busqueda, incluirInactivos) {
   const hoja = hojaProyectos_();
   const filas = hoja.getLastRow() > 1
     ? hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
-  return filtrarProyectos(proyectosDesdeFilas(filas), busqueda, incluirInactivos, 50)
+  // El buscador de cotizaciones (solo activos) no muestra proyectos con contrato firmado
+  const firmados = incluirInactivos ? {} : foliosConContratoFirmado_();
+  return filtrarProyectos(proyectosDesdeFilas(filas).filter(p => !firmados[p.folio.toUpperCase()]),
+    busqueda, incluirInactivos, 50)
     .map(p => ({ folio: p.folio, nombre: p.nombre, cliente: p.cliente, clienteId: p.clienteId,
       ubicacion: p.ubicacion, estado: p.estado, fecha: p.fecha }));
 }
@@ -878,7 +900,7 @@ function crearCarpetaProyecto_(folio, datos, anio) {
 }
 
 /**
- * Subcarpeta de un proyecto ("Cotizaciones", "Órdenes de compra", "Pagos"…). Se busca por nombre: si alguien la
+ * Subcarpeta de un proyecto ("Cotizaciones", "Órdenes de compra"…). Se busca por nombre: si alguien la
  * borró o la renombró, se crea una nueva. Si falta la carpeta del proyecto, se vuelve a crear y se actualiza
  * carpeta_id en la hoja.
  */
@@ -895,6 +917,507 @@ function subcarpetaProyecto_(proyecto, nombreSub) {
     if (proyecto.hoja && proyecto.fila) proyecto.hoja.getRange(proyecto.fila, COL_CARPETA_PROYECTO).setValue(carpeta.getId());
   }
   return subcarpeta_(carpeta, nombreSub);
+}
+
+// ====== 4.2 COBRANZA (Fase 2) ======
+// Libro aparte "Cotizador Helgen — Cobranza (datos)" dentro de la carpeta "Cotizador Helgen — Cobranza" (fuera de
+// la carpeta maestra, que todo el dominio puede leer). Solo el rol de cobranza (ROL_COBRANZA) ve o cambia estos datos;
+// el servidor lo revisa en cada llamada. Comprobantes en Cobranza/AAAA/<folio del proyecto>/.
+
+const NOMBRE_CARPETA_COBRANZA = 'Cotizador Helgen — Cobranza';
+const NOMBRE_LIBRO_COBRANZA = 'Cotizador Helgen — Cobranza (datos)';
+const PREFIJO_PAGO = 'PAG';
+
+/** Estructura del libro. numeros = columnas (1 = A) con formato de importe; las demás van como texto. */
+const HOJAS_COBRANZA = {
+  Contratos: {
+    enc: ['proyecto_folio', 'cotizacion_aceptada', 'marca', 'moneda', 'subtotal', 'iva', 'total', 'estado',
+      'aceptada_por', 'fecha_aceptacion', 'fecha_firma', 'firmado_por', 'actualizado'],
+    numeros: [5, 6, 7],
+  },
+  Esquemas: { enc: ['proyecto_folio', 'orden', 'etapa', 'porcentaje', 'monto'], numeros: [2, 4, 5] },
+  Pagos: {
+    enc: ['folio', 'fecha_pago', 'fecha_registro', 'proyecto_folio', 'monto', 'moneda_pago', 'tipo_cambio',
+      'monto_aplicado', 'moneda_proyecto', 'metodo', 'referencia', 'etapa_orden', 'etapa', 'aplicacion (JSON)',
+      'comprobante_id', 'comprobante_url', 'registro_email', 'registro_nombre', 'estado', 'cancelado_por',
+      'fecha_cancelacion', 'motivo_cancelacion'],
+    numeros: [5, 7, 8, 12],
+  },
+  Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
+};
+const ESTADO_ACEPTADA = 'Aceptada', ESTADO_FIRMADO = 'Firmado';
+
+/** Error de permisos: doPost lo manda con codigo 'PERMISO'. */
+function errorPermiso_(mensaje) {
+  const e = new Error(mensaje);
+  e.codigo = 'PERMISO';
+  return e;
+}
+
+/** ¿El usuario del token está en ROL_COBRANZA? Sin token (editor) o sin la propiedad: no. */
+function esCobranza_() {
+  if (!VENDEDOR_) return false;
+  const lista = correosDeLista(PropertiesService.getScriptProperties().getProperty('ROL_COBRANZA'), DOMINIO_HELGEN);
+  return lista.indexOf(String(VENDEDOR_.email).toLowerCase()) !== -1;
+}
+
+/** ¿Puede desbloquear contratos firmados? (ADMIN_DESBLOQUEO; sin la propiedad, nadie). */
+function esAdminDesbloqueo_() {
+  if (!VENDEDOR_) return false;
+  const lista = correosDeLista(PropertiesService.getScriptProperties().getProperty('ADMIN_DESBLOQUEO'), DOMINIO_HELGEN);
+  return lista.indexOf(String(VENDEDOR_.email).toLowerCase()) !== -1;
+}
+
+function exigirCobranza_() {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + '.');
+  if (!esCobranza_()) throw errorPermiso_('No tienes permiso de cobranza.');
+}
+
+/** Carpeta de cobranza. Se crea sola en Mi unidad (sin compartir). Si se borró, error: no se crea otra a escondidas. */
+function carpetaCobranza_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('COBRANZA_FOLDER_ID');
+  if (!id) {
+    const carpeta = DriveApp.createFolder(NOMBRE_CARPETA_COBRANZA);
+    props.setProperty('COBRANZA_FOLDER_ID', carpeta.getId());
+    return carpeta;
+  }
+  let carpeta = null;
+  try { carpeta = DriveApp.getFolderById(id); } catch (e) { carpeta = null; }
+  if (!carpeta || carpeta.isTrashed()) {
+    throw new Error('No se encontró la carpeta de cobranza (COBRANZA_FOLDER_ID). Revisa la Papelera de Drive.');
+  }
+  return carpeta;
+}
+
+/** Libro de cobranza; la primera vez lo crea dentro de la carpeta de cobranza (bajo candado). */
+function libroCobranza_() {
+  const props = PropertiesService.getScriptProperties();
+  if (!props.getProperty('COBRANZA_DB_ID')) {
+    const lock = LockService.getScriptLock();
+    if (!lock.tryLock(30000)) throw new Error('Se está preparando cobranza. Intenta de nuevo en unos segundos.');
+    try {
+      if (!props.getProperty('COBRANZA_DB_ID')) crearLibroCobranza_();
+    } finally {
+      lock.releaseLock();
+    }
+  }
+  return abrirLibroCobranza_(props.getProperty('COBRANZA_DB_ID'));
+}
+
+/** Libro de cobranza si ya existe; null si todavía no se crea (las cotizaciones no lo crean). */
+function libroCobranzaSiExiste_() {
+  const id = PropertiesService.getScriptProperties().getProperty('COBRANZA_DB_ID');
+  return id ? abrirLibroCobranza_(id) : null;
+}
+
+function abrirLibroCobranza_(id) {
+  try {
+    return SpreadsheetApp.openById(id);
+  } catch (e) {
+    throw new Error('No se pudo abrir el libro de cobranza (COBRANZA_DB_ID). Revisa que no esté en la Papelera.');
+  }
+}
+
+function crearLibroCobranza_() {
+  const carpeta = carpetaCobranza_();
+  const ss = SpreadsheetApp.create(NOMBRE_LIBRO_COBRANZA);
+  DriveApp.getFileById(ss.getId()).moveTo(carpeta);
+  Object.keys(HOJAS_COBRANZA).forEach(nombre => hojaCobranza_(ss, nombre));
+  const sobrante = ss.getSheetByName('Hoja 1') || ss.getSheetByName('Sheet1');
+  if (sobrante && ss.getSheets().length > 1) ss.deleteSheet(sobrante);
+  PropertiesService.getScriptProperties().setProperty('COBRANZA_DB_ID', ss.getId());
+}
+
+/** Pestaña del libro de cobranza; la crea o le repone los encabezados (patrón de hojaProyectos_). */
+function hojaCobranza_(libro, nombre) {
+  const def = HOJAS_COBRANZA[nombre];
+  let hoja = libro.getSheetByName(nombre);
+  if (!hoja) {
+    hoja = libro.insertSheet(nombre);
+    hoja.setFrozenRows(1);
+    hoja.getRange(1, 1, hoja.getMaxRows(), def.enc.length).setNumberFormat('@'); // texto: nada se lee como fórmula
+    def.numeros.forEach(c => hoja.getRange(2, c, hoja.getMaxRows() - 1, 1).setNumberFormat('#,##0.00##'));
+  }
+  const actuales = hoja.getRange(1, 1, 1, def.enc.length).getValues()[0];
+  if (def.enc.some((h, i) => actuales[i] !== h)) {
+    hoja.getRange(1, 1, 1, def.enc.length).setValues([def.enc])
+      .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+  }
+  return hoja;
+}
+
+/** Filas de datos (sin encabezado) de una pestaña, con el ancho de sus encabezados. */
+function filasCobranza_(hoja, nombre) {
+  const n = HOJAS_COBRANZA[nombre].enc.length;
+  return hoja.getLastRow() > 1 ? hoja.getRange(2, 1, hoja.getLastRow() - 1, n).getValues() : [];
+}
+
+const marcaDeTexto_ = t => (String(t || '').trim() === MARCAS.energy || t === 'energy') ? 'energy' : 'helgen';
+
+function contratoDesdeFila_(r, fila) {
+  return {
+    proyectoFolio: String(r[0]), cotizacion: String(r[1]), marca: marcaDeTexto_(r[2]), moneda: String(r[3] || 'MXN'),
+    subtotal: Number(r[4]) || 0, iva: Number(r[5]) || 0, total: Number(r[6]) || 0, estado: String(r[7] || ''),
+    aceptadaPor: String(r[8] || ''), fechaAceptacion: fechaTexto_(r[9]), fechaFirma: String(r[10] || ''),
+    firmadoPor: String(r[11] || ''), fila: fila,
+  };
+}
+
+function pagoDesdeFila_(r, fila) {
+  return {
+    folio: String(r[0]), fecha: String(r[1] || ''), fechaRegistro: fechaTexto_(r[2]), proyectoFolio: String(r[3]),
+    monto: Number(r[4]) || 0, monedaPago: String(r[5] || ''), tipoCambio: r[6] === '' ? '' : Number(r[6]),
+    montoAplicado: Number(r[7]) || 0, monedaProyecto: String(r[8] || ''), metodo: String(r[9] || ''),
+    referencia: String(r[10] || ''), etapaOrden: Number(r[11]) || 1, etapa: String(r[12] || ''),
+    comprobanteUrl: String(r[15] || ''), registro: String(r[17] || r[16] || ''), estado: String(r[18] || 'Vigente'),
+    canceladoPor: String(r[19] || ''), motivoCancelacion: String(r[21] || ''), fila: fila,
+  };
+}
+
+function fechaTexto_(v) {
+  return v instanceof Date ? Utilities.formatDate(v, 'America/Mexico_City', 'dd/MM/yyyy HH:mm') : String(v || '');
+}
+
+const hoyIso_ = () => Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd');
+
+/** Todo lo de cobranza de un proyecto, leído del libro. */
+function datosCobranza_(libro, folio) {
+  const f = String(folio).toUpperCase();
+  const hC = hojaCobranza_(libro, 'Contratos'), hE = hojaCobranza_(libro, 'Esquemas'), hP = hojaCobranza_(libro, 'Pagos');
+  let contrato = null;
+  filasCobranza_(hC, 'Contratos').forEach((r, i) => {
+    if (String(r[0]).toUpperCase() === f) contrato = contratoDesdeFila_(r, i + 2);
+  });
+  const etapas = filasCobranza_(hE, 'Esquemas')
+    .filter(r => String(r[0]).toUpperCase() === f)
+    .sort((a, b) => Number(a[1]) - Number(b[1]))
+    .map(r => ({ etapa: String(r[2]), porcentaje: Number(r[3]) }));
+  const pagos = [];
+  filasCobranza_(hP, 'Pagos').forEach((r, i) => {
+    if (String(r[3]).toUpperCase() === f) pagos.push(pagoDesdeFila_(r, i + 2));
+  });
+  return { hojas: { contratos: hC, esquemas: hE, pagos: hP }, contrato: contrato, etapas: etapas, pagos: pagos };
+}
+
+/** {"PRY-2026-0001": true, …} de proyectos con contrato firmado. Sin libro de cobranza: ninguno. */
+function foliosConContratoFirmado_() {
+  const libro = libroCobranzaSiExiste_();
+  const mapa = {};
+  if (!libro) return mapa;
+  const hoja = libro.getSheetByName('Contratos');
+  if (!hoja) return mapa;
+  filasCobranza_(hoja, 'Contratos').forEach(r => {
+    if (String(r[7]) === ESTADO_FIRMADO) mapa[String(r[0]).toUpperCase()] = true;
+  });
+  return mapa;
+}
+
+/** Cotizaciones ligadas a un proyecto (columna T), de la hoja Cotizaciones. */
+function cotizacionesDeProyecto_(folio) {
+  const f = String(folio).toUpperCase();
+  const hoja = db_().getSheetByName('Cotizaciones');
+  return hoja.getDataRange().getValues().slice(1)
+    .filter(r => String(r[19] || '').toUpperCase() === f && String(r[0] || '').trim())
+    .map(r => ({
+      folio: String(r[0]), fecha: r[1] instanceof Date ? Utilities.formatDate(r[1], 'America/Mexico_City', 'dd/MM/yyyy') : String(r[1] || ''),
+      cliente: String(r[2] || ''), subtotal: Number(r[7]) || 0, iva: Number(r[8]) || 0, total: Number(r[9]) || 0,
+      pdf: String(r[11] || ''), marca: marcaDeTexto_(r[14]), moneda: String(r[20] || '') || 'MXN',
+      vendedor: vendedorDeFila(r, {}),
+    }));
+}
+
+/** Proyecto existente (o error). */
+function proyectoParaCobranza_(folio) {
+  const proyecto = buscarProyecto_(hojaProyectos_(), folio);
+  if (!proyecto) throw new Error('No existe el proyecto ' + String(folio || '').toUpperCase() + '.');
+  return proyecto;
+}
+
+function bitacora_(libro, accion, folio, detalle, motivo) {
+  const t = textoCelda;
+  hojaCobranza_(libro, 'Bitacora').appendRow([
+    Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), t(VENDEDOR_ ? VENDEDOR_.email : ''),
+    t(accion), t(folio), t(detalle || ''), t(motivo || ''),
+  ]);
+}
+
+/** Reescribe las etapas del proyecto en "Esquemas" (borra las anteriores) con sus montos. */
+function escribirEsquema_(hoja, folio, etapas, total) {
+  const f = String(folio).toUpperCase();
+  const filas = filasCobranza_(hoja, 'Esquemas');
+  for (let i = filas.length - 1; i >= 0; i--) {
+    if (String(filas[i][0]).toUpperCase() === f) hoja.deleteRow(i + 2);
+  }
+  montosDeEsquema(etapas, total).forEach((e, i) => hoja.appendRow([f, i + 1, textoCelda(e.etapa), e.porcentaje, e.monto]));
+}
+
+/** Respuesta para la pestaña Cobranza: proyecto, cotizaciones, contrato, esquema con avance y pagos. */
+function vistaCobranza_(libro, proyecto) {
+  const d = datosCobranza_(libro, proyecto.folio);
+  const c = d.contrato;
+  const resumen = c && d.etapas.length ? resumenCobranza(c, d.etapas, d.pagos) : null;
+  return {
+    proyecto: { folio: proyecto.folio, nombre: proyecto.nombre, cliente: proyecto.cliente, estado: proyecto.estado,
+      ubicacion: proyecto.ubicacion },
+    cotizaciones: cotizacionesDeProyecto_(proyecto.folio),
+    contrato: c ? { cotizacion: c.cotizacion, marca: c.marca, moneda: c.moneda, subtotal: c.subtotal, iva: c.iva,
+      total: c.total, estado: c.estado, aceptadaPor: c.aceptadaPor, fechaAceptacion: c.fechaAceptacion,
+      fechaFirma: c.fechaFirma, firmadoPor: c.firmadoPor } : null,
+    esquema: d.etapas,
+    resumen: resumen,
+    pagos: d.pagos.map(p => { const o = Object.assign({}, p); delete o.fila; return o; }).reverse(),
+    esquemaEditable: !!c && c.estado !== ESTADO_FIRMADO && c.marca !== 'energy',
+    puedePagar: !!c && c.estado === ESTADO_FIRMADO,
+    puedeDesbloquear: !!c && c.estado === ESTADO_FIRMADO && esAdminDesbloqueo_(),
+    metodos: METODOS_PAGO,
+    hoy: hoyIso_(),
+  };
+}
+
+/** Candado de script (el mismo de folios) alrededor de una función. */
+function conCandado_(f) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw new Error('El sistema está ocupado guardando otro registro. Intenta de nuevo en unos segundos.');
+  try {
+    return f();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Proyectos para el buscador de Cobranza (todos los estados), con el estado de su contrato. */
+function listarProyectosCobranza(busqueda) {
+  exigirCobranza_();
+  const libro = libroCobranza_();
+  const estados = {};
+  filasCobranza_(hojaCobranza_(libro, 'Contratos'), 'Contratos').forEach(r => { estados[String(r[0]).toUpperCase()] = String(r[7]); });
+  return listarProyectos(busqueda, true).map(p => Object.assign(p, { contrato: estados[p.folio.toUpperCase()] || '' }));
+}
+
+function getCobranzaProyecto(folio) {
+  exigirCobranza_();
+  const libro = libroCobranza_();
+  return vistaCobranza_(libro, proyectoParaCobranza_(folio));
+}
+
+/**
+ * Marca la cotización aceptada del proyecto (una sola; se puede cambiar hasta firmar). Copia sus montos, marca y
+ * moneda al contrato. Si la nueva es de Helgen Energy y el esquema actual no es el 60/30/10, pide confirmar
+ * (devuelve {confirmar, mensaje}) antes de reemplazarlo.
+ */
+function marcarAceptada(proyectoFolio, cotizacionFolio, confirmado) {
+  exigirCobranza_();
+  const libro = libroCobranza_();
+  return conCandado_(() => {
+    const proyecto = proyectoParaCobranza_(proyectoFolio);
+    if (proyecto.estado === 'Cancelado') throw new Error('El proyecto ' + proyecto.folio + ' está cancelado.');
+    const folioCot = String(cotizacionFolio || '').trim().toUpperCase();
+    const cot = cotizacionesDeProyecto_(proyecto.folio).find(c => c.folio.toUpperCase() === folioCot);
+    if (!cot) throw new Error('La cotización ' + folioCot + ' no pertenece al proyecto ' + proyecto.folio + '.');
+
+    const d = datosCobranza_(libro, proyecto.folio);
+    const c = d.contrato;
+    if (c && c.estado === ESTADO_FIRMADO) throw new Error('Contrato firmado: la cotización aceptada ya no se puede cambiar.');
+    if (c && c.cotizacion === cot.folio) return vistaCobranza_(libro, proyecto);
+    const vigentes = d.pagos.filter(p => p.estado === 'Vigente');
+    if (vigentes.length && vigentes[0].monedaProyecto && vigentes[0].monedaProyecto !== cot.moneda) {
+      throw new Error('El proyecto ya tiene pagos en ' + vigentes[0].monedaProyecto + ': la cotización aceptada debe ser en ' +
+        vigentes[0].monedaProyecto + '.');
+    }
+
+    // Esquema: Helgen Energy siempre 60/30/10; Helgen conserva el que ya tenga (o el sugerido)
+    const porOmision = esquemaPorOmision();
+    const igualAlDeOmision = d.etapas.length === porOmision.length &&
+      d.etapas.every((e, i) => e.etapa === porOmision[i].etapa && e.porcentaje === porOmision[i].porcentaje);
+    if (cot.marca === 'energy' && d.etapas.length && !igualAlDeOmision && !confirmado) {
+      return { confirmar: true, mensaje: 'La cotización ' + cot.folio + ' es de Helgen Energy: su esquema de pagos es fijo ' +
+        '(60% Anticipo, 30% Instalación, 10% Encendido del sistema) y reemplazará el esquema actual. ¿Continuar?' };
+    }
+    const etapas = cot.marca === 'energy' || !d.etapas.length ? porOmision : d.etapas;
+
+    const t = textoCelda;
+    const fila = [proyecto.folio, cot.folio, MARCAS[cot.marca], cot.moneda, cot.subtotal, cot.iva, cot.total, ESTADO_ACEPTADA,
+      t(VENDEDOR_.email), Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm'), '', '',
+      Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm')];
+    if (c) d.hojas.contratos.getRange(c.fila, 1, 1, fila.length).setValues([fila]);
+    else d.hojas.contratos.appendRow(fila);
+    escribirEsquema_(d.hojas.esquemas, proyecto.folio, etapas, cot.total);
+    bitacora_(libro, c ? 'Cambiar cotización aceptada' : 'Marcar cotización aceptada', proyecto.folio,
+      cot.folio + ' · ' + MARCAS[cot.marca] + ' · total ' + formatoMoneda(cot.total) + ' ' + cot.moneda +
+      (c ? ' (antes ' + c.cotizacion + ')' : ''));
+    SpreadsheetApp.flush();
+    return vistaCobranza_(libro, proyecto);
+  });
+}
+
+/** Guarda el esquema de pagos (solo Helgen y solo antes de firmar). */
+function guardarEsquema(proyectoFolio, etapas) {
+  exigirCobranza_();
+  const limpio = validarEsquema(etapas);
+  const libro = libroCobranza_();
+  return conCandado_(() => {
+    const proyecto = proyectoParaCobranza_(proyectoFolio);
+    const d = datosCobranza_(libro, proyecto.folio);
+    const c = d.contrato;
+    if (!c) throw new Error('Primero marca la cotización aceptada del proyecto.');
+    if (c.estado === ESTADO_FIRMADO) throw new Error('Contrato firmado: el esquema de pagos ya no se puede cambiar.');
+    if (c.marca === 'energy') throw new Error('El esquema de Helgen Energy es fijo (60% / 30% / 10%).');
+    escribirEsquema_(d.hojas.esquemas, proyecto.folio, limpio, c.total);
+    bitacora_(libro, 'Editar esquema de pagos', proyecto.folio, limpio.map(e => e.etapa + ' ' + e.porcentaje + '%').join(' · '));
+    SpreadsheetApp.flush();
+    return vistaCobranza_(libro, proyecto);
+  });
+}
+
+/** Contrato firmado (fecha AAAA-MM-DD): fija la aceptada, el monto contratado y el esquema. */
+function firmarContrato(proyectoFolio, fecha) {
+  exigirCobranza_();
+  const libro = libroCobranza_();
+  return conCandado_(() => {
+    const proyecto = proyectoParaCobranza_(proyectoFolio);
+    const fechaFirma = validarFechaIso(fecha, hoyIso_(), 'La fecha de firma');
+    const d = datosCobranza_(libro, proyecto.folio);
+    const c = d.contrato;
+    if (!c) throw new Error('Primero marca la cotización aceptada del proyecto.');
+    if (c.estado === ESTADO_FIRMADO) throw new Error('El contrato de ' + proyecto.folio + ' ya está firmado.');
+    if (proyecto.estado === 'Cancelado') throw new Error('El proyecto ' + proyecto.folio + ' está cancelado.');
+    const etapas = validarEsquema(d.etapas);
+    // Tras un desbloqueo puede haber pagos: el nuevo monto no puede quedar por debajo de lo pagado
+    const r = resumenCobranza(c, etapas, d.pagos);
+    if (r.saldo < -TOLERANCIA_PAGO) {
+      throw new Error('Lo pagado (' + formatoMoneda(r.pagado) + ' ' + c.moneda + ') supera el monto contratado (' +
+        formatoMoneda(r.contratado) + ').');
+    }
+    escribirEsquema_(d.hojas.esquemas, proyecto.folio, etapas, c.total);
+    d.hojas.contratos.getRange(c.fila, 8, 1, 6).setValues([[ESTADO_FIRMADO, c.aceptadaPor, c.fechaAceptacion, fechaFirma,
+      textoCelda(VENDEDOR_.email), Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm')]]);
+    bitacora_(libro, 'Contrato firmado', proyecto.folio, 'Fecha de firma ' + fechaFirma + ' · ' + c.cotizacion + ' · ' +
+      formatoMoneda(c.total) + ' ' + c.moneda + ' · ' + etapas.map(e => e.etapa + ' ' + e.porcentaje + '%').join(' · '));
+    SpreadsheetApp.flush();
+    return vistaCobranza_(libro, proyecto);
+  });
+}
+
+/** Desbloqueo por error: solo ADMIN_DESBLOQUEO, con motivo. El contrato vuelve a "Aceptada"; los pagos se conservan. */
+function desbloquearContrato(proyectoFolio, motivo) {
+  exigirCobranza_();
+  if (!esAdminDesbloqueo_()) throw errorPermiso_('Solo el administrador puede desbloquear un contrato firmado.');
+  const m = String(motivo || '').trim();
+  if (m.length < 5) throw new Error('Escribe el motivo del desbloqueo.');
+  if (m.length > 500) throw new Error('El motivo debe tener máximo 500 caracteres.');
+  const libro = libroCobranza_();
+  return conCandado_(() => {
+    const proyecto = proyectoParaCobranza_(proyectoFolio);
+    const d = datosCobranza_(libro, proyecto.folio);
+    const c = d.contrato;
+    if (!c || c.estado !== ESTADO_FIRMADO) throw new Error('El contrato de ' + proyecto.folio + ' no está firmado.');
+    d.hojas.contratos.getRange(c.fila, 8, 1, 6).setValues([[ESTADO_ACEPTADA, c.aceptadaPor, c.fechaAceptacion, '', '',
+      Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm')]]);
+    bitacora_(libro, 'Desbloquear contrato', proyecto.folio,
+      'Estaba firmado el ' + c.fechaFirma + ' por ' + c.firmadoPor + ' · ' + c.cotizacion, m);
+    SpreadsheetApp.flush();
+    return vistaCobranza_(libro, proyecto);
+  });
+}
+
+/**
+ * Registra un pago con su comprobante (obligatorio). p = {proyectoFolio, fecha, monto, monedaPago, tipoCambio, metodo,
+ * referencia, etapaOrden, comprobante: {datos (base64)}, idSolicitud}. Solo con contrato firmado; si el pago excede su
+ * etapa, el excedente pasa a la siguiente; si excede el saldo del proyecto (más la tolerancia), se rechaza.
+ */
+function registrarPago(p) {
+  exigirCobranza_();
+  const d0 = p || {};
+  let bytes;
+  try {
+    bytes = d0.comprobante && d0.comprobante.datos ? Utilities.base64Decode(String(d0.comprobante.datos)) : null;
+  } catch (e) {
+    throw new Error('No se pudo leer el comprobante. Vuelve a adjuntarlo.');
+  }
+  const tipo = validarComprobante(bytes);
+  const libro = libroCobranza_();
+
+  const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
+  const cache = CacheService.getScriptCache();
+  const claveCache = idSolicitud ? 'PAG_' + idSolicitud : '';
+
+  return conCandado_(() => {
+    if (claveCache) {
+      const previo = cache.get(claveCache);
+      if (previo) return JSON.parse(previo);
+    }
+    const proyecto = proyectoParaCobranza_(d0.proyectoFolio);
+    const d = datosCobranza_(libro, proyecto.folio);
+    const c = d.contrato;
+    if (!c || c.estado !== ESTADO_FIRMADO) throw new Error('Solo se registran pagos en proyectos con contrato firmado.');
+    const pago = normalizarPago(d0, { moneda: c.moneda, etapas: d.etapas.length, hoy: hoyIso_() });
+
+    const resumen = resumenCobranza(c, d.etapas, d.pagos);
+    if (aCentavos(pago.montoAplicado) > aCentavos(resumen.saldo) + aCentavos(TOLERANCIA_PAGO)) {
+      throw new Error('El pago (' + formatoMoneda(pago.montoAplicado) + ' ' + c.moneda + ') excede el saldo del proyecto (' +
+        formatoMoneda(Math.max(resumen.saldo, 0)) + ' ' + c.moneda + ').');
+    }
+    const reparto = repartirPago(resumen.etapas, pago.etapaOrden - 1, pago.montoAplicado);
+    if (reparto.sobranteCts) reparto.aplicacion.push({ orden: pago.etapaOrden, centavos: reparto.sobranteCts });
+    const aplicacion = reparto.aplicacion.map(a => ({ etapa: d.etapas[a.orden - 1].etapa, orden: a.orden, monto: a.centavos / 100 }));
+
+    const hojaPagos = d.hojas.pagos;
+    const folio = siguienteFolio_(PREFIJO_PAGO, hojaPagos, 'CONSECUTIVO_PAG_');
+    const anio = String(proyecto.folio).split('-')[1] || hoyIso_().slice(0, 4);
+    const carpeta = subcarpeta_(subcarpeta_(carpetaCobranza_(), anio), proyecto.folio);
+    const archivo = carpeta.createFile(Utilities.newBlob(bytes, tipo.mime,
+      nombreComprobante(folio, pago.metodo, pago.referencia, tipo.ext)));
+
+    const t = textoCelda;
+    hojaPagos.appendRow([
+      folio, pago.fecha, Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), proyecto.folio,
+      pago.monto, pago.monedaPago, pago.tipoCambio, pago.montoAplicado, c.moneda, pago.metodo, t(pago.referencia),
+      pago.etapaOrden, t(d.etapas[pago.etapaOrden - 1].etapa), JSON.stringify(aplicacion), archivo.getId(), archivo.getUrl(),
+      t(VENDEDOR_.email), t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '',
+    ]);
+    bitacora_(libro, 'Registrar pago', proyecto.folio, folio + ' · ' + formatoMoneda(pago.monto) + ' ' + pago.monedaPago +
+      (pago.tipoCambio ? ' · TC ' + pago.tipoCambio + ' = ' + formatoMoneda(pago.montoAplicado) + ' ' + c.moneda : '') +
+      ' · ' + pago.metodo + ' · ' + aplicacion.map(a => a.etapa + ' ' + formatoMoneda(a.monto)).join(' + '));
+    SpreadsheetApp.flush();
+
+    const resultado = { folio: folio, url: archivo.getUrl(), vista: vistaCobranza_(libro, proyecto) };
+    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
+    return resultado;
+  });
+}
+
+/** Cancela un pago (no se borra): rol de cobranza, con motivo; queda en la Bitácora. */
+function cancelarPago(folioPago, motivo) {
+  exigirCobranza_();
+  const m = String(motivo || '').trim();
+  if (m.length < 5) throw new Error('Escribe el motivo de la cancelación.');
+  if (m.length > 500) throw new Error('El motivo debe tener máximo 500 caracteres.');
+  const libro = libroCobranza_();
+  return conCandado_(() => {
+    const folio = String(folioPago || '').trim().toUpperCase();
+    const hoja = hojaCobranza_(libro, 'Pagos');
+    let pago = null;
+    filasCobranza_(hoja, 'Pagos').forEach((r, i) => { if (String(r[0]).toUpperCase() === folio) pago = pagoDesdeFila_(r, i + 2); });
+    if (!pago) throw new Error('No existe el pago ' + folio + '.');
+    if (pago.estado !== 'Vigente') throw new Error('El pago ' + folio + ' ya está cancelado.');
+    hoja.getRange(pago.fila, 19, 1, 4).setValues([['Cancelado', textoCelda(VENDEDOR_.email),
+      Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
+    bitacora_(libro, 'Cancelar pago', pago.proyectoFolio, folio + ' · ' + formatoMoneda(pago.monto) + ' ' + pago.monedaPago, m);
+    SpreadsheetApp.flush();
+    return vistaCobranza_(libro, proyectoParaCobranza_(pago.proyectoFolio));
+  });
+}
+
+/**
+ * Correr UNA vez desde el editor: crea la carpeta "Cotizador Helgen — Cobranza" (en Mi unidad, sin compartir) y su
+ * libro. También sirve para autorizar permisos antes de publicar (§6.8). No comparte nada.
+ */
+function prepararCobranza() {
+  const libro = libroCobranza_();
+  Logger.log('Carpeta de cobranza: ' + carpetaCobranza_().getUrl());
+  Logger.log('Libro de cobranza:   ' + libro.getUrl());
+  Logger.log('ROL_COBRANZA: ' + (PropertiesService.getScriptProperties().getProperty('ROL_COBRANZA') || '(vacío: nadie tiene acceso)'));
 }
 
 // ====== 5. LÓGICA PURA (sin servicios de Google; se puede probar fuera) ======
@@ -936,6 +1459,7 @@ function normalizarCotizacion(p, ivaTasa) {
     cliente: cliente, items: items, subtotal: subtotal, iva: iva, total: total, ivaTasa: ivaTasa,
     notas: String((p && p.notas) || '').trim(),
     marca: p && p.marca === 'energy' ? 'energy' : 'helgen',
+    moneda: monedaDeCotizacion(p && p.moneda),
   };
 }
 
@@ -1077,6 +1601,224 @@ function filtrarProyectos(lista, busqueda, incluirInactivos, n) {
     .filter(p => incluirInactivos || p.estado === 'Activo')
     .filter(p => !q || textoNormal(p.folio + ' ' + p.cliente + ' ' + p.nombre).includes(q))
     .slice(0, n || 50);
+}
+
+// ---- Monedas (MXN / USD) ----
+// Cada cotización lleva su moneda (columna U); nunca se suman importes de monedas distintas.
+
+const MONEDAS = ['MXN', 'USD'];
+
+/** Moneda de una cotización nueva: vacía = MXN (como antes); otra que no sea MXN/USD es error. */
+function monedaDeCotizacion(m) {
+  const s = String(m == null ? '' : m).trim().toUpperCase();
+  if (!s) return 'MXN';
+  if (MONEDAS.indexOf(s) === -1) throw new Error('Moneda no válida: ' + s + '. Usa MXN o USD.');
+  return s;
+}
+
+// ---- Cobranza: esquema de pagos, reparto, comprobantes y roles ----
+
+const ESQUEMA_POR_OMISION = [['Anticipo', 60], ['Instalación', 30], ['Encendido del sistema', 10]];
+const MAX_ETAPAS = 10;
+const METODOS_PAGO = ['Transferencia', 'Efectivo', 'Cheque'];
+const TOLERANCIA_PAGO = 1.00;              // en la moneda del proyecto (diferencias de redondeo)
+const MAX_COMPROBANTE = 10 * 1024 * 1024;  // 10 MB
+
+/** Etapas por omisión: Helgen Energy 60/30/10 (fijo); Helgen, las mismas como sugerencia editable. */
+function esquemaPorOmision() {
+  return ESQUEMA_POR_OMISION.map(([etapa, porcentaje]) => ({ etapa: etapa, porcentaje: porcentaje }));
+}
+
+/** Pesos/dólares -> centavos enteros (evita errores de punto flotante al sumar). */
+function aCentavos(n) {
+  return Math.round(redondear(n) * 100);
+}
+
+/**
+ * Valida un esquema [{etapa, porcentaje}]: de 1 a MAX_ETAPAS etapas, nombres únicos (máx. 40 caracteres),
+ * porcentajes mayores a 0 con 2 decimales y suma exacta de 100%. Devuelve el esquema limpio.
+ */
+function validarEsquema(etapas) {
+  if (!Array.isArray(etapas) || !etapas.length) throw new Error('El esquema de pagos necesita al menos una etapa.');
+  if (etapas.length > MAX_ETAPAS) throw new Error('El esquema de pagos admite máximo ' + MAX_ETAPAS + ' etapas.');
+  const vistos = {};
+  const limpio = etapas.map((e, i) => {
+    const etapa = String((e && e.etapa) || '').trim().replace(/\s+/g, ' ');
+    const txt = e && e.porcentaje;
+    const porcentaje = Number(txt);
+    if (!etapa) throw new Error('La etapa ' + (i + 1) + ' no tiene nombre.');
+    if (etapa.length > 40) throw new Error('El nombre de la etapa "' + etapa.slice(0, 20) + '…" debe tener máximo 40 caracteres.');
+    const llave = textoNormal(etapa);
+    if (vistos[llave]) throw new Error('La etapa "' + etapa + '" está repetida.');
+    vistos[llave] = true;
+    if (txt === '' || txt == null || !isFinite(porcentaje) || porcentaje <= 0) {
+      throw new Error('El porcentaje de "' + etapa + '" debe ser mayor a 0.');
+    }
+    if (Math.abs(redondear(porcentaje) - porcentaje) > 1e-9) {
+      throw new Error('El porcentaje de "' + etapa + '" admite máximo 2 decimales.');
+    }
+    return { etapa: etapa, porcentaje: redondear(porcentaje) };
+  });
+  const suma = limpio.reduce((s, e) => s + Math.round(e.porcentaje * 100), 0);
+  if (suma !== 10000) {
+    throw new Error('Los porcentajes deben sumar 100% (suman ' + redondear(suma / 100) + '%).');
+  }
+  return limpio;
+}
+
+/** Monto de cada etapa = total × %, redondeado; la última etapa se queda con la diferencia de centavos. */
+function montosDeEsquema(etapas, total) {
+  const totalCts = aCentavos(total);
+  let acumulado = 0;
+  return etapas.map((e, i) => {
+    const cts = i === etapas.length - 1 ? totalCts - acumulado : Math.round(totalCts * e.porcentaje / 100);
+    acumulado += cts;
+    return { etapa: e.etapa, porcentaje: e.porcentaje, monto: cts / 100 };
+  });
+}
+
+/**
+ * Convierte el monto de un pago a la moneda del proyecto. Si las monedas son distintas, el tipo de cambio
+ * (pesos por dólar) es obligatorio: MXN -> USD divide, USD -> MXN multiplica.
+ */
+function convertirMoneda(monto, monedaPago, monedaProyecto, tipoCambio) {
+  if (monedaPago === monedaProyecto) return redondear(monto);
+  const tc = Number(tipoCambio);
+  if (!isFinite(tc) || tc <= 0) throw new Error('Captura el tipo de cambio del día (pesos por dólar).');
+  if (monedaPago === 'MXN' && monedaProyecto === 'USD') return redondear(monto / tc);
+  if (monedaPago === 'USD' && monedaProyecto === 'MXN') return redondear(monto * tc);
+  throw new Error('Moneda no válida.');
+}
+
+/**
+ * Reparte un monto entre las etapas: primero la elegida; el excedente pasa a la siguiente con saldo y, al llegar
+ * a la última, a las anteriores en orden. etapas = [{monto, pagado}]. Devuelve {aplicacion: [{orden, centavos}],
+ * sobranteCts} sin modificar las etapas.
+ */
+function repartirPago(etapas, indice, monto) {
+  const n = etapas.length;
+  let restante = aCentavos(monto);
+  const aplicacion = [];
+  for (let k = 0; k < n && restante > 0; k++) {
+    const i = (indice + k) % n;
+    const saldo = aCentavos(etapas[i].monto) - aCentavos(etapas[i].pagado || 0);
+    if (saldo <= 0) continue;
+    const toma = Math.min(saldo, restante);
+    aplicacion.push({ orden: i + 1, centavos: toma });
+    restante -= toma;
+  }
+  return { aplicacion: aplicacion, sobranteCts: restante };
+}
+
+/**
+ * Resumen de cobranza de un proyecto. contrato = {total, subtotal, moneda}; etapas = [{etapa, porcentaje}];
+ * pagos = [{estado, etapaOrden, montoAplicado}] en orden de registro (solo cuentan los Vigentes, se vuelven
+ * a repartir en ese orden). Lo que no cabe en ninguna etapa (dentro de la tolerancia) se suma a la etapa elegida.
+ */
+function resumenCobranza(contrato, etapas, pagos) {
+  const lista = montosDeEsquema(etapas, contrato.total).map(e => Object.assign(e, { pagado: 0 }));
+  let pagadoCts = 0;
+  (pagos || []).filter(p => p.estado === 'Vigente').forEach(p => {
+    const indice = Math.min(Math.max((Number(p.etapaOrden) || 1) - 1, 0), lista.length - 1);
+    const r = repartirPago(lista, indice, p.montoAplicado);
+    r.aplicacion.forEach(a => { lista[a.orden - 1].pagado = (aCentavos(lista[a.orden - 1].pagado) + a.centavos) / 100; });
+    if (r.sobranteCts) lista[indice].pagado = (aCentavos(lista[indice].pagado) + r.sobranteCts) / 100;
+    pagadoCts += aCentavos(p.montoAplicado);
+  });
+  lista.forEach(e => {
+    e.saldo = (aCentavos(e.monto) - aCentavos(e.pagado)) / 100;
+    e.avance = e.monto > 0 ? Math.min(100, Math.round(e.pagado / e.monto * 1000) / 10) : 0;
+  });
+  const contratadoCts = aCentavos(contrato.total);
+  return {
+    moneda: contrato.moneda, contratado: contratadoCts / 100, subtotal: redondear(contrato.subtotal),
+    pagado: pagadoCts / 100, saldo: (contratadoCts - pagadoCts) / 100,
+    avance: contratadoCts > 0 ? Math.min(100, Math.round(pagadoCts / contratadoCts * 1000) / 10) : 0,
+    etapas: lista,
+  };
+}
+
+/** Fecha "AAAA-MM-DD" válida, no futura (hoy = "AAAA-MM-DD") y no anterior a 2020. */
+function validarFechaIso(s, hoy, campo) {
+  const v = String(s || '').trim();
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const nombre = campo || 'La fecha';
+  if (!m) throw new Error(nombre + ' es obligatoria (AAAA-MM-DD).');
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  if (d.getUTCFullYear() !== +m[1] || d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3]) {
+    throw new Error(nombre + ' no es válida.');
+  }
+  if (v < '2020-01-01') throw new Error(nombre + ' no es válida.');
+  if (hoy && v > hoy) throw new Error(nombre + ' no puede ser futura.');
+  return v;
+}
+
+/**
+ * Valida y limpia un pago. proyecto = {moneda, etapas (número de etapas), hoy "AAAA-MM-DD"}.
+ * Devuelve {fecha, monto, monedaPago, tipoCambio, montoAplicado, metodo, referencia, etapaOrden}.
+ */
+function normalizarPago(p, proyecto) {
+  const d = p || {};
+  const fecha = validarFechaIso(d.fecha, proyecto.hoy, 'La fecha del pago');
+  const montoTxt = d.monto, monto = Number(montoTxt);
+  if (montoTxt === '' || montoTxt == null || !isFinite(monto) || monto <= 0) throw new Error('El monto del pago debe ser mayor a 0.');
+  if (Math.abs(redondear(monto) - monto) > 1e-9) throw new Error('El monto admite máximo 2 decimales.');
+  if (monto > 1e10) throw new Error('El monto del pago no es válido.');
+  const monedaPago = String(d.monedaPago || proyecto.moneda).trim().toUpperCase();
+  if (MONEDAS.indexOf(monedaPago) === -1) throw new Error('Moneda del pago no válida. Usa MXN o USD.');
+  const metodo = METODOS_PAGO.find(m => textoNormal(m) === textoNormal(d.metodo));
+  if (!metodo) throw new Error('Elige el método de pago: ' + METODOS_PAGO.join(', ') + '.');
+  const referencia = String(d.referencia || '').trim().replace(/\s+/g, ' ');
+  if (!referencia && metodo !== 'Efectivo') {
+    throw new Error('Captura la referencia (' + (metodo === 'Cheque' ? 'número de cheque' : 'clave de rastreo o folio') + ').');
+  }
+  if (referencia.length > 100) throw new Error('La referencia debe tener máximo 100 caracteres.');
+  const etapaOrden = Number(d.etapaOrden);
+  if (!Number.isInteger(etapaOrden) || etapaOrden < 1 || etapaOrden > proyecto.etapas) throw new Error('Elige la etapa del pago.');
+  let tipoCambio = '';
+  if (monedaPago !== proyecto.moneda) {
+    tipoCambio = Number(d.tipoCambio);
+    if (d.tipoCambio === '' || d.tipoCambio == null || !isFinite(tipoCambio) || tipoCambio <= 0 || tipoCambio > 1000) {
+      throw new Error('El proyecto es en ' + proyecto.moneda + ' y el pago en ' + monedaPago +
+        ': captura el tipo de cambio del día (pesos por dólar).');
+    }
+    tipoCambio = Math.round(tipoCambio * 10000) / 10000;
+  }
+  return { fecha: fecha, monto: redondear(monto), monedaPago: monedaPago, tipoCambio: tipoCambio,
+    montoAplicado: convertirMoneda(monto, monedaPago, proyecto.moneda, tipoCambio),
+    metodo: metodo, referencia: referencia, etapaOrden: etapaOrden };
+}
+
+/**
+ * Tipo real de un comprobante por sus primeros bytes (no por la extensión). bytes = arreglo de enteros; en Apps
+ * Script vienen con signo (-128…127). Acepta PDF, JPG, PNG y HEIC; máximo MAX_COMPROBANTE. Devuelve {mime, ext}.
+ */
+function validarComprobante(bytes) {
+  if (!bytes || !bytes.length) throw new Error('Adjunta el comprobante de pago (PDF o imagen).');
+  if (bytes.length > MAX_COMPROBANTE) throw new Error('El comprobante pesa más de 10 MB. Reduce la imagen o el PDF.');
+  const b = i => (bytes[i] || 0) & 0xFF;
+  const txt = (desde, n) => String.fromCharCode.apply(null, Array.from({ length: n }, (_, i) => b(desde + i)));
+  if (txt(0, 5) === '%PDF-') return { mime: 'application/pdf', ext: 'pdf' };
+  if (b(0) === 0xFF && b(1) === 0xD8 && b(2) === 0xFF) return { mime: 'image/jpeg', ext: 'jpg' };
+  if (b(0) === 0x89 && txt(1, 3) === 'PNG') return { mime: 'image/png', ext: 'png' };
+  if (txt(4, 4) === 'ftyp' && ['heic', 'heix', 'hevc', 'heim', 'heis', 'mif1', 'msf1'].indexOf(txt(8, 4)) !== -1) {
+    return { mime: 'image/heic', ext: 'heic' };
+  }
+  throw new Error('El comprobante debe ser PDF o imagen (JPG, PNG o HEIC).');
+}
+
+/** Correos de una propiedad ("a@helgen.tech, b@helgen.tech"), en minúsculas; solo del dominio. */
+function correosDeLista(texto, dominio) {
+  return String(texto || '').split(/[\s,;]+/).map(s => s.trim().toLowerCase())
+    .filter(s => s && s.endsWith('@' + dominio) && s.indexOf('@') > 0)
+    .filter((s, i, a) => a.indexOf(s) === i);
+}
+
+/** Nombre del archivo del comprobante: "PAG-2026-0001 — <método> <referencia>.pdf", sin caracteres raros. */
+function nombreComprobante(folio, metodo, referencia, ext) {
+  const limpio = s => String(s || '').replace(/[\/\\:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim();
+  return (limpio(folio) + ' — ' + [limpio(metodo), limpio(referencia).slice(0, 60)].filter(Boolean).join(' ')).slice(0, 140) +
+    '.' + ext;
 }
 
 // ---- Búsqueda en catálogos del SAT (c_ClaveProdServ / c_ClaveUnidad) ----
@@ -1341,8 +2083,11 @@ function escaparHtml(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-/** 1234.5 -> "MIL DOSCIENTOS TREINTA Y CUATRO PESOS 50/100 M.N." */
-function importeConLetra(n) {
+/**
+ * 1234.5 -> "MIL DOSCIENTOS TREINTA Y CUATRO PESOS 50/100 M.N."
+ * En USD: "MIL DOSCIENTOS TREINTA Y CUATRO DÓLARES 50/100 USD".
+ */
+function importeConLetra(n, moneda) {
   const UNI = ['', 'UN', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE', 'DIEZ',
     'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE', 'DIECISÉIS', 'DIECISIETE', 'DIECIOCHO', 'DIECINUEVE', 'VEINTE',
     'VEINTIÚN', 'VEINTIDÓS', 'VEINTITRÉS', 'VEINTICUATRO', 'VEINTICINCO', 'VEINTISÉIS', 'VEINTISIETE', 'VEINTIOCHO', 'VEINTINUEVE'];
@@ -1376,7 +2121,9 @@ function importeConLetra(n) {
   const cent = Math.round((v - ent) * 100);
   const base = entero(ent);
   const de = (ent >= 1e6 && ent % 1e6 === 0) ? ' DE' : '';
-  return base + de + (ent === 1 ? ' PESO ' : ' PESOS ') + String(cent).padStart(2, '0') + '/100 M.N.';
+  const cts = String(cent).padStart(2, '0') + '/100';
+  if (moneda === 'USD') return base + de + (ent === 1 ? ' DÓLAR ' : ' DÓLARES ') + cts + ' USD';
+  return base + de + (ent === 1 ? ' PESO ' : ' PESOS ') + cts + ' M.N.';
 }
 
 /**
@@ -1434,6 +2181,7 @@ function construirHtmlPdf(d, cfg, logoUrl) {
         '<span style="color:' + AZUL + ';font-weight:bold;letter-spacing:1px;border:1.5px solid ' + TEAL + ';padding:2px 8px;">HELGEN ENERGY</span></td></tr>'
       : '') +
     docFila('Folio', d.folio, true) + docFila('Fecha', d.fecha) + docFila('Vigencia', d.vigencia) +
+    (d.moneda === 'USD' ? docFila('Moneda', 'USD (dólares estadounidenses)', true) : '') +
     '</table></td></tr></table>' +
     '<div style="border-top:3px solid ' + AQUA + ';margin-top:8px;"></div>' +
     '<div style="padding:6px 0 0;color:#4B5563;line-height:1.5;">' +
@@ -1461,13 +2209,13 @@ function construirHtmlPdf(d, cfg, logoUrl) {
     '<table><tr>' +
     '<td style="width:58%;padding-left:0;">' +
     '<div style="color:' + GRIS + ';">Importe con letra</div>' +
-    '<div style="font-weight:bold;color:' + AZUL + ';margin:2px 0 8px;">(' + importeConLetra(d.total) + ')</div>' +
+    '<div style="font-weight:bold;color:' + AZUL + ';margin:2px 0 8px;">(' + importeConLetra(d.total, d.moneda) + ')</div>' +
     (d.notas ? '<div style="color:' + GRIS + ';">Notas</div><div>' + e(d.notas).replace(/\n/g, '<br>') + '</div>' : '') +
     '</td><td style="width:42%;padding-right:0;"><table>' +
     '<tr><td>Subtotal</td><td class="r">' + formatoMoneda(d.subtotal) + '</td></tr>' +
     '<tr><td>IVA (' + Math.round(d.ivaTasa * 100) + '%)</td><td class="r">' + formatoMoneda(d.iva) + '</td></tr>' +
     '<tr bgcolor="#E6FBF7" style="color:' + AZUL + ';font-weight:bold;font-size:14px;">' +
-    '<td style="border-top:2px solid ' + AZUL + ';border-bottom:3px solid ' + AQUA + ';padding:7px 6px;">TOTAL ' + e(cfg.MONEDA || 'MXN') + '</td>' +
+    '<td style="border-top:2px solid ' + AZUL + ';border-bottom:3px solid ' + AQUA + ';padding:7px 6px;">TOTAL ' + e(d.moneda || 'MXN') + '</td>' +
     '<td class="r" style="border-top:2px solid ' + AZUL + ';border-bottom:3px solid ' + AQUA + ';padding:7px 6px;">' + formatoMoneda(d.total) + '</td></tr>' +
     '</table></td></tr></table>' +
 

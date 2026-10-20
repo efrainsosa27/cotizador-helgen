@@ -71,10 +71,10 @@ fetches=0;
 const r=post({funcion:'guardarCotizacion',token:'t-bueno',
   args:[{...base,idSolicitud:'ok1',vendedor_email:'impostor@helgen.tech',vendedor:{email:'impostor@helgen.tech',nombre:'X'},elaboro:'impostor@helgen.tech'}]});
 assert(r.ok,r.error); assert.equal(r.datos.folio,'HLG-2026-0002');
-const enc=cot.m[0]; assert.deepEqual(enc.slice(16),['vendedor_email','vendedor_nombre','vendedor_apellido','proyecto_folio']);
+const enc=cot.m[0]; assert.deepEqual(enc.slice(16),['vendedor_email','vendedor_nombre','vendedor_apellido','proyecto_folio','moneda']);
 const fila=cot.m[cot.m.length-1];
 assert.equal(fila[10],'ana.lopez@helgen.tech','Elaboró = correo del token');
-assert.deepEqual(fila.slice(16),['ana.lopez@helgen.tech','Ana','López Díaz',''],'sin proyecto = columna T vacía');
+assert.deepEqual(fila.slice(16),['ana.lopez@helgen.tech','Ana','López Díaz','','MXN'],'sin proyecto = columna T vacía; sin moneda = MXN');
 assert(!JSON.stringify(fila).includes('impostor'));
 // Caché: el token ya se verificó (en la llamada a setup); no se vuelve a consultar a Google
 assert.equal(post({funcion:'listarCotizaciones',args:[''],token:'t-bueno'}).ok,true); assert.equal(fetches,0);
@@ -102,6 +102,7 @@ const d=post({funcion:'getDatosIniciales',args:[],token:'t-bueno'}).datos;
 assert.equal(d.usuario,'ana.lopez@helgen.tech'); assert.equal(d.vendedor.nombre,'Ana');
 assert.deepEqual([...d.proyectos],[]); assert.equal(pry.m[0][0],'Folio','la pestaña Proyectos se crea sola');
 assert.equal(cot.m[0][0],'Folio'); assert.equal(cot.m[0][19],'proyecto_folio','Cotizaciones no se toca al crear Proyectos');
+assert.deepEqual({...d.permisos},{cobranza:false,desbloqueo:false},'sin ROL_COBRANZA nadie tiene cobranza');
 assert.equal(h[1].proyecto,'Sin proyecto');
 assert.throws(()=>ctx.crearProyecto({nombre:'X',cliente:{nombre:'Y'}}),/Inicia sesión/);
 // Proyecto inexistente: doPost manda codigo PROYECTO (la interfaz quita el proyecto del campo); no es error de sesión

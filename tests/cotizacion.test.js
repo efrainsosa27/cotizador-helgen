@@ -71,4 +71,25 @@ ctx.guardarCotizacion({cliente:{nombre:'Luis',empresa:'Solar MX',direccion:'Av. 
 let lc=ctx.getClientes(); const luis=lc.find(c=>c.nombre==='Luis');
 assert(luis&&luis.direccion==='Av. 5'&&luis.empresa==='Solar MX'); assert.equal(lc[0].nombre,'Luis','más reciente primero');
 cot.m.splice(1); assert.equal(ctx.getClientes().length,0,'sin filas = sin sugerencias');
+// Moneda: USD en etiqueta, total e importe con letra; MXN igual que antes; columna U
+if (ctx.monedaDeCotizacion) {
+  assert.equal(ctx.importeConLetra(1160.02),'MIL CIENTO SESENTA PESOS 02/100 M.N.');
+  assert.equal(ctx.importeConLetra(1160.02,'USD'),'MIL CIENTO SESENTA DÓLARES 02/100 USD');
+  assert.equal(ctx.importeConLetra(1,'USD'),'UN DÓLAR 00/100 USD');
+  assert.equal(ctx.importeConLetra(2000000.5,'USD'),'DOS MILLONES DE DÓLARES 50/100 USD');
+  assert.equal(ctx.monedaDeCotizacion(''),'MXN'); assert.equal(ctx.monedaDeCotizacion('usd'),'USD');
+  assert.throws(()=>ctx.monedaDeCotizacion('EUR'),/Moneda no válida/);
+  assert.throws(()=>ctx.guardarCotizacion({...base,moneda:'EUR',idSolicitud:'eur'}),/Moneda no válida/);
+  const n=pdfs.length;
+  const rU=ctx.guardarCotizacion({cliente:{nombre:'Solar Corp',empresa:'Solar Corp LLC',direccion:'Austin, TX'},moneda:'USD',marca:'energy',
+    items:[{clave:'PAN-550',descripcion:'Panel solar 550 W',unidad:'PZA',cantidad:12,precio:180},{descripcion:'Inversor 8 kW',cantidad:1,precio:1450.5}],
+    notas:'Precios en dólares estadounidenses.',idSolicitud:'usd1'});
+  assert.equal(rU.moneda,'USD');
+  const u=pdfs[n].html, fila=cot.m[cot.m.length-1];
+  assert.equal(fila[20],'USD'); assert.equal(cot.m[0][20],'moneda');
+  assert(u.includes('TOTAL USD')&&!u.includes('TOTAL MXN')&&u.includes('USD (dólares estadounidenses)'));
+  assert(u.includes('DÓLARES')&&u.includes('/100 USD)')&&!u.includes('PESOS'));
+  assert(h.includes('TOTAL MXN')&&h.includes('M.N.')&&!h.includes('dólares'),'MXN sin cambios');
+  fs.writeFileSync(process.argv[3]+'/usd.html',u);
+}
 console.log('OK');
