@@ -53,7 +53,7 @@ para que un `clasp push` desde ella no pise la API con código viejo; no volver 
 | `Code.js` | Todo el backend: API `doPost` con sesión + lógica (ver §4). Se sube a Apps Script. |
 | `Logo.js` | Logos en base64: `LOGO_HELGEN_AZUL` (PDF, fondo blanco, 700×200) y `LOGO_HELGEN_BLANCO`. Se sube. |
 | `Index.html` | Interfaz vieja de HtmlService. Se sube pero **no se usa** (`doGet` ya no la sirve; su `API_URL` es un marcador). La interfaz real es `web/cotizador/index.html`. |
-| `appsscript.json` | Manifiesto: zona `America/Mexico_City`, V8, web app `executeAs: USER_DEPLOYING`, `access: ANYONE_ANONYMOUS`. Se sube. |
+| `appsscript.json` | Manifiesto: zona `America/Mexico_City`, V8, web app `executeAs: USER_DEPLOYING`, `access: ANYONE_ANONYMOUS`, servicio avanzado `People` (v1, directorio). Se sube. |
 | `.clasp.json` | Liga la carpeta al proyecto `1GsH8Dja…`. **No cambiar el scriptId.** |
 | `.claspignore` | Lista blanca: solo se suben `Code.js`, `Logo.js`, `Index.html`, `appsscript.json` (excluye `anterior/`). |
 | `web/` | Portada (`index.html`, `logo-helgen-blanco.png`) y la interfaz real `web/cotizador/index.html` (§10). No se sube a Apps Script. `.assetsignore` excluye `Icon`/`.DS_Store`. |
@@ -120,7 +120,10 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 - `getClientes()` *(UI)* — clientes que ya cotizaron, calculados desde la hoja `Cotizaciones` (`clientesDesdeFilas`).
 - `listarCotizaciones(busqueda)` *(UI)* — últimas 100 cotizaciones, filtro por folio/cliente/empresa/proyecto; `vendedor` =
   `vendedorDeFila`: nombre + apellido de la fila; en filas viejas (sin Q:S), el nombre que ese correo tiene en otras filas
-  (`nombresDeVendedores`, gana la más reciente); si no se conoce, el correo (`vendedor_email` o "Elaboró"). No modifica la hoja.
+  (`nombresDeVendedores`, gana la más reciente); si tampoco y es @helgen.tech, el nombre del **directorio de Google**
+  (`completarNombresDirectorio_` → `nombreEnDirectorio_`, People API, caché 6 h `DIR_<correo>`, `-` = no encontrado; un error no
+  se guarda en caché); si no, el correo (`vendedor_email` o "Elaboró"). No modifica la hoja.
+- `probarDirectorio()` — correr desde el editor: autoriza el permiso del directorio y muestra el nombre de quien lo ejecuta.
 
 ### 4.5 Guardar cotización
 - `guardarCotizacion(payload)` *(UI)* — exige vendedor verificado (si no, error de sesión); normaliza, agrega clave/unidad SAT
@@ -157,7 +160,8 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
   normalizados. `normalizarProyecto(p)`, `nombreCarpetaProyecto(folio, cliente, nombre)` (quita `/ \ : * ? " < > |`),
   `proyectosDesdeFilas`, `filtrarProyectos`.
 - `normalizarProducto(p)`, `indiceDeClave(claves, clave)`.
-- `nombresDeVendedores(filas)` (correo en minúsculas → "Nombre Apellido"), `vendedorDeFila(r, nombres)`.
+- `nombresDeVendedores(filas)` (correo en minúsculas → "Nombre Apellido"), `vendedorDeFila(r, nombres)`,
+  `nombreDePersonaDirectorio(personas, correo)` (solo la persona con el correo exacto; nombre + apellido o `displayName`).
 - `terminosParaPdf(cfg, marca)` — renglones de T&C de la marca; agrega la línea de vigencia si falta.
 - `textoCelda(s)` — antepone `'` a texto que empiece con `= + - @` para que Sheets no lo lea como fórmula.
 - `validarClaimsToken(claims, clientId, dominio, ahora)` — ver §10.3.
@@ -282,6 +286,9 @@ Actualizado, Actualizó, Clave SAT, Unidad SAT. A:C y G:H en formato texto.
   quita la configuración de web app). Ya pasó y hubo que borrar un proyecto duplicado.
 - Publicar siempre sobre el mismo deployment (misma `API_URL`). Nunca `clasp deploy` sin `--deploymentId`.
 - Si se agrega un servicio nuevo de Google, el dueño debe autorizar el permiso una vez desde el editor (`UrlFetchApp` ya está autorizado).
+  **Orden obligatorio:** `clasp push` → el dueño corre una función en el editor y acepta el permiso → recién entonces `clasp deploy`.
+  Si se publica antes de autorizar, la web app (que corre como el dueño) falla en **todas** las llamadas hasta que se autorice.
+  People (directorio) se agregó el 20/10/2026; se autoriza con `probarDirectorio()`.
 
 ### 6.9 Proyectos
 - **Opcionales al cotizar** ("Sin proyecto" por omisión). Solo se pueden elegir proyectos `Activo`; el servidor lo vuelve a revisar.

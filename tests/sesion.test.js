@@ -97,6 +97,40 @@ const Q=(email,n,a)=>{const r=Array(19).fill('');r[16]=email;r[17]=n;r[18]=a;ret
 assert.equal(ctx.nombresDeVendedores([Q('a@helgen.tech','Ana','Viejo'),Q('A@helgen.tech','Ana','Nuevo'),Q('b@helgen.tech','','')])['a@helgen.tech'],'Ana Nuevo');
 assert.equal(ctx.nombresDeVendedores([Q('b@helgen.tech','','')])['b@helgen.tech'],undefined,'sin nombre no entra al mapa');
 assert.equal(ctx.vendedorDeFila(Q('','',''),{}),'','fila sin datos de vendedor');
+
+// --- Directorio de Google (People API): correos @helgen.tech sin nombre en la hoja ---
+let consultas=[], directorioFalla=false;
+const PERSONAS={'leo@helgen.tech':{names:[{givenName:'Leonardo',familyName:'Ruiz Mora',displayName:'Leonardo Ruiz Mora'}],emailAddresses:[{value:'Leo@helgen.tech'}]},
+  'sinapellido@helgen.tech':{names:[{displayName:'Equipo Ventas'}],emailAddresses:[{value:'sinapellido@helgen.tech'}]}};
+ctx.People={People:{searchDirectoryPeople:o=>{consultas.push(o.query);if(directorioFalla)throw new Error('403 sin permiso');
+  // Google también regresa personas parecidas: solo cuenta la que coincide exacto
+  return{people:[{names:[{givenName:'Leo',familyName:'Parecido'}],emailAddresses:[{value:'leo.p@helgen.tech'}]}].concat(PERSONAS[o.query]?[PERSONAS[o.query]]:[])}}}};
+const filaLeo=['HLG-2026-0010','x','Cliente','','','','',1,0.16,1.16,'leo@helgen.tech','u','[]','','Helgen',''];
+const filaExt=['HLG-2026-0011','x','Cliente','','','','',1,0.16,1.16,'alguien@gmail.com','u','[]','','Helgen',''];
+const filaNadie=['HLG-2026-0012','x','Cliente','','','','',1,0.16,1.16,'nadie@helgen.tech','u','[]','','Helgen',''];
+cot.m.push(filaLeo.slice(),filaExt.slice(),filaNadie.slice(),filaLeo.slice());
+const antesHoja=JSON.stringify(cot.m);
+const h3=post({funcion:'listarCotizaciones',args:[''],token:'t-bueno'}).datos;
+const vend=f=>h3.filter(c=>c.folio===f).map(c=>c.vendedor);
+assert.deepEqual(vend('HLG-2026-0010'),['Leonardo Ruiz Mora','Leonardo Ruiz Mora'],'nombre + apellido del directorio');
+assert.deepEqual(vend('HLG-2026-0011'),['alguien@gmail.com'],'correo de fuera de helgen.tech no se busca');
+assert.deepEqual(vend('HLG-2026-0012'),['nadie@helgen.tech'],'no está en el directorio = correo');
+assert.deepEqual(consultas.sort(),['antes@helgen.tech','leo@helgen.tech','nadie@helgen.tech'],'una consulta por correo, sin gmail ni correos con nombre');
+assert.equal(JSON.stringify(cot.m),antesHoja,'el directorio no escribe en la hoja');
+// Caché: la segunda carga no vuelve a consultar (tampoco los no encontrados)
+consultas=[]; post({funcion:'listarCotizaciones',args:[''],token:'t-bueno'}); assert.deepEqual(consultas,[]);
+// Solo displayName
+assert.equal(ctx.nombreDePersonaDirectorio([PERSONAS['sinapellido@helgen.tech']],'sinapellido@helgen.tech'),'Equipo Ventas');
+assert.equal(ctx.nombreDePersonaDirectorio([],'x@helgen.tech'),'');
+// Si el directorio falla (sin permiso), se muestra el correo y no se guarda en caché (se reintenta)
+for(const k of Object.keys(cache)) if(k.startsWith('DIR_')) delete cache[k];
+directorioFalla=true; consultas=[];
+assert.deepEqual(post({funcion:'listarCotizaciones',args:['HLG-2026-0010'],token:'t-bueno'}).datos.map(c=>c.vendedor),['leo@helgen.tech','leo@helgen.tech']);
+assert.equal(cache['DIR_leo@helgen.tech'],undefined,'un error no se guarda en caché');
+// Sin servicio People (antes de habilitarlo): correo
+delete ctx.People; directorioFalla=false;
+assert.deepEqual(post({funcion:'listarCotizaciones',args:['HLG-2026-0010'],token:'t-bueno'}).datos.map(c=>c.vendedor),['leo@helgen.tech','leo@helgen.tech']);
+cot.m.splice(cot.m.length-4,4);
 // Datos iniciales: usuario = correo del token
 const d=post({funcion:'getDatosIniciales',args:[],token:'t-bueno'}).datos;
 assert.equal(d.usuario,'ana.lopez@helgen.tech'); assert.equal(d.vendedor.nombre,'Ana');

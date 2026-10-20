@@ -464,6 +464,59 @@ function probarIaSat() {
   });
 }
 
+// ---- Directorio de Google (nombre de vendedores sin nombre en la hoja) ----
+
+/**
+ * Agrega al mapa correo → nombre los correos @helgen.tech que no tienen nombre en la hoja, buscándolos en el
+ * directorio de la organización (People API). No escribe nada en la hoja. Si algo falla, el correo se queda como está.
+ */
+function completarNombresDirectorio_(correos, nombres) {
+  const pendientes = {};
+  (correos || []).forEach(c => {
+    const correo = String(c || '').trim().toLowerCase();
+    if (correo.endsWith('@' + DOMINIO_HELGEN) && !nombres[correo]) pendientes[correo] = true;
+  });
+  Object.keys(pendientes).forEach(correo => {
+    const nombre = nombreEnDirectorio_(correo);
+    if (nombre) nombres[correo] = nombre;
+  });
+}
+
+/**
+ * "Nombre Apellido" de una cuenta @helgen.tech según el directorio de Google; '' si no se encuentra o falla.
+ * Se guarda 6 h en caché (también cuando no se encuentra, para no consultar en cada carga del Historial).
+ * Requiere el servicio avanzado People (appsscript.json) y que el dueño autorice el permiso del directorio una vez.
+ */
+function nombreEnDirectorio_(correo) {
+  const cache = CacheService.getScriptCache();
+  const clave = 'DIR_' + correo;
+  const previo = cache.get(clave);
+  if (previo !== null) return previo === '-' ? '' : previo; // '-' = no está en el directorio
+  let nombre = '';
+  try {
+    if (typeof People === 'undefined') return '';
+    const r = People.People.searchDirectoryPeople({
+      query: correo, readMask: 'names,emailAddresses', sources: ['DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE'],
+    });
+    nombre = nombreDePersonaDirectorio((r && r.people) || [], correo);
+  } catch (e) {
+    console.warn('Directorio sin respuesta para ' + correo + ': ' + e.message);
+    return ''; // no se guarda en caché: se reintenta en la siguiente carga
+  }
+  cache.put(clave, nombre || '-', 21600);
+  return nombre;
+}
+
+/** Correr desde el editor: autoriza el permiso del directorio y muestra el nombre de la cuenta que lo ejecuta. */
+function probarDirectorio() {
+  const correo = Session.getEffectiveUser().getEmail().toLowerCase();
+  CacheService.getScriptCache().remove('DIR_' + correo);
+  const r = People.People.searchDirectoryPeople({
+    query: correo, readMask: 'names,emailAddresses', sources: ['DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE'],
+  });
+  console.log(correo + ' → "' + nombreDePersonaDirectorio((r && r.people) || [], correo) + '"');
+}
+
 /** Pide a Claude que elija y ordene entre los candidatos. null si no hay API key o algo falla. */
 function ordenarConIaSat_(texto, candidatos) {
   const apiKey = PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
@@ -587,9 +640,12 @@ function listarCotizaciones(busqueda) {
   const nombres = nombresDeVendedores(filas);
   const datos = filas.reverse();
   const q = String(busqueda || '').toLowerCase().trim();
-  return datos
+  const visibles = datos
     .filter(r => !q || (r[0] + ' ' + r[2] + ' ' + r[3] + ' ' + (r[19] || '')).toLowerCase().includes(q))
-    .slice(0, 100)
+    .slice(0, 100);
+  // Correos @helgen.tech que siguen sin nombre: se buscan en el directorio de Google de la organización
+  completarNombresDirectorio_(visibles.map(r => r[16] || r[10]), nombres);
+  return visibles
     .map(r => ({
       folio: r[0], fecha: r[1], cliente: r[2], empresa: r[3], total: r[9], elaboro: r[10], pdf: r[11],
       vendedor: vendedorDeFila(r, nombres),
@@ -1010,6 +1066,20 @@ function vendedorDeFila(r, nombres) {
   if (propio) return propio;
   const correo = String(r[16] || r[10] || '').trim();
   return (nombres || {})[correo.toLowerCase()] || correo;
+}
+
+/**
+ * Nombre de la persona del directorio cuyo correo coincide exacto (la búsqueda de Google también trae parecidos).
+ * Nombre de pila + apellido; si faltan, el nombre completo que muestra Google; '' si no hay coincidencia.
+ */
+function nombreDePersonaDirectorio(personas, correo) {
+  const buscado = String(correo || '').trim().toLowerCase();
+  const p = (personas || []).find(x => (x.emailAddresses || [])
+    .some(e => String(e.value || '').trim().toLowerCase() === buscado));
+  const n = p && (p.names || [])[0];
+  if (!n) return '';
+  return [n.givenName, n.familyName].map(x => String(x || '').trim()).filter(Boolean).join(' ') ||
+    String(n.displayName || '').trim();
 }
 
 /** Texto sin acentos, en minúsculas y con espacios simples (para comparar nombres). */
