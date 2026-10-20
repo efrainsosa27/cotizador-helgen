@@ -282,6 +282,8 @@ Actualizado, Actualizó, Clave SAT, Unidad SAT. A:C y G:H en formato texto.
   quita la configuración de web app). Ya pasó y hubo que borrar un proyecto duplicado.
 - Publicar siempre sobre el mismo deployment (misma `API_URL`). Nunca `clasp deploy` sin `--deploymentId`.
 - Si se agrega un servicio nuevo de Google, el dueño debe autorizar el permiso una vez desde el editor (`UrlFetchApp` ya está autorizado).
+- **Si un cambio requiere un permiso nuevo de Google: 1) `clasp push`, 2) autorizar ejecutando una función desde el editor,
+  3) `clasp deploy`. Nunca deploy antes de autorizar** (la web app corre como el dueño: sin el permiso, fallan todas las llamadas).
 
 ### 6.9 Proyectos
 - **Opcionales al cotizar** ("Sin proyecto" por omisión). Solo se pueden elegir proyectos `Activo`; el servidor lo vuelve a revisar.
