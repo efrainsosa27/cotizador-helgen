@@ -35,7 +35,7 @@ function libro(id,nombre,pestanas){const L={id,nombre,pest:pestanas||{},getId:()
 // ---- Drive simulado ----
 let nId=0; const carpetas={}, archivos={};
 // Como Workspace de helgen.tech: todo lo nuevo nace compartido con el dominio (acceso 'DOMAIN')
-const compartible=o=>Object.assign(o,{acceso:'DOMAIN',getSharingAccess:()=>o.acceso,setSharing:(a,p)=>{o.acceso=a;o.permiso=p}});
+const compartible=o=>Object.assign(o,{acceso:'DOMAIN',getSharingAccess:()=>o.acceso,setSharing:(a,p)=>{if(p==='NONE')throw new Error('Access denied: DriveApp.');o.acceso=a;o.permiso=p}}); // NONE no está soportado en Apps Script
 function carpeta(nombre,padre){const f=compartible({id:'F'+(++nId),nombre,padre,hijos:[],archivos:[],trashed:false}); Object.assign(f,{
  getId:()=>f.id,getName:()=>f.nombre,getUrl:()=>'https://drive/'+f.id,isTrashed:()=>f.trashed,
  getFoldersByName:n=>{const l=f.hijos.filter(h=>h.nombre===n);let i=0;return{hasNext:()=>i<l.length,next:()=>l[i++]}},

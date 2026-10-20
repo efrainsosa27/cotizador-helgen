@@ -1054,7 +1054,8 @@ function exigirCobranza_() {
  * las personas agregadas una por una (tania@, leo@). Workspace comparte con todo helgen.tech lo que se crea (§6.11).
  */
 function privado_(item) {
-  if (item.getSharingAccess() !== DriveApp.Access.PRIVATE) item.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE);
+  // Permission.NONE no está soportado (da "Access denied: DriveApp"); con PRIVATE el permiso se ignora.
+  if (item.getSharingAccess() !== DriveApp.Access.PRIVATE) item.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.VIEW);
   return item;
 }
 
