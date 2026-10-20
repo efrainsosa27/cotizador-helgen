@@ -38,7 +38,7 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 | Respaldos antes de Proyectos | Carpeta "Respaldos 2026-10-20" `1rFGY_k_YRRo243p3xL2RpibQ9jkEo634`: Base de datos `1PBQvmwI412IMyJb74qBWN5ZcyhSuxK3xGU9cV5KPxTE`, Catálogo `1GxBpAvQxVNJyFJSLnaY9umA5L2qf4dqX36S4uehHUNc` (antes de la pestaña Proyectos y la columna T) |
 | Worker de Cloudflare | `cotizador-helgen`, cuenta de efrain@helgen.tech `badd8bca60b008822a73ca24e983ff43` |
 | Dueño de todo / cuenta de clasp | `efrain@helgen.tech` (la API se ejecuta como esta cuenta) |
-| Proyecto de prueba "PRUEBAS — Cotizador Helgen (no usar)" (ARCHIVADO) | `1wp8_SQofXXUuMkUjmDyyUxYLxx-LdFv-20JaXE7q9entLfEvDKgYtnt0`; deployment `AKfycbwVu2q5…` retirado el 20/10/2026 (la URL da 404). Solo datos inventados (§10.5). **No es la API.** |
+| Proyecto de prueba "PRUEBAS — Cotizador Helgen (no usar)" | `1wp8_SQofXXUuMkUjmDyyUxYLxx-LdFv-20JaXE7q9entLfEvDKgYtnt0`; deployment `AKfycbwVu2q5…` retirado el 20/10/2026 (404). Para Cobranza (20/10/2026): deployment nuevo `AKfycbz9naWOw4Jj0qlta0RjCNifgZLvvJqXpqRnrrsALewSnmn7ydnEIw_zYriIHZjbQ5ugQw` (@2); su `Pruebas.js` crea "PRUEBAS — Cobranza" y tiene `pruebasRondaSinRol()` / `pruebasRondaConRol()`. Solo datos inventados (§10.5). **No es la API.** |
 | **Proyecto anterior (EN DESUSO)** | `1X-qSKgvqKwuDj4iPZBhXlakR5udau9ibVMevhwvlLXgtSkjV4IoQxqwU`; deployment `AKfycbxahS3…` en @10 = aviso "El cotizador se mudó". Código en `anterior/` (§11) |
 
 Los IDs que usa el código están en **Script Properties** del proyecto `1GsH8Dja…` (ver §5). Esta tabla es solo referencia.
