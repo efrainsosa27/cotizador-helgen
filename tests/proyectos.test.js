@@ -116,8 +116,10 @@ const h=ctx.listarCotizaciones('');
 assert.deepEqual(h.map(c=>c.proyecto),['Sin proyecto','PRY-2026-0001','Sin proyecto']);
 assert.deepEqual(ctx.listarCotizaciones('pry-2026-0001').map(c=>c.folio),['HLG-2026-0005'],'busca por proyecto');
 // Proyecto inexistente o cancelado: error y no se consume folio
-assert.throws(()=>ctx.guardarCotizacion({...base,proyectoFolio:'PRY-2026-0099',idSolicitud:'c3'}),/No existe el proyecto PRY-2026-0099/);
-assert.throws(()=>ctx.guardarCotizacion({...base,proyectoFolio:'PRY-2026-0003',idSolicitud:'c4'}),/está cancelado/);
+assert.throws(()=>ctx.guardarCotizacion({...base,proyectoFolio:'PRY-2026-0099',idSolicitud:'c3'}),
+  e=>/No existe el proyecto PRY-2026-0099/.test(e.message)&&e.codigo==='PROYECTO');
+assert.throws(()=>ctx.guardarCotizacion({...base,proyectoFolio:'PRY-2026-0003',idSolicitud:'c4'}),
+  e=>/está cancelado/.test(e.message)&&e.codigo==='PROYECTO','la interfaz usa codigo PROYECTO para limpiar el campo');
 assert.equal(props.CONSECUTIVO_2026,'6'); assert.equal(cot.m.length,4);
 
 // --- Subcarpetas borradas o renombradas: se crea una nueva ---

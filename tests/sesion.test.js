@@ -91,6 +91,9 @@ assert.deepEqual([...d.proyectos],[]); assert.equal(pry.m[0][0],'Folio','la pest
 assert.equal(cot.m[0][0],'Folio'); assert.equal(cot.m[0][19],'proyecto_folio','Cotizaciones no se toca al crear Proyectos');
 assert.equal(h[1].proyecto,'Sin proyecto');
 assert.throws(()=>ctx.crearProyecto({nombre:'X',cliente:{nombre:'Y'}}),/Inicia sesión/);
+// Proyecto inexistente: doPost manda codigo PROYECTO (la interfaz quita el proyecto del campo); no es error de sesión
+const rp=post({funcion:'guardarCotizacion',args:[{...base,proyectoFolio:'PRY-2026-0099',idSolicitud:'pry-x'}],token:'t-bueno'});
+assert.equal(rp.ok,false); assert.equal(rp.codigo,'PROYECTO'); assert(/No existe el proyecto/.test(rp.error));
 // Fuera de doPost (sin token) guardar se rechaza
 assert.throws(()=>ctx.guardarCotizacion({...base,idSolicitud:'directo'}),/Inicia sesión/);
 // doGet ya no sirve la app

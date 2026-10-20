@@ -124,6 +124,7 @@ function doPost(e) {
   } catch (err) {
     respuesta = { ok: false, error: err && err.message ? err.message : String(err) };
     if (err && err.sesion) respuesta.codigo = 'SESION';
+    else if (err && err.codigo) respuesta.codigo = err.codigo; // p. ej. 'PROYECTO' (ver errorProyecto_)
   } finally {
     VENDEDOR_ = null;
   }
@@ -636,9 +637,9 @@ function guardarCotizacion(payload) {
     let carpetaPdf = null;
     if (proyectoFolio) {
       const proyecto = buscarProyecto_(hojaProyectos_(), proyectoFolio);
-      if (!proyecto) throw new Error('No existe el proyecto ' + proyectoFolio + '. Elige otro o cotiza sin proyecto.');
+      if (!proyecto) throw errorProyecto_('No existe el proyecto ' + proyectoFolio + '. Elige otro o cotiza sin proyecto.');
       if (proyecto.estado !== 'Activo') {
-        throw new Error('El proyecto ' + proyectoFolio + ' está ' + proyecto.estado.toLowerCase() +
+        throw errorProyecto_('El proyecto ' + proyectoFolio + ' está ' + proyecto.estado.toLowerCase() +
           ': ya no se le pueden agregar cotizaciones.');
       }
       carpetaPdf = subcarpetaProyecto_(proyecto, 'Cotizaciones');
@@ -773,6 +774,13 @@ function listarProyectos(busqueda, incluirInactivos) {
   return filtrarProyectos(proyectosDesdeFilas(filas), busqueda, incluirInactivos, 50)
     .map(p => ({ folio: p.folio, nombre: p.nombre, cliente: p.cliente, clienteId: p.clienteId,
       ubicacion: p.ubicacion, estado: p.estado, fecha: p.fecha }));
+}
+
+/** Error de proyecto inexistente o no Activo: doPost lo manda con codigo 'PROYECTO' y la interfaz limpia el campo. */
+function errorProyecto_(mensaje) {
+  const e = new Error(mensaje);
+  e.codigo = 'PROYECTO';
+  return e;
 }
 
 /** Proyecto por folio (con su número de fila), o null. */

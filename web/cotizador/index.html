@@ -323,7 +323,11 @@
 
     // ---- Llamadas al servidor ----
     function llamar(funcion, args, alExito, alFallar, esReintento) {
-      const fallar = msg => { if (alFallar) alFallar(new Error(msg)); else console.error(msg); };
+      // El error lleva el codigo del servidor (p. ej. 'PROYECTO') para que la interfaz reaccione
+      const fallar = (msg, codigo) => {
+        const e = new Error(msg); if (codigo) e.codigo = codigo;
+        if (alFallar) alFallar(e); else console.error(msg);
+      };
       if (!/^https:\/\//.test(API_URL)) { fallar('Falta configurar la URL del servidor (API_URL).'); return; }
       if (!vigente()) {
         pendientes.push(() => llamar(funcion, args, alExito, alFallar, esReintento));
@@ -348,7 +352,7 @@
             }
             pedirSesion(res.error);
           }
-          fallar((res && res.error) || 'Respuesta inválida del servidor.');
+          fallar((res && res.error) || 'Respuesta inválida del servidor.', res && res.codigo);
         });
     }
 
@@ -496,8 +500,19 @@
               ' · <a href="' + esc(r.url) + '" target="_blank">Abrir PDF</a>');
         limpiar();
       })
-      .withFailureHandler(mostrarError)
+      .withFailureHandler(errorAlGuardar)
       .guardarCotizacion(payload);
+  }
+
+  // Si el servidor rechaza el proyecto (cancelado, cerrado o inexistente): se quita del campo y se refresca la lista
+  function errorAlGuardar(err) {
+    if (err && err.codigo === 'PROYECTO') {
+      $('proyecto').value = ''; pintarProyInfo();
+      google.script.run.withSuccessHandler(recibirProyectos).listarProyectos('', false);
+      mostrarError((err.message || '') + ' Se quitó el proyecto: elige otro o guarda sin proyecto.');
+      return;
+    }
+    mostrarError(err);
   }
 
   function limpiar() {

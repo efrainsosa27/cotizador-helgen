@@ -316,12 +316,13 @@ Actualizado, Actualizó, Clave SAT, Unidad SAT. A:C y G:H en formato texto.
 ## 8. Cómo trabajar
 
 ```bash
-# Pruebas (Node, servicios de Google simulados). Correr las cinco antes de subir.
+# Pruebas (Node, servicios de Google simulados). Correr las seis antes de subir.
 mkdir -p /tmp/salida-pdf && node tests/cotizacion.test.js Code.js /tmp/salida-pdf   # folios, idempotencia, marcas, Config, clientes; deja helgen.html / energy.html
 node tests/catalogo.test.js .                                  # catálogo: migración, alta, edición, duplicados
 node tests/sat.test.js . "$HOME/Library/CloudStorage/GoogleDrive-efrain@helgen.tech/Mi unidad/Cotizador Helgen/Catálogos SAT"
 node tests/sesion.test.js .                                    # token en doPost, vendedor_* (vendedor falso se ignora)
 node tests/proyectos.test.js .                                 # folio PRY, carpetas, proyecto_folio, subcarpetas que se reparan
+node tests/interfaz.test.js .                                  # interfaz con DOM y fetch simulados: proyecto rechazado se limpia
 node tests/probar-busqueda-sat.js Code.js "<ruta>/SAT_c_ClaveProdServ.csv"   # ver qué sugiere la búsqueda por palabras
 
 # Subir y publicar la API (misma API_URL)
@@ -392,6 +393,8 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
   (~1 h); las llamadas sin sesión vigente esperan en cola hasta que se inicia sesión.
 - Si el servidor responde `codigo: "SESION"`, se borra el token, se muestra el login y la llamada se repite **una vez** al entrar
   (guardar es idempotente por `idSolicitud`: no duplica folio).
+- Otros códigos llegan a la interfaz en `err.codigo`. `codigo: "PROYECTO"` (proyecto cancelado, cerrado o inexistente al guardar,
+  `errorProyecto_`): `errorAlGuardar` limpia el campo Proyecto, refresca la lista y muestra el aviso.
 - Encabezado: nombre del vendedor (del token, solo para mostrar) + botón "Cerrar sesión" (`disableAutoSelect`).
 - Tras publicar, el navegador puede mostrar la versión anterior en caché: recargar la página.
 - Wrangler 4 delega Cloudflare Pages "clásico" a Workers: se eligió **Worker con assets** (`wrangler.jsonc`), no `wrangler pages`.
