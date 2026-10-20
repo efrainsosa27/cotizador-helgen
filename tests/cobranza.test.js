@@ -42,8 +42,10 @@ function apiDrive(url,op){const m=url.match(/drive\/v3\/files\/([^/?]+)\/permiss
  assert(op&&op.headers&&op.headers.Authorization==='Bearer TOKEN-SCRIPT','API de Drive con el token del script');
  const resp=(c,b)=>({getResponseCode:()=>c,getContentText:()=>JSON.stringify(b||{})});
  if(!it)return resp(404);
- if(op.method==='delete'){assert.equal(m[2],'dom');it.acceso='PRIVATE';return resp(204)}
- return resp(200,{permissions:[{id:'own',type:'user'}].concat(it.acceso==='DOMAIN'?[{id:'dom',type:'domain'}]:[])})}
+ // Como Drive: el acceso del dominio se hereda de las carpetas y no se puede quitar en el hijo mientras el padre lo tenga
+ let heredado=false;for(let f=it.padre;f;f=f.padre)if(f.acceso==='DOMAIN')heredado=true;
+ if(op.method==='delete'){assert.equal(m[2],'dom');if(heredado)return resp(403,{error:{reason:'cannotDeletePermission'}});it.acceso='PRIVATE';return resp(204)}
+ return resp(200,{permissions:[{id:'own',type:'user'}].concat(it.acceso==='DOMAIN'||heredado?[{id:'dom',type:'domain'}]:[])})}
 function carpeta(nombre,padre){const f=compartible({id:'F'+(++nId),nombre,padre,hijos:[],archivos:[],trashed:false}); Object.assign(f,{
  getId:()=>f.id,getName:()=>f.nombre,getUrl:()=>'https://drive/'+f.id,isTrashed:()=>f.trashed,
  getFoldersByName:n=>{const l=f.hijos.filter(h=>h.nombre===n);let i=0;return{hasNext:()=>i<l.length,next:()=>l[i++]}},
@@ -51,6 +53,7 @@ function carpeta(nombre,padre){const f=compartible({id:'F'+(++nId),nombre,padre,
  createFile:b=>{const id='A'+(++nId);const a=compartible({id,blob:b,padre:f});archivos[id]=a;f.archivos.push(a);return Object.assign(a,{getId:()=>id,getUrl:()=>'https://drive/file/'+id})}});
  carpetas[f.id]=f;return f}
 const miUnidad=carpeta('Mi unidad',null), maestra=miUnidad.createFolder('Cotizador Helgen'), pdfRaiz=maestra.createFolder('Cotizaciones Helgen (PDF)');
+miUnidad.acceso='PRIVATE'; // la raíz de Mi unidad no se comparte; la carpeta maestra sí (todo el dominio, §6.11)
 const ruta=f=>f.padre?ruta(f.padre)+'/'+f.nombre:f.nombre;
 archivos.DB={id:'DB',padre:maestra};
 

@@ -1054,6 +1054,7 @@ function exigirCobranza_() {
  * las personas agregadas una por una (tania@, leo@). Workspace comparte con todo helgen.tech lo que se crea (§6.11).
  * Usa la API de Drive con el token del script: DriveApp.setSharing da "Access denied: DriveApp." en helgen.tech
  * (20/10/2026). No pide permisos nuevos (el de Drive ya lo da DriveApp). Si no puede, lanza error: nada queda abierto.
+ * Restringir siempre de arriba abajo: un permiso heredado de la carpeta no se puede quitar en el hijo (403).
  */
 function privado_(item) {
   const url = 'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(item.getId()) + '/permissions';
@@ -1537,8 +1538,8 @@ function cancelarPago(folioPago, motivo) {
  */
 function prepararCobranza() {
   const libro = libroCobranza_();
+  const carpeta = carpetaCobranza_(); // primero la carpeta: el libro hereda su acceso y Drive no deja quitarlo en el hijo
   const archivoLibro = privado_(DriveApp.getFileById(libro.getId()));
-  const carpeta = carpetaCobranza_();
   Logger.log('Carpeta de cobranza: ' + carpeta.getUrl() + ' (restringida)');
   Logger.log('Libro de cobranza:   ' + archivoLibro.getUrl() + ' (restringido)');
   Logger.log('ROL_COBRANZA: ' + (PropertiesService.getScriptProperties().getProperty('ROL_COBRANZA') || '(vacío: nadie tiene acceso)'));
