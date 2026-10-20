@@ -176,7 +176,7 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 - `redondear(n)`, `formatoMoneda(n)`, `escaparHtml(s)`, `importeConLetra(n, moneda)` ("MIL CIENTO SESENTA PESOS 02/100 M.N.";
   en USD "MIL CIENTO SESENTA DÓLARES 02/100 USD").
 - `normalizarCotizacion(p, ivaTasa)` — limpia cliente/conceptos, exige nombre y ≥1 concepto, calcula importes y totales, `marca`,
-  `moneda` (`monedaDeCotizacion`: vacía = MXN; solo MXN/USD).
+  `moneda` (`monedaDeCotizacion`: vacía = MXN; solo MXN/USD) y `tipoCambio` (solo USD, validado con `tipoCambioDesdeValores`).
 - Cobranza: `esquemaPorOmision`, `validarEsquema` (1–10 etapas, nombres únicos, % > 0 con 2 decimales, suma exacta 100),
   `montosDeEsquema` (la última etapa absorbe los centavos), `convertirMoneda`, `repartirPago` (etapa elegida → siguientes →
   anteriores; en centavos), `resumenCobranza` (vuelve a repartir los pagos Vigentes en orden de registro), `validarFechaIso`,
@@ -235,10 +235,11 @@ Capa de sesión y `fetch` en `<script id="api-web">` (§10.2).
 El proyecto de la API (`1GsH8Dja…`) está en la carpeta `1w-T05ql62SXxsm3z4u-xCpMjcdXc0b0p` (antes "PRUEBAS — Cotizador web"),
 junto con los archivos de prueba que ya no se usan (§9).
 
-**Pestaña `Cotizaciones`** (21 columnas, 1 fila por cotización): Folio, Fecha, Cliente, Empresa, RFC, Correo, Teléfono,
+**Pestaña `Cotizaciones`** (22 columnas, 1 fila por cotización): Folio, Fecha, Cliente, Empresa, RFC, Correo, Teléfono,
 Subtotal, IVA, Total, Elaboró, PDF (link), Conceptos (JSON: clave, descripcion, unidad, cantidad, precio, importe y, si vienen
 del catálogo, claveSat/unidadSat), Notas, Marca (Helgen / Helgen Energy), Dirección, `vendedor_email`, `vendedor_nombre`,
-`vendedor_apellido`, `proyecto_folio` (T; vacío = "Sin proyecto"), `moneda` (U: MXN o USD; vacía en filas viejas = MXN). Las columnas P:S se agregaron el 19/10/2026 (§11); las
+`vendedor_apellido`, `proyecto_folio` (T; vacío = "Sin proyecto"), `moneda` (U: MXN o USD; vacía en filas viejas = MXN), `tipo_cambio` (V: pesos por dólar con que la interfaz convirtió los
+precios del catálogo, 4 decimales; solo en USD; vacío en MXN, en filas viejas o si los precios se capturaron sin tipo de cambio). Las columnas P:S se agregaron el 19/10/2026 (§11); las
 filas 0001–0004 no las tienen llenas. La T se agregó con Proyectos (10/2026): las filas anteriores quedan vacías y no se mueven.
 `guardarCotizacion` reescribe la fila de encabezados si no coincide con `ENCABEZADOS_COTIZACIONES`.
 
@@ -476,8 +477,7 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - **Cobranza, antes de usarla:** probar en el proyecto PRUEBAS (§10.5) con un usuario sin rol, correr `prepararCobranza()` en la
   API real, capturar `ROL_COBRANZA` y `ADMIN_DESBLOQUEO`, compartir la carpeta de cobranza como lector con tania@ y leo@
   (Google les manda correo: confirmar con el usuario antes) y anotar su ID en §2.
-- Precio USD del catálogo (20/10/2026): la cotización no guarda el tipo de cambio que se usó; si contabilidad lo necesita,
-  agregar una columna en `Cotizaciones`. Confirmar que leer `GOOGLEFINANCE` desde Apps Script funciona en el catálogo real
+- Precio USD del catálogo (20/10/2026): el tipo de cambio usado se guarda en `Cotizaciones!V` (no sale en el PDF). Confirmar que leer `GOOGLEFINANCE` desde Apps Script funciona en el catálogo real
   (si no, usar el tipo de cambio manual de la pestaña).
 - **Acceso del dominio a la Base de datos y a la carpeta maestra** (lector para todo helgen.tech): se queda por ahora; revisarlo
   junto con la idea "cada vendedor ve solo sus cotizaciones" (quitarlo impide abrir los PDF desde el Historial).

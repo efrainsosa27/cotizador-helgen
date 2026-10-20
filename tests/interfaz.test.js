@@ -123,7 +123,9 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   respuestas.guardarCotizacion={ok:true,datos:{folio:'HLG-2026-0009',url:'u',total:208.8,moneda:'USD',proyectoFolio:''}};
   respuestas.getClientes={ok:true,datos:[]};
   $('proyecto').value=''; A.run('guardar()'); await esperar();
-  assert.equal(llamadas.filter(c=>c.funcion==='guardarCotizacion').pop().args[0].moneda,'USD');
+  const gU=llamadas.filter(c=>c.funcion==='guardarCotizacion').pop().args[0];
+  assert.deepEqual([gU.moneda,gU.tipoCambio],['USD',18.45],'manda el tipo de cambio con que convirtió');
+  assert.equal(g.args[0].tipoCambio,'','en MXN no manda tipo de cambio');
   assert(/\$208\.80 USD/.test($('aviso').innerHTML)); assert.equal($('moneda').value,'MXN','al limpiar vuelve a MXN');
 
   // ===== Cobranza (con permiso) =====

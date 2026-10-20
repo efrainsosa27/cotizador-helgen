@@ -81,12 +81,20 @@ if (ctx.monedaDeCotizacion) {
   assert.throws(()=>ctx.monedaDeCotizacion('EUR'),/Moneda no válida/);
   assert.throws(()=>ctx.guardarCotizacion({...base,moneda:'EUR',idSolicitud:'eur'}),/Moneda no válida/);
   const n=pdfs.length;
-  const rU=ctx.guardarCotizacion({cliente:{nombre:'Solar Corp',empresa:'Solar Corp LLC',direccion:'Austin, TX'},moneda:'USD',marca:'energy',
+  const rU=ctx.guardarCotizacion({cliente:{nombre:'Solar Corp',empresa:'Solar Corp LLC',direccion:'Austin, TX'},moneda:'USD',marca:'energy',tipoCambio:18.456789,
     items:[{clave:'PAN-550',descripcion:'Panel solar 550 W',unidad:'PZA',cantidad:12,precio:180},{descripcion:'Inversor 8 kW',cantidad:1,precio:1450.5}],
     notas:'Precios en dólares estadounidenses.',idSolicitud:'usd1'});
   assert.equal(rU.moneda,'USD');
   const u=pdfs[n].html, fila=cot.m[cot.m.length-1];
   assert.equal(fila[20],'USD'); assert.equal(cot.m[0][20],'moneda');
+  // Tipo de cambio usado (columna V): solo en USD, 4 decimales; inválido o en MXN = vacío
+  assert.equal(cot.m[0][21],'tipo_cambio'); assert.equal(fila[21],18.4568);
+  assert.equal(ctx.normalizarCotizacion({...base,moneda:'MXN',tipoCambio:18.5},0.16).tipoCambio,'','MXN no guarda tipo de cambio');
+  assert.equal(ctx.normalizarCotizacion({...base,moneda:'USD',tipoCambio:'abc'},0.16).tipoCambio,'');
+  assert.equal(ctx.normalizarCotizacion({...base,moneda:'USD',tipoCambio:0.05},0.16).tipoCambio,'','fuera de rango');
+  assert.equal(ctx.normalizarCotizacion({...base,moneda:'USD'},0.16).tipoCambio,'','precios a mano sin tipo de cambio');
+  ctx.guardarCotizacion({...base,moneda:'MXN',tipoCambio:18.5,idSolicitud:'mxn-tc'});
+  assert.deepEqual(cot.m[cot.m.length-1].slice(20),['MXN',''],'las cotizaciones en MXN quedan vacías en V');
   assert(u.includes('TOTAL USD')&&!u.includes('TOTAL MXN')&&u.includes('USD (dólares estadounidenses)'));
   assert(u.includes('DÓLARES')&&u.includes('/100 USD)')&&!u.includes('PESOS'));
   assert(h.includes('TOTAL MXN')&&h.includes('M.N.')&&!h.includes('dólares'),'MXN sin cambios');

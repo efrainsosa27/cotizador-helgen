@@ -180,7 +180,7 @@ const CONFIG_EJEMPLO_ANTERIOR = {
 const ENCABEZADOS_COTIZACIONES = [
   'Folio', 'Fecha', 'Cliente', 'Empresa', 'RFC', 'Correo', 'Teléfono',
   'Subtotal', 'IVA', 'Total', 'Elaboró', 'PDF', 'Conceptos (JSON)', 'Notas', 'Marca', 'Dirección',
-  'vendedor_email', 'vendedor_nombre', 'vendedor_apellido', 'proyecto_folio', 'moneda'
+  'vendedor_email', 'vendedor_nombre', 'vendedor_apellido', 'proyecto_folio', 'moneda', 'tipo_cambio'
 ];
 
 function setup() {
@@ -768,7 +768,7 @@ function guardarCotizacion(payload) {
       t(datos.cliente.email), t(datos.cliente.telefono),
       datos.subtotal, datos.iva, datos.total, datos.elaboro, archivo.getUrl(),
       JSON.stringify(datos.items), t(datos.notas), MARCAS[datos.marca], t(datos.cliente.direccion),
-      t(vendedor.email), t(vendedor.nombre), t(vendedor.apellido), proyectoFolio, datos.moneda,
+      t(vendedor.email), t(vendedor.nombre), t(vendedor.apellido), proyectoFolio, datos.moneda, datos.tipoCambio,
     ]);
     SpreadsheetApp.flush();
 
@@ -1545,12 +1545,15 @@ function normalizarCotizacion(p, ivaTasa) {
   const iva = redondear(subtotal * ivaTasa);
   const total = redondear(subtotal + iva);
 
-  return {
+  const datos = {
     cliente: cliente, items: items, subtotal: subtotal, iva: iva, total: total, ivaTasa: ivaTasa,
     notas: String((p && p.notas) || '').trim(),
     marca: p && p.marca === 'energy' ? 'energy' : 'helgen',
     moneda: monedaDeCotizacion(p && p.moneda),
   };
+  // Tipo de cambio (pesos por dólar) con que la interfaz convirtió los precios del catálogo; solo en USD y solo si es válido
+  datos.tipoCambio = datos.moneda === 'USD' ? (tipoCambioDesdeValores(Number(p && p.tipoCambio), '').valor || '') : '';
+  return datos;
 }
 
 function formatearFolio(prefijo, anio, n) {

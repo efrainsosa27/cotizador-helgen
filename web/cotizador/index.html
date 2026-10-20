@@ -608,6 +608,8 @@
       notas: $('notas').value,
       marca: $('marca').value,
       moneda: monedaActual(),
+      // Tipo de cambio con que se convirtieron los precios del catálogo (se guarda en la columna V; solo USD)
+      tipoCambio: monedaActual() === 'USD' && TC && TC.valor ? TC.valor : '',
       proyectoFolio: '',
       idSolicitud: ID_SOLICITUD,
     };
