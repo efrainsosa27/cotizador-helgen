@@ -33,7 +33,7 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 | Catálogo "Catálogo Helgen" (`CATALOGO_ID`) | `11Rr0G7ZHE8PqXWsw9OpPPfGLQx8Yz7g8h1wkjJY2ahQ` |
 | Carpeta PDF "Cotizaciones Helgen (PDF)" (`FOLDER_ID`) | `1CDN1LyOlA1L6z5dvBp49tlqu0fDoxdX8` (subcarpeta `2026` = `1X6m0nexpc3TzJd9XWBmGOAeZuiJE3Pig`) |
 | "Catálogos SAT (CFDI 4.0)" (`SAT_ID`) | `1B2t9tXuEj1i9JO9ybqsuH4PN1K47CqMZgoEBzd-Dmc8` (subcarpeta "Catálogos SAT" `15OYcUp41onVJoW7--b3gnLZY8ymvYbUZ`) |
-| Carpeta "Cotizador Helgen — Cobranza" (`COBRANZA_FOLDER_ID`) | Fuera de la carpeta maestra, en Mi unidad. Se crea con `prepararCobranza()` (ID pendiente: anotarlo aquí al crearla en la API real). Lectores: tania@ y leo@ (§6.11) |
+| Carpeta "Cotizador Helgen — Cobranza" (`COBRANZA_FOLDER_ID`) | `1A9uoRdhFdWOBacWCxx4Ktw1d9iQH7JRc` (creada el 20/10/2026 con `prepararCobranza()`; fuera de la carpeta maestra, en Mi unidad). Libro "Cotizador Helgen — Cobranza (datos)" (`COBRANZA_DB_ID`) `1uk9FNzTkQPjvWJw2R5wb8HXZl9c8ldYvyB64c8yjHL0`. Lectores: tania@ y leo@ (§6.11) |
 | Respaldos de la migración | Carpeta "Respaldos 2026-10-19" `1hxx0tgh4cLZMqoyf-eT8l14UAde7Y-L1` (copias de base de datos y catálogo antes del cambio) |
 | Respaldos antes de Proyectos | Carpeta "Respaldos 2026-10-20" `1rFGY_k_YRRo243p3xL2RpibQ9jkEo634`: Base de datos `1PBQvmwI412IMyJb74qBWN5ZcyhSuxK3xGU9cV5KPxTE`, Catálogo `1GxBpAvQxVNJyFJSLnaY9umA5L2qf4dqX36S4uehHUNc` (antes de la pestaña Proyectos y la columna T) |
 | Respaldos antes de Cobranza | Carpeta "Respaldos 2026-10-20 (antes de Cobranza)" `1C_yGbX0Gk_cZBwegdswPFvuzCVDdyTLF` (en la carpeta maestra): Base de datos `14C3d7w2ouaygtCGi0BP1QocGiqG4gf5Umh9O4KHgdow`, Catálogo `140_1sfwXF9u_aL1egDPYSbsE0rMwELGPZ5rkGVdzQnc` (antes de las columnas U:V, la columna I del catálogo y la pestaña "Tipo de cambio"). Verificadas contra los originales |
@@ -381,6 +381,11 @@ Cobranza: `ROL_COBRANZA` (correos separados por coma: efrain@, tania@, leo@), `A
 - **Datos en un libro aparte** dentro de la carpeta "Cotizador Helgen — Cobranza", fuera de la carpeta maestra: la Base de
   datos y la carpeta maestra están compartidas como **lector con todo el dominio helgen.tech** (revisado el 20/10/2026), así
   que una pestaña Pagos ahí la vería cualquier vendedor. **Nunca poner datos de cobranza en la Base de datos.**
+- **Workspace comparte con todo helgen.tech lo que se crea** (pasó el 20/10/2026: la carpeta y el libro de cobranza nacieron
+  con "helgen.tech: lector" aunque el código no compartía nada). Por eso todo lo de cobranza (carpeta, libro, subcarpetas de
+  año y proyecto, comprobantes) pasa por `privado_()`, que lo deja en "Restringido" y conserva a las personas agregadas una por
+  una. `prepararCobranza()` repara carpeta y libro si alguien los vuelve a compartir. Si se crean archivos en otra área privada,
+  hacer lo mismo.
 - **Permisos en el servidor:** `ROL_COBRANZA` (Script Properties, no en el código) para ver y cambiar todo lo de cobranza;
   `ADMIN_DESBLOQUEO` solo para desbloquear. Los demás reciben `codigo: "PERMISO"` y `getDatosIniciales` no les manda nada de
   cobranza (solo `permisos` en falso para ocultar la pestaña).

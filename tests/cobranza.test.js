@@ -34,11 +34,13 @@ function libro(id,nombre,pestanas){const L={id,nombre,pest:pestanas||{},getId:()
 
 // ---- Drive simulado ----
 let nId=0; const carpetas={}, archivos={};
-function carpeta(nombre,padre){const f={id:'F'+(++nId),nombre,padre,hijos:[],archivos:[],trashed:false,
+// Como Workspace de helgen.tech: todo lo nuevo nace compartido con el dominio (acceso 'DOMAIN')
+const compartible=o=>Object.assign(o,{acceso:'DOMAIN',getSharingAccess:()=>o.acceso,setSharing:(a,p)=>{o.acceso=a;o.permiso=p}});
+function carpeta(nombre,padre){const f=compartible({id:'F'+(++nId),nombre,padre,hijos:[],archivos:[],trashed:false}); Object.assign(f,{
  getId:()=>f.id,getName:()=>f.nombre,getUrl:()=>'https://drive/'+f.id,isTrashed:()=>f.trashed,
  getFoldersByName:n=>{const l=f.hijos.filter(h=>h.nombre===n);let i=0;return{hasNext:()=>i<l.length,next:()=>l[i++]}},
  createFolder:n=>{const h=carpeta(n,f);f.hijos.push(h);return h},
- createFile:b=>{const id='A'+(++nId);const a={id,blob:b,padre:f};archivos[id]=a;f.archivos.push(a);return{getId:()=>id,getUrl:()=>'https://drive/file/'+id}}};
+ createFile:b=>{const id='A'+(++nId);const a=compartible({id,blob:b,padre:f});archivos[id]=a;f.archivos.push(a);return Object.assign(a,{getId:()=>id,getUrl:()=>'https://drive/file/'+id})}});
  carpetas[f.id]=f;return f}
 const miUnidad=carpeta('Mi unidad',null), maestra=miUnidad.createFolder('Cotizador Helgen'), pdfRaiz=maestra.createFolder('Cotizaciones Helgen (PDF)');
 const ruta=f=>f.padre?ruta(f.padre)+'/'+f.nombre:f.nombre;
@@ -71,12 +73,14 @@ const ctx={console:{...console,warn(){}},Date,JSON,
   return{getResponseCode:()=>c?200:400,getContentText:()=>JSON.stringify(c||{error:'invalid_token'})}}},
  ContentService:{MimeType:{JSON:'json'},createTextOutput:t=>({t,setMimeType(){return this}})},
  SpreadsheetApp:{flush(){},openById:id=>{if(!libros[id])throw new Error('No encontrado');return libros[id]},
-  create:n=>{const L=libro('S'+(++nId),n,{'Hoja 1':hoja([])});archivos[L.id]={id:L.id,padre:miUnidad};return L},
+  create:n=>{const L=libro('S'+(++nId),n,{'Hoja 1':hoja([])});archivos[L.id]=compartible({id:L.id,padre:miUnidad});return L},
   newDataValidation:()=>{const b={requireValueInList:()=>b,setAllowInvalid:()=>b,setHelpText:()=>b,build:()=>({})};return b}},
  DriveApp:{getFolderById:id=>{if(!carpetas[id])throw new Error('No se encontró');return carpetas[id]},
   createFolder:n=>miUnidad.createFolder(n),getRootFolder:()=>miUnidad,
   getFileById:id=>({getParents:()=>{let d=false;return{hasNext:()=>!d,next:()=>{d=true;return archivos[id].padre}}},
-   moveTo:f=>{archivos[id].padre=f}})},
+   moveTo:f=>{archivos[id].padre=f},getSharingAccess:()=>archivos[id].getSharingAccess(),
+   setSharing:(a,p)=>archivos[id].setSharing(a,p),getId:()=>id}),
+  Access:{PRIVATE:'PRIVATE',DOMAIN:'DOMAIN'},Permission:{NONE:'NONE',VIEW:'VIEW'}},
 };
 vm.createContext(ctx); vm.runInContext(src,ctx);
 const post=(quien,funcion,...args)=>JSON.parse(ctx.doPost({postData:{contents:JSON.stringify({funcion,args,token:quien})}}).t);
@@ -169,6 +173,8 @@ assert.equal(ruta(carpCob),'Mi unidad/Cotizador Helgen — Cobranza');
 const LC=libros[props.COBRANZA_DB_ID];
 assert.equal(LC.nombre,'Cotizador Helgen — Cobranza (datos)'); assert.equal(archivos[LC.id].padre,carpCob);
 assert.deepEqual(Object.keys(LC.pest).sort(),['Bitacora','Contratos','Esquemas','Pagos']);
+// Restringidos aunque Workspace comparta lo nuevo con todo el dominio
+assert.equal(carpCob.acceso,'PRIVATE','carpeta de cobranza restringida'); assert.equal(archivos[LC.id].acceso,'PRIVATE','libro restringido');
 const H=n=>LC.pest[n].m, bit=()=>H('Bitacora').slice(1);
 
 let v=ok('tania','getCobranzaProyecto',p1.toLowerCase());
@@ -264,6 +270,7 @@ const comp=archivos[fp[14]];
 assert.equal(ruta(comp.padre),'Mi unidad/Cotizador Helgen — Cobranza/'+ANIO+'/'+p1);
 assert.equal(comp.blob.name,r.folio+' — Transferencia SPEI 123.pdf'); assert.equal(comp.blob.mime,'application/pdf');
 assert.deepEqual(Buffer.from(comp.blob.bytes),PDF); assert.equal(fp[15],r.url);
+assert.deepEqual([comp.acceso,comp.padre.acceso,comp.padre.padre.acceso],['PRIVATE','PRIVATE','PRIVATE'],'comprobante y subcarpetas restringidos');
 assert(!Object.values(carpetas).some(f=>f.nombre==='Pagos')&&vivos(maestra).every(f=>!/Cobranza/.test(f.nombre)),'nada de cobranza en la carpeta maestra');
 function vivos(f){return f.hijos.filter(h=>!h.trashed)}
 // Idempotencia: el mismo envío devuelve el mismo folio sin duplicar
@@ -316,6 +323,9 @@ assert.deepEqual([fu[4],fu[5],fu[6],fu[7],fu[8]],[18500,'MXN',18.5,1000,'USD']);
 assert.deepEqual([r.vista.resumen.moneda,r.vista.resumen.pagado,r.vista.resumen.saldo],['USD',1000,0]);
 falla('efrain','registrarPago',[pago({proyectoFolio:p2,monto:1.01,monedaPago:'USD'})],/excede el saldo/);
 assert.equal(ruta(archivos[fu[14]].padre),'Mi unidad/Cotizador Helgen — Cobranza/'+ANIO+'/'+p2);
+// Si alguien vuelve a compartir carpeta o libro con el dominio, prepararCobranza() (y el siguiente pago) los restringe
+carpCob.acceso='DOMAIN'; archivos[LC.id].acceso='DOMAIN'; ctx.prepararCobranza();
+assert.deepEqual([carpCob.acceso,archivos[LC.id].acceso],['PRIVATE','PRIVATE'],'prepararCobranza repara el acceso');
 // Los datos de cobranza nunca van en la Base de datos (todo el dominio la puede leer)
 assert.deepEqual(Object.keys(db.pest).sort(),['Config','Cotizaciones','Proyectos']);
 assert(!JSON.stringify(db.pest).includes('PAG-'));

@@ -1049,12 +1049,21 @@ function exigirCobranza_() {
   if (!esCobranza_()) throw errorPermiso_('No tienes permiso de cobranza.');
 }
 
-/** Carpeta de cobranza. Se crea sola en Mi unidad (sin compartir). Si se borró, error: no se crea otra a escondidas. */
+/**
+ * Deja un archivo o carpeta de cobranza en "Restringido": quita el acceso por enlace o de todo el dominio y conserva a
+ * las personas agregadas una por una (tania@, leo@). Workspace comparte con todo helgen.tech lo que se crea (§6.11).
+ */
+function privado_(item) {
+  if (item.getSharingAccess() !== DriveApp.Access.PRIVATE) item.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE);
+  return item;
+}
+
+/** Carpeta de cobranza. Se crea sola en Mi unidad (restringida). Si se borró, error: no se crea otra a escondidas. */
 function carpetaCobranza_() {
   const props = PropertiesService.getScriptProperties();
   const id = props.getProperty('COBRANZA_FOLDER_ID');
   if (!id) {
-    const carpeta = DriveApp.createFolder(NOMBRE_CARPETA_COBRANZA);
+    const carpeta = privado_(DriveApp.createFolder(NOMBRE_CARPETA_COBRANZA));
     props.setProperty('COBRANZA_FOLDER_ID', carpeta.getId());
     return carpeta;
   }
@@ -1063,7 +1072,7 @@ function carpetaCobranza_() {
   if (!carpeta || carpeta.isTrashed()) {
     throw new Error('No se encontró la carpeta de cobranza (COBRANZA_FOLDER_ID). Revisa la Papelera de Drive.');
   }
-  return carpeta;
+  return privado_(carpeta);
 }
 
 /** Libro de cobranza; la primera vez lo crea dentro de la carpeta de cobranza (bajo candado). */
@@ -1098,7 +1107,7 @@ function abrirLibroCobranza_(id) {
 function crearLibroCobranza_() {
   const carpeta = carpetaCobranza_();
   const ss = SpreadsheetApp.create(NOMBRE_LIBRO_COBRANZA);
-  DriveApp.getFileById(ss.getId()).moveTo(carpeta);
+  privado_(DriveApp.getFileById(ss.getId())).moveTo(carpeta);
   Object.keys(HOJAS_COBRANZA).forEach(nombre => hojaCobranza_(ss, nombre));
   const sobrante = ss.getSheetByName('Hoja 1') || ss.getSheetByName('Sheet1');
   if (sobrante && ss.getSheets().length > 1) ss.deleteSheet(sobrante);
@@ -1466,9 +1475,9 @@ function registrarPago(p) {
     const hojaPagos = d.hojas.pagos;
     const folio = siguienteFolio_(PREFIJO_PAGO, hojaPagos, 'CONSECUTIVO_PAG_');
     const anio = String(proyecto.folio).split('-')[1] || hoyIso_().slice(0, 4);
-    const carpeta = subcarpeta_(subcarpeta_(carpetaCobranza_(), anio), proyecto.folio);
-    const archivo = carpeta.createFile(Utilities.newBlob(bytes, tipo.mime,
-      nombreComprobante(folio, pago.metodo, pago.referencia, tipo.ext)));
+    const carpeta = privado_(subcarpeta_(privado_(subcarpeta_(carpetaCobranza_(), anio)), proyecto.folio));
+    const archivo = privado_(carpeta.createFile(Utilities.newBlob(bytes, tipo.mime,
+      nombreComprobante(folio, pago.metodo, pago.referencia, tipo.ext))));
 
     const t = textoCelda;
     hojaPagos.appendRow([
@@ -1511,13 +1520,15 @@ function cancelarPago(folioPago, motivo) {
 }
 
 /**
- * Correr UNA vez desde el editor: crea la carpeta "Cotizador Helgen — Cobranza" (en Mi unidad, sin compartir) y su
- * libro. También sirve para autorizar permisos antes de publicar (§6.8). No comparte nada.
+ * Correr desde el editor: crea la carpeta "Cotizador Helgen — Cobranza" (en Mi unidad) y su libro, y deja los dos en
+ * "Restringido" (también si ya existían). Sirve para autorizar permisos antes de publicar (§6.8). No comparte nada.
  */
 function prepararCobranza() {
   const libro = libroCobranza_();
-  Logger.log('Carpeta de cobranza: ' + carpetaCobranza_().getUrl());
-  Logger.log('Libro de cobranza:   ' + libro.getUrl());
+  const archivoLibro = privado_(DriveApp.getFileById(libro.getId()));
+  const carpeta = carpetaCobranza_();
+  Logger.log('Carpeta de cobranza: ' + carpeta.getUrl() + ' (acceso: ' + carpeta.getSharingAccess() + ')');
+  Logger.log('Libro de cobranza:   ' + libro.getUrl() + ' (acceso: ' + archivoLibro.getSharingAccess() + ')');
   Logger.log('ROL_COBRANZA: ' + (PropertiesService.getScriptProperties().getProperty('ROL_COBRANZA') || '(vacío: nadie tiene acceso)'));
 }
 
