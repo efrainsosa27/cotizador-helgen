@@ -32,9 +32,10 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 | Carpeta PDF "Cotizaciones Helgen (PDF)" (`FOLDER_ID`) | `1CDN1LyOlA1L6z5dvBp49tlqu0fDoxdX8` (subcarpeta `2026` = `1X6m0nexpc3TzJd9XWBmGOAeZuiJE3Pig`) |
 | "Catálogos SAT (CFDI 4.0)" (`SAT_ID`) | `1B2t9tXuEj1i9JO9ybqsuH4PN1K47CqMZgoEBzd-Dmc8` (subcarpeta "Catálogos SAT" `15OYcUp41onVJoW7--b3gnLZY8ymvYbUZ`) |
 | Respaldos de la migración | Carpeta "Respaldos 2026-10-19" `1hxx0tgh4cLZMqoyf-eT8l14UAde7Y-L1` (copias de base de datos y catálogo antes del cambio) |
+| Respaldos antes de Proyectos | Carpeta "Respaldos 2026-10-20" `1rFGY_k_YRRo243p3xL2RpibQ9jkEo634`: Base de datos `1PBQvmwI412IMyJb74qBWN5ZcyhSuxK3xGU9cV5KPxTE`, Catálogo `1GxBpAvQxVNJyFJSLnaY9umA5L2qf4dqX36S4uehHUNc` (antes de la pestaña Proyectos y la columna T) |
 | Worker de Cloudflare | `cotizador-helgen`, cuenta de efrain@helgen.tech `badd8bca60b008822a73ca24e983ff43` |
 | Dueño de todo / cuenta de clasp | `efrain@helgen.tech` (la API se ejecuta como esta cuenta) |
-| Proyecto de prueba "PRUEBAS — Cotizador Helgen (no usar)" | `1wp8_SQofXXUuMkUjmDyyUxYLxx-LdFv-20JaXE7q9entLfEvDKgYtnt0`; deployment `AKfycbwVu2q5…` @1. Solo datos inventados (§10.5). **No es la API.** |
+| Proyecto de prueba "PRUEBAS — Cotizador Helgen (no usar)" (ARCHIVADO) | `1wp8_SQofXXUuMkUjmDyyUxYLxx-LdFv-20JaXE7q9entLfEvDKgYtnt0`; deployment `AKfycbwVu2q5…` retirado el 20/10/2026 (la URL da 404). Solo datos inventados (§10.5). **No es la API.** |
 | **Proyecto anterior (EN DESUSO)** | `1X-qSKgvqKwuDj4iPZBhXlakR5udau9ibVMevhwvlLXgtSkjV4IoQxqwU`; deployment `AKfycbxahS3…` en @10 = aviso "El cotizador se mudó". Código en `anterior/` (§11) |
 
 Los IDs que usa el código están en **Script Properties** del proyecto `1GsH8Dja…` (ver §5). Esta tabla es solo referencia.
@@ -366,8 +367,7 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - `GUIA.md` describe el proyecto anterior; actualizarla si se va a usar.
 - Ideas mencionadas: enviar PDF por correo, duplicar cotización, estatus (Enviada/Aceptada/Rechazada), descuentos por renglón.
 - Proyectos fase 2: órdenes de compra, pagos, gastos y cotización "Aceptada" (§6.10).
-- **Archivar el proyecto de prueba** (§10.5): `clasp undeploy AKfycbwVu2q5…` desde una carpeta temporal ligada a `1wp8_SQ…`
-  (la URL deja de responder; se puede volver a publicar) y moverlo en Drive a la carpeta `1w-T05ql…` junto a los "ARCHIVO PRUEBAS".
+- Mover el proyecto de prueba (ya sin deployment, §10.5) a la carpeta `1w-T05ql…` junto a los "ARCHIVO PRUEBAS" (lo hace el usuario).
 
 ## 10. Interfaz web y sesión con Google
 
@@ -438,7 +438,9 @@ Para probar Proyectos con la sesión real **sin tocar la hoja real** se creó un
 - **Para volver a usarlo:** clonar en una carpeta temporal (`clasp clone 1wp8_SQ…`), copiar ahí `Code.js`/`Logo.js`/`appsscript.json`
   de este repositorio (sin tocar el `.clasp.json` de aquí), `clasp push --force` y `clasp deploy` (o `redeploy` del mismo id).
   Al terminar, borrar la carpeta temporal.
-- **Archivado:** ver el estado en §9 (pendiente: retirar el deployment). No borrar el proyecto: sirve para la fase 2.
+- **Archivado (20/10/2026):** `clasp undeploy AKfycbwVu2q5…` desde una carpeta temporal ligada a `1wp8_SQ…`; la URL responde 404
+  (`clasp list-deployments` puede seguir mostrándolo un rato). El usuario lo mueve en Drive a la carpeta `1w-T05ql…` junto a los
+  "ARCHIVO PRUEBAS". No borrarlo: sirve para la fase 2 (para reusarlo, `clasp deploy` crea un deployment nuevo con otra URL).
 
 ## 11. Migración al proyecto nuevo (19/10/2026)
 
