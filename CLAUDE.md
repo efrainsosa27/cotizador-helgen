@@ -200,8 +200,10 @@ filas 0001–0004 no las tienen llenas. La T se agregó con Proyectos (10/2026):
 
 **Registros de prueba en la hoja real (excluir de reportes y totales; identificarlos por folio, no por texto):**
 - `HLG-2026-0005` — cliente "PRUEBA - CANCELADA" (prueba de la migración, 19/10/2026).
-- `HLG-2026-0006` — cliente renombrado a "PRUEBA – CANCELADA" (con guion largo; prueba del primer proyecto, 20/10/2026).
-- `PRY-2026-0001` — "Proyecto de Prueba oficial", estado `Cancelado` (20/10/2026). Su carpeta en `Proyectos/2026` es de prueba.
+- `HLG-2026-0006` — prueba del primer proyecto (20/10/2026). Cliente original "Angel Sosa"; se cambia a "PRUEBA - CANCELADA"
+  (guion corto, igual que la 0005) en la celda `Cotizaciones!C7`.
+- `PRY-2026-0001` — "Proyecto de Prueba oficial" (20/10/2026); se marca `Cancelado` en `Proyectos!G2`. Su carpeta en
+  `Proyectos/2026` es de prueba.
 - Las filas HLG-2026-0001 a 0004 son anteriores a la sesión con Google y también parecen pruebas, pero no se marcaron.
 
 **Pestaña `Config`** (Clave | Valor, columna B en formato texto): `EMPRESA_NOMBRE` (Helgen Servicios Especializados),
