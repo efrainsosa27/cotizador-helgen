@@ -34,6 +34,7 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 | Respaldos de la migración | Carpeta "Respaldos 2026-10-19" `1hxx0tgh4cLZMqoyf-eT8l14UAde7Y-L1` (copias de base de datos y catálogo antes del cambio) |
 | Worker de Cloudflare | `cotizador-helgen`, cuenta de efrain@helgen.tech `badd8bca60b008822a73ca24e983ff43` |
 | Dueño de todo / cuenta de clasp | `efrain@helgen.tech` (la API se ejecuta como esta cuenta) |
+| Proyecto de prueba "PRUEBAS — Cotizador Helgen (no usar)" | `1wp8_SQofXXUuMkUjmDyyUxYLxx-LdFv-20JaXE7q9entLfEvDKgYtnt0`; deployment `AKfycbwVu2q5…` @1. Solo datos inventados (§10.5). **No es la API.** |
 | **Proyecto anterior (EN DESUSO)** | `1X-qSKgvqKwuDj4iPZBhXlakR5udau9ibVMevhwvlLXgtSkjV4IoQxqwU`; deployment `AKfycbxahS3…` en @10 = aviso "El cotizador se mudó". Código en `anterior/` (§11) |
 
 Los IDs que usa el código están en **Script Properties** del proyecto `1GsH8Dja…` (ver §5). Esta tabla es solo referencia.
@@ -363,6 +364,8 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - `GUIA.md` describe el proyecto anterior; actualizarla si se va a usar.
 - Ideas mencionadas: enviar PDF por correo, duplicar cotización, estatus (Enviada/Aceptada/Rechazada), descuentos por renglón.
 - Proyectos fase 2: órdenes de compra, pagos, gastos y cotización "Aceptada" (§6.10).
+- **Archivar el proyecto de prueba** (§10.5): `clasp undeploy AKfycbwVu2q5…` desde una carpeta temporal ligada a `1wp8_SQ…`
+  (la URL deja de responder; se puede volver a publicar) y moverlo en Drive a la carpeta `1w-T05ql…` junto a los "ARCHIVO PRUEBAS".
 
 ## 10. Interfaz web y sesión con Google
 
@@ -415,6 +418,23 @@ ninguna propiedad a ellos. Están en la carpeta `1w-T05ql62SXxsm3z4u-xCpMjcdXc0b
 - "PRUEBAS — Cotizador Helgen — Base de datos" `10WLYHF2vB2TDmoTXwfAxnG8bp7gDOPPzoj9p6B0tUGY`
 - "PRUEBAS — Catálogo Helgen" `1GQBK0_WXSQRuCOeE-Pv8AA6PFA4tjZwCqae4L7WZsH0`
 - "PRUEBAS — Cotizaciones Helgen (PDF)" `1iDk4faAM557SZh67EA122dj6eU4RJpsH`
+
+### 10.5 Proyecto de prueba de punta a punta (20/10/2026)
+Para probar Proyectos con la sesión real **sin tocar la hoja real** se creó un proyecto de Apps Script aparte:
+"PRUEBAS — Cotizador Helgen (no usar)" (`1wp8_SQ…`, en la raíz de Mi unidad), deployment `AKfycbwVu2q5…`.
+- Código = `Code.js`/`Logo.js`/`appsscript.json` oficiales + `Pruebas.js` con `configurarPruebas()`, que apunta sus Script
+  Properties a los archivos "ARCHIVO PRUEBAS — …" (§10.4) y a la carpeta "PRUEBAS — Proyectos" (`1hGyzqb08ePBi-EIhKg0ztiE9yWxqm-DE`,
+  dentro de "ARCHIVO PRUEBAS — Cotizaciones Helgen (PDF)"). **`Pruebas.js` no existe en este repositorio** y nunca debe subirse
+  al proyecto oficial.
+- Como el candado es por proyecto, solo puede escribir en los archivos PRUEBAS (§6.1). Usa el mismo Client ID de OAuth.
+- La interfaz se probó desde una **copia** de `web/` fuera del repositorio, servida en `http://127.0.0.1:8788`, con `API_URL`
+  apuntando al deployment de prueba. El `API_URL` del repositorio nunca cambia.
+- Un proyecto creado con `clasp create` responde **403 "Acceso denegado"** hasta que el dueño corre una función desde el editor
+  y acepta los permisos.
+- **Para volver a usarlo:** clonar en una carpeta temporal (`clasp clone 1wp8_SQ…`), copiar ahí `Code.js`/`Logo.js`/`appsscript.json`
+  de este repositorio (sin tocar el `.clasp.json` de aquí), `clasp push --force` y `clasp deploy` (o `redeploy` del mismo id).
+  Al terminar, borrar la carpeta temporal.
+- **Archivado:** ver el estado en §9 (pendiente: retirar el deployment). No borrar el proyecto: sirve para la fase 2.
 
 ## 11. Migración al proyecto nuevo (19/10/2026)
 
