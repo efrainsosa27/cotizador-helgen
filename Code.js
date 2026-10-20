@@ -1050,12 +1050,23 @@ function exigirCobranza_() {
 }
 
 /**
- * Deja un archivo o carpeta de cobranza en "Restringido": quita el acceso por enlace o de todo el dominio y conserva a
+ * Deja un archivo o carpeta de cobranza en "Restringido": quita el acceso de todo el dominio o por enlace y conserva a
  * las personas agregadas una por una (tania@, leo@). Workspace comparte con todo helgen.tech lo que se crea (§6.11).
+ * Usa la API de Drive con el token del script: DriveApp.setSharing da "Access denied: DriveApp." en helgen.tech
+ * (20/10/2026). No pide permisos nuevos (el de Drive ya lo da DriveApp). Si no puede, lanza error: nada queda abierto.
  */
 function privado_(item) {
-  // Permission.NONE no está soportado (da "Access denied: DriveApp"); con PRIVATE el permiso se ignora.
-  if (item.getSharingAccess() !== DriveApp.Access.PRIVATE) item.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.VIEW);
+  const url = 'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(item.getId()) + '/permissions';
+  const opciones = { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true };
+  const r = UrlFetchApp.fetch(url + '?supportsAllDrives=true&fields=permissions(id,type)', opciones);
+  if (r.getResponseCode() !== 200) throw new Error('No se pudo revisar el acceso en Drive (' + r.getResponseCode() + '): ' + r.getContentText());
+  (JSON.parse(r.getContentText()).permissions || [])
+    .filter(p => p.type === 'domain' || p.type === 'anyone')
+    .forEach(p => {
+      const d = UrlFetchApp.fetch(url + '/' + encodeURIComponent(p.id) + '?supportsAllDrives=true',
+        Object.assign({ method: 'delete' }, opciones));
+      if (d.getResponseCode() >= 300) throw new Error('No se pudo restringir el acceso en Drive (' + d.getResponseCode() + '): ' + d.getContentText());
+    });
   return item;
 }
 
@@ -1528,8 +1539,8 @@ function prepararCobranza() {
   const libro = libroCobranza_();
   const archivoLibro = privado_(DriveApp.getFileById(libro.getId()));
   const carpeta = carpetaCobranza_();
-  Logger.log('Carpeta de cobranza: ' + carpeta.getUrl() + ' (acceso: ' + carpeta.getSharingAccess() + ')');
-  Logger.log('Libro de cobranza:   ' + libro.getUrl() + ' (acceso: ' + archivoLibro.getSharingAccess() + ')');
+  Logger.log('Carpeta de cobranza: ' + carpeta.getUrl() + ' (restringida)');
+  Logger.log('Libro de cobranza:   ' + archivoLibro.getUrl() + ' (restringido)');
   Logger.log('ROL_COBRANZA: ' + (PropertiesService.getScriptProperties().getProperty('ROL_COBRANZA') || '(vacío: nadie tiene acceso)'));
 }
 

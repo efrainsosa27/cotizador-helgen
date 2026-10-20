@@ -35,7 +35,15 @@ function libro(id,nombre,pestanas){const L={id,nombre,pest:pestanas||{},getId:()
 // ---- Drive simulado ----
 let nId=0; const carpetas={}, archivos={};
 // Como Workspace de helgen.tech: todo lo nuevo nace compartido con el dominio (acceso 'DOMAIN')
-const compartible=o=>Object.assign(o,{acceso:'DOMAIN',getSharingAccess:()=>o.acceso,setSharing:(a,p)=>{if(p==='NONE')throw new Error('Access denied: DriveApp.');o.acceso=a;o.permiso=p}}); // NONE no está soportado en Apps Script
+// DriveApp.setSharing da "Access denied" en helgen.tech: el código usa la API de Drive (permissions) con el token del script
+const compartible=o=>Object.assign(o,{acceso:'DOMAIN',setSharing:()=>{throw new Error('Access denied: DriveApp.')}});
+function apiDrive(url,op){const m=url.match(/drive\/v3\/files\/([^/?]+)\/permissions(?:\/([^?]+))?/);
+ const it=carpetas[decodeURIComponent(m[1])]||archivos[decodeURIComponent(m[1])];
+ assert(op&&op.headers&&op.headers.Authorization==='Bearer TOKEN-SCRIPT','API de Drive con el token del script');
+ const resp=(c,b)=>({getResponseCode:()=>c,getContentText:()=>JSON.stringify(b||{})});
+ if(!it)return resp(404);
+ if(op.method==='delete'){assert.equal(m[2],'dom');it.acceso='PRIVATE';return resp(204)}
+ return resp(200,{permissions:[{id:'own',type:'user'}].concat(it.acceso==='DOMAIN'?[{id:'dom',type:'domain'}]:[])})}
 function carpeta(nombre,padre){const f=compartible({id:'F'+(++nId),nombre,padre,hijos:[],archivos:[],trashed:false}); Object.assign(f,{
  getId:()=>f.id,getName:()=>f.nombre,getUrl:()=>'https://drive/'+f.id,isTrashed:()=>f.trashed,
  getFoldersByName:n=>{const l=f.hijos.filter(h=>h.nombre===n);let i=0;return{hasNext:()=>i<l.length,next:()=>l[i++]}},
@@ -69,7 +77,8 @@ const ctx={console:{...console,warn(){}},Date,JSON,
  Utilities:{formatDate:fmt,newBlob:(a,b,c)=>typeof a==='string'?{getAs:()=>({setName:n=>({name:n,html:a})})}:{bytes:a,mime:b,name:c},
   base64Encode:b=>Buffer.from(b).toString('base64'),base64Decode:s=>firmados(Buffer.from(s,'base64')),
   DigestAlgorithm:{SHA_256:'sha256'},computeDigest:(a,s)=>[...require('crypto').createHash('sha256').update(s).digest()]},
- UrlFetchApp:{fetch:url=>{const t=decodeURIComponent(url.split('id_token=')[1]);const c=tokens[t];
+ ScriptApp:{getOAuthToken:()=>'TOKEN-SCRIPT'},
+ UrlFetchApp:{fetch:(url,op)=>{if(/googleapis\.com\/drive\//.test(url))return apiDrive(url,op);const t=decodeURIComponent(url.split('id_token=')[1]);const c=tokens[t];
   return{getResponseCode:()=>c?200:400,getContentText:()=>JSON.stringify(c||{error:'invalid_token'})}}},
  ContentService:{MimeType:{JSON:'json'},createTextOutput:t=>({t,setMimeType(){return this}})},
  SpreadsheetApp:{flush(){},openById:id=>{if(!libros[id])throw new Error('No encontrado');return libros[id]},
@@ -78,8 +87,7 @@ const ctx={console:{...console,warn(){}},Date,JSON,
  DriveApp:{getFolderById:id=>{if(!carpetas[id])throw new Error('No se encontró');return carpetas[id]},
   createFolder:n=>miUnidad.createFolder(n),getRootFolder:()=>miUnidad,
   getFileById:id=>({getParents:()=>{let d=false;return{hasNext:()=>!d,next:()=>{d=true;return archivos[id].padre}}},
-   moveTo:f=>{archivos[id].padre=f},getSharingAccess:()=>archivos[id].getSharingAccess(),
-   setSharing:(a,p)=>archivos[id].setSharing(a,p),getId:()=>id}),
+   moveTo:f=>{archivos[id].padre=f},setSharing:()=>archivos[id].setSharing(),getId:()=>id,getUrl:()=>'https://drive/file/'+id}),
   Access:{PRIVATE:'PRIVATE',DOMAIN:'DOMAIN'},Permission:{NONE:'NONE',VIEW:'VIEW'}},
 };
 vm.createContext(ctx); vm.runInContext(src,ctx);

@@ -385,7 +385,9 @@ Cobranza: `ROL_COBRANZA` (correos separados por coma: efrain@, tania@, leo@), `A
   con "helgen.tech: lector" aunque el código no compartía nada). Por eso todo lo de cobranza (carpeta, libro, subcarpetas de
   año y proyecto, comprobantes) pasa por `privado_()`, que lo deja en "Restringido" y conserva a las personas agregadas una por
   una. `prepararCobranza()` repara carpeta y libro si alguien los vuelve a compartir. Si se crean archivos en otra área privada,
-  hacer lo mismo.
+  hacer lo mismo. **`DriveApp.setSharing` no sirve aquí** (da "Access denied: DriveApp." aun siendo dueño, con `Permission.NONE`
+  o `VIEW`): `privado_()` borra los permisos `domain`/`anyone` con la API REST de Drive (`UrlFetchApp` + `ScriptApp.getOAuthToken()`,
+  sin permisos nuevos).
 - **Permisos en el servidor:** `ROL_COBRANZA` (Script Properties, no en el código) para ver y cambiar todo lo de cobranza;
   `ADMIN_DESBLOQUEO` solo para desbloquear. Los demás reciben `codigo: "PERMISO"` y `getDatosIniciales` no les manda nada de
   cobranza (solo `permisos` en falso para ocultar la pestaña).
