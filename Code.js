@@ -1135,14 +1135,14 @@ function contratoDesdeFila_(r, fila) {
   return {
     proyectoFolio: String(r[0]), cotizacion: String(r[1]), marca: marcaDeTexto_(r[2]), moneda: String(r[3] || 'MXN'),
     subtotal: Number(r[4]) || 0, iva: Number(r[5]) || 0, total: Number(r[6]) || 0, estado: String(r[7] || ''),
-    aceptadaPor: String(r[8] || ''), fechaAceptacion: fechaTexto_(r[9]), fechaFirma: String(r[10] || ''),
+    aceptadaPor: String(r[8] || ''), fechaAceptacion: fechaTexto_(r[9]), fechaFirma: fechaIso_(r[10]),
     firmadoPor: String(r[11] || ''), fila: fila,
   };
 }
 
 function pagoDesdeFila_(r, fila) {
   return {
-    folio: String(r[0]), fecha: String(r[1] || ''), fechaRegistro: fechaTexto_(r[2]), proyectoFolio: String(r[3]),
+    folio: String(r[0]), fecha: fechaIso_(r[1]), fechaRegistro: fechaTexto_(r[2]), proyectoFolio: String(r[3]),
     monto: Number(r[4]) || 0, monedaPago: String(r[5] || ''), tipoCambio: r[6] === '' ? '' : Number(r[6]),
     montoAplicado: Number(r[7]) || 0, monedaProyecto: String(r[8] || ''), metodo: String(r[9] || ''),
     referencia: String(r[10] || ''), etapaOrden: Number(r[11]) || 1, etapa: String(r[12] || ''),
@@ -1154,6 +1154,15 @@ function pagoDesdeFila_(r, fila) {
 function fechaTexto_(v) {
   return v instanceof Date ? Utilities.formatDate(v, 'America/Mexico_City', 'dd/MM/yyyy HH:mm') : String(v || '');
 }
+
+/**
+ * Fecha sin hora (pago, firma) como "AAAA-MM-DD". Se escriben con apóstrofo (textoFecha_) para que Sheets no las
+ * convierta en fecha (appendRow lo hace aunque la columna sea texto); las filas guardadas antes vienen como Date.
+ */
+function fechaIso_(v) {
+  return v instanceof Date ? Utilities.formatDate(v, 'America/Mexico_City', 'yyyy-MM-dd') : String(v || '');
+}
+const textoFecha_ = iso => iso ? "'" + iso : '';
 
 const hoyIso_ = () => Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd');
 
@@ -1380,8 +1389,9 @@ function firmarContrato(proyectoFolio, fecha) {
         formatoMoneda(r.contratado) + ').');
     }
     escribirEsquema_(d.hojas.esquemas, proyecto.folio, etapas, c.total);
-    d.hojas.contratos.getRange(c.fila, 8, 1, 6).setValues([[ESTADO_FIRMADO, c.aceptadaPor, c.fechaAceptacion, fechaFirma,
-      textoCelda(VENDEDOR_.email), Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm')]]);
+    d.hojas.contratos.getRange(c.fila, 8).setValue(ESTADO_FIRMADO);
+    d.hojas.contratos.getRange(c.fila, 11, 1, 3).setValues([[textoFecha_(fechaFirma), textoCelda(VENDEDOR_.email),
+      Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm')]]);
     bitacora_(libro, 'Contrato firmado', proyecto.folio, 'Fecha de firma ' + fechaFirma + ' · ' + c.cotizacion + ' · ' +
       formatoMoneda(c.total) + ' ' + c.moneda + ' · ' + etapas.map(e => e.etapa + ' ' + e.porcentaje + '%').join(' · '));
     SpreadsheetApp.flush();
@@ -1402,7 +1412,8 @@ function desbloquearContrato(proyectoFolio, motivo) {
     const d = datosCobranza_(libro, proyecto.folio);
     const c = d.contrato;
     if (!c || c.estado !== ESTADO_FIRMADO) throw new Error('El contrato de ' + proyecto.folio + ' no está firmado.');
-    d.hojas.contratos.getRange(c.fila, 8, 1, 6).setValues([[ESTADO_ACEPTADA, c.aceptadaPor, c.fechaAceptacion, '', '',
+    d.hojas.contratos.getRange(c.fila, 8).setValue(ESTADO_ACEPTADA);
+    d.hojas.contratos.getRange(c.fila, 11, 1, 3).setValues([['', '',
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm')]]);
     bitacora_(libro, 'Desbloquear contrato', proyecto.folio,
       'Estaba firmado el ' + c.fechaFirma + ' por ' + c.firmadoPor + ' · ' + c.cotizacion, m);
@@ -1461,7 +1472,7 @@ function registrarPago(p) {
 
     const t = textoCelda;
     hojaPagos.appendRow([
-      folio, pago.fecha, Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), proyecto.folio,
+      folio, textoFecha_(pago.fecha), Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), proyecto.folio,
       pago.monto, pago.monedaPago, pago.tipoCambio, pago.montoAplicado, c.moneda, pago.metodo, t(pago.referencia),
       pago.etapaOrden, t(d.etapas[pago.etapaOrden - 1].etapa), JSON.stringify(aplicacion), archivo.getId(), archivo.getUrl(),
       t(VENDEDOR_.email), t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '',

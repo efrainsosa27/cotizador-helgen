@@ -11,13 +11,18 @@ const pad=n=>String(n).padStart(2,'0');
 const HOY=new Date(), HOY_ISO=HOY.getFullYear()+'-'+pad(HOY.getMonth()+1)+'-'+pad(HOY.getDate());
 
 // ---- Hojas y libros simulados ----
+// Como Sheets: un texto que parece fecha ("2026-10-20", "2026-10-20 17:30") se guarda como fecha; con apóstrofo
+// inicial se guarda como texto (y getValues lo devuelve sin el apóstrofo).
+const comoSheets=v=>{if(typeof v!=='string')return v;if(v[0]==="'")return v.slice(1);
+  const x=v.match(/^(\d{4})-(\d\d)-(\d\d)(?: (\d\d):(\d\d)(?::(\d\d))?)?$/);
+  return x?new Date(+x[1],+x[2]-1,+x[3],+(x[4]||0),+(x[5]||0),+(x[6]||0)):v};
 function hoja(m){const h={m,getLastRow:()=>m.length,getMaxRows:()=>1000,setFrozenRows(){},setColumnWidth(){},
  getDataRange:()=>({getValues:()=>m.map(r=>r.slice()),getDisplayValues:()=>m.map(r=>r.map(x=>x instanceof Date?'20/10/2026':String(x??'')))}),
- appendRow:a=>m.push(a),deleteRow:n=>m.splice(n-1,1),
+ appendRow:a=>m.push(a.map(comoSheets)),deleteRow:n=>m.splice(n-1,1),
  getRange:(r,c=1,nr=1,nc=1)=>typeof r==='string'?{setNumberFormat(){return this},setDataValidation(){return this}}:({
   getValues:()=>Array.from({length:nr},(_,i)=>{const f=(m[r-1+i]||[]).slice(c-1,c-1+nc);while(f.length<nc)f.push('');return f}),
-  setValue(v){m[r-1][c-1]=v;return this},
-  setValues(vs){vs.forEach((x,i)=>{m[r-1+i]=m[r-1+i]||[];x.forEach((y,j)=>m[r-1+i][c-1+j]=y)});return this},
+  setValue(v){m[r-1][c-1]=comoSheets(v);return this},
+  setValues(vs){vs.forEach((x,i)=>{m[r-1+i]=m[r-1+i]||[];x.forEach((y,j)=>m[r-1+i][c-1+j]=comoSheets(y))});return this},
   setNumberFormat(){return this},setFontWeight(){return this},setBackground(){return this},setFontColor(){return this},setDataValidation(){return this}})};
  return h}
 const libros={};
@@ -247,6 +252,10 @@ assert.equal(r.folio,'PAG-'+ANIO+'-0001');
 assert.deepEqual(r.vista.resumen.etapas.map(e=>[e.pagado,e.saldo]),[[696,0],[104,244],[0,116]]);
 assert.deepEqual([r.vista.resumen.pagado,r.vista.resumen.saldo],[800,360]);
 const fp=H('Pagos')[1];
+// La fecha del pago se guarda como texto AAAA-MM-DD (no la convierte Sheets) y así se muestra
+assert.equal(r.vista.pagos[0].fecha,HOY_ISO,'fecha del pago legible');
+assert.equal(r.vista.contrato.fechaFirma,HOY_ISO,'fecha de firma legible');
+assert(/^\d\d\/\d\d\/\d{4} \d\d:\d\d$/.test(r.vista.contrato.fechaAceptacion),'fecha de aceptación legible: '+r.vista.contrato.fechaAceptacion);
 assert.deepEqual([fp[0],fp[1],fp[3],fp[4],fp[5],fp[7],fp[8],fp[9],fp[10],fp[11],fp[12],fp[16],fp[18]],
   [r.folio,HOY_ISO,p1,800,'MXN',800,'MXN','Transferencia','SPEI 123',1,'Anticipo','tania@helgen.tech','Vigente']);
 assert.deepEqual(JSON.parse(fp[13]).map(a=>a.etapa+':'+a.monto),['Anticipo:696','Instalación:104']);
@@ -282,7 +291,7 @@ v=ok('efrain','desbloquearContrato',p1,'Se firmó con la cotización equivocada'
 assert.deepEqual([v.contrato.estado,v.contrato.fechaFirma],['Aceptada','']); assert.equal(v.pagos.length,2,'los pagos se conservan');
 const ub=bit().find(b=>b[2]==='Desbloquear contrato');
 assert.deepEqual([ub[1],ub[3],ub[5]],['efrain@helgen.tech',p1,'Se firmó con la cotización equivocada']);
-assert(ub[4].includes('tania@helgen.tech')&&ub[4].includes(HOY_ISO)&&/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(ub[0]),'quién, cuándo y qué estaba');
+assert(ub[4].includes('tania@helgen.tech')&&ub[4].includes('firmado el '+HOY_ISO)&&ub[0] instanceof Date,'quién, cuándo (fecha de Sheets) y qué estaba');
 falla('tania','registrarPago',[pago()],/contrato firmado/,undefined);
 // Con pagos en MXN no se puede aceptar una cotización en USD (nunca mezclar monedas)
 falla('tania','marcarAceptada',[p1,cU],/pagos en MXN/);
