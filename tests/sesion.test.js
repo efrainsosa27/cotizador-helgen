@@ -84,6 +84,19 @@ assert.equal(post({funcion:'guardarCotizacion',args:[{...base,idSolicitud:'ok1'}
 // --- Historial con el nombre del vendedor; filas viejas muestran el correo de "Elaboró" ---
 const h=post({funcion:'listarCotizaciones',args:[''],token:'t-bueno'}).datos;
 assert.equal(h[0].vendedor,'Ana López Díaz'); assert.equal(h[1].vendedor,'antes@helgen.tech');
+// Filas viejas sin nombre: si su correo aparece con nombre en otra fila, se muestra ese nombre (sin tocar la hoja)
+const vieja=['HLG-2026-0000','x','Vieja','','','','',1,0.16,1.16,'ANA.LOPEZ@helgen.tech','u','[]','','Helgen',''];
+cot.m.splice(1,0,vieja.slice());
+const h2=post({funcion:'listarCotizaciones',args:[''],token:'t-bueno'}).datos;
+assert.equal(h2.find(c=>c.folio==='HLG-2026-0000').vendedor,'Ana López Díaz','correo conocido (sin importar mayúsculas) = nombre');
+assert.equal(h2.find(c=>c.folio==='HLG-2026-0001').vendedor,'antes@helgen.tech','correo sin nombre conocido = correo');
+assert.deepEqual(cot.m[1],vieja,'la hoja no se modifica');
+cot.m.splice(1,1);
+// Pura: si un correo tiene nombres distintos, gana la fila más reciente (la de más abajo)
+const Q=(email,n,a)=>{const r=Array(19).fill('');r[16]=email;r[17]=n;r[18]=a;return r};
+assert.equal(ctx.nombresDeVendedores([Q('a@helgen.tech','Ana','Viejo'),Q('A@helgen.tech','Ana','Nuevo'),Q('b@helgen.tech','','')])['a@helgen.tech'],'Ana Nuevo');
+assert.equal(ctx.nombresDeVendedores([Q('b@helgen.tech','','')])['b@helgen.tech'],undefined,'sin nombre no entra al mapa');
+assert.equal(ctx.vendedorDeFila(Q('','',''),{}),'','fila sin datos de vendedor');
 // Datos iniciales: usuario = correo del token
 const d=post({funcion:'getDatosIniciales',args:[],token:'t-bueno'}).datos;
 assert.equal(d.usuario,'ana.lopez@helgen.tech'); assert.equal(d.vendedor.nombre,'Ana');

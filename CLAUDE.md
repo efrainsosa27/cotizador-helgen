@@ -118,8 +118,9 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 ### 4.4 Datos para la interfaz
 - `getDatosIniciales()` *(UI, al cargar)* — IVA, vigencia, marcas, catálogo, clientes, `usuario` (correo) y `vendedor` (`{email, nombre, apellido}`).
 - `getClientes()` *(UI)* — clientes que ya cotizaron, calculados desde la hoja `Cotizaciones` (`clientesDesdeFilas`).
-- `listarCotizaciones(busqueda)` *(UI)* — últimas 100 cotizaciones, filtro por folio/cliente/empresa; `vendedor` = nombre + apellido
-  (filas viejas: `vendedor_email` o "Elaboró").
+- `listarCotizaciones(busqueda)` *(UI)* — últimas 100 cotizaciones, filtro por folio/cliente/empresa/proyecto; `vendedor` =
+  `vendedorDeFila`: nombre + apellido de la fila; en filas viejas (sin Q:S), el nombre que ese correo tiene en otras filas
+  (`nombresDeVendedores`, gana la más reciente); si no se conoce, el correo (`vendedor_email` o "Elaboró"). No modifica la hoja.
 
 ### 4.5 Guardar cotización
 - `guardarCotizacion(payload)` *(UI)* — exige vendedor verificado (si no, error de sesión); normaliza, agrega clave/unidad SAT
@@ -156,6 +157,7 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
   normalizados. `normalizarProyecto(p)`, `nombreCarpetaProyecto(folio, cliente, nombre)` (quita `/ \ : * ? " < > |`),
   `proyectosDesdeFilas`, `filtrarProyectos`.
 - `normalizarProducto(p)`, `indiceDeClave(claves, clave)`.
+- `nombresDeVendedores(filas)` (correo en minúsculas → "Nombre Apellido"), `vendedorDeFila(r, nombres)`.
 - `terminosParaPdf(cfg, marca)` — renglones de T&C de la marca; agrega la línea de vigencia si falta.
 - `textoCelda(s)` — antepone `'` a texto que empiece con `= + - @` para que Sheets no lo lea como fórmula.
 - `validarClaimsToken(claims, clientId, dominio, ahora)` — ver §10.3.
@@ -195,6 +197,12 @@ del catálogo, claveSat/unidadSat), Notas, Marca (Helgen / Helgen Energy), Direc
 `vendedor_apellido`, `proyecto_folio` (T; vacío = "Sin proyecto"). Las columnas P:S se agregaron el 19/10/2026 (§11); las
 filas 0001–0004 no las tienen llenas. La T se agregó con Proyectos (10/2026): las filas anteriores quedan vacías y no se mueven.
 `guardarCotizacion` reescribe la fila de encabezados si no coincide con `ENCABEZADOS_COTIZACIONES`.
+
+**Registros de prueba en la hoja real (excluir de reportes y totales; identificarlos por folio, no por texto):**
+- `HLG-2026-0005` — cliente "PRUEBA - CANCELADA" (prueba de la migración, 19/10/2026).
+- `HLG-2026-0006` — cliente renombrado a "PRUEBA – CANCELADA" (con guion largo; prueba del primer proyecto, 20/10/2026).
+- `PRY-2026-0001` — "Proyecto de Prueba oficial", estado `Cancelado` (20/10/2026). Su carpeta en `Proyectos/2026` es de prueba.
+- Las filas HLG-2026-0001 a 0004 son anteriores a la sesión con Google y también parecen pruebas, pero no se marcaron.
 
 **Pestaña `Config`** (Clave | Valor, columna B en formato texto): `EMPRESA_NOMBRE` (Helgen Servicios Especializados),
 `EMPRESA_RFC` (HSE240304PC1), `EMPRESA_DIRECCION`, `EMPRESA_TELEFONO` (+52 442 644 5391), `EMPRESA_EMAIL`, `EMPRESA_WEB`,

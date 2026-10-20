@@ -582,15 +582,17 @@ function getClientes() {
 /** Historial (últimas 100, con búsqueda opcional). */
 function listarCotizaciones(busqueda) {
   const hoja = db_().getSheetByName('Cotizaciones');
-  const datos = hoja.getDataRange().getDisplayValues().slice(1).reverse();
+  const filas = hoja.getDataRange().getDisplayValues().slice(1);
+  // Correo → "Nombre Apellido" con todas las filas (antes de filtrar), para ponerle nombre a las filas viejas
+  const nombres = nombresDeVendedores(filas);
+  const datos = filas.reverse();
   const q = String(busqueda || '').toLowerCase().trim();
   return datos
     .filter(r => !q || (r[0] + ' ' + r[2] + ' ' + r[3] + ' ' + (r[19] || '')).toLowerCase().includes(q))
     .slice(0, 100)
     .map(r => ({
       folio: r[0], fecha: r[1], cliente: r[2], empresa: r[3], total: r[9], elaboro: r[10], pdf: r[11],
-      // Filas anteriores a la sesión con Google no tienen vendedor: se muestra el correo de "Elaboró"
-      vendedor: [r[17], r[18]].filter(Boolean).join(' ') || r[16] || r[10] || '',
+      vendedor: vendedorDeFila(r, nombres),
       // Filas anteriores a Proyectos (o cotizadas sin proyecto)
       proyecto: r[19] || 'Sin proyecto',
     }));
@@ -983,6 +985,31 @@ function clientesDesdeFilas(filas) {
     delete c.orden;
   });
   return lista;
+}
+
+/**
+ * Correo (minúsculas) → "Nombre Apellido", tomado de las filas de Cotizaciones que sí tienen vendedor_nombre /
+ * vendedor_apellido (columnas Q:S). Filas en orden de la hoja: si un correo aparece con nombres distintos, gana la más reciente.
+ */
+function nombresDeVendedores(filas) {
+  const mapa = {};
+  (filas || []).forEach(r => {
+    const correo = String(r[16] || '').trim().toLowerCase();
+    const nombre = [r[17], r[18]].map(x => String(x || '').trim()).filter(Boolean).join(' ');
+    if (correo && nombre) mapa[correo] = nombre;
+  });
+  return mapa;
+}
+
+/**
+ * Vendedor para el Historial: nombre y apellido de la fila; si no tiene (filas anteriores a la sesión con Google),
+ * el nombre que ese correo tiene en otras filas; si no se conoce, el correo (vendedor_email o "Elaboró").
+ */
+function vendedorDeFila(r, nombres) {
+  const propio = [r[17], r[18]].map(x => String(x || '').trim()).filter(Boolean).join(' ');
+  if (propio) return propio;
+  const correo = String(r[16] || r[10] || '').trim();
+  return (nombres || {})[correo.toLowerCase()] || correo;
 }
 
 /** Texto sin acentos, en minúsculas y con espacios simples (para comparar nombres). */
