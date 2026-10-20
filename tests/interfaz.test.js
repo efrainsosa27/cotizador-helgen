@@ -11,7 +11,9 @@ const apiWeb=scripts.find(s=>s.id==='api-web').src, app=scripts.find(s=>!s.id).s
 const b64=o=>Buffer.from(JSON.stringify(o)).toString('base64url');
 const token='h.'+b64({email:'ana@helgen.tech',given_name:'Ana',exp:Math.floor(Date.now()/1000)+3600})+'.f';
 const PRY={folio:'PRY-2026-0001',nombre:'Techo',cliente:'Luis — Solar MX',clienteId:'LUSM800101AB1',ubicacion:'Qro',estado:'Activo',fecha:'20/10/2026'};
-const CAT=[{clave:'PAN-550',descripcion:'Panel solar 550 W',unidad:'PZA',precio:4100}];
+const CAT=[{clave:'PAN-550',descripcion:'Panel solar 550 W',unidad:'PZA',precio:4100,precioUsd:222.22},
+  {clave:'SRV-1',descripcion:'Servicio sin USD',unidad:'SRV',precio:1000,precioUsd:null}];
+const TC={valor:18.45,fuente:'Google Finance'};
 
 /** App cargada con un DOM y un servidor simulados nuevos. */
 function montar(datosIniciales){
@@ -49,7 +51,7 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
 
 (async()=>{
   // ===== Vendedora (sin rol de cobranza) =====
-  const A=montar({ivaTasa:0.16,catalogo:CAT,clientes:[],proyectos:[PRY],marcas:{},permisos:{cobranza:false,desbloqueo:false}});
+  const A=montar({ivaTasa:0.16,catalogo:CAT,tipoCambio:TC,clientes:[],proyectos:[PRY],marcas:{},permisos:{cobranza:false,desbloqueo:false}});
   const {$,llamadas,respuestas}=A;
   await esperar(5);
   assert.equal(A.run('PROYECTOS.length'),1,'carga los proyectos activos');
@@ -93,15 +95,29 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   assert.equal(llamadas.filter(c=>c.funcion==='listarProyectos').length,antes);
   assert(/ocupado/.test($('aviso').innerHTML)&&!/Se quitó/.test($('aviso').innerHTML));
 
-  // Moneda: en MXN el catálogo pone el precio; en USD lo deja vacío para capturarlo a mano
+  // Moneda: en MXN el catálogo pone el precio en pesos; en USD, su precio convertido con el tipo de cambio del día
   const fila=$('filas').hijos[0];
   fila.querySelector('.desc').value='Panel solar 550 W'; fila.querySelector('.desc').disparar('change');
   assert.equal(fila.querySelector('.pu').value,4100);
+  assert(/PAN-550 · \$4,100\.00 MXN/.test($('catalogo').innerHTML),'lista en pesos');
   $('moneda').value='USD'; A.run('cambiarMoneda()');
-  assert(/captura los precios en dólares/.test($('notaMoneda').innerHTML)&&/Revisa los precios/.test($('notaMoneda').innerHTML));
+  assert.equal(fila.querySelector('.pu').value,222.22,'el renglón del catálogo se convierte a USD al cambiar de moneda');
+  assert(/18\.4500 pesos por dólar \(Google Finance\)/.test($('notaMoneda').innerHTML)&&!/Revisa/.test($('notaMoneda').innerHTML));
+  assert(/PAN-550 · \$222\.22 USD/.test($('catalogo').innerHTML)&&/precio en USD a mano/.test($('catalogo').innerHTML),'lista en dólares');
   assert.equal($('lblTot').textContent,'TOTAL USD');
+  $('moneda').value='MXN'; A.run('cambiarMoneda()'); assert.equal(fila.querySelector('.pu').value,4100,'de regreso a pesos');
+  $('moneda').value='USD'; A.run('cambiarMoneda()'); assert.equal(fila.querySelector('.pu').value,222.22);
   fila.querySelector('.desc').disparar('change');
-  assert.equal(fila.querySelector('.pu').value,'','en USD el catálogo no pone precio'); assert.equal(fila.querySelector('.clave').value,'PAN-550');
+  assert.equal(fila.querySelector('.pu').value,222.22,'elegir en USD pone el precio en dólares'); assert.equal(fila.querySelector('.clave').value,'PAN-550');
+  // Producto sin precio USD (sin tipo de cambio): se captura a mano
+  A.run('agregarFila()'); const fila2=$('filas').hijos[1];
+  fila2.querySelector('.clave').value='SRV-1'; fila2.querySelector('.clave').disparar('change');
+  assert.equal(fila2.querySelector('.pu').value,''); assert.equal(fila2.querySelector('.pu').placeholder,'USD');
+  // Precio ajustado a mano: no se convierte al cambiar de moneda y se avisa
+  fila.querySelector('.pu').value='180';
+  $('moneda').value='MXN'; A.run('cambiarMoneda()');
+  assert.equal(fila.querySelector('.pu').value,'180'); assert(/Revisa los precios que capturaste a mano/.test($('notaMoneda').innerHTML));
+  $('moneda').value='USD'; A.run('cambiarMoneda()');
   fila.querySelector('.cant').value='1'; fila.querySelector('.pu').value='180'; A.run('recalcular()');
   assert.equal($('tTot').textContent,'$208.80 USD');
   respuestas.guardarCotizacion={ok:true,datos:{folio:'HLG-2026-0009',url:'u',total:208.8,moneda:'USD',proyectoFolio:''}};

@@ -235,7 +235,7 @@
         <div><label>Clave *</label><input id="pClave" maxlength="30" placeholder="Ej. CAR-7KW"></div>
         <div style="grid-column:span 2"><label>Descripción *</label><input id="pDesc"></div>
         <div><label>Unidad</label><input id="pUni" value="PZA"></div>
-        <div><label>Precio unitario sin IVA *</label><input id="pPrecio" type="number" min="0" step="0.01" style="text-align:right"></div>
+        <div><label>Precio unitario sin IVA (MXN) *</label><input id="pPrecio" type="number" min="0" step="0.01" style="text-align:right"></div>
       </div>
 
       <div class="sat">
@@ -260,10 +260,11 @@
       <h2 id="tituloLista">Productos</h2>
       <div class="acciones" style="margin:0 0 12px">
         <input id="buscarCat" placeholder="Buscar por clave o descripción…" oninput="pintarCatalogo()" style="flex:1; min-width:220px">
+        <span id="tcCat" class="nota"></span>
         <a id="linkCat" href="#" target="_blank" class="oculto">Abrir en Google Sheets</a>
       </div>
       <table>
-        <thead><tr><th style="width:130px">Clave</th><th>Descripción</th><th style="width:80px">Unidad</th><th class="num" style="width:150px">Precio sin IVA</th><th style="width:110px">Clave SAT</th></tr></thead>
+        <thead><tr><th style="width:130px">Clave</th><th>Descripción</th><th style="width:80px">Unidad</th><th class="num" style="width:150px">Precio sin IVA</th><th class="num" style="width:150px">Precio USD</th><th style="width:110px">Clave SAT</th></tr></thead>
         <tbody id="listaCat"></tbody>
       </table>
     </div>
@@ -487,6 +488,7 @@
 
 <script>
   let IVA = 0.16, CATALOGO = [], CLIENTES = [], PROYECTOS = [], PERMISOS = {};
+  let TC = { valor: null, fuente: '' }, MONEDA_ANT = 'MXN'; // tipo de cambio del catálogo (pestaña "Tipo de cambio")
   // Un id por cotización: si el envío se repite, el servidor devuelve el mismo folio en vez de crear otro.
   const nuevoId = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(36).slice(2));
   let ID_SOLICITUD = nuevoId();
@@ -503,7 +505,7 @@
 
   // ---- Arranque ----
   google.script.run.withSuccessHandler(d => {
-    IVA = d.ivaTasa; CATALOGO = d.catalogo;
+    IVA = d.ivaTasa; CATALOGO = d.catalogo; TC = d.tipoCambio || TC;
     recibirClientes(d.clientes);
     recibirProyectos(d.proyectos);
     // La pestaña Cobranza solo se muestra con permiso; el servidor lo revisa en cada llamada
@@ -530,9 +532,11 @@
       if (!p) return;
       tr.querySelector('.clave').value = p.clave; tr.querySelector('.desc').value = p.descripcion;
       tr.querySelector('.uni').value = p.unidad;
-      // El catálogo está en pesos: en una cotización en USD el precio se captura a mano
-      if (monedaActual() === 'USD') { tr.querySelector('.pu').value = ''; tr.querySelector('.pu').placeholder = 'USD'; tr.querySelector('.pu').focus(); }
-      else tr.querySelector('.pu').value = p.precio;
+      // En USD: precio del catálogo convertido con el tipo de cambio del día; sin tipo de cambio, se captura a mano
+      const precio = precioCatalogo(p, monedaActual());
+      tr.querySelector('.pu').value = precio == null ? '' : precio;
+      if (precio == null) { tr.querySelector('.pu').placeholder = 'USD'; tr.querySelector('.pu').focus(); }
+      tr._cat = p.clave; // al cambiar de moneda, este renglón se convierte si su precio no se tocó
     };
     tr.querySelector('.desc').addEventListener('change', e => { aplicar(CATALOGO.find(x => x.descripcion === e.target.value)); recalcular(); });
     tr.querySelector('.clave').addEventListener('change', e => { aplicar(buscarClave(e.target.value)); recalcular(); });
@@ -566,14 +570,33 @@
     $('lblTot').textContent = 'TOTAL ' + m;
   }
 
+  /** Precio de un producto del catálogo en la moneda pedida; null si es USD y no hay tipo de cambio. */
+  function precioCatalogo(p, moneda) {
+    if (moneda !== 'USD') return p.precio;
+    return p.precioUsd != null ? p.precioUsd : null;
+  }
+
   function cambiarMoneda() {
-    const usd = monedaActual() === 'USD';
-    const conPrecio = leerItems().some(it => it.precio > 0);
-    $('notaMoneda').innerHTML = usd
-      ? '<span class="aviso-moneda">Cotización en USD:</span> el catálogo llena clave y descripción; captura los precios en dólares.' +
-        (conPrecio ? ' <span class="aviso-moneda">Revisa los precios que ya capturaste: los del catálogo están en pesos.</span>' : '')
-      : '';
-    recalcular();
+    const m = monedaActual(), antes = MONEDA_ANT;
+    MONEDA_ANT = m;
+    // Renglones elegidos del catálogo cuyo precio no se modificó: se pasan a la nueva moneda
+    let manuales = 0;
+    if (m !== antes) leerItems().forEach(it => {
+      const p = it._tr._cat && buscarClave(it._tr._cat);
+      const pu = it._tr.querySelector('.pu');
+      if (p && Number(pu.value) === Number(precioCatalogo(p, antes))) {
+        const nuevo = precioCatalogo(p, m);
+        pu.value = nuevo == null ? '' : nuevo;
+      } else if (it.precio > 0) manuales++;
+    });
+    const tc = TC && TC.valor ? 'tipo de cambio ' + TC.valor.toFixed(4) + ' pesos por dólar (' + (TC.fuente === 'manual' ? 'capturado en el catálogo' : 'Google Finance') + ')' : '';
+    $('notaMoneda').innerHTML = m === 'USD'
+      ? '<span class="aviso-moneda">Cotización en USD:</span> ' + (tc
+          ? 'los precios del catálogo se convierten con el ' + esc(tc) + '. Puedes ajustarlos.'
+          : 'no hay tipo de cambio en el catálogo; captura los precios en dólares.') +
+        (manuales ? ' <span class="aviso-moneda">Revisa los precios que capturaste a mano: no se convierten.</span>' : '')
+      : (manuales ? '<span class="aviso-moneda">Revisa los precios que capturaste a mano: no se convierten.</span>' : '');
+    pintarDatalists(); recalcular();
   }
 
   // ---- Guardar ----
@@ -746,19 +769,24 @@
   const buscarClave = c => CATALOGO.find(x => x.clave.toUpperCase() === String(c || '').trim().toUpperCase());
 
   function pintarDatalists() {
+    // La etiqueta muestra el precio en la moneda de la cotización
+    const m = monedaActual();
+    const precio = p => { const x = precioCatalogo(p, m); return x == null ? 'precio en USD a mano' : dinero(x, m); };
     $('catalogo').innerHTML = CATALOGO.map(p =>
-      '<option value="' + esc(p.descripcion) + '" label="' + esc(p.clave + ' · ' + mxn(p.precio)) + '">').join('');
+      '<option value="' + esc(p.descripcion) + '" label="' + esc(p.clave + ' · ' + precio(p)) + '">').join('');
     $('claves').innerHTML = CATALOGO.map(p =>
-      '<option value="' + esc(p.clave) + '" label="' + esc(p.descripcion + ' · ' + mxn(p.precio)) + '">').join('');
+      '<option value="' + esc(p.clave) + '" label="' + esc(p.descripcion + ' · ' + precio(p)) + '">').join('');
   }
 
   function cargarCatalogo() {
-    $('listaCat').innerHTML = '<tr><td colspan="5">Cargando…</td></tr>';
+    $('listaCat').innerHTML = '<tr><td colspan="6">Cargando…</td></tr>';
     google.script.run.withSuccessHandler(recibirCatalogo).withFailureHandler(mostrarError).getCatalogo();
   }
 
   function recibirCatalogo(r) {
-    CATALOGO = r.productos;
+    CATALOGO = r.productos; TC = r.tipoCambio || TC;
+    $('tcCat').textContent = TC && TC.valor ? 'Tipo de cambio: ' + TC.valor.toFixed(4) + ' MXN/USD · ' +
+      (TC.fuente === 'manual' ? 'capturado a mano' : 'Google Finance') : 'Sin tipo de cambio (revisa la pestaña "Tipo de cambio" del catálogo)';
     $('linkCat').href = r.url; $('linkCat').classList.remove('oculto');
     if (r.unidadesSat && r.unidadesSat.length) {
       $('unidadesSat').innerHTML = r.unidadesSat.map(u => '<option value="' + esc(u[0]) + '" label="' + esc(u[1]) + '">').join('');
@@ -774,8 +802,9 @@
       '<tr class="fila-cat' + (p.clave === CLAVE_EDITANDO ? ' editando' : '') + '" data-clave="' + esc(p.clave) + '">' +
       '<td><b>' + esc(p.clave) + '</b></td><td>' + esc(p.descripcion) + '</td><td>' + esc(p.unidad) + '</td>' +
       '<td class="num">' + mxn(p.precio) + '</td>' +
+      '<td class="num">' + (p.precioUsd != null ? dinero(p.precioUsd, 'USD') : '<span class="nota">—</span>') + '</td>' +
       '<td>' + (p.claveSat ? esc(p.claveSat) + (p.unidadSat ? ' · ' + esc(p.unidadSat) : '') : '<span class="nota">Pendiente</span>') + '</td></tr>').join('')
-      : '<tr><td colspan="5">' + (CATALOGO.length ? 'Sin resultados.' : 'El catálogo está vacío. Agrega el primer producto arriba.') + '</td></tr>';
+      : '<tr><td colspan="6">' + (CATALOGO.length ? 'Sin resultados.' : 'El catálogo está vacío. Agrega el primer producto arriba.') + '</td></tr>';
     $('listaCat').querySelectorAll('.fila-cat').forEach(tr => tr.onclick = () => editarProd(tr.dataset.clave));
   }
 

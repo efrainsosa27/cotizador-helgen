@@ -100,8 +100,14 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 - `crearCatalogo_()` — crea el archivo con formato, validaciones (clave única con `COUNTIF`, precio ≥ 0), migra la pestaña
   `Catalogo` vieja de la base de datos (sin el ejemplo `EJ-001`, luego la borra) y lo mueve junto a la base de datos.
 - `asegurarColumnasSat_(hoja)` — agrega encabezados `Clave SAT`/`Unidad SAT` (G:H, formato texto) a catálogos viejos.
-- `getCatalogo_(hoja?)` — lista `{clave, descripcion, unidad, precio, claveSat, unidadSat}`.
-- `getCatalogo()` *(UI)* — productos + URL del archivo + unidades SAT para la lista de selección.
+- `asegurarPrecioUsd_(hoja)` — crea la pestaña "Tipo de cambio" (B2 `GOOGLEFINANCE("CURRENCY:USDMXN")`, B3 manual opcional,
+  B4 en uso = rango con nombre `TIPO_CAMBIO`, recálculo cada hora), el encabezado de la columna I (protegida con advertencia) y la
+  fórmula `=IF(ISNUMBER(Dn),IFERROR(ROUND(Dn/TIPO_CAMBIO,2),""),"")` en cada renglón con producto que no la tenga (se repara
+  sola). **Fórmula por renglón, no `ARRAYFORMULA`**: una que llene toda la columna haría que `appendRow` escriba al final de la hoja.
+  Si falla, el catálogo funciona igual. `tipoCambioCatalogo_(hoja)` → `{valor, fuente}`.
+- `getCatalogo_(hoja?)` — lista `{clave, descripcion, unidad, precio, claveSat, unidadSat, precioUsd}`; `precioUsd` lo calcula el
+  servidor con el tipo de cambio en uso (mismo cálculo que la columna I; no espera a que Sheets recalcule); `null` sin tipo de cambio.
+- `getCatalogo()` *(UI)* — productos + URL del archivo + unidades SAT para la lista de selección + `tipoCambio`.
 - `guardarProducto(p)` *(UI)* — alta o edición (`p.claveOriginal` = edición, permite cambiar la clave). Valida con
   `normalizarProducto`, rechaza claves duplicadas (sin distinguir mayúsculas) y claves/unidades SAT que no existan.
   "Actualizó" = `usuarioActual_()`.
@@ -253,8 +259,10 @@ filas 0001–0004 no las tienen llenas. La T se agregó con Proyectos (10/2026):
 `cliente_id` (ver `idCliente`), Ubicación, Estado (Activo/Cerrado/Cancelado; **se cambia con la lista desplegable en la hoja**,
 no hay pantalla), `carpeta_id`, `vendedor_email`, `vendedor_nombre`, `vendedor_apellido`.
 
-**"Catálogo Helgen" / pestaña `Catalogo`**: Clave (única, mayúsculas), Descripción, Unidad, Precio unitario (sin IVA),
-Actualizado, Actualizó, Clave SAT, Unidad SAT. A:C y G:H en formato texto.
+**"Catálogo Helgen" / pestaña `Catalogo`**: Clave (única, mayúsculas), Descripción, Unidad, Precio unitario (sin IVA, MXN),
+Actualizado, Actualizó, Clave SAT, Unidad SAT, Precio USD (sin IVA, automático; columna I con fórmula, no escribir ahí).
+A:C y G:H en formato texto. Pestaña **`Tipo de cambio`**: B2 Google Finance, B3 manual opcional (si tiene valor, manda), B4 en
+uso (`TIPO_CAMBIO`). Se crean solas (§6.2).
 
 **Libro de cobranza** (`COBRANZA_DB_ID`; columnas en `HOJAS_COBRANZA`; texto salvo importes):
 - `Contratos` (1 fila por proyecto): `proyecto_folio`, `cotizacion_aceptada`, `marca`, `moneda`, `subtotal`, `iva`, `total`
@@ -383,8 +391,10 @@ Cobranza: `ROL_COBRANZA` (correos separados por coma: efrain@, tania@, leo@), `A
   proyecto por más de **1.00** (moneda del proyecto) se rechaza. Si la moneda del pago es otra, tipo de cambio del día
   obligatorio (pesos por dólar) y se guarda el monto aplicado en la moneda del proyecto: **nunca se suman MXN y USD**.
 - **Cancelar pago:** rol de cobranza, con motivo; el pago queda como Cancelado (nunca se borra) y deja de contar.
-- **USD en cotizaciones:** el catálogo está en pesos: en USD la interfaz llena clave y descripción, y el precio se captura a mano
-  (no se convierte con tipo de cambio). El PDF dice "Moneda: USD (dólares estadounidenses)", columnas "P. Unitario (USD)" e
+- **USD en cotizaciones:** el catálogo guarda el precio en pesos y la columna I lo convierte a dólares con el tipo de cambio del
+  día (Google Finance, o el manual de la pestaña "Tipo de cambio"; **no es el FIX de Banxico**). En USD la interfaz pone el precio en
+  dólares al elegir un producto; al cambiar de moneda convierte los renglones del catálogo cuyo precio no se tocó (los capturados a
+  mano no se convierten y se avisa). Sin tipo de cambio válido, el precio se captura a mano. El precio se puede ajustar antes de guardar. El PDF dice "Moneda: USD (dólares estadounidenses)", columnas "P. Unitario (USD)" e
   "Importe (USD)", "TOTAL USD" e importe con letra en dólares. **Términos y condiciones: el mismo bloque que en MXN, sin cambios**
   (incluido "$300 MXN por metro" en Energy; decisión del usuario, 20/10/2026).
 
@@ -466,7 +476,9 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - **Cobranza, antes de usarla:** probar en el proyecto PRUEBAS (§10.5) con un usuario sin rol, correr `prepararCobranza()` en la
   API real, capturar `ROL_COBRANZA` y `ADMIN_DESBLOQUEO`, compartir la carpeta de cobranza como lector con tania@ y leo@
   (Google les manda correo: confirmar con el usuario antes) y anotar su ID en §2.
-- **Mejora futura:** columna de precio en USD en el catálogo (hoy en cotizaciones USD el precio se captura a mano).
+- Precio USD del catálogo (20/10/2026): la cotización no guarda el tipo de cambio que se usó; si contabilidad lo necesita,
+  agregar una columna en `Cotizaciones`. Confirmar que leer `GOOGLEFINANCE` desde Apps Script funciona en el catálogo real
+  (si no, usar el tipo de cambio manual de la pestaña).
 - **Acceso del dominio a la Base de datos y a la carpeta maestra** (lector para todo helgen.tech): se queda por ahora; revisarlo
   junto con la idea "cada vendedor ve solo sus cotizaciones" (quitarlo impide abrir los PDF desde el Historial).
 - Tania y Leo eran **editores** de la Base de datos (20/10/2026); el usuario los baja a lector.

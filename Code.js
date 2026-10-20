@@ -317,7 +317,75 @@ function hojaCatalogo_() {
   const ss = SpreadsheetApp.openById(props.getProperty('CATALOGO_ID'));
   const hoja = ss.getSheetByName('Catalogo') || ss.getSheets()[0];
   asegurarColumnasSat_(hoja);
+  // Precio en USD: dato extra; si falla, el catálogo funciona igual (en USD el precio se captura a mano)
+  try { asegurarPrecioUsd_(hoja); } catch (e) { console.warn('Sin columna de precio USD: ' + e.message); }
   return hoja;
+}
+
+// ---- Precio en USD (columna I) y tipo de cambio del día (pestaña "Tipo de cambio" del catálogo) ----
+// Fórmula por renglón (no ARRAYFORMULA: una fórmula que llena toda la columna haría que appendRow escriba al final
+// de la hoja). Los renglones sin fórmula (p. ej. capturados a mano en Sheets) se reparan solos al abrir el catálogo.
+
+const ENC_PRECIO_USD = 'Precio USD (sin IVA, automático)';
+const COL_PRECIO_USD = 9; // I
+const HOJA_TIPO_CAMBIO = 'Tipo de cambio';
+const RANGO_TIPO_CAMBIO = 'TIPO_CAMBIO';
+const formulaPrecioUsd_ = fila => '=IF(ISNUMBER(D' + fila + '),IFERROR(ROUND(D' + fila + '/' + RANGO_TIPO_CAMBIO + ',2),""),"")';
+
+/**
+ * Pestaña "Tipo de cambio": B2 = Google Finance (USD→MXN, automático), B3 = manual opcional (si tiene valor, manda),
+ * B4 = en uso (rango con nombre TIPO_CAMBIO). Columna I del catálogo = precio en pesos ÷ TIPO_CAMBIO.
+ */
+function asegurarPrecioUsd_(hoja) {
+  const ss = hoja.getParent();
+  if (!ss.getSheetByName(HOJA_TIPO_CAMBIO)) {
+    const tc = ss.insertSheet(HOJA_TIPO_CAMBIO);
+    tc.getRange(1, 1, 5, 2).setValues([
+      ['Concepto', 'Valor'],
+      ['Automático: Google Finance (pesos por dólar)', ''],
+      ['Manual (opcional): si escribes un valor aquí, se usa en lugar del automático', ''],
+      ['Tipo de cambio en uso', ''],
+      ['Nota', 'Los precios en USD del catálogo (columna I) se calculan solos con el tipo de cambio en uso. Google Finance ' +
+        'se actualiza durante el día y puede tener unos minutos de retraso; no es el FIX de Banxico.'],
+    ]);
+    tc.getRange(2, 2).setFormula('=GOOGLEFINANCE("CURRENCY:USDMXN")');
+    tc.getRange(4, 2).setFormula('=IF(ISNUMBER(B3),B3,IFERROR(ROUND(B2,4),""))');
+    tc.getRange(2, 2, 3, 1).setNumberFormat('0.0000');
+    tc.getRange(1, 1, 1, 2).setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+    tc.setColumnWidth(1, 470); tc.setColumnWidth(2, 160);
+    ss.setNamedRange(RANGO_TIPO_CAMBIO, tc.getRange(4, 2));
+    // GOOGLEFINANCE se recalcula cada hora aunque nadie abra el archivo
+    ss.setRecalculationInterval(SpreadsheetApp.RecalculationInterval.HOUR);
+  }
+  if (hoja.getRange(1, COL_PRECIO_USD).getValue() !== ENC_PRECIO_USD) {
+    hoja.getRange(1, COL_PRECIO_USD).setValue(ENC_PRECIO_USD)
+      .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+    hoja.getRange('I:I').setNumberFormat('$#,##0.00');
+    hoja.setColumnWidth(COL_PRECIO_USD, 210);
+    hoja.getRange('I:I').protect().setDescription('Precio USD automático: no escribir aquí (cambia el precio en pesos ' +
+      'o el tipo de cambio)').setWarningOnly(true);
+  }
+  // Renglones con producto y sin fórmula en I: se les pone (incluye los dados de alta a mano en Sheets)
+  const n = hoja.getLastRow() - 1;
+  if (n < 1) return;
+  const claves = hoja.getRange(2, 1, n, 1).getValues();
+  const formulas = hoja.getRange(2, COL_PRECIO_USD, n, 1).getFormulas();
+  claves.forEach((r, i) => {
+    if (String(r[0] || '').trim() && !formulas[i][0]) hoja.getRange(i + 2, COL_PRECIO_USD).setFormula(formulaPrecioUsd_(i + 2));
+  });
+}
+
+/** Tipo de cambio en uso según la pestaña "Tipo de cambio" ({valor, fuente}); valor null si no hay uno válido. */
+function tipoCambioCatalogo_(hoja) {
+  try {
+    const tc = hoja.getParent().getSheetByName(HOJA_TIPO_CAMBIO);
+    if (!tc) return { valor: null, fuente: '' };
+    const v = tc.getRange(2, 2, 2, 1).getValues();
+    return tipoCambioDesdeValores(v[0][0], v[1][0]);
+  } catch (e) {
+    console.warn('Sin tipo de cambio: ' + e.message);
+    return { valor: null, fuente: '' };
+  }
 }
 
 /** Catálogos creados antes de las columnas SAT: agrega los encabezados G:H con formato texto. */
@@ -375,11 +443,14 @@ function crearCatalogo_() {
 }
 
 function getCatalogo_(hoja) {
-  const filas = (hoja || hojaCatalogo_()).getDataRange().getValues().slice(1);
+  const h = hoja || hojaCatalogo_();
+  const filas = h.getDataRange().getValues().slice(1);
+  // Precio en USD con el mismo cálculo que la columna I (no depende de que Sheets ya haya recalculado la fórmula)
+  const tc = tipoCambioCatalogo_(h).valor;
   return filas
     .filter(r => r[0] && r[1])
     .map(r => ({ clave: String(r[0]), descripcion: String(r[1]), unidad: String(r[2] || 'PZA'), precio: Number(r[3]) || 0,
-      claveSat: String(r[6] || ''), unidadSat: String(r[7] || '') }));
+      claveSat: String(r[6] || ''), unidadSat: String(r[7] || ''), precioUsd: precioEnDolares(Number(r[3]) || 0, tc) }));
 }
 
 /** Datos para la pestaña Catálogo de la app (incluye las unidades del SAT para elegir). */
@@ -387,7 +458,8 @@ function getCatalogo() {
   const hoja = hojaCatalogo_();
   let unidadesSat = [];
   try { unidadesSat = getUnidadesSat_(); } catch (e) { /* sin catálogo SAT: la app sigue funcionando */ }
-  return { productos: getCatalogo_(hoja), url: hoja.getParent().getUrl(), unidadesSat: unidadesSat };
+  return { productos: getCatalogo_(hoja), url: hoja.getParent().getUrl(), unidadesSat: unidadesSat,
+    tipoCambio: tipoCambioCatalogo_(hoja) };
 }
 
 // ====== CATÁLOGOS DEL SAT (CFDI 4.0): Google Sheets "Catálogos SAT (CFDI 4.0)", ligado por SAT_ID ======
@@ -542,8 +614,10 @@ function guardarProducto(p) {
     } else {
       hoja.appendRow(fila);
     }
+    try { asegurarPrecioUsd_(hoja); } catch (e) { console.warn('Sin columna de precio USD: ' + e.message); }
     SpreadsheetApp.flush();
-    return { productos: getCatalogo_(hoja), url: hoja.getParent().getUrl(), clave: prod.clave };
+    return { productos: getCatalogo_(hoja), url: hoja.getParent().getUrl(), clave: prod.clave,
+      tipoCambio: tipoCambioCatalogo_(hoja) };
   } finally {
     lock.releaseLock();
   }
@@ -552,11 +626,13 @@ function guardarProducto(p) {
 /** Llamada por la app al cargar. */
 function getDatosIniciales() {
   const cfg = getConfig_();
+  const hojaCat = hojaCatalogo_();
   return {
     ivaTasa: cfg.IVA_TASA,
     vigenciaDias: cfg.VIGENCIA_DIAS,
     marcas: MARCAS,
-    catalogo: getCatalogo_(),
+    catalogo: getCatalogo_(hojaCat),
+    tipoCambio: tipoCambioCatalogo_(hojaCat),
     clientes: getClientes(),
     proyectos: proyectosParaInicio_(),
     usuario: usuarioActual_(),
@@ -1628,6 +1704,22 @@ function monedaDeCotizacion(m) {
   if (!s) return 'MXN';
   if (MONEDAS.indexOf(s) === -1) throw new Error('Moneda no válida: ' + s + '. Usa MXN o USD.');
   return s;
+}
+
+/**
+ * Tipo de cambio en uso (pesos por dólar): el manual si es un número válido; si no, el automático (Google Finance).
+ * Fuera de 1–1000 se descarta (p. ej. "#N/A" o "Cargando…" de GOOGLEFINANCE). Devuelve {valor, fuente}.
+ */
+function tipoCambioDesdeValores(automatico, manual) {
+  const valido = v => typeof v === 'number' && isFinite(v) && v >= 1 && v <= 1000;
+  if (valido(manual)) return { valor: Math.round(manual * 10000) / 10000, fuente: 'manual' };
+  if (valido(automatico)) return { valor: Math.round(automatico * 10000) / 10000, fuente: 'Google Finance' };
+  return { valor: null, fuente: '' };
+}
+
+/** Precio en pesos -> dólares con el tipo de cambio (2 decimales); null si no hay tipo de cambio. */
+function precioEnDolares(precioMxn, tipoCambio) {
+  return tipoCambio > 0 ? redondear(Number(precioMxn) / tipoCambio) : null;
 }
 
 // ---- Cobranza: esquema de pagos, reparto, comprobantes y roles ----
