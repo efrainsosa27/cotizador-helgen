@@ -298,6 +298,11 @@ Cobranza: `ROL_COBRANZA` (correos separados por coma: efrain@, tania@, leo@), `A
   porque correr `setup()` a mano falló la primera vez.
 - Toda estructura nueva se migra sola (Config, columnas del catálogo, encabezados de Cotizaciones).
   Al agregar columnas o claves, seguir este patrón: **nunca pedir al usuario que edite la hoja a mano**.
+- **Sheets convierte texto que parece fecha** ("2026-10-20", "2026-10-20 17:30") en un valor de fecha con `appendRow`/`setValues`,
+  **aunque la columna tenga formato de texto**; al leerlo, `getValues` da un `Date` y `String(Date)` sale como
+  "Tue Oct 20 2026 00:00:00 GMT-0600…" (pasó en la prueba de Cobranza, 20/10/2026). Fechas sin hora que deben quedar exactas:
+  escribirlas con apóstrofo (`textoFecha_`) y leerlas con `fechaIso_`/`fechaTexto_`, que aceptan `Date` o texto. Las simulaciones
+  de `tests/cobranza.test.js` (`comoSheets`) reproducen esa conversión.
 
 ### 6.3 PDF (lecciones del conversor HTML→PDF de Google)
 - **No imprime colores de fondo** (`background`): con la banda azul, el logo blanco y el texto blanco desaparecieron.
@@ -378,6 +383,9 @@ Cobranza: `ROL_COBRANZA` (correos separados por coma: efrain@, tania@, leo@), `A
 - **Permisos en el servidor:** `ROL_COBRANZA` (Script Properties, no en el código) para ver y cambiar todo lo de cobranza;
   `ADMIN_DESBLOQUEO` solo para desbloquear. Los demás reciben `codigo: "PERMISO"` y `getDatosIniciales` no les manda nada de
   cobranza (solo `permisos` en falso para ocultar la pestaña).
+- La pestaña Cobranza aparece cuando responde `getDatosIniciales` (2–3 s en la prueba): antes la página no sabe si hay rol. Los
+  permisos se leen al cargar: tras cambiar `ROL_COBRANZA` hay que recargar la página. Ideas si molesta (no hechas): recordar el
+  permiso en `sessionStorage` o poner en caché partes de la carga inicial.
 - **Aceptada:** una por proyecto; se puede cambiar hasta firmar. Monto contratado = total **con IVA**; subtotal de referencia.
   **Línea de negocio y moneda del proyecto salen de la aceptada.** Si ya hay pagos (tras un desbloqueo), la nueva aceptada debe
   tener la misma moneda.
@@ -474,11 +482,16 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - `GUIA.md` describe el proyecto anterior; actualizarla si se va a usar.
 - Ideas mencionadas: enviar PDF por correo, duplicar cotización, estatus (Enviada/Aceptada/Rechazada), descuentos por renglón.
 - Proyectos fase 2: órdenes de compra, gastos y adicionales (§6.10). Cobranza ya construida (§6.11).
-- **Cobranza, antes de usarla:** probar en el proyecto PRUEBAS (§10.5) con un usuario sin rol, correr `prepararCobranza()` en la
-  API real, capturar `ROL_COBRANZA` y `ADMIN_DESBLOQUEO`, compartir la carpeta de cobranza como lector con tania@ y leo@
-  (Google les manda correo: confirmar con el usuario antes) y anotar su ID en §2.
-- Precio USD del catálogo (20/10/2026): el tipo de cambio usado se guarda en `Cotizaciones!V` (no sale en el PDF). Confirmar que leer `GOOGLEFINANCE` desde Apps Script funciona en el catálogo real
-  (si no, usar el tipo de cambio manual de la pestaña).
+- **Cobranza: probada en PRUEBAS (20/10/2026, §10.6), falta publicarla.** Orden (cada paso con confirmación del usuario):
+  1) respaldos de la Base de datos y del Catálogo ("Respaldos 2026-10-XX"); 2) `npx clasp push --force` a la API real;
+  3) correr `prepararCobranza()` en el editor (crea carpeta y libro; si pide permisos, aceptarlos aquí) y capturar `ROL_COBRANZA`
+  y `ADMIN_DESBLOQUEO`; 4) `npx clasp deploy --deploymentId AKfycbwBjF7…`; 5) `npx --yes wrangler@4 deploy`; 6) compartir la carpeta
+  de cobranza como lector con tania@ y leo@ (Google les manda correo) y anotar su ID en §2; 7) retirar el deployment de prueba
+  (`clasp undeploy AKfycbz9naWO…` desde una carpeta temporal ligada a `1wp8_SQ…`) y apagar el servidor local de prueba.
+  Al publicar, la primera apertura del catálogo real crea la pestaña "Tipo de cambio" y la columna I (§4.2).
+- Rol de cobranza **sin** desbloqueo (Tania) solo se probó con las pruebas automáticas, no con su cuenta real.
+- Precio USD del catálogo (20/10/2026): el tipo de cambio usado se guarda en `Cotizaciones!V` (no sale en el PDF). Leer
+  `GOOGLEFINANCE` desde Apps Script **sí funciona** (comprobado en PRUEBAS: 18.4248); si un día falla, usar el valor manual (B3).
 - **Acceso del dominio a la Base de datos y a la carpeta maestra** (lector para todo helgen.tech): se queda por ahora; revisarlo
   junto con la idea "cada vendedor ve solo sus cotizaciones" (quitarlo impide abrir los PDF desde el Historial).
 - Tania y Leo eran **editores** de la Base de datos (20/10/2026); el usuario los baja a lector.
@@ -557,6 +570,22 @@ Para probar Proyectos con la sesión real **sin tocar la hoja real** se creó un
 - **Archivado (20/10/2026):** `clasp undeploy AKfycbwVu2q5…` desde una carpeta temporal ligada a `1wp8_SQ…`; la URL responde 404
   (`clasp list-deployments` puede seguir mostrándolo un rato). El usuario lo mueve en Drive a la carpeta `1w-T05ql…` junto a los
   "ARCHIVO PRUEBAS". No borrarlo: sirve para la fase 2 (para reusarlo, `clasp deploy` crea un deployment nuevo con otra URL).
+
+### 10.6 Prueba de Cobranza y USD en PRUEBAS (20/10/2026)
+- Deployment nuevo del proyecto PRUEBAS: `AKfycbz9naWOw4Jj0qlta0RjCNifgZLvvJqXpqRnrrsALewSnmn7ydnEIw_zYriIHZjbQ5ugQw` (@5 al cierre;
+  se actualiza con `clasp deploy --deploymentId` desde la carpeta temporal, nunca desde el repo). Interfaz: copia de `web/` en una
+  carpeta temporal, servida en `http://127.0.0.1:8788/cotizador/` (título "PRUEBAS — Cotizador Helgen").
+- `Pruebas.js` (solo en PRUEBAS) ahora también: crea "PRUEBAS — Cobranza" (`1kdxWCCmi0lcdexqjmqgO89gKphCvxTKJ`, dentro de
+  "ARCHIVO PRUEBAS — Cotizaciones Helgen (PDF)", sin compartir) y su libro "PRUEBAS — Cobranza (datos)"
+  (`1fqtyRXiztJlQ8V2dCg0QZXKbb5LzmR73Yq55ezabMNo`); `pruebasRondaSinRol()` (ROL_COBRANZA = tania@) y `pruebasRondaConRol()`
+  (efrain@, tania@, leo@); `diagnosticoCobranza()` (solo lee: propiedades y permisos que ve el servidor para efrain@ y tania@).
+- **Ronda 1 (sin rol):** sin pestaña Cobranza; cotizaciones normales y USD correctas (el usuario).
+- **Ronda 2 (con rol):** 22 casos en el Chrome del usuario (Claude in Chrome, con su sesión): aceptada, esquema Helgen y Energy
+  (con motivo), firma, regla de cotizaciones nuevas, pagos con PDF y foto, excedente, tolerancia, cancelar, desbloquear, firma
+  con lo pagado mayor al monto, proyecto USD pagado en MXN con tipo de cambio. Todos pasaron. Se encontró y corrigió el error de
+  fechas (§6.2). Datos de prueba (solo en archivos PRUEBAS): `PRY-2026-0003` (A, MXN: `HLG-2026-0008` aceptada y firmada,
+  `0009`, `0010` Energy) y `PRY-2026-0004` (B, USD: `HLG-2026-0011`); pagos `PAG-2026-0001` a `0004` (`0002` cancelado).
+- Comprobantes de prueba generados en el scratchpad de la sesión (un PDF mínimo y un JPG); no están en el repositorio.
 
 ## 11. Migración al proyecto nuevo (19/10/2026)
 
