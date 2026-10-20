@@ -311,6 +311,7 @@ Actualizado, Actualizó, Clave SAT, Unidad SAT. A:C y G:H en formato texto.
 9. Las claves SAT son internas: nunca en el PDF.
 10. Toda llamada a la API exige token válido de @helgen.tech (`hd`, `email_verified`, `aud`); el vendedor sale **siempre**
     del token, nunca de lo que mande el navegador. No quitar esas revisiones.
+11. **Responder siempre en español** (de México) al usuario, en el chat y en los mensajes de commit.
 
 ## 8. Cómo trabajar
 
