@@ -170,6 +170,13 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   assert.equal(csv[0].charCodeAt(0),0xFEFF,'BOM para Excel'); assert(csv[0].includes('"Contratado con IVA","Cobrado","Saldo"'));
   assert.equal(csv[1],'"PRY-2026-0003","Techo","\'=Luis, ""SA""","Helgen","Firmado","MXN",11600.00,5000.00,6600.00,43.1,"Instalación",3480.00,"2026-10-20",2,4850.00,5150.00,51.5');
   assert(csv[3].endsWith(',0,,,'),'sin margen: celdas vacías'); assert.equal(csv.length,4);
+  // Desde el resumen se abre cualquier proyecto, también uno sin cotización aceptada (no está en la tabla)
+  const nAntes=B.llamadas.filter(c=>c.funcion==='getCobranzaProyecto').length;
+  B.$('resProyecto').value='PRY-2026-0001 — Luis — Solar MX — Techo'; B.$('resProyecto').disparar('change'); await esperar();
+  const abiertos=B.llamadas.filter(c=>c.funcion==='getCobranzaProyecto');
+  assert.equal(abiertos.length,nAntes+1); assert.equal(abiertos.pop().args[0],'PRY-2026-0001');
+  assert(!B.$('cobVistaProyecto').classList.contains('oculto')&&B.$('resProyecto').value==='','abre el proyecto y limpia el buscador');
+  B.run('verResumenCob()'); await esperar();
   // Clic en un renglón abre el proyecto; "← Resumen" regresa
   B.respuestas.getCobranzaProyecto={ok:true,datos:{proyecto:PRY,cotizaciones:[],contrato:null,esquema:[],resumen:null,pagos:[],puedeAceptar:true,puedeFirmar:false,metodos:[],hoy:'2026-10-20'}};
   B.run("abrirProyectoCob('PRY-2026-0001')"); await esperar();

@@ -278,6 +278,9 @@
     <div id="cobVistaResumen">
       <div class="modulo">
         <h2>1 · Resumen de cobranza</h2>
+        <!-- Todos los proyectos (también sin cotización aceptada): desde aquí se marca la primera aceptada -->
+        <div style="margin-bottom:12px"><label>Abrir un proyecto (todos, también sin cotización aceptada)</label>
+          <input id="resProyecto" list="cobProyectosList" autocomplete="off" placeholder="Busca por folio, cliente o nombre"></div>
         <div id="resTotales" class="nota">Cargando…</div>
         <div class="acciones">
           <input id="resBuscar" placeholder="Buscar por folio, cliente o nombre…" oninput="pintarResumenCob()" style="flex:1; min-width:220px">
@@ -1010,6 +1013,12 @@
     return (folio && COB_PROYECTOS.find(p => p.folio === folio)) || null;
   }
   $('cobProyecto').addEventListener('change', () => { const p = proyectoCobElegido(); if (p) abrirProyectoCob(p.folio); });
+  // Desde el resumen: cualquier proyecto (el resumen solo lista los que tienen contrato)
+  $('resProyecto').addEventListener('change', () => {
+    const folio = ($('resProyecto').value.trim().match(/^PRY-\d{4}-\d{4}/i) || [''])[0].toUpperCase();
+    const p = folio && COB_PROYECTOS.find(x => x.folio === folio);
+    if (p) { $('resProyecto').value = ''; abrirProyectoCob(p.folio); }
+  });
 
   function abrirProyectoCob(folio) {
     $('cobVistaResumen').classList.add('oculto'); $('cobVistaProyecto').classList.remove('oculto');
