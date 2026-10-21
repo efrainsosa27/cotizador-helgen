@@ -728,8 +728,10 @@ Para probar Proyectos con la sesión real **sin tocar la hoja real** se creó un
   Deployment nuevo de prueba: `AKfycbxK3ldf4zuqhZdBuDP6V_1VMy1T3ygk3RvEL8AYjvrGTQqL2DAtrFOt07cESOQFWFaesQ` (@6). **Retirarlo al
   terminar** (`clasp undeploy` desde una carpeta temporal ligada a `1wp8_SQ…`). Interfaz: copia de `web/` en el scratchpad con ese
   `API_URL` y título "PRUEBAS — Cotizador Helgen", servida en `http://127.0.0.1:8788/cotizador/` (el `API_URL` del repo no cambia).
-- `Pruebas.js` (solo en PRUEBAS) ahora además tiene: `configurarCompras()` (crea "PRUEBAS — Compras" dentro de "ARCHIVO PRUEBAS —
-  Cotizaciones Helgen (PDF)" y su libro, los restringe con `privado_`, agrega `TERMINOS_OC` al Config de PRUEBAS y deja la ronda C1),
+- `Pruebas.js` (solo en PRUEBAS) ahora además tiene: `configurarCompras()` (crea "PRUEBAS — Compras (no usar)" **en la raíz de Mi
+  unidad** y su libro, los restringe con `privado_`. Primero se intentó dentro de "ARCHIVO PRUEBAS — Cotizaciones Helgen (PDF)",
+  pero esa carpeta (y "PRUEBAS — Cobranza") la lee todo el dominio y `privado_` dio 403 `cannotDeletePermission`: quedó ahí una
+  carpeta vacía "PRUEBAS — Compras" `1hlqlrwwq_olMttqvYtoXid4vS7a6NRXb`, sin uso; agrega `TERMINOS_OC` al Config de PRUEBAS y deja la ronda C1),
   `pruebasComprasSinRol()` (C1: efrain@ sin compras, con cobranza), `pruebasComprasSinCobranza()` (C2: efrain@ con compras, sin
   cobranza), `pruebasComprasCompleta()` (C3: los dos) y `diagnosticoCompras()` (solo lee). Proyectos firmados para probar:
   `PRY-2026-0003` (MXN) y `PRY-2026-0004` (USD).
