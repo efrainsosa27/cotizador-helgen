@@ -27,7 +27,7 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 |---|---|
 | **Cotizador (lo usa el equipo)** | `https://cotizador-helgen.cotizador-helgen.workers.dev/cotizador/` (portada en `/`) |
 | Proyecto Apps Script de la API (`scriptId` en `.clasp.json`) | `1GsH8DjaFEZ9dltqBUTUEFE_frblSYimRRCvPkqKdRB5UhmBwwYHLSwyS` (nombre anterior "Cotizador Helgen — PRUEBAS interfaz web"; ver §9) |
-| Deployment de la API (siempre actualizar este; `API_URL` en `web/cotizador/index.html`) | `AKfycbwBjF7ra_4O8INsxBq0eh-4r-BlSsJ4LLxcJgVCPRpx1U1a-Pz1CUSdYtvj_Mh0S6y2` (@8 al 21/10/2026 = Compras: órdenes de compra, proveedores y margen; @7 = ocultar aceptar/firmar en proyectos cancelados; @6 = Cobranza y USD; @5 = nombre del vendedor en Historial; @4 = Proyectos; @3 = 19/10/2026; `access: ANYONE_ANONYMOUS` + token) |
+| Deployment de la API (siempre actualizar este; `API_URL` en `web/cotizador/index.html`) | `AKfycbwBjF7ra_4O8INsxBq0eh-4r-BlSsJ4LLxcJgVCPRpx1U1a-Pz1CUSdYtvj_Mh0S6y2` (@9 al 21/10/2026 = resumen de cobranza; @8 = Compras: órdenes de compra, proveedores y margen; @7 = ocultar aceptar/firmar en proyectos cancelados; @6 = Cobranza y USD; @5 = nombre del vendedor en Historial; @4 = Proyectos; @3 = 19/10/2026; `access: ANYONE_ANONYMOUS` + token) |
 | Client ID de OAuth (`CLIENT_ID_GOOGLE` en `web/cotizador/index.html` y `Code.js`) | `884526916417-cn5fh45io0nnpvlad2439thkpius4063.apps.googleusercontent.com` (no es secreto) |
 | Carpeta maestra en Drive "Cotizador Helgen" | `1lf3Z4d3e_oqFbYJse4QbyYkWowYT9HCo` |
 | Base de datos "Cotizador Helgen — Base de datos" (`SPREADSHEET_ID`) | `1ozFsyt1OjSnSv-PVpRWZjgqeWt6voQREbjvOJAXPEaI` |
@@ -240,7 +240,7 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 
 ### 4.7 Interfaz (`web/cotizador/index.html`)
 Pestañas: **Nueva cotización**, **Historial**, **Catálogo**, **Cobranza** (solo si `permisos.cobranza`; al entrar muestra el
-**resumen** `#cobVistaResumen` — `verResumenCob`, `cargarResumenCob`, `filtrarResumenCob`, `pintarResumenCob`, `csvResumenCob`,
+**resumen** `#cobVistaResumen` — buscador `#resProyecto` para abrir **cualquier** proyecto (también sin aceptada), `verResumenCob`, `cargarResumenCob`, `filtrarResumenCob`, `pintarResumenCob`, `csvResumenCob`,
 `descargarCsvCob` —; clic en un renglón → `abrirProyectoCob` muestra `#cobVistaProyecto` con "← Resumen"; tarjeta de margen
 `#cobMargen`) y **Compras** (solo si `permisos.compras`): `cargarProyectosCom`, `pintarCompras(vista)` (al cambiar de proyecto
 limpia el formulario), `recibirProveedores`/`autorrellenarProveedor`, `agregarRenglonOc` (el catálogo llena clave, descripción y
@@ -476,7 +476,8 @@ Compras: `ROL_COMPRAS` (correos separados por coma: efrain@, tania@, leo@; cread
   proyecto por más de **1.00** (moneda del proyecto) se rechaza. Si la moneda del pago es otra, tipo de cambio del día
   obligatorio (pesos por dólar) y se guarda el monto aplicado en la moneda del proyecto: **nunca se suman MXN y USD**.
 - **Cancelar pago:** rol de cobranza, con motivo; el pago queda como Cancelado (nunca se borra) y deja de contar.
-- **Resumen de cobranza** (construido 21/10/2026; decisiones del usuario): pantalla inicial de la pestaña Cobranza. Totales por
+- **Resumen de cobranza** (construido y publicado 21/10/2026; decisiones del usuario): pantalla inicial de la pestaña Cobranza, con un buscador para
+  abrir cualquier proyecto (también sin aceptada). Totales por
   moneda (nunca MXN + USD): contratado con IVA, cobrado, por cobrar, avance, proyectos con saldo y margen sin IVA. Tabla por
   proyecto: contratado, cobrado, saldo, avance, siguiente etapa por cobrar, último pago, costo de órdenes y margen; firmados por
   moneda (MXN, USD) y del mayor saldo al menor (nunca se comparan saldos de monedas distintas) y luego los **"Por firmar"** (aceptada sin firmar: se muestran pero **no suman** a los totales). Los
@@ -627,14 +628,21 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
   **Revisión en el cotizador real (21/10/2026, Claude in Chrome, sin crear nada):** sesión sin errores, pestañas Cobranza y
   Compras visibles con los dos roles, Compras sin proyectos ("No hay proyectos activos con contrato firmado": en la hoja real
   ningún contrato está firmado), vista de cobranza de `PRY-2026-0001` (Cancelado) carga con `margen: null`. Libro de compras vacío.
-- **Resumen de cobranza: construido el 21/10/2026, SIN PUBLICAR.** Probado en PRUEBAS el 21/10/2026 (Claude in Chrome, sesión del
+- **Resumen de cobranza: publicado el 21/10/2026** (API @9 + interfaz). Editor comparado antes (= `a591174`) y después (= repo)
+  con `clasp clone`. **Revisión en el cotizador real (Claude in Chrome, sin crear nada):** resumen vacío con "Todavía no hay
+  proyectos con cotización aceptada" (primera carga ~15 s). Ahí se encontró un error que PRUEBAS no mostró (allí todos los
+  proyectos tenían contrato): el detalle solo se abría desde un renglón del resumen, que solo lista proyectos con contrato, así
+  que **un proyecto nuevo no se podía abrir para marcar su primera aceptada**. Corregido el mismo día con el buscador "Abrir un
+  proyecto" (`#resProyecto`, todos los proyectos; prueba en `interfaz.test.js`; commit `06ef824`, solo `wrangler deploy`) y
+  comprobado en el real abriendo `PRY-2026-0001` (sin aceptada). Lección: al cambiar la navegación, probar también con un proyecto
+  **sin** cotización aceptada.
+  Antes, probado en PRUEBAS el 21/10/2026 (Claude in Chrome, sesión del
   usuario; deployment de prueba `AKfycbz3DZuN…`, ya **retirado**, 404). R1 (con cobranza): totales MXN 11,600 / 8,000 / 3,600 (69 %),
   margen 5,150 (51.5 %); USD 5,800 / 1,100 / 4,700 (19 %), margen 4,900 (98 %); cada renglón igual a la vista de su proyecto; pago
   cancelado excluido; clic en renglón, "← Resumen", filtros y texto del CSV correctos. Se encontró y corrigió el orden (comparaba
   saldos de MXN y USD; prueba en `cobranza.test.js`). El botón "Descargar CSV" no lo usó Claude (descargar pide permiso del
   usuario). R2 (`pruebasComprasSinCobranza()`, efrain@ sin cobranza): sin pestaña y `resumenCobranzaGeneral` → `PERMISO`.
-  PRUEBAS quedó en la ronda C2 (efrain@ con compras, sin cobranza). Falta: `clasp push` + comprobar, `clasp deploy` (@9),
-  `wrangler deploy` y revisión en el cotizador real. Solo lee: no requiere respaldo ni permisos nuevos de Google.
+  PRUEBAS quedó en la ronda C2 (efrain@ con compras, sin cobranza). Solo lee: no requirió respaldo ni permisos nuevos de Google.
 - Al probar con Claude in Chrome, un clic por `ref` en la pestaña Cobranza no se aplicó (la página siguió en Nueva cotización);
   por coordenadas sí. Si una acción "no responde", revisar primero qué pestaña está visible antes de buscar un error en el código.
 - Tania y Leo (rol de compras) no se han probado con sus cuentas reales; la primera orden real será también la primera prueba de
