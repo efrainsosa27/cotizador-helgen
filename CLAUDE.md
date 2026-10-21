@@ -39,7 +39,7 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 | Respaldos antes de Cobranza | Carpeta "Respaldos 2026-10-20 (antes de Cobranza)" `1C_yGbX0Gk_cZBwegdswPFvuzCVDdyTLF` (en la carpeta maestra): Base de datos `14C3d7w2ouaygtCGi0BP1QocGiqG4gf5Umh9O4KHgdow`, Catálogo `140_1sfwXF9u_aL1egDPYSbsE0rMwELGPZ5rkGVdzQnc` (antes de las columnas U:V, la columna I del catálogo y la pestaña "Tipo de cambio"). Verificadas contra los originales |
 | Worker de Cloudflare | `cotizador-helgen`, cuenta de efrain@helgen.tech `badd8bca60b008822a73ca24e983ff43` |
 | Dueño de todo / cuenta de clasp | `efrain@helgen.tech` (la API se ejecuta como esta cuenta) |
-| Proyecto de prueba "PRUEBAS — Cotizador Helgen (no usar)" | `1wp8_SQofXXUuMkUjmDyyUxYLxx-LdFv-20JaXE7q9entLfEvDKgYtnt0`; deployment `AKfycbwVu2q5…` retirado el 20/10/2026 (404). Para Cobranza (20/10/2026): deployment nuevo `AKfycbz9naWOw4Jj0qlta0RjCNifgZLvvJqXpqRnrrsALewSnmn7ydnEIw_zYriIHZjbQ5ugQw` (@2); su `Pruebas.js` crea "PRUEBAS — Cobranza" y tiene `pruebasRondaSinRol()` / `pruebasRondaConRol()`. Solo datos inventados (§10.5). **No es la API.** |
+| Proyecto de prueba "PRUEBAS — Cotizador Helgen (no usar)" | `1wp8_SQofXXUuMkUjmDyyUxYLxx-LdFv-20JaXE7q9entLfEvDKgYtnt0`; deployment `AKfycbwVu2q5…` retirado el 20/10/2026 (404). Para Cobranza (20/10/2026): deployment `AKfycbz9naWOw4Jj0qlta0RjCNifgZLvvJqXpqRnrrsALewSnmn7ydnEIw_zYriIHZjbQ5ugQw`, **retirado** al publicar (404); su `Pruebas.js` crea "PRUEBAS — Cobranza" y tiene `pruebasRondaSinRol()` / `pruebasRondaConRol()`. Solo datos inventados (§10.5). **No es la API.** |
 | **Proyecto anterior (EN DESUSO)** | `1X-qSKgvqKwuDj4iPZBhXlakR5udau9ibVMevhwvlLXgtSkjV4IoQxqwU`; deployment `AKfycbxahS3…` en @10 = aviso "El cotizador se mudó". Código en `anterior/` (§11) |
 
 Los IDs que usa el código están en **Script Properties** del proyecto `1GsH8Dja…` (ver §5). Esta tabla es solo referencia.
@@ -511,8 +511,8 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - **Cobranza: publicada el 20/10/2026** (API @6 + interfaz en Cloudflare). Hechos: respaldos, `clasp push`, `prepararCobranza()`
   (carpeta y libro creados y restringidos, §2 y §6.11), `ROL_COBRANZA` = efrain@, tania@, leo@ y `ADMIN_DESBLOQUEO` = efrain@,
   `clasp deploy`, `wrangler deploy` y carpeta compartida como lector con tania@ y leo@ (por persona, acceso general Restringido;
-  comprobado el 20/10/2026: carpeta y libro sin acceso del dominio). Falta: 7) retirar el deployment de prueba
-  (`clasp undeploy AKfycbz9naWO…` desde una carpeta temporal ligada a `1wp8_SQ…`) y apagar el servidor local de prueba.
+  comprobado el 20/10/2026: carpeta y libro sin acceso del dominio). Entorno de prueba retirado el mismo día: deployment
+  `AKfycbz9naWO…` eliminado (404) y servidor local `127.0.0.1:8788` apagado.
   Al publicar, la primera apertura del catálogo real crea la pestaña "Tipo de cambio" y la columna I (§4.2).
 - Rol de cobranza **sin** desbloqueo (Tania) solo se probó con las pruebas automáticas, no con su cuenta real.
 - Precio USD del catálogo (20/10/2026): el tipo de cambio usado se guarda en `Cotizaciones!V` (no sale en el PDF). Leer
@@ -597,7 +597,7 @@ Para probar Proyectos con la sesión real **sin tocar la hoja real** se creó un
   "ARCHIVO PRUEBAS". No borrarlo: sirve para la fase 2 (para reusarlo, `clasp deploy` crea un deployment nuevo con otra URL).
 
 ### 10.6 Prueba de Cobranza y USD en PRUEBAS (20/10/2026)
-- Deployment nuevo del proyecto PRUEBAS: `AKfycbz9naWOw4Jj0qlta0RjCNifgZLvvJqXpqRnrrsALewSnmn7ydnEIw_zYriIHZjbQ5ugQw` (@5 al cierre;
+- Deployment del proyecto PRUEBAS (**retirado** el 20/10/2026 tras publicar Cobranza; para reusarlo, `clasp deploy` da otra URL): `AKfycbz9naWOw4Jj0qlta0RjCNifgZLvvJqXpqRnrrsALewSnmn7ydnEIw_zYriIHZjbQ5ugQw` (@5 al cierre;
   se actualiza con `clasp deploy --deploymentId` desde la carpeta temporal, nunca desde el repo). Interfaz: copia de `web/` en una
   carpeta temporal, servida en `http://127.0.0.1:8788/cotizador/` (título "PRUEBAS — Cotizador Helgen").
 - `Pruebas.js` (solo en PRUEBAS) ahora también: crea "PRUEBAS — Cobranza" (`1kdxWCCmi0lcdexqjmqgO89gKphCvxTKJ`, dentro de
