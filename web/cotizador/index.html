@@ -907,13 +907,16 @@
         '</td><td class="num">' + dinero(q.subtotal, q.moneda) + '</td><td class="num">' + dinero(q.total, q.moneda) + '</td><td>' +
         (q.pdf ? '<a href="' + esc(q.pdf) + '" target="_blank">Ver</a>' : '') + '</td><td>' +
         (esAceptada ? '<span class="chip ' + (firmado ? 'firmado' : 'aceptada') + '">Aceptada</span>'
-          : firmado ? '' : '<button type="button" class="btn btn-sec" onclick="aceptarCot(\'' + esc(q.folio) + '\')">Marcar aceptada</button>') +
+          : !v.puedeAceptar ? '' : '<button type="button" class="btn btn-sec" onclick="aceptarCot(\'' + esc(q.folio) + '\')">Marcar aceptada</button>') +
         '</td></tr>';
     }).join('') : '<tr><td colspan="8" class="nota">Este proyecto no tiene cotizaciones.</td></tr>';
 
     // Contrato
     let h = '';
-    if (!c) h = '<span class="nota">Marca la cotización aceptada para definir el monto contratado.</span>';
+    const cancelado = v.proyecto.estado === 'Cancelado';
+    const avisoCancelado = '<div class="nota aviso-moneda" style="margin-top:6px">Proyecto cancelado: no se puede marcar la cotización ' +
+      'aceptada ni registrar el contrato firmado. Para reactivarlo, cambia su Estado a Activo en la hoja Proyectos.</div>';
+    if (!c) h = cancelado ? avisoCancelado : '<span class="nota">Marca la cotización aceptada para definir el monto contratado.</span>';
     else {
       h = '<div class="sat-titulo">Monto contratado: ' + dinero(c.total, mon) + ' (con IVA) · subtotal ' + dinero(c.subtotal, mon) +
         ' · ' + esc(MARCA_TXT[c.marca]) + '</div>';
@@ -925,6 +928,8 @@
             '<input id="cobMotivo" maxlength="500" placeholder="Ej. Se firmó con la cotización equivocada"></div>' +
             '<div class="acciones"><button type="button" class="btn btn-sec" id="btnDesbloquear" onclick="desbloquearCob()">Desbloquear contrato</button></div>';
         }
+      } else if (!v.puedeFirmar) {
+        h += cancelado ? avisoCancelado : '';
       } else {
         h += '<div class="proy-fila" style="margin-top:8px"><div style="max-width:220px"><label>Fecha de firma *</label>' +
           '<input id="cobFechaFirma" type="date" max="' + esc(v.hoy) + '" value="' + esc(v.hoy) + '"></div>' +

@@ -1276,6 +1276,9 @@ function vistaCobranza_(libro, proyecto) {
     pagos: d.pagos.map(p => { const o = Object.assign({}, p); delete o.fila; return o; }).reverse(),
     esquemaEditable: !!c && c.estado !== ESTADO_FIRMADO && (c.marca !== 'energy' || esAdminDesbloqueo_()),
     esquemaPideMotivo: !!c && c.estado !== ESTADO_FIRMADO && c.marca === 'energy' && esAdminDesbloqueo_(),
+    // Proyecto cancelado: no se acepta ni se firma (marcarAceptada y firmarContrato también lo rechazan)
+    puedeAceptar: proyecto.estado !== 'Cancelado' && !(c && c.estado === ESTADO_FIRMADO),
+    puedeFirmar: proyecto.estado !== 'Cancelado' && !!c && c.estado === ESTADO_ACEPTADA,
     puedePagar: !!c && c.estado === ESTADO_FIRMADO,
     puedeDesbloquear: !!c && c.estado === ESTADO_FIRMADO && esAdminDesbloqueo_(),
     metodos: METODOS_PAGO,

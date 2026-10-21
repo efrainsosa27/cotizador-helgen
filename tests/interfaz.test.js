@@ -137,8 +137,12 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   assert(/PRY-2026-0001 — Luis — Solar MX — Techo/.test(B.$('cobProyectosList').innerHTML)&&/Sin aceptada/.test(B.$('cobProyectosList').innerHTML));
   const cots=[{folio:'HLG-2026-0010',fecha:'20/10/2026',marca:'helgen',moneda:'MXN',subtotal:1000,total:1160,pdf:'p'},
               {folio:'HLG-2026-0011',fecha:'20/10/2026',marca:'energy',moneda:'MXN',subtotal:2000,total:2320,pdf:'p'}];
-  const vista=(extra)=>({proyecto:PRY,cotizaciones:cots,contrato:null,esquema:[],resumen:null,pagos:[],esquemaEditable:false,
-    puedePagar:false,puedeDesbloquear:false,metodos:['Transferencia','Efectivo','Cheque'],hoy:'2026-10-20',...extra});
+  // Como vistaCobranza_: se acepta mientras no esté firmado; se firma con aceptada (proyecto no cancelado)
+  const vista=(extra={})=>{const v={proyecto:PRY,cotizaciones:cots,contrato:null,esquema:[],resumen:null,pagos:[],esquemaEditable:false,
+    puedePagar:false,puedeDesbloquear:false,metodos:['Transferencia','Efectivo','Cheque'],hoy:'2026-10-20',...extra};
+    if(!('puedeAceptar' in extra)) v.puedeAceptar=!(v.contrato&&v.contrato.estado==='Firmado');
+    if(!('puedeFirmar' in extra)) v.puedeFirmar=!!v.contrato&&v.contrato.estado==='Aceptada';
+    return v};
   B.respuestas.getCobranzaProyecto={ok:true,datos:vista()};
   B.$('cobProyecto').value='PRY-2026-0001 — Luis — Solar MX — Techo'; B.$('cobProyecto').disparar('change'); await esperar();
   assert.equal(B.llamadas.find(c=>c.funcion==='getCobranzaProyecto').args[0],'PRY-2026-0001');
@@ -191,6 +195,15 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   B.dialogos.prompt='Se capturó dos veces'; B.run("cancelarPagoCob('PAG-2026-0001')"); await esperar();
   assert.deepEqual(B.llamadas.find(c=>c.funcion==='cancelarPago').args,['PAG-2026-0001','Se capturó dos veces']);
   assert(/No tienes permiso de cobranza/.test(B.$('aviso').innerHTML));
+  // Proyecto cancelado: sin "Marcar aceptada" ni "Contrato firmado", con aviso
+  const cancel=vista({proyecto:{...PRY,estado:'Cancelado'},puedeAceptar:false,puedeFirmar:false,
+    contrato:{cotizacion:'HLG-2026-0010',marca:'helgen',moneda:'MXN',subtotal:1000,iva:160,total:1160,estado:'Aceptada'},
+    esquema:[{etapa:'Anticipo',porcentaje:100}]});
+  B.run('pintarCobranza('+JSON.stringify(cancel)+')');
+  assert(!/Marcar aceptada/.test(B.$('cobCots').innerHTML)&&!/btnFirmar|Contrato firmado/.test(B.$('cobContrato').innerHTML),'cancelado: sin aceptar ni firmar');
+  assert(/Proyecto cancelado: no se puede marcar/.test(B.$('cobContrato').innerHTML)&&/chip cancelado">Cancelado/.test(B.$('cobInfo').innerHTML));
+  B.run('pintarCobranza('+JSON.stringify(vista({proyecto:{...PRY,estado:'Cancelado'},puedeAceptar:false,puedeFirmar:false}))+')');
+  assert(!/Marcar aceptada/.test(B.$('cobCots').innerHTML)&&/Proyecto cancelado/.test(B.$('cobContrato').innerHTML),'cancelado sin aceptada');
   // Administrador en un contrato de Energy sin firmar: edita el esquema con motivo obligatorio
   const energyAdmin=vista({contrato:{cotizacion:'HLG-2026-0011',marca:'energy',moneda:'MXN',subtotal:2000,iva:320,total:2320,estado:'Aceptada'},
     esquema:[{etapa:'Anticipo',porcentaje:60},{etapa:'Instalación',porcentaje:30},{etapa:'Encendido del sistema',porcentaje:10}],

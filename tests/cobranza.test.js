@@ -191,7 +191,7 @@ const H=n=>LC.pest[n].m, bit=()=>H('Bitacora').slice(1);
 let v=ok('tania','getCobranzaProyecto',p1.toLowerCase());
 assert.equal(v.contrato,null); assert.deepEqual(v.cotizaciones.map(c=>c.folio),[cH,cE,cU,cBarata,cE2]);
 assert.deepEqual(v.cotizaciones.map(c=>c.moneda+'/'+c.marca),['MXN/helgen','MXN/energy','USD/helgen','MXN/helgen','MXN/energy']);
-assert.equal(v.puedePagar,false);
+assert.equal(v.puedePagar,false); assert.deepEqual([v.puedeAceptar,v.puedeFirmar],[true,false],'sin aceptada: se acepta, no se firma');
 falla('tania','firmarContrato',[p1,HOY_ISO],/Primero marca la cotización aceptada/);
 falla('tania','guardarEsquema',[p1,P.esquemaPorOmision()],/Primero marca/);
 falla('tania','registrarPago',[{proyectoFolio:p1,comprobante:{datos:PDF.toString('base64')}}],/contrato firmado/);
@@ -243,6 +243,7 @@ falla('tania','firmarContrato',[p1,''],/obligatoria/);
 v=ok('tania','firmarContrato',p1,HOY_ISO);
 assert.deepEqual([v.contrato.estado,v.contrato.fechaFirma,v.contrato.firmadoPor],['Firmado',HOY_ISO,'tania@helgen.tech']);
 assert.equal(v.puedePagar,true); assert.equal(v.esquemaEditable,false); assert.equal(v.puedeDesbloquear,false,'Tania no desbloquea');
+assert.deepEqual([v.puedeAceptar,v.puedeFirmar],[false,false],'firmado: ni aceptar ni firmar');
 falla('tania','firmarContrato',[p1,HOY_ISO],/ya está firmado/);
 falla('tania','marcarAceptada',[p1,cBarata],/Contrato firmado/);
 falla('tania','guardarEsquema',[p1,P.esquemaPorOmision()],/Contrato firmado/);
@@ -340,4 +341,14 @@ assert.deepEqual([carpCob.acceso,archivos[LC.id].acceso],['PRIVATE','PRIVATE'],'
 // Los datos de cobranza nunca van en la Base de datos (todo el dominio la puede leer)
 assert.deepEqual(Object.keys(db.pest).sort(),['Config','Cotizaciones','Proyectos']);
 assert(!JSON.stringify(db.pest).includes('PAG-'));
+// --- Proyecto cancelado: la vista no ofrece aceptar ni firmar y el servidor lo rechaza ---
+const p3=ok('ana','crearProyecto',{nombre:'Se canceló',cliente:{nombre:'Luis'},idSolicitud:'p3'}).folio;
+const c3=cot(p3,100), c3b=cot(p3,200);
+v=ok('tania','marcarAceptada',p3,c3); assert.deepEqual([v.puedeAceptar,v.puedeFirmar],[true,true],'aceptada: se puede firmar');
+const filaP3=db.pest.Proyectos.m.findIndex(r=>r[0]===p3); db.pest.Proyectos.m[filaP3][6]='Cancelado';
+v=ok('tania','getCobranzaProyecto',p3);
+assert.deepEqual([v.proyecto.estado,v.puedeAceptar,v.puedeFirmar],['Cancelado',false,false]);
+falla('tania','marcarAceptada',[p3,c3b],/está cancelado/); falla('tania','firmarContrato',[p3,HOY_ISO],/está cancelado/);
+db.pest.Proyectos.m[filaP3][6]='Activo';
+assert.deepEqual([ok('tania','getCobranzaProyecto',p3).puedeAceptar,ok('tania','getCobranzaProyecto',p3).puedeFirmar],[true,true],'reactivado');
 console.log('OK cobranza');

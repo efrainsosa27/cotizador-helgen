@@ -167,7 +167,8 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
   `guardarEsquema(proyecto, etapas, motivo)` (Energy: solo `ADMIN_DESBLOQUEO` y motivo obligatorio en la Bitacora), `firmarContrato(proyecto, 'AAAA-MM-DD')`,
   `desbloquearContrato(proyecto, motivo)` (además `esAdminDesbloqueo_`), `registrarPago(p)` (con `comprobante.datos` en base64
   e idempotencia `PAG_<idSolicitud>`), `cancelarPago(folio, motivo)`. Las que cambian algo usan `conCandado_` y devuelven la vista
-  (`vistaCobranza_`).
+  (`vistaCobranza_`: además de los datos, `puedeAceptar`, `puedeFirmar` —falsos si el proyecto está `Cancelado`—, `puedePagar`,
+  `puedeDesbloquear`, `esquemaEditable`, `esquemaPideMotivo`; la interfaz muestra los botones según estos campos).
 - Internas: `carpetaCobranza_` y `libroCobranza_` (se crean solas la primera vez; si el ID existe pero no se encuentra, **error**:
   no se crea otra a escondidas), `libroCobranzaSiExiste_` (las cotizaciones no crean el libro), `hojaCobranza_(libro, nombre)`
   (encabezados que se migran solos, `HOJAS_COBRANZA`), `datosCobranza_`, `escribirEsquema_`, `bitacora_`, `cotizacionesDeProyecto_`.
@@ -530,8 +531,10 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
   solas (B4 = 18.4250); libro de cobranza con encabezados y sin datos.
 - Catálogo real: solo tiene el renglón `HSE-EJ` "EJEMPLO" ($1,000, sin "Actualizado"). Parece de ejemplo: borrarlo o cargar los
   productos reales (ver la idea de importar el "Catálogo Maestro de Precios - Helgen Energy").
-- Idea (no hecha): ocultar "Marcar aceptada" (y firmar) en proyectos `Cancelado`. Hoy el botón aparece, pero el servidor lo
-  rechaza ("El proyecto … está cancelado.", en `marcarAceptada` y `firmarContrato`).
+- Proyectos `Cancelado` en Cobranza (20/10/2026, commit de este cambio): la vista trae `puedeAceptar` y `puedeFirmar` en falso y
+  la interfaz oculta "Marcar aceptada" y "Contrato firmado" con un aviso (reactivar = Estado Activo en la hoja). El servidor ya lo
+  rechazaba. **Publicar primero la API y después la interfaz**: la interfaz nueva con la API vieja (sin esos campos) ocultaría
+  los botones en todos los proyectos.
 - Rol de cobranza **sin** desbloqueo (Tania) solo se probó con las pruebas automáticas, no con su cuenta real.
 - Precio USD del catálogo (20/10/2026): el tipo de cambio usado se guarda en `Cotizaciones!V` (no sale en el PDF). Leer
   `GOOGLEFINANCE` desde Apps Script **sí funciona** (comprobado en PRUEBAS: 18.4248); si un día falla, usar el valor manual (B3).
