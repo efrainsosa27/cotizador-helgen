@@ -599,7 +599,8 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - Proyectos: gastos, nómina, horas (fase 4) y adicionales (§6.10). Cobranza (§6.11) y órdenes de compra (§6.12) ya construidas.
 - **Compras (fase 3): construida el 20/10/2026, SIN PUBLICAR** (código y pruebas en Node; commit "Compras: órdenes de compra…").
   Falta, en este orden: 1) ~~respaldo~~ **hecho el 20/10/2026** (§2; falta que el usuario deje en "Restringido" la carpeta de
-  respaldo dentro de cobranza y Claude lo verifique); 2) prueba de punta a punta en el proyecto PRUEBAS (§10.5) con `Pruebas.js` ampliado
+  respaldo dentro de cobranza y Claude lo verifique: al 20/10/2026 seguía con "helgen.tech: lector", solo encabezados);
+  2) prueba (PRUEBAS ya preparado, §10.7) de punta a punta en el proyecto PRUEBAS (§10.5) con `Pruebas.js` ampliado
   ("PRUEBAS — Compras", `ROL_COMPRAS` sin efrain@ para probar al usuario sin rol, y luego compras sin cobranza y con los dos);
   3) el usuario crea `ROL_COMPRAS` (efrain@, tania@, leo@); 4) `clasp push` + comprobar con `clasp clone`; 5) el usuario corre
   `prepararCompras()` (no hay permisos nuevos de Google: mismos servicios que cobranza; si el editor pide autorizar, aceptar);
@@ -721,6 +722,17 @@ Para probar Proyectos con la sesión real **sin tocar la hoja real** se creó un
   fechas (§6.2). Datos de prueba (solo en archivos PRUEBAS): `PRY-2026-0003` (A, MXN: `HLG-2026-0008` aceptada y firmada,
   `0009`, `0010` Energy) y `PRY-2026-0004` (B, USD: `HLG-2026-0011`); pagos `PAG-2026-0001` a `0004` (`0002` cancelado).
 - Comprobantes de prueba generados en el scratchpad de la sesión (un PDF mínimo y un JPG); no están en el repositorio.
+
+### 10.7 Prueba de Compras en PRUEBAS (preparada el 20/10/2026)
+- PRUEBAS (`1wp8_SQ…`) tiene el `Code.js`/`Logo.js`/`appsscript.json` del commit de Compras (`1a02e2d`), comprobado con `clasp clone`.
+  Deployment nuevo de prueba: `AKfycbxK3ldf4zuqhZdBuDP6V_1VMy1T3ygk3RvEL8AYjvrGTQqL2DAtrFOt07cESOQFWFaesQ` (@6). **Retirarlo al
+  terminar** (`clasp undeploy` desde una carpeta temporal ligada a `1wp8_SQ…`). Interfaz: copia de `web/` en el scratchpad con ese
+  `API_URL` y título "PRUEBAS — Cotizador Helgen", servida en `http://127.0.0.1:8788/cotizador/` (el `API_URL` del repo no cambia).
+- `Pruebas.js` (solo en PRUEBAS) ahora además tiene: `configurarCompras()` (crea "PRUEBAS — Compras" dentro de "ARCHIVO PRUEBAS —
+  Cotizaciones Helgen (PDF)" y su libro, los restringe con `privado_`, agrega `TERMINOS_OC` al Config de PRUEBAS y deja la ronda C1),
+  `pruebasComprasSinRol()` (C1: efrain@ sin compras, con cobranza), `pruebasComprasSinCobranza()` (C2: efrain@ con compras, sin
+  cobranza), `pruebasComprasCompleta()` (C3: los dos) y `diagnosticoCompras()` (solo lee). Proyectos firmados para probar:
+  `PRY-2026-0003` (MXN) y `PRY-2026-0004` (USD).
 
 ## 11. Migración al proyecto nuevo (19/10/2026)
 
