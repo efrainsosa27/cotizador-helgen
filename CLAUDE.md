@@ -27,7 +27,7 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 |---|---|
 | **Cotizador (lo usa el equipo)** | `https://cotizador-helgen.cotizador-helgen.workers.dev/cotizador/` (portada en `/`) |
 | Proyecto Apps Script de la API (`scriptId` en `.clasp.json`) | `1GsH8DjaFEZ9dltqBUTUEFE_frblSYimRRCvPkqKdRB5UhmBwwYHLSwyS` (nombre anterior "Cotizador Helgen — PRUEBAS interfaz web"; ver §9) |
-| Deployment de la API (siempre actualizar este; `API_URL` en `web/cotizador/index.html`) | `AKfycbwBjF7ra_4O8INsxBq0eh-4r-BlSsJ4LLxcJgVCPRpx1U1a-Pz1CUSdYtvj_Mh0S6y2` (@7 al 20/10/2026 = ocultar aceptar/firmar en proyectos cancelados; @6 = Cobranza y USD; @5 = nombre del vendedor en Historial; @4 = Proyectos; @3 = 19/10/2026; `access: ANYONE_ANONYMOUS` + token) |
+| Deployment de la API (siempre actualizar este; `API_URL` en `web/cotizador/index.html`) | `AKfycbwBjF7ra_4O8INsxBq0eh-4r-BlSsJ4LLxcJgVCPRpx1U1a-Pz1CUSdYtvj_Mh0S6y2` (@8 al 21/10/2026 = Compras: órdenes de compra, proveedores y margen; @7 = ocultar aceptar/firmar en proyectos cancelados; @6 = Cobranza y USD; @5 = nombre del vendedor en Historial; @4 = Proyectos; @3 = 19/10/2026; `access: ANYONE_ANONYMOUS` + token) |
 | Client ID de OAuth (`CLIENT_ID_GOOGLE` en `web/cotizador/index.html` y `Code.js`) | `884526916417-cn5fh45io0nnpvlad2439thkpius4063.apps.googleusercontent.com` (no es secreto) |
 | Carpeta maestra en Drive "Cotizador Helgen" | `1lf3Z4d3e_oqFbYJse4QbyYkWowYT9HCo` |
 | Base de datos "Cotizador Helgen — Base de datos" (`SPREADSHEET_ID`) | `1ozFsyt1OjSnSv-PVpRWZjgqeWt6voQREbjvOJAXPEaI` |
@@ -35,7 +35,7 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 | Carpeta PDF "Cotizaciones Helgen (PDF)" (`FOLDER_ID`) | `1CDN1LyOlA1L6z5dvBp49tlqu0fDoxdX8` (subcarpeta `2026` = `1X6m0nexpc3TzJd9XWBmGOAeZuiJE3Pig`) |
 | "Catálogos SAT (CFDI 4.0)" (`SAT_ID`) | `1B2t9tXuEj1i9JO9ybqsuH4PN1K47CqMZgoEBzd-Dmc8` (subcarpeta "Catálogos SAT" `15OYcUp41onVJoW7--b3gnLZY8ymvYbUZ`) |
 | Carpeta "Cotizador Helgen — Cobranza" (`COBRANZA_FOLDER_ID`) | `1A9uoRdhFdWOBacWCxx4Ktw1d9iQH7JRc` (creada el 20/10/2026 con `prepararCobranza()`; fuera de la carpeta maestra, en Mi unidad). Libro "Cotizador Helgen — Cobranza (datos)" (`COBRANZA_DB_ID`) `1uk9FNzTkQPjvWJw2R5wb8HXZl9c8ldYvyB64c8yjHL0`. Lectores: tania@ y leo@ (§6.11) |
-| Carpeta "Cotizador Helgen — Compras" (`COMPRAS_FOLDER_ID`) | **Todavía no existe** (fase 3 construida, sin publicar; §9). La crea `prepararCompras()` en Mi unidad, fuera de la carpeta maestra, con su libro "Cotizador Helgen — Compras (datos)" (`COMPRAS_DB_ID`). Anotar aquí sus IDs al crearlos |
+| Carpeta "Cotizador Helgen — Compras" (`COMPRAS_FOLDER_ID`) | `16tsymb1cKlPUfXrkmu8XzBgyVAO5djCb` (creada el 21/10/2026 con `prepararCompras()`; raíz de Mi unidad, fuera de la carpeta maestra). Libro "Cotizador Helgen — Compras (datos)" (`COMPRAS_DB_ID`) `1cDK0Jgj9YPXsASMVkU7ctiP6Dtc4hN34jJ3MWhPgfDE`. Lectores: tania@ y leo@ (por persona; acceso general Restringido, comprobado) |
 | Respaldos de la migración | Carpeta "Respaldos 2026-10-19" `1hxx0tgh4cLZMqoyf-eT8l14UAde7Y-L1` (copias de base de datos y catálogo antes del cambio) |
 | Respaldos antes de Proyectos | Carpeta "Respaldos 2026-10-20" `1rFGY_k_YRRo243p3xL2RpibQ9jkEo634`: Base de datos `1PBQvmwI412IMyJb74qBWN5ZcyhSuxK3xGU9cV5KPxTE`, Catálogo `1GxBpAvQxVNJyFJSLnaY9umA5L2qf4dqX36S4uehHUNc` (antes de la pestaña Proyectos y la columna T) |
 | Respaldos antes de Cobranza | Carpeta "Respaldos 2026-10-20 (antes de Cobranza)" `1C_yGbX0Gk_cZBwegdswPFvuzCVDdyTLF` (en la carpeta maestra): Base de datos `14C3d7w2ouaygtCGi0BP1QocGiqG4gf5Umh9O4KHgdow`, Catálogo `140_1sfwXF9u_aL1egDPYSbsE0rMwELGPZ5rkGVdzQnc` (antes de las columnas U:V, la columna I del catálogo y la pestaña "Tipo de cambio"). Verificadas contra los originales |
@@ -336,7 +336,7 @@ uso (`TIPO_CAMBIO`). Se crean solas (§6.2).
 `ANTHROPIC_API_KEY` (opcional; activa la IA para claves SAT; el proyecto anterior no la tenía). Nunca poner la API key en el código.
 Cobranza: `ROL_COBRANZA` (correos separados por coma: efrain@, tania@, leo@), `ADMIN_DESBLOQUEO` (efrain@), `COBRANZA_FOLDER_ID` y
 `COBRANZA_DB_ID` (se crean solos), `CONSECUTIVO_PAG_AAAA`. **Sin `ROL_COBRANZA` nadie tiene cobranza** (se niega por omisión).
-Compras: `ROL_COMPRAS` (correos separados por coma; hoy efrain@, tania@, leo@ — se crea a mano al publicar), `COMPRAS_FOLDER_ID` y
+Compras: `ROL_COMPRAS` (correos separados por coma: efrain@, tania@, leo@; creada el 21/10/2026), `COMPRAS_FOLDER_ID` y
 `COMPRAS_DB_ID` (se crean solos), `CONSECUTIVO_OC_AAAA`. **Sin `ROL_COMPRAS` nadie tiene compras.**
 
 ## 6. Decisiones tomadas (y por qué)
@@ -471,7 +471,7 @@ Compras: `ROL_COMPRAS` (correos separados por coma; hoy efrain@, tania@, leo@ �
   "Importe (USD)", "TOTAL USD" e importe con letra en dólares. **Términos y condiciones: el mismo bloque que en MXN, sin cambios**
   (incluido "$300 MXN por metro" en Energy; decisión del usuario, 20/10/2026).
 
-### 6.12 Compras: órdenes de compra (construida 20/10/2026; sin publicar, §9)
+### 6.12 Compras: órdenes de compra (construida 20/10/2026; publicada 21/10/2026, §9)
 - **Datos y PDF en un libro y carpeta aparte** ("Cotizador Helgen — Compras"), ni en la Base de datos ni en la carpeta del
   proyecto (las lee todo el dominio) ni en el libro de cobranza (`ROL_COMPRAS` y `ROL_COBRANZA` son listas distintas: quien compra
   no debe ver pagos). Todo pasa por `privado_()` de arriba abajo, como cobranza. **Nunca poner datos de compras en la Base de datos.**
@@ -597,15 +597,16 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - `GUIA.md` describe el proyecto anterior; actualizarla si se va a usar.
 - Ideas mencionadas: enviar PDF por correo, duplicar cotización, estatus (Enviada/Aceptada/Rechazada), descuentos por renglón.
 - Proyectos: gastos, nómina, horas (fase 4) y adicionales (§6.10). Cobranza (§6.11) y órdenes de compra (§6.12) ya construidas.
-- **Compras (fase 3): construida el 20/10/2026, SIN PUBLICAR** (código y pruebas en Node; commit "Compras: órdenes de compra…").
-  Falta, en este orden: 1) ~~respaldo~~ **hecho el 20/10/2026** (§2; falta que el usuario deje en "Restringido" la carpeta de
-  respaldo dentro de cobranza y Claude lo verifique: al 20/10/2026 seguía con "helgen.tech: lector", solo encabezados);
-  2) ~~prueba~~ **hecha el 20/10/2026, todo pasó** (§10.7) de punta a punta en el proyecto PRUEBAS (§10.5) con `Pruebas.js` ampliado
-  ("PRUEBAS — Compras", `ROL_COMPRAS` sin efrain@ para probar al usuario sin rol, y luego compras sin cobranza y con los dos);
-  3) el usuario crea `ROL_COMPRAS` (efrain@, tania@, leo@); 4) `clasp push` + comprobar con `clasp clone`; 5) el usuario corre
-  `prepararCompras()` (no hay permisos nuevos de Google: mismos servicios que cobranza; si el editor pide autorizar, aceptar);
-  6) el usuario comparte la carpeta de compras como lector con tania@ y leo@ (por persona) y Claude lo verifica; 7) `clasp deploy`
-  (@8); 8) `wrangler deploy`; 9) revisión en el cotizador real sin crear nada y anotar IDs en §2.
+- **Compras (fase 3): publicada el 21/10/2026** (API @8 + interfaz en Cloudflare). Hechos, en orden: respaldos (§2; la carpeta de
+  respaldo dentro de cobranza nació con acceso del dominio y el usuario la dejó en Restringido, comprobado), prueba en PRUEBAS
+  (§10.7, todo pasó), `ROL_COMPRAS`, `clasp push` (editor comparado antes y después con `clasp clone`: antes = `985df1f`, después =
+  repo), `prepararCompras()` (carpeta y libro restringidos, `TERMINOS_OC` en Config), carpeta compartida como lector con tania@ y
+  leo@ (comprobado: sin acceso del dominio), `clasp deploy` @8 y `wrangler deploy`.
+  **Revisión en el cotizador real (21/10/2026, Claude in Chrome, sin crear nada):** sesión sin errores, pestañas Cobranza y
+  Compras visibles con los dos roles, Compras sin proyectos ("No hay proyectos activos con contrato firmado": en la hoja real
+  ningún contrato está firmado), vista de cobranza de `PRY-2026-0001` (Cancelado) carga con `margen: null`. Libro de compras vacío.
+- Tania y Leo (rol de compras) no se han probado con sus cuentas reales; la primera orden real será también la primera prueba de
+  PDF en la carpeta real.
 - Subcarpetas "Órdenes de compra" de los proyectos viejos: quedan vacías y sin uso. Si el usuario lo pide, comprobar con el
   conector de Drive que estén vacías y que él las mande a la Papelera.
 - **Cobranza: publicada el 20/10/2026** (API @6 + interfaz en Cloudflare). Hechos: respaldos, `clasp push`, `prepararCobranza()`
