@@ -107,4 +107,18 @@ if (ctx.monedaDeCotizacion) {
   assert(bloque(u).includes('$300 MXN por metro'));
   fs.writeFileSync(process.argv[3]+'/usd.html',u);
 }
+// Orden de compra (fase 3): PDF de ejemplo con los datos de Config (TERMINOS_OC se agrega sola)
+if (typeof ctx.construirHtmlOrdenCompra === 'function') {
+  ctx.getConfig_(); assert(cfg.m.some(r=>r[0]==='TERMINOS_OC'),'Config recibe TERMINOS_OC');
+  const datosCfg={}; cfg.m.slice(1).forEach(([k,v])=>datosCfg[k]=v);
+  const oc=ctx.normalizarOrdenCompra({proveedor:{razonSocial:'Paneles del Bajío SA de CV',rfc:'PDB200101AB1',contacto:'Luis Pérez',
+    correo:'ventas@pdb.mx',telefono:'+52 442 111 2233'},fechaEntrega:'2026-10-30',condicionesPago:'Crédito 30 días',notas:'Entregar en horario de 9 a 14 h.',
+    renglones:[{clave:'PAN-550',descripcion:'Panel solar 550 W',unidad:'PZA',cantidad:12,costo:2350},{descripcion:'Estructura de aluminio',unidad:'JGO',cantidad:3,costo:4200}]},
+    {moneda:'MXN',ubicacion:'Av. Constituyentes 100, Querétaro, Qro.',hoy:'2026-10-20',ivaTasa:0.16});
+  const o=ctx.construirHtmlOrdenCompra({...oc,folio:'OC-2026-0001',fecha:'20/10/2026',proyectoFolio:'PRY-2026-0003',
+    elaboro:'Efrain Sosa (efrain@helgen.tech)'},datosCfg,vm.runInContext('LOGO_HELGEN_AZUL',ctx));
+  assert(o.includes('ORDEN DE COMPRA')&&o.includes('Helgen Servicios Especializados')&&o.includes('Entregar en el lugar y fecha indicados.'));
+  assert(!/display:\s*(flex|grid)/.test(o),'sin flex/grid en el PDF');
+  fs.writeFileSync(process.argv[3]+'/oc.html',o);
+}
 console.log('OK');

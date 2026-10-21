@@ -102,7 +102,7 @@ const d=post({funcion:'getDatosIniciales',args:[],token:'t-bueno'}).datos;
 assert.equal(d.usuario,'ana.lopez@helgen.tech'); assert.equal(d.vendedor.nombre,'Ana');
 assert.deepEqual([...d.proyectos],[]); assert.equal(pry.m[0][0],'Folio','la pestaña Proyectos se crea sola');
 assert.equal(cot.m[0][0],'Folio'); assert.equal(cot.m[0][19],'proyecto_folio','Cotizaciones no se toca al crear Proyectos');
-assert.deepEqual({...d.permisos},{cobranza:false,desbloqueo:false},'sin ROL_COBRANZA nadie tiene cobranza');
+assert.deepEqual({...d.permisos},{cobranza:false,desbloqueo:false,compras:false},'sin ROL_COBRANZA ni ROL_COMPRAS nadie tiene cobranza ni compras');
 assert.equal(h[1].proyecto,'Sin proyecto');
 assert.throws(()=>ctx.crearProyecto({nombre:'X',cliente:{nombre:'Y'}}),/Inicia sesión/);
 // Proyecto inexistente: doPost manda codigo PROYECTO (la interfaz quita el proyecto del campo); no es error de sesión

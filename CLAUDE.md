@@ -15,7 +15,8 @@ Desde el **19/10/2026** (§11) la interfaz se sirve desde **Cloudflare** y habla
 
 Además: **proyectos** (opcionales: folio `PRY-AAAA-0001` y carpeta propia en Drive; §6.9), **cobranza por proyecto**
 (cotización aceptada, contrato firmado, esquema de pagos y pagos `PAG-AAAA-0001` con comprobante; solo rol de cobranza; §6.11),
-cotizaciones en **MXN o USD**, historial con búsqueda, catálogo de productos con precios (Google Sheets aparte), clientes sugeridos con
+**órdenes de compra por proyecto** (`OC-AAAA-0001` con PDF, proveedores y margen del proyecto; solo rol de compras; el margen solo
+lo ve cobranza; §6.12), cotizaciones en **MXN o USD**, historial con búsqueda, catálogo de productos con precios (Google Sheets aparte), clientes sugeridos con
 autorrelleno, y claves SAT internas por producto para contabilidad (con sugerencias por palabras o con IA).
 
 **Helgen Energy** es la submarca de paneles solares: mismo folio y diseño, pero sus propios Términos y Condiciones.
@@ -34,6 +35,7 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 | Carpeta PDF "Cotizaciones Helgen (PDF)" (`FOLDER_ID`) | `1CDN1LyOlA1L6z5dvBp49tlqu0fDoxdX8` (subcarpeta `2026` = `1X6m0nexpc3TzJd9XWBmGOAeZuiJE3Pig`) |
 | "Catálogos SAT (CFDI 4.0)" (`SAT_ID`) | `1B2t9tXuEj1i9JO9ybqsuH4PN1K47CqMZgoEBzd-Dmc8` (subcarpeta "Catálogos SAT" `15OYcUp41onVJoW7--b3gnLZY8ymvYbUZ`) |
 | Carpeta "Cotizador Helgen — Cobranza" (`COBRANZA_FOLDER_ID`) | `1A9uoRdhFdWOBacWCxx4Ktw1d9iQH7JRc` (creada el 20/10/2026 con `prepararCobranza()`; fuera de la carpeta maestra, en Mi unidad). Libro "Cotizador Helgen — Cobranza (datos)" (`COBRANZA_DB_ID`) `1uk9FNzTkQPjvWJw2R5wb8HXZl9c8ldYvyB64c8yjHL0`. Lectores: tania@ y leo@ (§6.11) |
+| Carpeta "Cotizador Helgen — Compras" (`COMPRAS_FOLDER_ID`) | **Todavía no existe** (fase 3 construida, sin publicar; §9). La crea `prepararCompras()` en Mi unidad, fuera de la carpeta maestra, con su libro "Cotizador Helgen — Compras (datos)" (`COMPRAS_DB_ID`). Anotar aquí sus IDs al crearlos |
 | Respaldos de la migración | Carpeta "Respaldos 2026-10-19" `1hxx0tgh4cLZMqoyf-eT8l14UAde7Y-L1` (copias de base de datos y catálogo antes del cambio) |
 | Respaldos antes de Proyectos | Carpeta "Respaldos 2026-10-20" `1rFGY_k_YRRo243p3xL2RpibQ9jkEo634`: Base de datos `1PBQvmwI412IMyJb74qBWN5ZcyhSuxK3xGU9cV5KPxTE`, Catálogo `1GxBpAvQxVNJyFJSLnaY9umA5L2qf4dqX36S4uehHUNc` (antes de la pestaña Proyectos y la columna T) |
 | Respaldos antes de Cobranza | Carpeta "Respaldos 2026-10-20 (antes de Cobranza)" `1C_yGbX0Gk_cZBwegdswPFvuzCVDdyTLF` (en la carpeta maestra): Base de datos `14C3d7w2ouaygtCGi0BP1QocGiqG4gf5Umh9O4KHgdow`, Catálogo `140_1sfwXF9u_aL1egDPYSbsE0rMwELGPZ5rkGVdzQnc` (antes de las columnas U:V, la columna I del catálogo y la pestaña "Tipo de cambio"). Verificadas contra los originales |
@@ -177,6 +179,25 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
   (un permiso heredado no se puede quitar en el hijo: 403 `cannotDeletePermission`). Si falla, lanza error.
 - `prepararCobranza()` — correr desde el editor: crea carpeta y libro (o los repara si ya existen), restringe primero la
   carpeta y luego el libro, y registra `ROL_COBRANZA`. Sirve para autorizar permisos. No comparte nada.
+- Cobranza y compras comparten la mecánica de "área privada": `AREA_COBRANZA` / `AREA_COMPRAS` + `carpetaArea_`, `libroArea_`,
+  `libroAreaSiExiste_`, `hojaDeArea_(libro, hojas, nombre)`, `filasDeArea_`; roles con `enRol_(propiedad)`.
+  `contratosFirmados_()` = mapa folio → contrato firmado (lo usan el buscador de cotizaciones y compras).
+- `vistaCobranza_` incluye `margen` (`margenDeContrato_`: contratado sin IVA − órdenes de compra no canceladas; si algo falla,
+  `{error}` y la vista carga igual). `marcarAceptada` rechaza una aceptada de otra moneda si hay órdenes vigentes (como con pagos).
+
+### 4.5.3 Compras (sección 4.3 del archivo; ver §6.12)
+- Todas empiezan con `exigirCompras_()` (token + correo en `ROL_COMPRAS`; si no, `codigo: "PERMISO"`).
+- *(UI)* `listarProyectosCompras(busqueda)` (solo `Activo` con contrato firmado; con `moneda` y `marca`, **sin montos**),
+  `getComprasProyecto(folio)` (`vistaCompras_`: proyecto, `moneda`, `marca`, `puedeEmitir`, órdenes, proveedores; sin contrato ni
+  margen), `guardarOrdenCompra(p)` (candado + idempotencia `OC_<idSolicitud>`; revisa dentro del candado proyecto Activo y firmado;
+  folio con `siguienteFolio_('OC', hoja, 'CONSECUTIVO_OC_')`; actualiza el proveedor; PDF; fila; Bitacora),
+  `marcarOcRecibida(folio, 'AAAA-MM-DD')` (solo Emitida; fecha no futura ni anterior a la orden), `cancelarOrdenCompra(folio, motivo)`
+  (solo Emitida; motivo ≥ 5).
+- Internas: `carpetaCompras_`, `libroCompras_`, `libroComprasSiExiste_`, `hojaCompras_`, `ordenDesdeFila_`, `ordenesDeProyecto_`,
+  `proveedoresDelLibro_`, `guardarProveedor_` (alta o actualización por id; si llega con RFC y existía sin RFC, esa fila toma el RFC),
+  `buscarOrden_`, `bitacora_(…, HOJAS_COMPRAS)`.
+- `prepararCompras()` — correr desde el editor: crea o repara carpeta y libro restringidos, agrega `TERMINOS_OC` a Config y
+  muestra `ROL_COMPRAS`. No comparte nada.
 
 ### 4.6 Lógica pura (sin Google; se prueba en Node)
 - `redondear(n)`, `formatoMoneda(n)`, `escaparHtml(s)`, `importeConLetra(n, moneda)` ("MIL CIENTO SESENTA PESOS 02/100 M.N.";
@@ -203,9 +224,20 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 - SAT: `palabrasSat`, `SINONIMOS_SAT`, `PALABRAS_SERVICIO_SAT`, `buscarClavesSat(consulta, filas, n)`, `candidatosSat`,
   `solicitudIaSat`, `leerRespuestaIaSat` (solo acepta claves que estaban entre los candidatos). Modelo: `MODELO_IA_SAT`.
 - `construirHtmlPdf(d, cfg, logoUrl)` — HTML del PDF (ver reglas 3–4).
+- Compras: `normalizarProveedor`, `proveedorId` (RFC válido no genérico o `SIN-RFC:razón social`), `fusionarProveedor` (un dato
+  vacío no borra uno anterior), `proveedoresDesdeFilas` (con `etiqueta` y `fila`), `normalizarOrdenCompra(p, {moneda, ubicacion, hoy,
+  ivaTasa})` (entrega obligatoria y no anterior a hoy; lugar = ubicación del proyecto si viene vacío; condiciones obligatorias; IVA
+  16/8/0 % (`IVA_OC`); renglones con costo capturado; tipo de cambio obligatorio si la moneda no es la del proyecto;
+  `subtotalProyecto` sin IVA en la moneda del proyecto), `margenProyecto(contratado, moneda, costos)` (lanza error si un costo
+  está en otra moneda; `porcentaje` con 1 decimal), `nombreArchivoOc`, `terminosOcParaPdf(cfg)` (si la celda está vacía, los
+  iniciales), `construirHtmlOrdenCompra(d, cfg, logoUrl)` (mismas reglas que el de cotización; sin tipo de cambio ni línea de negocio).
 
 ### 4.7 Interfaz (`web/cotizador/index.html`)
-Pestañas: **Nueva cotización**, **Historial**, **Catálogo** y **Cobranza** (solo si `permisos.cobranza`). Moneda: selector
+Pestañas: **Nueva cotización**, **Historial**, **Catálogo**, **Cobranza** (solo si `permisos.cobranza`; con tarjeta de margen
+`#cobMargen`) y **Compras** (solo si `permisos.compras`): `cargarProyectosCom`, `pintarCompras(vista)` (al cambiar de proyecto
+limpia el formulario), `recibirProveedores`/`autorrellenarProveedor`, `agregarRenglonOc` (el catálogo llena clave, descripción y
+unidad; el costo queda vacío; listas `#ocCatalogo`/`#ocClaves` sin precio), `recalcularOc`, `pintarTcOc` (tipo de cambio si la
+moneda no es la del proyecto), `limpiarOc`, `guardarOc`, `recibirOc` (fecha con `window.prompt`), `cancelarOc` (motivo). Moneda: selector
 `#moneda`, `monedaActual`, `dinero(n, moneda)`, `cambiarMoneda` (en USD el catálogo llena clave/descripción/unidad pero **no**
 el precio). Cobranza: `cargarProyectosCob`, `pintarCobranza(vista)`, `pintarEsquema`, `aceptarCot` (confirma con `window.confirm`
 si el servidor lo pide), `guardarEsquemaCob`, `firmarCob`, `desbloquearCob`, `registrarPago` (lee el archivo con `FileReader`),
@@ -226,8 +258,8 @@ Capa de sesión y `fetch` en `<script id="api-web">` (§10.2).
    ├─ 📊 Cotizador Helgen — Base de datos     (Cotizaciones, Config)
    ├─ 📊 Catálogo Helgen                       (Catalogo)
    ├─ 📁 Cotizaciones Helgen (PDF) / 📁 2026 / HLG-2026-0001 - Cliente.pdf      (cotizaciones "Sin proyecto")
-   ├─ 📁 Proyectos / 📁 2026 / 📁 PRY-2026-0001 — Cliente — Nombre / Cotizaciones, Órdenes de compra
-   │                                         (los proyectos creados antes de Cobranza tienen además "Pagos", vacía)
+   ├─ 📁 Proyectos / 📁 2026 / 📁 PRY-2026-0001 — Cliente — Nombre / Cotizaciones
+   │                (los creados antes de Compras tienen además "Órdenes de compra", vacía, y antes de Cobranza "Pagos", vacía)
    ├─ 📁 Catálogos SAT / SAT_c_ClaveProdServ.csv, SAT_c_ClaveUnidad.csv, 📊 Catálogos SAT (CFDI 4.0)
    ├─ 📁 Respaldos 2026-10-19                  (copias antes de la migración)
    └─ 📜 Cotizador Helgen (código de la app)   ← proyecto ANTERIOR, en desuso
@@ -237,6 +269,9 @@ Capa de sesión y `fetch` en `<script id="api-web">` (§10.2).
 📁 Cotizador Helgen — Cobranza                (COBRANZA_FOLDER_ID; lectores tania@ y leo@)
    ├─ 📊 Cotizador Helgen — Cobranza (datos)  (COBRANZA_DB_ID: Contratos, Esquemas, Pagos, Bitacora)
    └─ 📁 2026 / 📁 PRY-2026-0002 / PAG-2026-0001 — Transferencia SPEI 123.pdf
+📁 Cotizador Helgen — Compras                 (COMPRAS_FOLDER_ID; se comparte por persona con quien deba abrir los PDF)
+   ├─ 📊 Cotizador Helgen — Compras (datos)   (COMPRAS_DB_ID: OrdenesCompra, Proveedores, Bitacora)
+   └─ 📁 2026 / 📁 PRY-2026-0003 / OC-2026-0001 — Proveedor.pdf
 ```
 El proyecto de la API (`1GsH8Dja…`) está en la carpeta `1w-T05ql62SXxsm3z4u-xCpMjcdXc0b0p` (antes "PRUEBAS — Cotizador web"),
 junto con los archivos de prueba que ya no se usan (§9).
@@ -260,7 +295,8 @@ filas 0001–0004 no las tienen llenas. La T se agregó con Proyectos (10/2026):
 **Pestaña `Config`** (Clave | Valor, columna B en formato texto): `EMPRESA_NOMBRE` (Helgen Servicios Especializados),
 `EMPRESA_RFC` (HSE240304PC1), `EMPRESA_DIRECCION`, `EMPRESA_TELEFONO` (+52 442 644 5391), `EMPRESA_EMAIL`, `EMPRESA_WEB`,
 `PREFIJO_FOLIO` (HLG), `IVA_TASA` (0.16), `VIGENCIA_DIAS` (15), `MONEDA`, `LOGO_FILE_ID` (vacío = logo de `Logo.js`),
-`TERMINOS_HELGEN`, `TERMINOS_ENERGY` (un término por renglón dentro de la celda).
+`TERMINOS_HELGEN`, `TERMINOS_ENERGY`, `TERMINOS_OC` (pie de las órdenes de compra; se agrega sola) (un término por renglón
+dentro de la celda).
 
 **Pestaña `Proyectos`** (1 fila por proyecto): Folio (`PRY-AAAA-NNNN`), Fecha, Nombre, Cliente ("nombre — empresa"),
 `cliente_id` (ver `idCliente`), Ubicación, Estado (Activo/Cerrado/Cancelado; **se cambia con la lista desplegable en la hoja**,
@@ -282,12 +318,25 @@ uso (`TIPO_CAMBIO`). Se crean solas (§6.2).
 - `Bitacora`: `fecha`, `correo`, `accion`, `proyecto_folio`, `detalle`, `motivo` (aceptar, cambiar aceptada, editar esquema,
   firmar, desbloquear, registrar y cancelar pago).
 
+**Libro de compras** (`COMPRAS_DB_ID`; columnas en `HOJAS_COMPRAS`; texto salvo importes):
+- `OrdenesCompra` (1 fila por orden; nunca se borran): `folio` OC, `fecha` (AAAA-MM-DD), `proyecto_folio`, `marca` (línea de
+  negocio del contrato al emitir; no cambia después), `proveedor_id`, `proveedor`, `rfc`, `contacto`, `correo`, `telefono`,
+  `fecha_entrega`, `lugar_entrega`, `condiciones_pago`, `moneda`, `iva_tasa`, `subtotal`, `iva`, `total`, `moneda_proyecto`,
+  `tipo_cambio` (solo si la moneda es otra), `subtotal_proyecto` (sin IVA, en la moneda del proyecto: lo usa el margen),
+  `renglones (JSON)` (clave, descripcion, unidad, cantidad, costo, importe), `notas`, `pdf_id`, `pdf_url`, `elaboro_email`,
+  `elaboro_nombre`, `fecha_registro`, `estado` (Emitida / Recibida / Cancelada), `fecha_recepcion`, `recibio`, `cancelado_por`,
+  `fecha_cancelacion`, `motivo_cancelacion`.
+- `Proveedores`: `id` (RFC o `SIN-RFC:razón social`), `razon_social`, `rfc`, `contacto`, `correo`, `telefono`, `actualizado`.
+- `Bitacora`: mismas columnas que la de cobranza (emitir, recibir y cancelar orden).
+
 **Script Properties** del proyecto `1GsH8Dja…` (Configuración del proyecto en el editor):
 `SPREADSHEET_ID`, `FOLDER_ID`, `CATALOGO_ID`, `SAT_ID`, `CONSECUTIVO_AAAA` (p. ej. `CONSECUTIVO_2026`),
 `PROYECTOS_FOLDER_ID` y `CONSECUTIVO_PROY_AAAA` (se crean solos con el primer proyecto),
 `ANTHROPIC_API_KEY` (opcional; activa la IA para claves SAT; el proyecto anterior no la tenía). Nunca poner la API key en el código.
 Cobranza: `ROL_COBRANZA` (correos separados por coma: efrain@, tania@, leo@), `ADMIN_DESBLOQUEO` (efrain@), `COBRANZA_FOLDER_ID` y
 `COBRANZA_DB_ID` (se crean solos), `CONSECUTIVO_PAG_AAAA`. **Sin `ROL_COBRANZA` nadie tiene cobranza** (se niega por omisión).
+Compras: `ROL_COMPRAS` (correos separados por coma; hoy efrain@, tania@, leo@ — se crea a mano al publicar), `COMPRAS_FOLDER_ID` y
+`COMPRAS_DB_ID` (se crean solos), `CONSECUTIVO_OC_AAAA`. **Sin `ROL_COMPRAS` nadie tiene compras.**
 
 ## 6. Decisiones tomadas (y por qué)
 
@@ -363,20 +412,21 @@ Cobranza: `ROL_COBRANZA` (correos separados por coma: efrain@, tania@, leo@), `A
   se le agrega RFC al cliente, su `id` cambia a ese RFC y los proyectos viejos conservan el `SIN-RFC:…`.
 - Folio propio con contador `CONSECUTIVO_PROY_AAAA` bajo el **mismo** candado de script que las cotizaciones.
 - **Subcarpetas que se reparan solas:** las subcarpetas de un proyecto se buscan **por nombre**. Si alguien borra (Papelera) o
-  renombra `Cotizaciones` u `Órdenes de compra`, la próxima vez que se necesite el sistema **crea una nueva** con el
+  renombra `Cotizaciones`, la próxima vez que se necesite el sistema **crea una nueva** con el
   nombre correcto (la renombrada se queda como está, con sus archivos). Si se borra la carpeta completa del proyecto, se
   vuelve a crear (con sus subcarpetas) y se actualiza `carpeta_id` en la hoja. Igual con `Proyectos` y su carpeta de año.
   Renombrar la carpeta **del proyecto** sí se puede (se usa por ID).
 - Las cotizaciones viejas no se mueven ni se ligan a proyectos.
-- Desde Cobranza, `SUBCARPETAS_PROYECTO` = `Cotizaciones`, `Órdenes de compra` (sin `Pagos`, solo para proyectos nuevos; los
-  viejos conservan la suya, vacía). Un proyecto con contrato firmado **no admite cotizaciones nuevas** y sale del buscador de
+- Desde Compras, `SUBCARPETAS_PROYECTO` = solo `Cotizaciones` (sin `Pagos` desde Cobranza ni `Órdenes de compra` desde Compras;
+  solo para proyectos nuevos: los viejos conservan las suyas, vacías; **no se borran** a escondidas — si el usuario lo pide, revisar
+  antes que estén vacías). Un proyecto con contrato firmado **no admite cotizaciones nuevas** y sale del buscador de
   cotizaciones (se revisará con los adicionales).
 
-### 6.10 Modelo futuro (resto de la fase 2; NO construido)
-- Órdenes de compra y gastos: folio (`OC-`, `GAS-AAAA-NNNN`), contador `CONSECUTIVO_<TIPO>_AAAA`
-  (`siguienteFolio_(prefijo, hoja, 'CONSECUTIVO_OC_')`), columna **`proyecto_folio`** y `vendedor_*` del token, con encabezados
-  que se migran solos. Antes de elegir dónde van, decidir quién debe verlos: la Base de datos la lee todo el dominio (§6.11).
-- Se comparan contra el monto contratado (`Contratos.total` del libro de cobranza).
+### 6.10 Modelo futuro (fase 4 y después; NO construido)
+- Gastos, nómina y horas por proyecto: folio (`GAS-AAAA-NNNN`), contador `CONSECUTIVO_<TIPO>_AAAA`, columna **`proyecto_folio`**.
+  Antes de elegir dónde van, decidir quién debe verlos: la Base de datos la lee todo el dominio (§6.11).
+- **Margen preparado:** `margenDeContrato_` arma una lista `costos` (`{concepto, moneda, monto, cantidad}`) que pasa a
+  `margenProyecto`; nómina y horas se agregan como otros elementos de esa lista, siempre en la moneda del contrato.
 - **Adicionales después de firmar** (propuesta aprobada para después): función de adicionales **dentro del mismo proyecto**:
   una cotización del proyecto se marca "Adicional", con su propio mini-esquema (por omisión 100% en una etapa), misma moneda que
   el proyecto, y se suma al contratado como línea aparte sin tocar el contrato original. Al construirla, revisar la regla de
@@ -420,6 +470,31 @@ Cobranza: `ROL_COBRANZA` (correos separados por coma: efrain@, tania@, leo@), `A
   "Importe (USD)", "TOTAL USD" e importe con letra en dólares. **Términos y condiciones: el mismo bloque que en MXN, sin cambios**
   (incluido "$300 MXN por metro" en Energy; decisión del usuario, 20/10/2026).
 
+### 6.12 Compras: órdenes de compra (construida 20/10/2026; sin publicar, §9)
+- **Datos y PDF en un libro y carpeta aparte** ("Cotizador Helgen — Compras"), ni en la Base de datos ni en la carpeta del
+  proyecto (las lee todo el dominio) ni en el libro de cobranza (`ROL_COMPRAS` y `ROL_COBRANZA` son listas distintas: quien compra
+  no debe ver pagos). Todo pasa por `privado_()` de arriba abajo, como cobranza. **Nunca poner datos de compras en la Base de datos.**
+- **Permisos en el servidor:** `ROL_COMPRAS` crea, ve, recibe y cancela órdenes; los demás reciben `codigo: "PERMISO"` y
+  `getDatosIniciales` solo les manda `permisos.compras` en falso. Compras **no** recibe montos del contrato ni margen (solo la moneda
+  y la línea de negocio del proyecto). El **margen solo lo ve `ROL_COBRANZA`** (va en `vistaCobranza_`). Agregar a alguien a
+  `ROL_COMPRAS` le da acceso en la app; para abrir los PDF también hay que compartirle la carpeta de compras en Drive (por persona).
+- **Solo en proyectos `Activo` con contrato firmado** (decisión del usuario, 20/10/2026): así la moneda y el contratado ya están
+  fijos. Si después se desbloquea el contrato, el proyecto sale de la lista y no admite órdenes nuevas; las que tiene se conservan.
+- **Datos de la orden:** proveedor (de la lista o nuevo), fecha de entrega (obligatoria, no anterior a hoy), lugar de entrega (por
+  omisión la ubicación del proyecto), condiciones de pago (obligatorias), moneda (por omisión la del proyecto), IVA 16 / 8 / 0 %
+  (por omisión `IVA_TASA`), notas. Renglones del catálogo (llena clave, descripción y unidad) o a mano; **el costo siempre se
+  captura: nunca se usa el precio de venta** (las listas del catálogo de Compras ni siquiera lo muestran).
+- **Línea de negocio:** cada orden guarda la del contrato al emitirse (para separar reportes Helgen / Helgen Energy). El PDF
+  **siempre** es de Helgen Servicios Especializados con los datos fiscales de Config, también en Energy, y lleva `TERMINOS_OC`
+  (los 4 términos del usuario, 20/10/2026). El tipo de cambio y la línea de negocio no salen en el PDF. No se envía por correo.
+- **Estados:** Emitida → Recibida (completa, con fecha) o Cancelada (con motivo, solo si está Emitida). Nunca se borran filas.
+  No hay recepciones parciales.
+- **Proveedores:** pestaña propia que se llena sola al emitir (por RFC, o por razón social si no trae RFC; un dato vacío no borra
+  uno anterior; si un proveedor sin RFC llega después con RFC, su fila toma el RFC).
+- **Margen** = contratado sin IVA (`Contratos.subtotal`) − suma de `subtotal_proyecto` de las órdenes Emitidas y Recibidas, en
+  monto y porcentaje. Una orden en otra moneda que el proyecto exige tipo de cambio al crearla y guarda su costo convertido;
+  **nunca se suman MXN y USD**: con órdenes vigentes, la aceptada no puede cambiar de moneda (igual que con pagos).
+
 ## 7. Reglas del proyecto (no romper)
 1. Los totales SIEMPRE se recalculan en el servidor (`normalizarCotizacion`). El navegador solo muestra una vista previa.
 2. Redondeo a 2 decimales por renglón (`redondear`). IVA = subtotal × tasa.
@@ -439,21 +514,23 @@ Cobranza: `ROL_COBRANZA` (correos separados por coma: efrain@, tania@, leo@), `A
     del token, nunca de lo que mande el navegador. No quitar esas revisiones.
 11. **Responder siempre en español** (de México) al usuario, en el chat y en los mensajes de commit.
 12. Datos de cobranza (contratos, esquemas, pagos, comprobantes) **solo** en el libro y la carpeta de cobranza, y cada función
-    de cobranza revisa `ROL_COBRANZA` en el servidor (§6.11). Nunca sumar importes de monedas distintas.
+    de cobranza revisa `ROL_COBRANZA` en el servidor (§6.11). Lo mismo con compras (órdenes, proveedores, PDF): solo en su libro y
+    carpeta, con `ROL_COMPRAS`; el margen solo para `ROL_COBRANZA` (§6.12). Nunca sumar importes de monedas distintas.
 13. **Las pruebas en el navegador las hace Claude, no el usuario** (pedido del usuario, 20/10/2026): en el Chrome del usuario con
     Claude in Chrome, donde ya tiene su sesión de @helgen.tech. Detalle en §8 "Pruebas en el navegador".
 
 ## 8. Cómo trabajar
 
 ```bash
-# Pruebas (Node, servicios de Google simulados). Correr las siete antes de subir.
-mkdir -p /tmp/salida-pdf && node tests/cotizacion.test.js Code.js /tmp/salida-pdf   # folios, idempotencia, marcas, Config, clientes, USD; deja helgen.html / energy.html / usd.html
+# Pruebas (Node, servicios de Google simulados). Correr las ocho antes de subir.
+mkdir -p /tmp/salida-pdf && node tests/cotizacion.test.js Code.js /tmp/salida-pdf   # folios, idempotencia, marcas, Config, clientes, USD; deja helgen.html / energy.html / usd.html / oc.html
 node tests/catalogo.test.js .                                  # catálogo: migración, alta, edición, duplicados
 node tests/sat.test.js . "$HOME/Library/CloudStorage/GoogleDrive-efrain@helgen.tech/Mi unidad/Cotizador Helgen/Catálogos SAT"
 node tests/sesion.test.js .                                    # token en doPost, vendedor_* (vendedor falso se ignora)
 node tests/proyectos.test.js .                                 # folio PRY, carpetas, proyecto_folio, subcarpetas que se reparan
-node tests/interfaz.test.js .                                  # interfaz con DOM y fetch simulados: proyecto rechazado, USD, pestaña Cobranza
+node tests/interfaz.test.js .                                  # interfaz con DOM y fetch simulados: proyecto rechazado, USD, pestañas Cobranza (con margen) y Compras
 node tests/cobranza.test.js .                                  # cobranza por doPost: permisos, aceptada, esquema, firma, desbloqueo, pagos, monedas
+node tests/compras.test.js .                                   # compras por doPost: ROL_COMPRAS, órdenes, PDF, proveedores, recibir/cancelar, margen, monedas
 node tests/probar-busqueda-sat.js Code.js "<ruta>/SAT_c_ClaveProdServ.csv"   # ver qué sugiere la búsqueda por palabras
 
 # Subir y publicar la API (misma API_URL)
@@ -518,7 +595,17 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - Si Helgen Energy tiene logo/colores propios, aplicarlos solo a sus cotizaciones.
 - `GUIA.md` describe el proyecto anterior; actualizarla si se va a usar.
 - Ideas mencionadas: enviar PDF por correo, duplicar cotización, estatus (Enviada/Aceptada/Rechazada), descuentos por renglón.
-- Proyectos fase 2: órdenes de compra, gastos y adicionales (§6.10). Cobranza ya construida (§6.11).
+- Proyectos: gastos, nómina, horas (fase 4) y adicionales (§6.10). Cobranza (§6.11) y órdenes de compra (§6.12) ya construidas.
+- **Compras (fase 3): construida el 20/10/2026, SIN PUBLICAR** (código y pruebas en Node; commit "Compras: órdenes de compra…").
+  Falta, en este orden: 1) **respaldo** (copias de la Base de datos, el Catálogo y el libro de cobranza en "Respaldos AAAA-MM-DD
+  (antes de Compras)", verificadas); 2) prueba de punta a punta en el proyecto PRUEBAS (§10.5) con `Pruebas.js` ampliado
+  ("PRUEBAS — Compras", `ROL_COMPRAS` sin efrain@ para probar al usuario sin rol, y luego compras sin cobranza y con los dos);
+  3) el usuario crea `ROL_COMPRAS` (efrain@, tania@, leo@); 4) `clasp push` + comprobar con `clasp clone`; 5) el usuario corre
+  `prepararCompras()` (no hay permisos nuevos de Google: mismos servicios que cobranza; si el editor pide autorizar, aceptar);
+  6) el usuario comparte la carpeta de compras como lector con tania@ y leo@ (por persona) y Claude lo verifica; 7) `clasp deploy`
+  (@8); 8) `wrangler deploy`; 9) revisión en el cotizador real sin crear nada y anotar IDs en §2.
+- Subcarpetas "Órdenes de compra" de los proyectos viejos: quedan vacías y sin uso. Si el usuario lo pide, comprobar con el
+  conector de Drive que estén vacías y que él las mande a la Papelera.
 - **Cobranza: publicada el 20/10/2026** (API @6 + interfaz en Cloudflare). Hechos: respaldos, `clasp push`, `prepararCobranza()`
   (carpeta y libro creados y restringidos, §2 y §6.11), `ROL_COBRANZA` = efrain@, tania@, leo@ y `ADMIN_DESBLOQUEO` = efrain@,
   `clasp deploy`, `wrangler deploy` y carpeta compartida como lector con tania@ y leo@ (por persona, acceso general Restringido;

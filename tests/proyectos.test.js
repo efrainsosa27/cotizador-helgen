@@ -74,10 +74,10 @@ const f1=pry.m[1];
 assert.deepEqual([f1[0],f1[2],f1[3],f1[4],f1[5],f1[6]],['PRY-2026-0001','Techo solar planta','Luis — Solar MX','LUSM800101AB1','Querétaro','Activo']);
 assert.deepEqual(f1.slice(8),['ana@helgen.tech','Ana','López'],'vendedor del servidor');
 assert(!JSON.stringify(pry.m).includes('impostor'));
-// Carpeta: Cotizador Helgen/Proyectos/2026/<folio> — <cliente> — <nombre>/ con 2 subcarpetas (Pagos ya no: va en cobranza)
+// Carpeta: Cotizador Helgen/Proyectos/2026/<folio> — <cliente> — <nombre>/ solo con Cotizaciones (Pagos y Órdenes de compra ya no: van en cobranza y compras)
 const c1=carpetas[f1[7]];
 assert.equal(ruta(c1),'Cotizador Helgen/Proyectos/2026/PRY-2026-0001 — Luis — Solar MX — Techo solar planta');
-assert.deepEqual(c1.hijos.map(h=>h.nombre),['Cotizaciones','Órdenes de compra']);
+assert.deepEqual(c1.hijos.map(h=>h.nombre),['Cotizaciones']);
 assert.equal(props.PROYECTOS_FOLDER_ID,c1.padre.padre.id); assert.equal(props.CONSECUTIVO_PROY_2026,'1');
 assert.equal(props.CONSECUTIVO_2026,undefined,'el contador de cotizaciones no cambia');
 // Idempotencia
@@ -135,7 +135,7 @@ c1.trashed=true;
 ctx.guardarCotizacion({...base,proyectoFolio:'PRY-2026-0001',idSolicitud:'c7'});
 const c1b=carpetas[pry.m[1][7]];
 assert(c1b!==c1&&!c1b.trashed&&c1b.hijos.find(h=>h.nombre==='Cotizaciones').archivos.length===1);
-assert.deepEqual(c1b.hijos.map(h=>h.nombre),['Cotizaciones','Órdenes de compra']);
+assert.deepEqual(c1b.hijos.map(h=>h.nombre),['Cotizaciones']);
 
 // --- Fuera de doPost (sin vendedor) no se crean proyectos ---
 vm.runInContext('VENDEDOR_ = null',ctx);

@@ -164,7 +164,7 @@ const sinProy=cot('',50);
 
 // --- Usuario sin rol (vendedora): no ve la pestaña ni recibe datos; el servidor rechaza todo con PERMISO ---
 const dAna=ok('ana','getDatosIniciales');
-assert.deepEqual({...dAna.permisos},{cobranza:false,desbloqueo:false});
+assert.deepEqual({...dAna.permisos},{cobranza:false,desbloqueo:false,compras:false});
 assert(!/contrato|pagos|saldo/i.test(JSON.stringify(dAna)),'datos iniciales sin cobranza');
 const COB=[['listarProyectosCobranza',['']],['getCobranzaProyecto',[p1]],['marcarAceptada',[p1,cH]],['guardarEsquema',[p1,P.esquemaPorOmision()]],
   ['firmarContrato',[p1,HOY_ISO]],['desbloquearContrato',[p1,'motivo largo']],['registrarPago',[{proyectoFolio:p1}]],['cancelarPago',['PAG-'+ANIO+'-0001','motivo']]];
@@ -174,8 +174,8 @@ for(const [f,args] of COB) falla('intruso',f,args,/@helgen.tech/,'SESION');
 assert.throws(()=>ctx.getCobranzaProyecto(p1),/Inicia sesión/,'desde el editor (sin token) tampoco');
 
 // --- Tania (rol de cobranza, sin desbloqueo) ---
-assert.deepEqual({...ok('tania','getDatosIniciales').permisos},{cobranza:true,desbloqueo:false});
-assert.deepEqual({...ok('efrain','getDatosIniciales').permisos},{cobranza:true,desbloqueo:true});
+assert.deepEqual({...ok('tania','getDatosIniciales').permisos},{cobranza:true,desbloqueo:false,compras:false});
+assert.deepEqual({...ok('efrain','getDatosIniciales').permisos},{cobranza:true,desbloqueo:true,compras:false});
 const lista=ok('tania','listarProyectosCobranza','');
 assert.deepEqual(lista.map(p=>p.folio+':'+p.contrato),[p2+':',p1+':']);
 // Carpeta y libro: fuera de "Cotizador Helgen", libro dentro de la carpeta de cobranza

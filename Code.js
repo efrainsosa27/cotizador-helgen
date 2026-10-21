@@ -104,6 +104,12 @@ const API_FUNCIONES = {
   desbloquearContrato: desbloquearContrato,
   registrarPago: registrarPago,
   cancelarPago: cancelarPago,
+  // Compras (solo ROL_COMPRAS; cada función lo revisa)
+  listarProyectosCompras: listarProyectosCompras,
+  getComprasProyecto: getComprasProyecto,
+  guardarOrdenCompra: guardarOrdenCompra,
+  marcarOcRecibida: marcarOcRecibida,
+  cancelarOrdenCompra: cancelarOrdenCompra,
 };
 
 /**
@@ -145,6 +151,12 @@ function doPost(e) {
 const TERMINO_VIGENCIA =
   'Precios vigentes por 15 días o hasta agotar existencias, sujetos a variaciones en costos de suministro de componentes.';
 
+const TERMINOS_OC_INICIALES =
+  'Favor de indicar el folio de esta orden en su factura.\n' +
+  'Facturar a nombre de la razón social y RFC indicados arriba.\n' +
+  'Precios fijos según esta orden; cualquier cambio requiere una nueva orden.\n' +
+  'Entregar en el lugar y fecha indicados.';
+
 /** Líneas de negocio: Helgen (general) y Helgen Energy (submarca de paneles solares). */
 const MARCAS = { helgen: 'Helgen', energy: 'Helgen Energy' };
 
@@ -167,6 +179,8 @@ const CONFIG_INICIAL = [
     'Centro de carga: cambios o actualizaciones no incluidos (se cotizan por separado).\n' +
     'Obra civil: se cotiza por separado según las condiciones arquitectónicas del inmueble.\n' +
     TERMINO_VIGENCIA],
+  // Términos al pie de las órdenes de compra (iguales en Helgen y Helgen Energy)
+  ['TERMINOS_OC', TERMINOS_OC_INICIALES],
 ];
 
 /** Valores de ejemplo de versiones anteriores: si siguen en Config, se cambian por los datos reales. */
@@ -637,8 +651,8 @@ function getDatosIniciales() {
     proyectos: proyectosParaInicio_(),
     usuario: usuarioActual_(),
     vendedor: VENDEDOR_,
-    // Solo para mostrar u ocultar la pestaña Cobranza; cada función de cobranza lo vuelve a revisar
-    permisos: { cobranza: esCobranza_(), desbloqueo: esAdminDesbloqueo_() },
+    // Solo para mostrar u ocultar las pestañas Cobranza y Compras; cada función lo vuelve a revisar
+    permisos: { cobranza: esCobranza_(), desbloqueo: esAdminDesbloqueo_(), compras: esCompras_() },
   };
 }
 
@@ -826,9 +840,9 @@ const ENCABEZADOS_PROYECTOS = [
 const COL_ESTADO_PROYECTO = 7;   // G
 const COL_CARPETA_PROYECTO = 8;  // H
 const ESTADOS_PROYECTO = ['Activo', 'Cerrado', 'Cancelado'];
-// Sin "Pagos": los comprobantes van en la carpeta de cobranza (no visible para todo el dominio). Los proyectos
-// creados antes la conservan; no se borra.
-const SUBCARPETAS_PROYECTO = ['Cotizaciones', 'Órdenes de compra'];
+// Sin "Pagos" ni "Órdenes de compra": comprobantes y órdenes van en las carpetas de cobranza y compras (no visibles para
+// todo el dominio). Los proyectos creados antes conservan las suyas, vacías; no se borran.
+const SUBCARPETAS_PROYECTO = ['Cotizaciones'];
 const PREFIJO_PROYECTO = 'PRY';
 
 /**
@@ -976,7 +990,7 @@ function crearCarpetaProyecto_(folio, datos, anio) {
 }
 
 /**
- * Subcarpeta de un proyecto ("Cotizaciones", "Órdenes de compra"…). Se busca por nombre: si alguien la
+ * Subcarpeta de un proyecto ("Cotizaciones"). Se busca por nombre: si alguien la
  * borró o la renombró, se crea una nueva. Si falta la carpeta del proyecto, se vuelve a crear y se actualiza
  * carpeta_id en la hoja.
  */
@@ -1030,18 +1044,21 @@ function errorPermiso_(mensaje) {
   return e;
 }
 
-/** ¿El usuario del token está en ROL_COBRANZA? Sin token (editor) o sin la propiedad: no. */
-function esCobranza_() {
+/** ¿El usuario del token está en la lista de correos de la propiedad (rol)? Sin token (editor) o sin la propiedad: no. */
+function enRol_(propiedad) {
   if (!VENDEDOR_) return false;
-  const lista = correosDeLista(PropertiesService.getScriptProperties().getProperty('ROL_COBRANZA'), DOMINIO_HELGEN);
+  const lista = correosDeLista(PropertiesService.getScriptProperties().getProperty(propiedad), DOMINIO_HELGEN);
   return lista.indexOf(String(VENDEDOR_.email).toLowerCase()) !== -1;
+}
+
+/** ¿El usuario del token está en ROL_COBRANZA? */
+function esCobranza_() {
+  return enRol_('ROL_COBRANZA');
 }
 
 /** ¿Puede desbloquear contratos firmados? (ADMIN_DESBLOQUEO; sin la propiedad, nadie). */
 function esAdminDesbloqueo_() {
-  if (!VENDEDOR_) return false;
-  const lista = correosDeLista(PropertiesService.getScriptProperties().getProperty('ADMIN_DESBLOQUEO'), DOMINIO_HELGEN);
-  return lista.indexOf(String(VENDEDOR_.email).toLowerCase()) !== -1;
+  return enRol_('ADMIN_DESBLOQUEO');
 }
 
 function exigirCobranza_() {
@@ -1071,65 +1088,80 @@ function privado_(item) {
   return item;
 }
 
-/** Carpeta de cobranza. Se crea sola en Mi unidad (restringida). Si se borró, error: no se crea otra a escondidas. */
-function carpetaCobranza_() {
+// Áreas privadas (cobranza, compras): carpeta en Mi unidad + libro dentro de ella, restringidos, con sus IDs en
+// Script Properties. Se crean solos la primera vez; si después no se encuentran, error (no se crean otros a escondidas).
+const AREA_COBRANZA = { que: 'cobranza', propCarpeta: 'COBRANZA_FOLDER_ID', propLibro: 'COBRANZA_DB_ID',
+  carpeta: NOMBRE_CARPETA_COBRANZA, libro: NOMBRE_LIBRO_COBRANZA, hojas: HOJAS_COBRANZA };
+
+/** Carpeta del área. Se crea sola en Mi unidad (restringida). Si se borró, error. */
+function carpetaArea_(area) {
   const props = PropertiesService.getScriptProperties();
-  const id = props.getProperty('COBRANZA_FOLDER_ID');
+  const id = props.getProperty(area.propCarpeta);
   if (!id) {
-    const carpeta = privado_(DriveApp.createFolder(NOMBRE_CARPETA_COBRANZA));
-    props.setProperty('COBRANZA_FOLDER_ID', carpeta.getId());
+    const carpeta = privado_(DriveApp.createFolder(area.carpeta));
+    props.setProperty(area.propCarpeta, carpeta.getId());
     return carpeta;
   }
   let carpeta = null;
   try { carpeta = DriveApp.getFolderById(id); } catch (e) { carpeta = null; }
   if (!carpeta || carpeta.isTrashed()) {
-    throw new Error('No se encontró la carpeta de cobranza (COBRANZA_FOLDER_ID). Revisa la Papelera de Drive.');
+    throw new Error('No se encontró la carpeta de ' + area.que + ' (' + area.propCarpeta + '). Revisa la Papelera de Drive.');
   }
   return privado_(carpeta);
 }
 
-/** Libro de cobranza; la primera vez lo crea dentro de la carpeta de cobranza (bajo candado). */
-function libroCobranza_() {
+/** Libro del área; la primera vez lo crea dentro de su carpeta (bajo candado). */
+function libroArea_(area) {
   const props = PropertiesService.getScriptProperties();
-  if (!props.getProperty('COBRANZA_DB_ID')) {
+  if (!props.getProperty(area.propLibro)) {
     const lock = LockService.getScriptLock();
-    if (!lock.tryLock(30000)) throw new Error('Se está preparando cobranza. Intenta de nuevo en unos segundos.');
+    if (!lock.tryLock(30000)) throw new Error('Se está preparando ' + area.que + '. Intenta de nuevo en unos segundos.');
     try {
-      if (!props.getProperty('COBRANZA_DB_ID')) crearLibroCobranza_();
+      if (!props.getProperty(area.propLibro)) crearLibroArea_(area);
     } finally {
       lock.releaseLock();
     }
   }
-  return abrirLibroCobranza_(props.getProperty('COBRANZA_DB_ID'));
+  return abrirLibroArea_(area, props.getProperty(area.propLibro));
 }
 
-/** Libro de cobranza si ya existe; null si todavía no se crea (las cotizaciones no lo crean). */
-function libroCobranzaSiExiste_() {
-  const id = PropertiesService.getScriptProperties().getProperty('COBRANZA_DB_ID');
-  return id ? abrirLibroCobranza_(id) : null;
+/** Libro del área si ya existe; null si todavía no se crea. */
+function libroAreaSiExiste_(area) {
+  const id = PropertiesService.getScriptProperties().getProperty(area.propLibro);
+  return id ? abrirLibroArea_(area, id) : null;
 }
 
-function abrirLibroCobranza_(id) {
+function abrirLibroArea_(area, id) {
   try {
     return SpreadsheetApp.openById(id);
   } catch (e) {
-    throw new Error('No se pudo abrir el libro de cobranza (COBRANZA_DB_ID). Revisa que no esté en la Papelera.');
+    throw new Error('No se pudo abrir el libro de ' + area.que + ' (' + area.propLibro + '). Revisa que no esté en la Papelera.');
   }
 }
 
-function crearLibroCobranza_() {
-  const carpeta = carpetaCobranza_();
-  const ss = SpreadsheetApp.create(NOMBRE_LIBRO_COBRANZA);
+function crearLibroArea_(area) {
+  const carpeta = carpetaArea_(area);
+  const ss = SpreadsheetApp.create(area.libro);
   privado_(DriveApp.getFileById(ss.getId())).moveTo(carpeta);
-  Object.keys(HOJAS_COBRANZA).forEach(nombre => hojaCobranza_(ss, nombre));
+  Object.keys(area.hojas).forEach(nombre => hojaDeArea_(ss, area.hojas, nombre));
   const sobrante = ss.getSheetByName('Hoja 1') || ss.getSheetByName('Sheet1');
   if (sobrante && ss.getSheets().length > 1) ss.deleteSheet(sobrante);
-  PropertiesService.getScriptProperties().setProperty('COBRANZA_DB_ID', ss.getId());
+  PropertiesService.getScriptProperties().setProperty(area.propLibro, ss.getId());
 }
+
+function carpetaCobranza_() { return carpetaArea_(AREA_COBRANZA); }
+function libroCobranza_() { return libroArea_(AREA_COBRANZA); }
+/** Libro de cobranza si ya existe; null si todavía no se crea (las cotizaciones no lo crean). */
+function libroCobranzaSiExiste_() { return libroAreaSiExiste_(AREA_COBRANZA); }
 
 /** Pestaña del libro de cobranza; la crea o le repone los encabezados (patrón de hojaProyectos_). */
 function hojaCobranza_(libro, nombre) {
-  const def = HOJAS_COBRANZA[nombre];
+  return hojaDeArea_(libro, HOJAS_COBRANZA, nombre);
+}
+
+/** Pestaña de un libro de área (estructura en `hojas`); la crea o le repone los encabezados. */
+function hojaDeArea_(libro, hojas, nombre) {
+  const def = hojas[nombre];
   let hoja = libro.getSheetByName(nombre);
   if (!hoja) {
     hoja = libro.insertSheet(nombre);
@@ -1147,7 +1179,11 @@ function hojaCobranza_(libro, nombre) {
 
 /** Filas de datos (sin encabezado) de una pestaña, con el ancho de sus encabezados. */
 function filasCobranza_(hoja, nombre) {
-  const n = HOJAS_COBRANZA[nombre].enc.length;
+  return filasDeArea_(hoja, HOJAS_COBRANZA, nombre);
+}
+
+function filasDeArea_(hoja, hojas, nombre) {
+  const n = hojas[nombre].enc.length;
   return hoja.getLastRow() > 1 ? hoja.getRange(2, 1, hoja.getLastRow() - 1, n).getValues() : [];
 }
 
@@ -1207,17 +1243,22 @@ function datosCobranza_(libro, folio) {
   return { hojas: { contratos: hC, esquemas: hE, pagos: hP }, contrato: contrato, etapas: etapas, pagos: pagos };
 }
 
-/** {"PRY-2026-0001": true, …} de proyectos con contrato firmado. Sin libro de cobranza: ninguno. */
-function foliosConContratoFirmado_() {
+/** {"PRY-2026-0001": <contrato>, …} de proyectos con contrato firmado. Sin libro de cobranza: ninguno. */
+function contratosFirmados_() {
   const libro = libroCobranzaSiExiste_();
   const mapa = {};
   if (!libro) return mapa;
   const hoja = libro.getSheetByName('Contratos');
   if (!hoja) return mapa;
-  filasCobranza_(hoja, 'Contratos').forEach(r => {
-    if (String(r[7]) === ESTADO_FIRMADO) mapa[String(r[0]).toUpperCase()] = true;
+  filasCobranza_(hoja, 'Contratos').forEach((r, i) => {
+    if (String(r[7]) === ESTADO_FIRMADO) mapa[String(r[0]).toUpperCase()] = contratoDesdeFila_(r, i + 2);
   });
   return mapa;
+}
+
+/** {"PRY-2026-0001": <contrato>, …}: se usa como "¿tiene contrato firmado?". */
+function foliosConContratoFirmado_() {
+  return contratosFirmados_();
 }
 
 /** Cotizaciones ligadas a un proyecto (columna T), de la hoja Cotizaciones. */
@@ -1241,9 +1282,10 @@ function proyectoParaCobranza_(folio) {
   return proyecto;
 }
 
-function bitacora_(libro, accion, folio, detalle, motivo) {
+/** Renglón en la Bitacora del libro (cobranza por omisión; compras pasa HOJAS_COMPRAS: mismas columnas). */
+function bitacora_(libro, accion, folio, detalle, motivo, hojas) {
   const t = textoCelda;
-  hojaCobranza_(libro, 'Bitacora').appendRow([
+  hojaDeArea_(libro, hojas || HOJAS_COBRANZA, 'Bitacora').appendRow([
     Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), t(VENDEDOR_ ? VENDEDOR_.email : ''),
     t(accion), t(folio), t(detalle || ''), t(motivo || ''),
   ]);
@@ -1281,9 +1323,33 @@ function vistaCobranza_(libro, proyecto) {
     puedeFirmar: proyecto.estado !== 'Cancelado' && !!c && c.estado === ESTADO_ACEPTADA,
     puedePagar: !!c && c.estado === ESTADO_FIRMADO,
     puedeDesbloquear: !!c && c.estado === ESTADO_FIRMADO && esAdminDesbloqueo_(),
+    // Solo llega al rol de cobranza (vistaCobranza_ se llama después de exigirCobranza_)
+    margen: c ? margenDeContrato_(c) : null,
     metodos: METODOS_PAGO,
     hoy: hoyIso_(),
   };
+}
+
+/**
+ * Margen del proyecto: contratado sin IVA − costos (fase 3: órdenes de compra vigentes; fase 4: nómina y horas se
+ * agregan a la lista de costos). Si algo no cuadra (p. ej. una orden en otra moneda), {error} y la vista carga igual.
+ */
+function margenDeContrato_(contrato) {
+  try {
+    const ordenes = ordenesDeProyecto_(libroComprasSiExiste_(), contrato.proyectoFolio).filter(o => o.estado !== OC_CANCELADA);
+    const porMoneda = {};
+    ordenes.forEach(o => {
+      const m = o.monedaProyecto || contrato.moneda;
+      const x = porMoneda[m] || (porMoneda[m] = { concepto: 'Órdenes de compra', moneda: m, monto: 0, cantidad: 0 });
+      x.monto = (aCentavos(x.monto) + aCentavos(o.subtotalProyecto)) / 100;
+      x.cantidad++;
+    });
+    const costos = Object.keys(porMoneda).map(m => porMoneda[m]);
+    if (!costos.length) costos.push({ concepto: 'Órdenes de compra', moneda: contrato.moneda, monto: 0, cantidad: 0 });
+    return margenProyecto(contrato.subtotal, contrato.moneda, costos);
+  } catch (e) {
+    return { error: 'No se pudo calcular el margen: ' + e.message };
+  }
 }
 
 /** Candado de script (el mismo de folios) alrededor de una función. */
@@ -1335,6 +1401,13 @@ function marcarAceptada(proyectoFolio, cotizacionFolio, confirmado) {
     if (vigentes.length && vigentes[0].monedaProyecto && vigentes[0].monedaProyecto !== cot.moneda) {
       throw new Error('El proyecto ya tiene pagos en ' + vigentes[0].monedaProyecto + ': la cotización aceptada debe ser en ' +
         vigentes[0].monedaProyecto + '.');
+    }
+    // Lo mismo con las órdenes de compra vigentes: su costo está en la moneda del proyecto (el margen nunca mezcla monedas)
+    const oc = ordenesDeProyecto_(libroComprasSiExiste_(), proyecto.folio)
+      .find(o => o.estado !== OC_CANCELADA && o.monedaProyecto && o.monedaProyecto !== cot.moneda);
+    if (oc) {
+      throw new Error('El proyecto ya tiene órdenes de compra en ' + oc.monedaProyecto + ': la cotización aceptada debe ser en ' +
+        oc.monedaProyecto + '.');
     }
 
     // Esquema: al pasar a Helgen Energy se pone el 60/30/10 (después solo el administrador lo cambia); entre cotizaciones
@@ -1546,6 +1619,272 @@ function prepararCobranza() {
   Logger.log('Carpeta de cobranza: ' + carpeta.getUrl() + ' (restringida)');
   Logger.log('Libro de cobranza:   ' + archivoLibro.getUrl() + ' (restringido)');
   Logger.log('ROL_COBRANZA: ' + (PropertiesService.getScriptProperties().getProperty('ROL_COBRANZA') || '(vacío: nadie tiene acceso)'));
+}
+
+// ====== 4.3 COMPRAS (Fase 3): órdenes de compra por proyecto ======
+// Libro aparte "Cotizador Helgen — Compras (datos)" dentro de la carpeta "Cotizador Helgen — Compras" (fuera de la carpeta
+// maestra y de la de cobranza). Solo el rol de compras (ROL_COMPRAS) crea, ve, recibe y cancela órdenes; el servidor lo
+// revisa en cada llamada. PDF en Compras/AAAA/<folio del proyecto>/. El margen (contratado − órdenes) solo lo ve cobranza.
+
+const NOMBRE_CARPETA_COMPRAS = 'Cotizador Helgen — Compras';
+const NOMBRE_LIBRO_COMPRAS = 'Cotizador Helgen — Compras (datos)';
+const PREFIJO_OC = 'OC';
+const OC_EMITIDA = 'Emitida', OC_RECIBIDA = 'Recibida', OC_CANCELADA = 'Cancelada';
+
+/** Estructura del libro de compras (mismo formato que HOJAS_COBRANZA). */
+const HOJAS_COMPRAS = {
+  OrdenesCompra: {
+    enc: ['folio', 'fecha', 'proyecto_folio', 'marca', 'proveedor_id', 'proveedor', 'rfc', 'contacto', 'correo', 'telefono',
+      'fecha_entrega', 'lugar_entrega', 'condiciones_pago', 'moneda', 'iva_tasa', 'subtotal', 'iva', 'total', 'moneda_proyecto',
+      'tipo_cambio', 'subtotal_proyecto', 'renglones (JSON)', 'notas', 'pdf_id', 'pdf_url', 'elaboro_email', 'elaboro_nombre',
+      'fecha_registro', 'estado', 'fecha_recepcion', 'recibio', 'cancelado_por', 'fecha_cancelacion', 'motivo_cancelacion'],
+    numeros: [15, 16, 17, 18, 20, 21],
+  },
+  Proveedores: { enc: ['id', 'razon_social', 'rfc', 'contacto', 'correo', 'telefono', 'actualizado'], numeros: [] },
+  Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
+};
+const COL_ESTADO_OC = 29; // AC: estado, recepción (AD:AE) y cancelación (AF:AH)
+
+const AREA_COMPRAS = { que: 'compras', propCarpeta: 'COMPRAS_FOLDER_ID', propLibro: 'COMPRAS_DB_ID',
+  carpeta: NOMBRE_CARPETA_COMPRAS, libro: NOMBRE_LIBRO_COMPRAS, hojas: HOJAS_COMPRAS };
+
+function carpetaCompras_() { return carpetaArea_(AREA_COMPRAS); }
+function libroCompras_() { return libroArea_(AREA_COMPRAS); }
+/** Libro de compras si ya existe; null si todavía no se crea (cobranza no lo crea al calcular el margen). */
+function libroComprasSiExiste_() { return libroAreaSiExiste_(AREA_COMPRAS); }
+function hojaCompras_(libro, nombre) { return hojaDeArea_(libro, HOJAS_COMPRAS, nombre); }
+
+/** ¿El usuario del token está en ROL_COMPRAS? */
+function esCompras_() {
+  return enRol_('ROL_COMPRAS');
+}
+
+function exigirCompras_() {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + '.');
+  if (!esCompras_()) throw errorPermiso_('No tienes permiso de compras.');
+}
+
+function ordenDesdeFila_(r, fila) {
+  let renglones = [];
+  try { renglones = JSON.parse(String(r[21] || '[]')); } catch (e) { renglones = []; }
+  return {
+    folio: String(r[0]), fecha: fechaIso_(r[1]), proyectoFolio: String(r[2]), marca: marcaDeTexto_(r[3]),
+    proveedorId: String(r[4] || ''), proveedor: String(r[5] || ''), rfc: String(r[6] || ''), contacto: String(r[7] || ''),
+    correo: String(r[8] || ''), telefono: String(r[9] || ''), fechaEntrega: fechaIso_(r[10]), lugarEntrega: String(r[11] || ''),
+    condicionesPago: String(r[12] || ''), moneda: String(r[13] || 'MXN'), ivaTasa: Number(r[14]) || 0,
+    subtotal: Number(r[15]) || 0, iva: Number(r[16]) || 0, total: Number(r[17]) || 0, monedaProyecto: String(r[18] || ''),
+    tipoCambio: r[19] === '' ? '' : Number(r[19]), subtotalProyecto: Number(r[20]) || 0, renglones: renglones,
+    notas: String(r[22] || ''), pdfUrl: String(r[24] || ''), elaboro: String(r[26] || r[25] || ''),
+    estado: String(r[28] || OC_EMITIDA), fechaRecepcion: fechaIso_(r[29]), recibio: String(r[30] || ''),
+    canceladoPor: String(r[31] || ''), motivoCancelacion: String(r[33] || ''), fila: fila,
+  };
+}
+
+/** Órdenes de un proyecto, en orden de registro. Sin libro de compras: ninguna. */
+function ordenesDeProyecto_(libro, folio) {
+  if (!libro) return [];
+  const f = String(folio || '').toUpperCase();
+  const lista = [];
+  filasDeArea_(hojaCompras_(libro, 'OrdenesCompra'), HOJAS_COMPRAS, 'OrdenesCompra').forEach((r, i) => {
+    if (String(r[2]).toUpperCase() === f && String(r[0] || '').trim()) lista.push(ordenDesdeFila_(r, i + 2));
+  });
+  return lista;
+}
+
+/** Proveedores de la pestaña Proveedores (con su fila). */
+function proveedoresDelLibro_(libro) {
+  return proveedoresDesdeFilas(filasDeArea_(hojaCompras_(libro, 'Proveedores'), HOJAS_COMPRAS, 'Proveedores'));
+}
+
+/**
+ * Alta o actualización del proveedor al emitir una orden (se llena sola, como los clientes). Se busca por id (RFC o
+ * SIN-RFC:razón social); si llega con RFC y solo existía sin RFC, esa fila toma el RFC. Un dato vacío no borra uno anterior.
+ */
+function guardarProveedor_(libro, prov) {
+  const hoja = hojaCompras_(libro, 'Proveedores');
+  const lista = proveedoresDelLibro_(libro);
+  const id = proveedorId(prov);
+  const existente = lista.find(p => p.id === id) ||
+    (id.indexOf('SIN-RFC:') !== 0 ? lista.find(p => p.id === proveedorId({ razonSocial: prov.razonSocial })) : null);
+  const t = textoCelda;
+  const datos = fusionarProveedor(existente, prov);
+  const fila = [t(id), t(datos.razonSocial), t(datos.rfc), t(datos.contacto), t(datos.correo), t(datos.telefono),
+    Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm')];
+  if (existente) hoja.getRange(existente.fila, 1, 1, fila.length).setValues([fila]);
+  else hoja.appendRow(fila);
+  return Object.assign(datos, { id: id });
+}
+
+/** Proyecto existente (o error). */
+function proyectoParaCompras_(folio) {
+  const proyecto = buscarProyecto_(hojaProyectos_(), folio);
+  if (!proyecto) throw new Error('No existe el proyecto ' + String(folio || '').toUpperCase() + '.');
+  return proyecto;
+}
+
+/** Respuesta para la pestaña Compras: proyecto, moneda, órdenes y proveedores. Sin montos del contrato ni margen. */
+function vistaCompras_(libro, proyecto) {
+  const c = contratosFirmados_()[proyecto.folio.toUpperCase()] || null;
+  return {
+    proyecto: { folio: proyecto.folio, nombre: proyecto.nombre, cliente: proyecto.cliente, estado: proyecto.estado,
+      ubicacion: proyecto.ubicacion },
+    moneda: c ? c.moneda : '',
+    marca: c ? c.marca : '',
+    puedeEmitir: !!c && proyecto.estado === 'Activo',
+    ordenes: ordenesDeProyecto_(libro, proyecto.folio).map(o => { const x = Object.assign({}, o); delete x.fila; return x; }).reverse(),
+    proveedores: proveedoresDelLibro_(libro).map(p => { const x = Object.assign({}, p); delete x.fila; return x; }),
+    ivaTasas: IVA_OC,
+    hoy: hoyIso_(),
+  };
+}
+
+/** Proyectos donde se pueden emitir órdenes: Activos y con contrato firmado (con su moneda; sin montos). */
+function listarProyectosCompras(busqueda) {
+  exigirCompras_();
+  const firmados = contratosFirmados_();
+  const hoja = hojaProyectos_();
+  const filas = hoja.getLastRow() > 1 ? hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
+  return filtrarProyectos(proyectosDesdeFilas(filas).filter(p => firmados[p.folio.toUpperCase()]), busqueda, false, 50)
+    .map(p => {
+      const c = firmados[p.folio.toUpperCase()];
+      return { folio: p.folio, nombre: p.nombre, cliente: p.cliente, ubicacion: p.ubicacion, estado: p.estado, fecha: p.fecha,
+        moneda: c.moneda, marca: c.marca };
+    });
+}
+
+function getComprasProyecto(folio) {
+  exigirCompras_();
+  const libro = libroCompras_();
+  return vistaCompras_(libro, proyectoParaCompras_(folio));
+}
+
+/**
+ * Emite una orden de compra con su PDF. p = {proyectoFolio, proveedor: {razonSocial, rfc, contacto, correo, telefono},
+ * fechaEntrega, lugarEntrega, condicionesPago, moneda, tipoCambio, ivaTasa, renglones: [{clave, descripcion, unidad,
+ * cantidad, costo}], notas, idSolicitud}. Solo en proyectos Activos con contrato firmado. La línea de negocio sale del
+ * contrato (nunca del navegador); el costo es el capturado (nunca el precio de venta del catálogo).
+ */
+function guardarOrdenCompra(p) {
+  exigirCompras_();
+  const d0 = p || {};
+  const cfg = getConfig_();
+  const libro = libroCompras_();
+
+  const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
+  const cache = CacheService.getScriptCache();
+  const claveCache = idSolicitud ? 'OC_' + idSolicitud : '';
+
+  return conCandado_(() => {
+    if (claveCache) {
+      const previo = cache.get(claveCache);
+      if (previo) return JSON.parse(previo);
+    }
+    const proyecto = proyectoParaCompras_(d0.proyectoFolio);
+    if (proyecto.estado !== 'Activo') {
+      throw new Error('El proyecto ' + proyecto.folio + ' está ' + proyecto.estado.toLowerCase() + ': no admite órdenes de compra.');
+    }
+    const c = contratosFirmados_()[proyecto.folio.toUpperCase()];
+    if (!c) throw new Error('Solo se emiten órdenes de compra en proyectos con contrato firmado.');
+    const oc = normalizarOrdenCompra(d0, { moneda: c.moneda, ubicacion: proyecto.ubicacion, hoy: hoyIso_(), ivaTasa: cfg.IVA_TASA });
+
+    const hoja = hojaCompras_(libro, 'OrdenesCompra');
+    const folio = siguienteFolio_(PREFIJO_OC, hoja, 'CONSECUTIVO_OC_');
+    const proveedor = guardarProveedor_(libro, oc.proveedor);
+    const ahora = new Date();
+    const elaboro = [VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ') || VENDEDOR_.email;
+
+    // PDF (razón social y datos fiscales de Helgen, iguales en Helgen y Helgen Energy)
+    const html = construirHtmlOrdenCompra(Object.assign({}, oc, {
+      folio: folio, fecha: Utilities.formatDate(ahora, 'America/Mexico_City', 'dd/MM/yyyy'), proveedor: proveedor,
+      proyectoFolio: proyecto.folio, elaboro: elaboro + (elaboro === VENDEDOR_.email ? '' : ' (' + VENDEDOR_.email + ')'),
+    }), cfg, logoDataUrl_(cfg.LOGO_FILE_ID));
+    const pdf = Utilities.newBlob(html, 'text/html', folio + '.html').getAs('application/pdf')
+      .setName(nombreArchivoOc(folio, proveedor.razonSocial));
+    const anio = String(proyecto.folio).split('-')[1] || hoyIso_().slice(0, 4);
+    // De arriba abajo: un permiso heredado de la carpeta no se puede quitar en el hijo
+    const carpeta = privado_(subcarpeta_(privado_(subcarpeta_(carpetaCompras_(), anio)), proyecto.folio));
+    const archivo = privado_(carpeta.createFile(pdf));
+
+    const t = textoCelda;
+    hoja.appendRow([
+      folio, textoFecha_(hoyIso_()), proyecto.folio, MARCAS[c.marca], t(proveedor.id), t(proveedor.razonSocial), t(proveedor.rfc),
+      t(proveedor.contacto), t(proveedor.correo), t(proveedor.telefono), textoFecha_(oc.fechaEntrega), t(oc.lugarEntrega),
+      t(oc.condicionesPago), oc.moneda, oc.ivaTasa, oc.subtotal, oc.iva, oc.total, oc.monedaProyecto, oc.tipoCambio,
+      oc.subtotalProyecto, JSON.stringify(oc.renglones), t(oc.notas), archivo.getId(), archivo.getUrl(), t(VENDEDOR_.email),
+      t(elaboro), Utilities.formatDate(ahora, 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), OC_EMITIDA, '', '', '', '', '',
+    ]);
+    bitacora_(libro, 'Emitir orden de compra', proyecto.folio, folio + ' · ' + proveedor.razonSocial + ' · ' +
+      formatoMoneda(oc.total) + ' ' + oc.moneda + (oc.tipoCambio ? ' · TC ' + oc.tipoCambio + ' = ' +
+      formatoMoneda(oc.subtotalProyecto) + ' ' + oc.monedaProyecto + ' sin IVA' : '') + ' · ' + MARCAS[c.marca], '', HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+
+    const resultado = { folio: folio, url: archivo.getUrl(), total: oc.total, moneda: oc.moneda, vista: vistaCompras_(libro, proyecto) };
+    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
+    return resultado;
+  });
+}
+
+/** Busca una orden por folio en el libro de compras (o error). */
+function buscarOrden_(libro, folioOc) {
+  const folio = String(folioOc || '').trim().toUpperCase();
+  const hoja = hojaCompras_(libro, 'OrdenesCompra');
+  let orden = null;
+  filasDeArea_(hoja, HOJAS_COMPRAS, 'OrdenesCompra').forEach((r, i) => {
+    if (String(r[0]).toUpperCase() === folio) orden = ordenDesdeFila_(r, i + 2);
+  });
+  if (!orden) throw new Error('No existe la orden de compra ' + folio + '.');
+  return { hoja: hoja, orden: orden };
+}
+
+/** Marca una orden Emitida como Recibida (completa), con la fecha de recepción (AAAA-MM-DD, no futura). */
+function marcarOcRecibida(folioOc, fecha) {
+  exigirCompras_();
+  const libro = libroCompras_();
+  return conCandado_(() => {
+    const { hoja, orden } = buscarOrden_(libro, folioOc);
+    if (orden.estado !== OC_EMITIDA) throw new Error('La orden ' + orden.folio + ' ya está ' + orden.estado.toLowerCase() + '.');
+    const recepcion = validarFechaIso(fecha, hoyIso_(), 'La fecha de recepción');
+    if (orden.fecha && recepcion < orden.fecha) throw new Error('La fecha de recepción no puede ser anterior a la orden (' + orden.fecha + ').');
+    hoja.getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(recepcion), textoCelda(VENDEDOR_.email)]]);
+    bitacora_(libro, 'Recibir orden de compra', orden.proyectoFolio, orden.folio + ' · recibida el ' + recepcion, '', HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    return vistaCompras_(libro, proyectoParaCompras_(orden.proyectoFolio));
+  });
+}
+
+/** Cancela una orden Emitida (no se borra), con motivo; queda en la Bitacora y deja de contar en el margen. */
+function cancelarOrdenCompra(folioOc, motivo) {
+  exigirCompras_();
+  const m = String(motivo || '').trim();
+  if (m.length < 5) throw new Error('Escribe el motivo de la cancelación.');
+  if (m.length > 500) throw new Error('El motivo debe tener máximo 500 caracteres.');
+  const libro = libroCompras_();
+  return conCandado_(() => {
+    const { hoja, orden } = buscarOrden_(libro, folioOc);
+    if (orden.estado === OC_CANCELADA) throw new Error('La orden ' + orden.folio + ' ya está cancelada.');
+    if (orden.estado !== OC_EMITIDA) throw new Error('La orden ' + orden.folio + ' ya se recibió: no se puede cancelar.');
+    hoja.getRange(orden.fila, COL_ESTADO_OC).setValue(OC_CANCELADA);
+    hoja.getRange(orden.fila, COL_ESTADO_OC + 3, 1, 3).setValues([[textoCelda(VENDEDOR_.email),
+      Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
+    bitacora_(libro, 'Cancelar orden de compra', orden.proyectoFolio, orden.folio + ' · ' + orden.proveedor + ' · ' +
+      formatoMoneda(orden.total) + ' ' + orden.moneda, m, HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    return vistaCompras_(libro, proyectoParaCompras_(orden.proyectoFolio));
+  });
+}
+
+/**
+ * Correr desde el editor: crea la carpeta "Cotizador Helgen — Compras" (en Mi unidad) y su libro, y deja los dos en
+ * "Restringido" (también si ya existían). No comparte nada: a quien deba abrir los PDF se le comparte la carpeta en Drive.
+ */
+function prepararCompras() {
+  const libro = libroCompras_();
+  const carpeta = carpetaCompras_(); // primero la carpeta: el libro hereda su acceso y Drive no deja quitarlo en el hijo
+  const archivoLibro = privado_(DriveApp.getFileById(libro.getId()));
+  getConfig_(); // agrega TERMINOS_OC a la pestaña Config si falta
+  Logger.log('Carpeta de compras: ' + carpeta.getUrl() + ' (restringida)');
+  Logger.log('Libro de compras:   ' + archivoLibro.getUrl() + ' (restringido)');
+  Logger.log('ROL_COMPRAS: ' + (PropertiesService.getScriptProperties().getProperty('ROL_COMPRAS') || '(vacío: nadie tiene acceso)'));
 }
 
 // ====== 5. LÓGICA PURA (sin servicios de Google; se puede probar fuera) ======
@@ -1968,6 +2307,158 @@ function nombreComprobante(folio, metodo, referencia, ext) {
     '.' + ext;
 }
 
+// ---- Compras: órdenes de compra, proveedores y margen ----
+
+const IVA_OC = [0.16, 0.08, 0];  // tasas de IVA que admite una orden (16% general, 8% frontera, 0% extranjero/exento)
+const MAX_RENGLONES_OC = 100;
+const RFC_VALIDO = /^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/;
+
+/** Valida y limpia un proveedor {razonSocial, rfc, contacto, correo, telefono}. */
+function normalizarProveedor(p) {
+  const d = p || {};
+  const limpio = s => String(s || '').trim().replace(/\s+/g, ' ');
+  const prov = {
+    razonSocial: limpio(d.razonSocial), rfc: String(d.rfc || '').replace(/[\s-]/g, '').toUpperCase(),
+    contacto: limpio(d.contacto), correo: String(d.correo || '').trim().toLowerCase(), telefono: limpio(d.telefono),
+  };
+  if (!prov.razonSocial) throw new Error('Escribe la razón social del proveedor.');
+  if (prov.razonSocial.length > 150) throw new Error('La razón social debe tener máximo 150 caracteres.');
+  if (prov.rfc && !RFC_VALIDO.test(prov.rfc)) throw new Error('El RFC del proveedor no es válido.');
+  if (prov.correo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(prov.correo)) throw new Error('El correo del proveedor no es válido.');
+  if (prov.contacto.length > 100 || prov.correo.length > 100 || prov.telefono.length > 40) {
+    throw new Error('Contacto, correo y teléfono del proveedor son demasiado largos.');
+  }
+  return prov;
+}
+
+/** Identificador de un proveedor: su RFC si es válido y no genérico; si no, "SIN-RFC:" + razón social normalizada. */
+function proveedorId(p) {
+  const rfc = String((p && p.rfc) || '').replace(/[\s-]/g, '').toUpperCase();
+  if (RFC_VALIDO.test(rfc) && RFC_GENERICOS.indexOf(rfc) === -1) return rfc;
+  return 'SIN-RFC:' + textoNormal(p && p.razonSocial);
+}
+
+/** Datos de un proveedor ya registrado + los nuevos: lo nuevo manda, pero un dato vacío no borra uno anterior. */
+function fusionarProveedor(anterior, nuevo) {
+  const r = {};
+  ['razonSocial', 'rfc', 'contacto', 'correo', 'telefono'].forEach(k => {
+    r[k] = String((nuevo && nuevo[k]) || '').trim() || String((anterior && anterior[k]) || '').trim();
+  });
+  return r;
+}
+
+/**
+ * Filas de la pestaña Proveedores (sin encabezado) → [{id, razonSocial, rfc, contacto, correo, telefono, actualizado,
+ * etiqueta, fila}], por razón social. etiqueta = razón social, o "razón social — RFC" si la razón social se repite.
+ */
+function proveedoresDesdeFilas(filas) {
+  const lista = (filas || []).map((r, i) => ({
+    id: String(r[0] || '').trim(), razonSocial: String(r[1] || '').trim(), rfc: String(r[2] || '').trim(),
+    contacto: String(r[3] || '').trim(), correo: String(r[4] || '').trim(), telefono: String(r[5] || '').trim(),
+    actualizado: r[6] instanceof Date ? r[6].toISOString().slice(0, 10) : String(r[6] || ''), fila: i + 2,
+  })).filter(p => p.razonSocial);
+  const veces = {};
+  lista.forEach(p => { const n = textoNormal(p.razonSocial); veces[n] = (veces[n] || 0) + 1; });
+  lista.forEach(p => { p.etiqueta = veces[textoNormal(p.razonSocial)] > 1 && p.rfc ? p.razonSocial + ' — ' + p.rfc : p.razonSocial; });
+  return lista.sort((a, b) => textoNormal(a.razonSocial) < textoNormal(b.razonSocial) ? -1 : 1);
+}
+
+/**
+ * Valida y calcula una orden de compra. proyecto = {moneda, ubicacion, hoy "AAAA-MM-DD", ivaTasa (de Config)}.
+ * El costo de cada renglón es el capturado (nunca el precio de venta). Si la orden es en otra moneda que el proyecto,
+ * el tipo de cambio (pesos por dólar) es obligatorio y subtotalProyecto queda en la moneda del proyecto (para el margen).
+ */
+function normalizarOrdenCompra(p, proyecto) {
+  const d = p || {};
+  const limpio = s => String(s == null ? '' : s).trim();
+  const proveedor = normalizarProveedor(d.proveedor);
+
+  const fechaEntrega = validarFechaIso(d.fechaEntrega, null, 'La fecha de entrega');
+  if (proyecto.hoy && fechaEntrega < proyecto.hoy) throw new Error('La fecha de entrega no puede ser anterior a hoy.');
+  const lugarEntrega = limpio(d.lugarEntrega).replace(/\s+/g, ' ') || limpio(proyecto.ubicacion);
+  if (!lugarEntrega) throw new Error('Escribe el lugar de entrega.');
+  if (lugarEntrega.length > 200) throw new Error('El lugar de entrega debe tener máximo 200 caracteres.');
+  const condicionesPago = limpio(d.condicionesPago).replace(/\s+/g, ' ');
+  if (!condicionesPago) throw new Error('Escribe las condiciones de pago (p. ej. contado, crédito 30 días).');
+  if (condicionesPago.length > 200) throw new Error('Las condiciones de pago deben tener máximo 200 caracteres.');
+  const notas = limpio(d.notas);
+  if (notas.length > 1000) throw new Error('Las notas deben tener máximo 1000 caracteres.');
+
+  const moneda = limpio(d.moneda) ? monedaDeCotizacion(d.moneda) : proyecto.moneda;
+  const tasaTxt = d.ivaTasa;
+  const ivaTasa = tasaTxt === '' || tasaTxt == null ? Number(proyecto.ivaTasa) : Number(tasaTxt);
+  if (!IVA_OC.some(t => Math.abs(t - ivaTasa) < 1e-9)) throw new Error('Tasa de IVA no válida: usa 16%, 8% o 0%.');
+
+  const renglones = (Array.isArray(d.renglones) ? d.renglones : [])
+    .filter(r => limpio(r && r.descripcion))
+    .map(r => {
+      const descripcion = limpio(r.descripcion);
+      const cantidad = Number(r.cantidad), costoTxt = r.costo, costo = Number(costoTxt);
+      if (descripcion.length > 500) throw new Error('La descripción "' + descripcion.slice(0, 30) + '…" debe tener máximo 500 caracteres.');
+      if (!isFinite(cantidad) || cantidad <= 0) throw new Error('La cantidad de "' + descripcion.slice(0, 40) + '" debe ser mayor a 0.');
+      if (costoTxt === '' || costoTxt == null || !isFinite(costo)) throw new Error('Captura el costo unitario de "' + descripcion.slice(0, 40) + '".');
+      if (costo < 0) throw new Error('El costo de "' + descripcion.slice(0, 40) + '" no puede ser negativo.');
+      const c = redondear(costo);
+      return { clave: limpio(r.clave).toUpperCase().slice(0, 30), descripcion: descripcion,
+        unidad: limpio(r.unidad).toUpperCase().slice(0, 20) || 'PZA', cantidad: cantidad, costo: c, importe: redondear(cantidad * c) };
+    });
+  if (!renglones.length) throw new Error('Agrega al menos un renglón con descripción, cantidad y costo.');
+  if (renglones.length > MAX_RENGLONES_OC) throw new Error('Una orden admite máximo ' + MAX_RENGLONES_OC + ' renglones.');
+
+  const subtotal = redondear(renglones.reduce((s, r) => s + r.importe, 0));
+  if (subtotal <= 0) throw new Error('El total de la orden debe ser mayor a 0.');
+  const iva = redondear(subtotal * ivaTasa);
+
+  let tipoCambio = '';
+  if (moneda !== proyecto.moneda) {
+    tipoCambio = Number(d.tipoCambio);
+    if (d.tipoCambio === '' || d.tipoCambio == null || !isFinite(tipoCambio) || tipoCambio < 1 || tipoCambio > 1000) {
+      throw new Error('El proyecto es en ' + proyecto.moneda + ' y la orden en ' + moneda +
+        ': captura el tipo de cambio del día (pesos por dólar).');
+    }
+    tipoCambio = Math.round(tipoCambio * 10000) / 10000;
+  }
+  return {
+    proveedor: proveedor, fechaEntrega: fechaEntrega, lugarEntrega: lugarEntrega, condicionesPago: condicionesPago,
+    moneda: moneda, ivaTasa: ivaTasa, renglones: renglones, subtotal: subtotal, iva: iva, total: redondear(subtotal + iva),
+    monedaProyecto: proyecto.moneda, tipoCambio: tipoCambio,
+    subtotalProyecto: convertirMoneda(subtotal, moneda, proyecto.moneda, tipoCambio), notas: notas,
+  };
+}
+
+/**
+ * Margen de un proyecto: contratado (sin IVA) − costos (sin IVA), en la moneda del contrato. costos = [{concepto, monto,
+ * moneda, cantidad?}] (fase 3: órdenes de compra; fase 4: nómina y horas). Un costo en otra moneda es error: nunca se
+ * suman MXN y USD. Devuelve {moneda, contratado, costos, totalCostos, margen, porcentaje (sobre el contratado, 1 decimal)}.
+ */
+function margenProyecto(contratado, moneda, costos) {
+  const lista = (costos || []).map(c => {
+    if (c.moneda !== moneda) {
+      throw new Error('hay costos en ' + c.moneda + ' y el contrato es en ' + moneda + ' (no se suman monedas distintas).');
+    }
+    return { concepto: c.concepto, moneda: c.moneda, monto: redondear(c.monto), cantidad: c.cantidad || 0 };
+  });
+  const contratadoCts = aCentavos(contratado);
+  const costosCts = lista.reduce((s, c) => s + aCentavos(c.monto), 0);
+  const margenCts = contratadoCts - costosCts;
+  return {
+    moneda: moneda, contratado: contratadoCts / 100, costos: lista, totalCostos: costosCts / 100, margen: margenCts / 100,
+    porcentaje: contratadoCts > 0 ? Math.round(margenCts / contratadoCts * 1000) / 10 : 0,
+  };
+}
+
+/** Nombre del PDF de una orden: "OC-2026-0001 — <proveedor>.pdf", sin caracteres raros. */
+function nombreArchivoOc(folio, proveedor) {
+  const limpio = s => String(s || '').replace(/[\/\\:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim();
+  return (limpio(folio) + ' — ' + limpio(proveedor).slice(0, 80)).slice(0, 140) + '.pdf';
+}
+
+/** Renglones de los términos de las órdenes de compra (TERMINOS_OC de Config; si la celda está vacía, los iniciales). */
+function terminosOcParaPdf(cfg) {
+  const lineas = String((cfg && cfg.TERMINOS_OC) || '').split('\n').map(t => t.trim()).filter(Boolean);
+  return lineas.length ? lineas : TERMINOS_OC_INICIALES.split('\n');
+}
+
 // ---- Búsqueda en catálogos del SAT (c_ClaveProdServ / c_ClaveUnidad) ----
 
 const PALABRAS_VACIAS_SAT = ('de del la las el los y o u a al en con sin para por un una unos unas que se su sus ' +
@@ -2371,6 +2862,113 @@ function construirHtmlPdf(d, cfg, logoUrl) {
     // Términos
     '<table style="margin-top:18px;"><tr><td bgcolor="' + CIELO + '" style="border-left:3px solid ' + TEAL + ';padding:8px 10px;">' +
     '<div style="font-weight:bold;color:' + AZUL + ';margin-bottom:4px;">TÉRMINOS Y CONDICIONES</div>' +
+    '<ul style="margin:0;padding-left:16px;line-height:1.5;">' + terminos + '</ul></td></tr></table>' +
+
+    // Pie
+    '<div style="margin-top:18px;border-top:1px solid #D1D5DB;padding:6px 0 0;color:' + GRIS + ';font-size:9px;">' +
+    'Elaboró: ' + e(d.elaboro) + ' &nbsp;·&nbsp; ' + e(cfg.EMPRESA_EMAIL) + ' &nbsp;·&nbsp; ' + e(cfg.EMPRESA_TELEFONO) +
+    '</div>' +
+    '</body></html>';
+}
+
+/**
+ * HTML del PDF de una orden de compra (mismas reglas que construirHtmlPdf: tablas, inline CSS, sin depender de fondos).
+ * d = normalizarOrdenCompra(...) + {folio, fecha "dd/MM/yyyy", proveedor (con id), proyectoFolio, elaboro}.
+ * Siempre con la razón social y los datos fiscales de Helgen (Config), también en proyectos de Helgen Energy.
+ * El tipo de cambio y la línea de negocio son internos: no salen en el PDF.
+ */
+function construirHtmlOrdenCompra(d, cfg, logoUrl) {
+  const e = escaparHtml;
+  const AZUL = '#2C3C5B', AQUA = '#51F3DA', TEAL = '#0AC5A8', CIELO = '#F2F4F7', GRIS = '#6B7280';
+  const usd = d.moneda === 'USD';
+
+  const logo = logoUrl
+    ? '<img src="' + logoUrl + '" style="height:44px;">'
+    : '<div style="font-size:26px;font-weight:bold;color:' + AZUL + ';">Helgen</div>';
+
+  const filas = d.renglones.map((it, i) =>
+    '<tr' + (i % 2 ? ' bgcolor="' + CIELO + '"' : '') + '>' +
+    '<td class="c">' + (i + 1) + '</td>' +
+    '<td>' + e(it.clave) + '</td>' +
+    '<td>' + e(it.descripcion).replace(/\n/g, '<br>') + '</td>' +
+    '<td class="c">' + e(it.unidad) + '</td>' +
+    '<td class="r">' + e(it.cantidad) + '</td>' +
+    '<td class="r">' + formatoMoneda(it.costo) + '</td>' +
+    '<td class="r">' + formatoMoneda(it.importe) + '</td></tr>').join('');
+
+  const terminos = terminosOcParaPdf(cfg).map(t => '<li>' + e(t) + '</li>').join('');
+  const p = d.proveedor || {};
+  const dato = (k, v) => v ? '<tr><td class="k">' + k + '</td><td>' + e(v) + '</td></tr>' : '';
+  const docFila = (k, v, fuerte) =>
+    '<tr><td style="padding:1px 10px 1px 0;color:' + GRIS + ';text-align:right;">' + k + '</td>' +
+    '<td style="padding:1px 0;text-align:right;color:' + AZUL + ';' + (fuerte ? 'font-weight:bold;font-size:12px;' : '') + '">' + e(v) + '</td></tr>';
+  const fechaLarga = iso => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? m[3] + '/' + m[2] + '/' + m[1] : String(iso || ''); };
+
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' +
+    'body{font-family:Arial,Helvetica,sans-serif;font-size:10px;color:#1F2937;margin:0;}' +
+    'table{border-collapse:collapse;width:100%;}' +
+    'td,th{padding:5px 6px;vertical-align:top;}' +
+    '.c{text-align:center;}.r{text-align:right;white-space:nowrap;}' +
+    '.k{color:' + GRIS + ';width:110px;}' +
+    '.mod{font-size:11px;font-weight:bold;color:' + AZUL + ';border-bottom:2px solid ' + TEAL + ';padding:0 0 3px 0;margin:16px 0 6px 0;}' +
+    '.conceptos th{color:' + AZUL + ';font-size:9px;text-transform:uppercase;text-align:left;' +
+    'border-top:2px solid ' + AZUL + ';border-bottom:2px solid ' + AZUL + ';}' +
+    '.conceptos td{border-bottom:1px solid #E5E7EB;}' +
+    '.conceptos th.r{text-align:right;}.conceptos th.c{text-align:center;}' +
+    '</style></head><body>' +
+
+    // Encabezado: logo azul + datos del documento
+    '<table><tr>' +
+    '<td style="width:55%;padding:4px 0;vertical-align:middle;">' + logo + '</td>' +
+    '<td style="width:45%;padding:0;text-align:right;vertical-align:middle;">' +
+    '<table style="width:auto;margin-left:auto;">' +
+    '<tr><td colspan="2" style="font-size:20px;font-weight:bold;letter-spacing:2px;color:' + AZUL + ';padding:0 0 3px;text-align:right;">ORDEN DE COMPRA</td></tr>' +
+    docFila('Folio', d.folio, true) + docFila('Fecha', d.fecha) + docFila('Proyecto', d.proyectoFolio) +
+    (usd ? docFila('Moneda', 'USD (dólares estadounidenses)', true) : '') +
+    '</table></td></tr></table>' +
+    '<div style="border-top:3px solid ' + AQUA + ';margin-top:8px;"></div>' +
+    '<div style="padding:6px 0 0;color:#4B5563;line-height:1.5;">' +
+    '<b style="color:' + AZUL + ';">' + e(cfg.EMPRESA_NOMBRE) + '</b> · RFC ' + e(cfg.EMPRESA_RFC) + '<br>' + e(cfg.EMPRESA_DIRECCION) + '<br>' +
+    e(cfg.EMPRESA_TELEFONO) + ' · ' + e(cfg.EMPRESA_EMAIL) + ' · ' + e(cfg.EMPRESA_WEB) + '</div>' +
+
+    // Módulo 1: Proveedor y entrega
+    '<div class="mod">1 · PROVEEDOR Y ENTREGA</div>' +
+    '<table><tr><td style="width:50%;padding:0;"><table>' +
+    dato('Proveedor', p.razonSocial) + dato('RFC', p.rfc) + dato('Contacto', p.contacto) + dato('Correo', p.correo) +
+    dato('Teléfono', p.telefono) +
+    '</table></td><td style="width:50%;padding:0;"><table>' +
+    dato('Fecha de entrega', fechaLarga(d.fechaEntrega)) + dato('Lugar de entrega', d.lugarEntrega) +
+    dato('Condiciones de pago', d.condicionesPago) +
+    '</table></td></tr></table>' +
+
+    // Módulo 2: Conceptos
+    '<div class="mod">2 · CONCEPTOS</div>' +
+    '<table class="conceptos"><tr>' +
+    '<th class="c" style="width:22px;">#</th><th style="width:60px;">Clave</th><th>Descripción</th>' +
+    '<th class="c" style="width:45px;">Unidad</th><th class="r" style="width:45px;">Cant.</th>' +
+    (usd
+      ? '<th class="r" style="width:95px;">Costo unit. (USD)</th><th class="r" style="width:95px;">Importe (USD)</th></tr>'
+      : '<th class="r" style="width:85px;">Costo unit.</th><th class="r" style="width:85px;">Importe</th></tr>') +
+    filas + '</table>' +
+
+    // Módulo 3: Totales
+    '<div class="mod">3 · RESUMEN</div>' +
+    '<table><tr>' +
+    '<td style="width:58%;padding-left:0;">' +
+    '<div style="color:' + GRIS + ';">Importe con letra</div>' +
+    '<div style="font-weight:bold;color:' + AZUL + ';margin:2px 0 8px;">(' + importeConLetra(d.total, d.moneda) + ')</div>' +
+    (d.notas ? '<div style="color:' + GRIS + ';">Notas</div><div>' + e(d.notas).replace(/\n/g, '<br>') + '</div>' : '') +
+    '</td><td style="width:42%;padding-right:0;"><table>' +
+    '<tr><td>Subtotal</td><td class="r">' + formatoMoneda(d.subtotal) + '</td></tr>' +
+    '<tr><td>IVA (' + Math.round(d.ivaTasa * 100) + '%)</td><td class="r">' + formatoMoneda(d.iva) + '</td></tr>' +
+    '<tr bgcolor="#E6FBF7" style="color:' + AZUL + ';font-weight:bold;font-size:14px;">' +
+    '<td style="border-top:2px solid ' + AZUL + ';border-bottom:3px solid ' + AQUA + ';padding:7px 6px;">TOTAL ' + e(d.moneda || 'MXN') + '</td>' +
+    '<td class="r" style="border-top:2px solid ' + AZUL + ';border-bottom:3px solid ' + AQUA + ';padding:7px 6px;">' + formatoMoneda(d.total) + '</td></tr>' +
+    '</table></td></tr></table>' +
+
+    // Términos
+    '<table style="margin-top:18px;"><tr><td bgcolor="' + CIELO + '" style="border-left:3px solid ' + TEAL + ';padding:8px 10px;">' +
+    '<div style="font-weight:bold;color:' + AZUL + ';margin-bottom:4px;">TÉRMINOS</div>' +
     '<ul style="margin:0;padding-left:16px;line-height:1.5;">' + terminos + '</ul></td></tr></table>' +
 
     // Pie

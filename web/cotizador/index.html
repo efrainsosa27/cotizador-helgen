@@ -93,6 +93,7 @@
   .tile { border:1px solid var(--borde); border-radius:8px; padding:10px 12px; }
   .tile span { display:block; font-size:11px; color:var(--gris); text-transform:uppercase; }
   .tile b { font-size:16px; color:var(--azul); }
+  .tile b.negativo { color:#B91C1C; }
   .barra { height:8px; background:var(--cielo); border-radius:4px; overflow:hidden; min-width:80px; }
   .barra i { display:block; height:100%; background:var(--teal); }
   .fila-cancelada td { color:var(--gris); text-decoration:line-through; }
@@ -109,6 +110,7 @@
     <button id="tabHist" onclick="verTab('hist')">Historial</button>
     <button id="tabCat" onclick="verTab('cat')">Catálogo</button>
     <button id="tabCob" class="oculto" onclick="verTab('cob')">Cobranza</button>
+    <button id="tabCom" class="oculto" onclick="verTab('com')">Compras</button>
   </nav>
   <div id="usuario" class="usuario oculto">
     <span id="usuarioNombre"></span>
@@ -287,6 +289,8 @@
           <tbody id="cobCots"></tbody>
         </table>
         <div id="cobContrato" class="sat"></div>
+        <!-- Margen: contratado sin IVA − órdenes de compra vigentes sin IVA (solo rol de cobranza) -->
+        <div id="cobMargen" class="tiles oculto" style="margin-top:14px"></div>
       </div>
     </div>
 
@@ -325,6 +329,86 @@
       <table style="margin-top:12px">
         <thead><tr><th>Folio</th><th>Fecha</th><th class="num">Monto</th><th class="num">Aplicado</th><th>Método / referencia</th><th>Etapa</th><th>Registró</th><th>Comprobante</th><th></th></tr></thead>
         <tbody id="cobPagos"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===== COMPRAS (solo rol de compras; el servidor lo vuelve a revisar en cada llamada) ===== -->
+  <section id="vistaCom" class="oculto">
+    <div class="modulo">
+      <h2>1 · Proyecto y proveedor</h2>
+      <div class="proy-fila">
+        <div><label>Proyecto (activo y con contrato firmado)</label>
+          <input id="comProyecto" list="comProyectosList" autocomplete="off" placeholder="Busca por folio, cliente o nombre">
+          <datalist id="comProyectosList"></datalist></div>
+        <button type="button" class="btn btn-sec" onclick="cargarProyectosCom()">Actualizar lista</button>
+      </div>
+      <div id="comInfo" class="nota" style="margin-top:6px">Elige un proyecto para emitir órdenes de compra y ver las que tiene.</div>
+      <div id="comProveedor" class="grid oculto" style="margin-top:14px">
+        <div><label>Proveedor (razón social) *</label>
+          <input id="prvRazon" list="proveedoresList" autocomplete="off" maxlength="150" placeholder="Escribe o elige un proveedor">
+          <datalist id="proveedoresList"></datalist></div>
+        <div><label>RFC</label><input id="prvRfc" maxlength="13"></div>
+        <div><label>Contacto</label><input id="prvContacto" maxlength="100"></div>
+        <div><label>Correo</label><input id="prvCorreo" type="email" maxlength="100"></div>
+        <div><label>Teléfono</label><input id="prvTel" maxlength="40"></div>
+      </div>
+    </div>
+
+    <div id="comModRenglones" class="modulo oculto">
+      <h2>2 · Renglones</h2>
+      <datalist id="ocCatalogo"></datalist>
+      <datalist id="ocClaves"></datalist>
+      <div class="grid" style="margin-bottom:12px">
+        <div><label>Moneda de la orden *</label>
+          <select id="ocMoneda" onchange="pintarTcOc()">
+            <option value="MXN">MXN · pesos mexicanos</option>
+            <option value="USD">USD · dólares estadounidenses</option>
+          </select></div>
+        <div id="ocTcCaja" class="oculto"><label>Tipo de cambio del día (pesos por dólar) *</label>
+          <input id="ocTc" type="number" min="0" step="0.0001" style="text-align:right"></div>
+        <div><label>IVA *</label>
+          <select id="ocIva" onchange="recalcularOc()">
+            <option value="0.16">16%</option>
+            <option value="0.08">8% (región fronteriza)</option>
+            <option value="0">0% (extranjero o exento)</option>
+          </select></div>
+      </div>
+      <table>
+        <thead><tr>
+          <th style="width:100px">Clave</th><th>Descripción</th><th style="width:80px">Unidad</th>
+          <th class="num" style="width:90px">Cant.</th><th class="num" style="width:130px">Costo unitario</th>
+          <th class="num" style="width:130px">Importe</th><th style="width:30px"></th>
+        </tr></thead>
+        <tbody id="ocFilas"></tbody>
+      </table>
+      <button class="btn btn-sec" style="margin-top:10px" onclick="agregarRenglonOc()">+ Agregar renglón</button>
+      <div class="nota" style="margin-top:8px">Del catálogo se llenan clave, descripción y unidad. El costo se captura a mano: nunca es el precio de venta.</div>
+      <div class="totales" style="margin-top:12px">
+        <div><span>Subtotal</span><span id="ocSub">$0.00</span></div>
+        <div><span id="ocLblIva">IVA (16%)</span><span id="ocIvaMonto">$0.00</span></div>
+        <div class="total"><span id="ocLblTot">TOTAL MXN</span><span id="ocTot">$0.00</span></div>
+      </div>
+    </div>
+
+    <div id="comModOrdenes" class="modulo oculto">
+      <h2>3 · Entrega y órdenes</h2>
+      <div id="comForm">
+        <div class="grid">
+          <div><label>Fecha de entrega *</label><input id="ocEntrega" type="date"></div>
+          <div style="grid-column:span 2"><label>Lugar de entrega *</label><input id="ocLugar" maxlength="200"></div>
+          <div><label>Condiciones de pago *</label><input id="ocCondiciones" maxlength="200" placeholder="Ej. Contado, crédito 30 días"></div>
+        </div>
+        <div style="margin-top:12px"><label>Notas para el proveedor (opcional)</label><textarea id="ocNotas" rows="3" maxlength="1000"></textarea></div>
+        <div class="acciones">
+          <button type="button" id="btnOc" class="btn" onclick="guardarOc()">Emitir orden y generar PDF</button>
+          <span class="nota">El PDF se guarda en la carpeta privada de compras; no se envía por correo.</span>
+        </div>
+      </div>
+      <div id="comNoEmite" class="nota"></div>
+      <table style="margin-top:14px">
+        <thead><tr><th>Folio</th><th>Fecha</th><th>Proveedor</th><th class="num">Total</th><th>Entrega</th><th>Estado</th><th>PDF</th><th></th></tr></thead>
+        <tbody id="ocLista"></tbody>
       </table>
     </div>
   </section>
@@ -508,9 +592,10 @@
     IVA = d.ivaTasa; CATALOGO = d.catalogo; TC = d.tipoCambio || TC;
     recibirClientes(d.clientes);
     recibirProyectos(d.proyectos);
-    // La pestaña Cobranza solo se muestra con permiso; el servidor lo revisa en cada llamada
+    // Las pestañas Cobranza y Compras solo se muestran con permiso; el servidor lo revisa en cada llamada
     PERMISOS = d.permisos || {};
     $('tabCob').classList.toggle('oculto', !PERMISOS.cobranza);
+    $('tabCom').classList.toggle('oculto', !PERMISOS.compras);
     $('lblIva').textContent = 'IVA (' + Math.round(IVA * 100) + '%)';
     pintarDatalists();
     agregarFila();
@@ -778,6 +863,11 @@
       '<option value="' + esc(p.descripcion) + '" label="' + esc(p.clave + ' · ' + precio(p)) + '">').join('');
     $('claves').innerHTML = CATALOGO.map(p =>
       '<option value="' + esc(p.clave) + '" label="' + esc(p.descripcion + ' · ' + precio(p)) + '">').join('');
+    // Órdenes de compra: sin precio de venta (el costo se captura a mano)
+    $('ocCatalogo').innerHTML = CATALOGO.map(p =>
+      '<option value="' + esc(p.descripcion) + '" label="' + esc(p.clave + ' · ' + p.unidad) + '">').join('');
+    $('ocClaves').innerHTML = CATALOGO.map(p =>
+      '<option value="' + esc(p.clave) + '" label="' + esc(p.descripcion) + '">').join('');
   }
 
   function cargarCatalogo() {
@@ -940,6 +1030,16 @@
     }
     $('cobContrato').innerHTML = h;
 
+    // Margen (sin IVA, en la moneda del proyecto): el servidor solo lo manda al rol de cobranza
+    const mg = v.margen;
+    $('cobMargen').classList.toggle('oculto', !mg);
+    $('cobMargen').innerHTML = !mg ? '' : mg.error ? '<div class="nota aviso-moneda">' + esc(mg.error) + '</div>'
+      : '<div class="sat-titulo" style="grid-column:1/-1;margin:0">Margen del proyecto (sin IVA)</div>' +
+        [['Contratado sin IVA', dinero(mg.contratado, mg.moneda)]]
+          .concat(mg.costos.map(x => [x.concepto + ' (' + x.cantidad + ')', '− ' + dinero(x.monto, mg.moneda)]))
+          .concat([['Margen', dinero(mg.margen, mg.moneda), mg.margen < 0], ['Margen %', mg.porcentaje + '%', mg.margen < 0]])
+          .map(([k, x, neg]) => '<div class="tile"><span>' + esc(k) + '</span><b' + (neg ? ' class="negativo"' : '') + '>' + x + '</b></div>').join('');
+
     // Esquema
     $('cobModEsquema').classList.toggle('oculto', !c);
     ESQ = (v.esquema || []).map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje }));
@@ -1084,12 +1184,184 @@
     }, err => { listo(); mostrarError(err); });
   }
 
+  // ---- Compras (solo rol de compras) ----
+  let COM_PROYECTOS = [], COM = null, PROVEEDORES = [], ID_OC = nuevoId();
+  const CHIP_OC = { Emitida: 'aceptada', Recibida: 'firmado', Cancelada: 'cancelado' };
+  const CAMPOS_PROV = { prvRazon: 'razonSocial', prvRfc: 'rfc', prvContacto: 'contacto', prvCorreo: 'correo', prvTel: 'telefono' };
+  const fechaMx = iso => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? m[3] + '/' + m[2] + '/' + m[1] : String(iso || ''); };
+
+  function cargarProyectosCom() {
+    google.script.run.withSuccessHandler(lista => {
+      COM_PROYECTOS = lista || [];
+      $('comProyectosList').innerHTML = COM_PROYECTOS.map(p =>
+        '<option value="' + esc(etiquetaCob(p)) + '" label="' + esc(p.moneda + ' · ' + (MARCA_TXT[p.marca] || '')) + '">').join('');
+      if (!COM_PROYECTOS.length && !COM) $('comInfo').textContent = 'No hay proyectos activos con contrato firmado.';
+    }).withFailureHandler(mostrarError).listarProyectosCompras('');
+  }
+
+  function proyectoComElegido() {
+    const folio = ($('comProyecto').value.trim().match(/^PRY-\d{4}-\d{4}/i) || [''])[0].toUpperCase();
+    return (folio && COM_PROYECTOS.find(p => p.folio === folio)) || null;
+  }
+  $('comProyecto').addEventListener('change', () => { const p = proyectoComElegido(); if (p) abrirProyectoCom(p.folio); });
+
+  function abrirProyectoCom(folio) {
+    $('comInfo').textContent = 'Cargando…';
+    google.script.run.withSuccessHandler(pintarCompras).withFailureHandler(mostrarError).getComprasProyecto(folio);
+  }
+
+  /** Pinta la pestaña a partir de la respuesta del servidor (vistaCompras_). Al cambiar de proyecto, limpia el formulario. */
+  function pintarCompras(v) {
+    const cambio = !COM || COM.proyecto.folio !== v.proyecto.folio;
+    COM = v;
+    $('comProyecto').value = etiquetaCob(v.proyecto);
+    $('comInfo').innerHTML = '<b>' + esc(v.proyecto.folio) + '</b> · ' + esc(v.proyecto.cliente) + ' · ' + esc(v.proyecto.nombre) +
+      (v.moneda ? ' · Moneda del proyecto: <b>' + esc(v.moneda) + '</b> · ' + esc(MARCA_TXT[v.marca] || '') : '') +
+      (v.proyecto.estado !== 'Activo' ? ' · <span class="chip cancelado">' + esc(v.proyecto.estado) + '</span>' : '');
+    recibirProveedores(v.proveedores);
+    ['comProveedor', 'comModRenglones', 'comForm'].forEach(id => $(id).classList.toggle('oculto', !v.puedeEmitir));
+    $('comModOrdenes').classList.remove('oculto');
+    $('comNoEmite').textContent = v.puedeEmitir ? '' : 'Este proyecto no admite órdenes nuevas: debe estar Activo y con contrato firmado.';
+    if (v.puedeEmitir && cambio) limpiarOc();
+    $('ocLista').innerHTML = (v.ordenes || []).length ? v.ordenes.map(o => '<tr' + (o.estado === 'Cancelada' ? ' class="fila-cancelada" title="' +
+      esc('Cancelada por ' + o.canceladoPor + ': ' + o.motivoCancelacion) + '"' : '') + '><td style="white-space:nowrap"><b>' + esc(o.folio) + '</b></td><td>' + esc(fechaMx(o.fecha)) +
+      '</td><td>' + esc(o.proveedor) + '</td><td class="num">' + dinero(o.total, o.moneda) +
+      (o.tipoCambio ? '<div class="nota">TC ' + esc(o.tipoCambio) + '</div>' : '') + '</td><td>' + esc(fechaMx(o.fechaEntrega)) +
+      '<div class="nota">' + esc(o.lugarEntrega) + '</div></td><td><span class="chip ' + (CHIP_OC[o.estado] || '') + '"' +
+      (o.estado === 'Recibida' ? ' title="' + esc('Recibida el ' + fechaMx(o.fechaRecepcion) + ' · ' + o.recibio) + '"' : '') + '>' + esc(o.estado) + '</span></td><td>' +
+      (o.pdfUrl ? '<a href="' + esc(o.pdfUrl) + '" target="_blank">Ver</a>' : '') + '</td><td style="white-space:nowrap">' +
+      (o.estado === 'Emitida' ? '<button type="button" class="btn btn-sec" style="padding:4px 10px;font-size:12px" onclick="recibirOc(\'' + esc(o.folio) + '\')">Recibida</button>' +
+        '<button type="button" class="quitar" title="Cancelar orden" onclick="cancelarOc(\'' + esc(o.folio) + '\')">×</button>' : '') +
+      '</td></tr>').join('') : '<tr><td colspan="8" class="nota">Este proyecto no tiene órdenes de compra.</td></tr>';
+  }
+
+  // Proveedores (se llenan solos al emitir órdenes, como los clientes)
+  function recibirProveedores(lista) {
+    PROVEEDORES = lista || [];
+    $('proveedoresList').innerHTML = PROVEEDORES.map(p => '<option value="' + esc(p.etiqueta) + '" label="' +
+      esc([p.rfc, p.contacto].filter(Boolean).join(' · ') || 'Proveedor registrado') + '">').join('');
+  }
+  function autorrellenarProveedor() {
+    const v = $('prvRazon').value.trim().toLowerCase();
+    const p = v && PROVEEDORES.find(x => x.etiqueta.toLowerCase() === v);
+    if (p) Object.keys(CAMPOS_PROV).forEach(id => $(id).value = p[CAMPOS_PROV[id]] || '');
+  }
+  $('prvRazon').addEventListener('change', autorrellenarProveedor);
+  $('prvRazon').addEventListener('input', () => { if (PROVEEDORES.some(x => x.etiqueta === $('prvRazon').value)) autorrellenarProveedor(); });
+
+  // Renglones: del catálogo se toman clave, descripción y unidad; el costo nunca es el precio de venta
+  function agregarRenglonOc() {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td><input class="clave" list="ocClaves"></td>' +
+      '<td><input class="desc" list="ocCatalogo" placeholder="Escribe o elige del catálogo"></td>' +
+      '<td><input class="uni" value="PZA"></td>' +
+      '<td><input class="cant" type="number" min="0" step="any" value="1" style="text-align:right"></td>' +
+      '<td><input class="costo" type="number" min="0" step="0.01" placeholder="Costo" style="text-align:right"></td>' +
+      '<td class="num imp">$0.00</td>' +
+      '<td><button class="quitar" title="Quitar">×</button></td>';
+    const aplicar = p => {
+      if (!p) return;
+      tr.querySelector('.clave').value = p.clave; tr.querySelector('.desc').value = p.descripcion;
+      tr.querySelector('.uni').value = p.unidad;
+      if (!tr.querySelector('.costo').value) tr.querySelector('.costo').focus();
+    };
+    tr.querySelector('.desc').addEventListener('change', e => { aplicar(CATALOGO.find(x => x.descripcion === e.target.value)); recalcularOc(); });
+    tr.querySelector('.clave').addEventListener('change', e => { aplicar(buscarClave(e.target.value)); recalcularOc(); });
+    tr.querySelectorAll('input').forEach(i => i.addEventListener('input', recalcularOc));
+    tr.querySelector('.quitar').onclick = () => { tr.remove(); recalcularOc(); };
+    $('ocFilas').appendChild(tr);
+  }
+
+  function leerRenglonesOc() {
+    return [...$('ocFilas').querySelectorAll('tr')].map(tr => ({
+      clave: tr.querySelector('.clave').value,
+      descripcion: tr.querySelector('.desc').value,
+      unidad: tr.querySelector('.uni').value,
+      cantidad: Number(tr.querySelector('.cant').value) || 0,
+      costo: tr.querySelector('.costo').value, // vacío = sin capturar (el servidor lo rechaza)
+      _tr: tr,
+    }));
+  }
+
+  /** Vista previa (el servidor recalcula). */
+  function recalcularOc() {
+    const m = $('ocMoneda').value === 'USD' ? 'USD' : 'MXN', tasa = Number($('ocIva').value) || 0;
+    let sub = 0;
+    leerRenglonesOc().forEach(r => {
+      const imp = r2(r.cantidad * r2(Number(r.costo) || 0));
+      r._tr.querySelector('.imp').textContent = dinero(imp, m);
+      sub += imp;
+    });
+    sub = r2(sub);
+    const iva = r2(sub * tasa);
+    $('ocSub').textContent = dinero(sub, m); $('ocIvaMonto').textContent = dinero(iva, m); $('ocTot').textContent = dinero(sub + iva, m);
+    $('ocLblIva').textContent = 'IVA (' + Math.round(tasa * 100) + '%)'; $('ocLblTot').textContent = 'TOTAL ' + m;
+  }
+
+  /** Orden en otra moneda que el proyecto: tipo de cambio obligatorio. */
+  function pintarTcOc() {
+    const distinta = !!COM && !!COM.moneda && $('ocMoneda').value !== COM.moneda;
+    $('ocTcCaja').classList.toggle('oculto', !distinta);
+    if (!distinta) $('ocTc').value = '';
+    recalcularOc();
+  }
+
+  function limpiarOc() {
+    Object.keys(CAMPOS_PROV).concat(['ocTc', 'ocEntrega', 'ocCondiciones', 'ocNotas']).forEach(id => $(id).value = '');
+    $('ocFilas').innerHTML = ''; agregarRenglonOc();
+    $('ocMoneda').value = (COM && COM.moneda) || 'MXN';
+    $('ocIva').value = [0.16, 0.08, 0].indexOf(IVA) !== -1 ? String(IVA) : '0.16';
+    $('ocLugar').value = (COM && COM.proyecto.ubicacion) || '';
+    if (COM) $('ocEntrega').min = COM.hoy;
+    ID_OC = nuevoId();
+    $('btnOc').disabled = false; $('btnOc').textContent = 'Emitir orden y generar PDF';
+    pintarTcOc();
+  }
+
+  function guardarOc() {
+    if (!COM || $('btnOc').disabled) return;
+    const payload = {
+      proyectoFolio: COM.proyecto.folio,
+      proveedor: { razonSocial: $('prvRazon').value, rfc: $('prvRfc').value, contacto: $('prvContacto').value,
+                   correo: $('prvCorreo').value, telefono: $('prvTel').value },
+      renglones: leerRenglonesOc().map(({_tr, ...r}) => r),
+      moneda: $('ocMoneda').value, tipoCambio: $('ocTc').value, ivaTasa: $('ocIva').value,
+      fechaEntrega: $('ocEntrega').value, lugarEntrega: $('ocLugar').value, condicionesPago: $('ocCondiciones').value,
+      notas: $('ocNotas').value, idSolicitud: ID_OC,
+    };
+    $('btnOc').disabled = true; $('btnOc').textContent = 'Generando PDF…';
+    const listo = () => { $('btnOc').disabled = false; $('btnOc').textContent = 'Emitir orden y generar PDF'; };
+    google.script.run
+      .withSuccessHandler(r => {
+        pintarCompras(r.vista); limpiarOc();
+        aviso('ok', 'Orden de compra <b>' + esc(r.folio) + '</b> emitida · Total ' + dinero(r.total, r.moneda) +
+              ' · <a href="' + esc(r.url) + '" target="_blank">Abrir PDF</a>');
+      })
+      .withFailureHandler(err => { listo(); mostrarError(err); })
+      .guardarOrdenCompra(payload);
+  }
+
+  function recibirOc(folio) {
+    const fecha = window.prompt('Fecha en que se recibió completa la orden ' + folio + ' (AAAA-MM-DD):', COM.hoy);
+    if (fecha == null) return;
+    accionCob(null, 'marcarOcRecibida', [folio, fecha.trim()], v => { pintarCompras(v); aviso('ok', 'Orden <b>' + esc(folio) + '</b> marcada como recibida.'); });
+  }
+  function cancelarOc(folio) {
+    const motivo = window.prompt('Motivo para cancelar la orden ' + folio + ' (queda registrado; la orden no se borra):');
+    if (motivo == null) return;
+    if (!motivo.trim()) { mostrarError('Escribe el motivo de la cancelación.'); return; }
+    accionCob(null, 'cancelarOrdenCompra', [folio, motivo], v => { pintarCompras(v); aviso('ok', 'Orden <b>' + esc(folio) + '</b> cancelada.'); });
+  }
+
   // ---- UI ----
   function verTab(t) {
     $('vistaNueva').classList.toggle('oculto', t !== 'nueva');
     $('vistaHist').classList.toggle('oculto', t !== 'hist');
     $('vistaCat').classList.toggle('oculto', t !== 'cat');
     $('vistaCob').classList.toggle('oculto', t !== 'cob');
+    $('vistaCom').classList.toggle('oculto', t !== 'com');
+    $('tabCom').classList.toggle('activo', t === 'com');
     $('tabCob').classList.toggle('activo', t === 'cob');
     $('tabCat').classList.toggle('activo', t === 'cat');
     $('tabNueva').classList.toggle('activo', t === 'nueva');
@@ -1097,6 +1369,7 @@
     if (t === 'hist') cargarHistorial();
     if (t === 'cat') cargarCatalogo();
     if (t === 'cob') cargarProyectosCob();
+    if (t === 'com') cargarProyectosCom();
     $('aviso').className = 'aviso';
   }
   function aviso(tipo, html) { const a = $('aviso'); a.className = 'aviso ' + tipo; a.innerHTML = html; window.scrollTo(0, 0); }
