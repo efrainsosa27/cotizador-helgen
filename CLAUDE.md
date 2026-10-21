@@ -26,7 +26,7 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 |---|---|
 | **Cotizador (lo usa el equipo)** | `https://cotizador-helgen.cotizador-helgen.workers.dev/cotizador/` (portada en `/`) |
 | Proyecto Apps Script de la API (`scriptId` en `.clasp.json`) | `1GsH8DjaFEZ9dltqBUTUEFE_frblSYimRRCvPkqKdRB5UhmBwwYHLSwyS` (nombre anterior "Cotizador Helgen — PRUEBAS interfaz web"; ver §9) |
-| Deployment de la API (siempre actualizar este; `API_URL` en `web/cotizador/index.html`) | `AKfycbwBjF7ra_4O8INsxBq0eh-4r-BlSsJ4LLxcJgVCPRpx1U1a-Pz1CUSdYtvj_Mh0S6y2` (@6 al 20/10/2026 = Cobranza y USD; @5 = nombre del vendedor en Historial; @4 = Proyectos; @3 = 19/10/2026; `access: ANYONE_ANONYMOUS` + token) |
+| Deployment de la API (siempre actualizar este; `API_URL` en `web/cotizador/index.html`) | `AKfycbwBjF7ra_4O8INsxBq0eh-4r-BlSsJ4LLxcJgVCPRpx1U1a-Pz1CUSdYtvj_Mh0S6y2` (@7 al 20/10/2026 = ocultar aceptar/firmar en proyectos cancelados; @6 = Cobranza y USD; @5 = nombre del vendedor en Historial; @4 = Proyectos; @3 = 19/10/2026; `access: ANYONE_ANONYMOUS` + token) |
 | Client ID de OAuth (`CLIENT_ID_GOOGLE` en `web/cotizador/index.html` y `Code.js`) | `884526916417-cn5fh45io0nnpvlad2439thkpius4063.apps.googleusercontent.com` (no es secreto) |
 | Carpeta maestra en Drive "Cotizador Helgen" | `1lf3Z4d3e_oqFbYJse4QbyYkWowYT9HCo` |
 | Base de datos "Cotizador Helgen — Base de datos" (`SPREADSHEET_ID`) | `1ozFsyt1OjSnSv-PVpRWZjgqeWt6voQREbjvOJAXPEaI` |
@@ -533,8 +533,9 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
   productos reales (ver la idea de importar el "Catálogo Maestro de Precios - Helgen Energy").
 - Proyectos `Cancelado` en Cobranza (20/10/2026, commit de este cambio): la vista trae `puedeAceptar` y `puedeFirmar` en falso y
   la interfaz oculta "Marcar aceptada" y "Contrato firmado" con un aviso (reactivar = Estado Activo en la hoja). El servidor ya lo
-  rechazaba. **Publicar primero la API y después la interfaz**: la interfaz nueva con la API vieja (sin esos campos) ocultaría
-  los botones en todos los proyectos.
+  rechazaba. Publicado el 20/10/2026 (API @7 y luego la interfaz: la interfaz nueva con una API sin esos campos ocultaría los
+  botones en todos los proyectos). Revisado en el cotizador real con Claude in Chrome, sin crear nada: `PRY-2026-0001` (Cancelado)
+  sin botones y con el aviso.
 - Rol de cobranza **sin** desbloqueo (Tania) solo se probó con las pruebas automáticas, no con su cuenta real.
 - Precio USD del catálogo (20/10/2026): el tipo de cambio usado se guarda en `Cotizaciones!V` (no sale en el PDF). Leer
   `GOOGLEFINANCE` desde Apps Script **sí funciona** (comprobado en PRUEBAS: 18.4248); si un día falla, usar el valor manual (B3).
