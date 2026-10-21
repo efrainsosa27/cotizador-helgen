@@ -40,6 +40,7 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 | Respaldos antes de Proyectos | Carpeta "Respaldos 2026-10-20" `1rFGY_k_YRRo243p3xL2RpibQ9jkEo634`: Base de datos `1PBQvmwI412IMyJb74qBWN5ZcyhSuxK3xGU9cV5KPxTE`, Catálogo `1GxBpAvQxVNJyFJSLnaY9umA5L2qf4dqX36S4uehHUNc` (antes de la pestaña Proyectos y la columna T) |
 | Respaldos antes de Cobranza | Carpeta "Respaldos 2026-10-20 (antes de Cobranza)" `1C_yGbX0Gk_cZBwegdswPFvuzCVDdyTLF` (en la carpeta maestra): Base de datos `14C3d7w2ouaygtCGi0BP1QocGiqG4gf5Umh9O4KHgdow`, Catálogo `140_1sfwXF9u_aL1egDPYSbsE0rMwELGPZ5rkGVdzQnc` (antes de las columnas U:V, la columna I del catálogo y la pestaña "Tipo de cambio"). Verificadas contra los originales |
 | Respaldos antes de Compras (20/10/2026) | Carpeta "Respaldos 2026-10-20 (antes de Compras)" `1QWHfc7K5w5lk5vU_jt1lCSrn4PY5YyKA` (en la carpeta maestra): Base de datos `1dCTVyMH50_55WzIfN-waUvoXaKYOliet_scZSCyKHYo`, Catálogo `1Y-Ho8kKfZsLd0lris8IIHOR5X_LExRcxThbje0Z5G9s`. Libro de cobranza: carpeta "Respaldo 2026-10-20 (antes de Compras)" `1H_BjW-VEdKbO-4LpF5aeKvFWwPiprKu2` **dentro de la carpeta de cobranza** (nunca en la maestra), copia `1KIhAfkEZhMWzzp81Y8jMFjSs6a2Ki6L7LcO13cvbFgU` (solo encabezados). Las tres verificadas pestaña por pestaña contra los originales. Copias hechas con el conector de Drive: Workspace les puso "helgen.tech: lector" (§6.11); el usuario dejó en Restringido la carpeta de respaldo de cobranza el 21/10/2026 (comprobado: carpeta y copia solo con efrain@, tania@ y leo@) |
+| **Manual del Cotizador Helgen** (para personas) | Documento de Claude Docs `https://claude.ai/artifact/AN8w8T2SKmDXSTa1zpFt2C` (id `AN8w8T2SKmDXSTa1zpFt2C`; pestaña `1cdc8401-1062`, cuerpo `86e49b65-80a1`). Se actualiza **junto con este archivo** (regla 14 y §8) |
 | Worker de Cloudflare | `cotizador-helgen`, cuenta de efrain@helgen.tech `badd8bca60b008822a73ca24e983ff43` |
 | Dueño de todo / cuenta de clasp | `efrain@helgen.tech` (la API se ejecuta como esta cuenta) |
 | Proyecto de prueba "PRUEBAS — Cotizador Helgen (no usar)" | `1wp8_SQofXXUuMkUjmDyyUxYLxx-LdFv-20JaXE7q9entLfEvDKgYtnt0`; deployment `AKfycbwVu2q5…` retirado el 20/10/2026 (404). Para Cobranza (20/10/2026): deployment `AKfycbz9naWOw4Jj0qlta0RjCNifgZLvvJqXpqRnrrsALewSnmn7ydnEIw_zYriIHZjbQ5ugQw`, **retirado** al publicar (404); su `Pruebas.js` crea "PRUEBAS — Cobranza" y tiene `pruebasRondaSinRol()` / `pruebasRondaConRol()`. Para Compras (20/10/2026): deployment `AKfycbxK3ldf…`, **retirado** al terminar (404); `Pruebas.js` con `configurarCompras()` y rondas C1–C3 (§10.7). Está en la carpeta `1w-T05ql…` (lo movió el usuario). Solo datos inventados (§10.5). **No es la API.** |
@@ -539,6 +540,8 @@ Compras: `ROL_COMPRAS` (correos separados por coma: efrain@, tania@, leo@; cread
     carpeta, con `ROL_COMPRAS`; el margen solo para `ROL_COBRANZA` (§6.12). Nunca sumar importes de monedas distintas.
 13. **Las pruebas en el navegador las hace Claude, no el usuario** (pedido del usuario, 20/10/2026): en el Chrome del usuario con
     Claude in Chrome, donde ya tiene su sesión de @helgen.tech. Detalle en §8 "Pruebas en el navegador".
+14. **Cada vez que se actualice este CLAUDE.md, se actualiza en el mismo turno el Manual del Cotizador Helgen** (pedido del usuario,
+    21/10/2026; §2 y §8 "Manual del Cotizador"). Los dos deben contar lo mismo; si no se pudo actualizar el manual, decirlo.
 
 ## 8. Cómo trabajar
 
@@ -605,7 +608,27 @@ Al terminar **cualquier** cambio:
 2. Si se modificó el código de Apps Script (`Code.js`, `Logo.js`, `Index.html`, `appsscript.json`), **recordarle al usuario**
    publicar la API: `npx clasp push --force` y `npx clasp deploy --deploymentId AKfycbwBjF7…` (comandos completos arriba).
 3. Si se modificó algo en `web/`, **recordarle al usuario** publicar la interfaz: `npx --yes wrangler@4 deploy`.
+4. **Actualizar el Manual del Cotizador Helgen** si se cambió este CLAUDE.md (regla 14; cómo, abajo).
 El commit y el push no publican nada: el equipo sigue usando la versión anterior hasta publicar con clasp o wrangler.
+
+### Manual del Cotizador (regla 14)
+Documento de Claude Docs para personas: "Manual del Cotizador Helgen" (`https://claude.ai/artifact/AN8w8T2SKmDXSTa1zpFt2C`, §2).
+CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para quien usa y mantiene el cotizador.
+- **Cuándo:** en el mismo turno en que se edite CLAUDE.md, antes de la respuesta final. No hace falta tocar el manual por cambios
+  de CLAUDE.md que solo son internos para Claude (p. ej. una nota sobre cómo usar una herramienta), pero sí por todo lo que cambia
+  qué hace el cotizador, cómo se usa, dónde están los datos, quién tiene acceso, qué se publicó o qué queda pendiente.
+- **Qué secciones:** las que toque el cambio. Hoy son: Cómo está armado · Direcciones · Archivos · Proyectos · Cobranza · Compras ·
+  Tareas frecuentes · Reglas de oro · Si algo falla · Historial (tabla de versiones y "Cómo se probó") · Pendientes. Una función
+  nueva → su sección (o una nueva) + Historial + Pendientes. Al final, la fecha del renglón bajo el título (chip de fecha) = hoy.
+- **Cómo:** solo con el conector de Claude Docs (nunca web fetch ni el Artifact tool para editarlo; nunca recrearlo). Cargar la
+  skill `anthropic-skills:docs` (o `guide` → `topic.index`), leer el esquema de la pestaña (`read` con `projection: outline`, o
+  `kind: view` + `sinceRev` desde la última lectura) y cambiar **solo** lo necesario (`update` con `find`/`replace` o
+  `insert` junto a un bloque; `topic.editing` antes de borrar o mover). Lo que el usuario escribió en el manual se respeta.
+- **Estilo:** español de México, frases cortas, sin nombres de funciones internas salvo que hagan falta para operar
+  (`clasp`, `wrangler`, propiedades de Script). Nunca secretos (API keys, tokens). Los datos de cobranza y compras no se
+  copian al manual (solo cómo funciona y dónde viven).
+- **Al terminar:** decirle al usuario en la respuesta qué secciones del manual cambiaron. Si el conector no está disponible o
+  rechaza el cambio, decirlo y anotarlo en §9 como pendiente.
 
 ## 9. Pendientes e ideas
 - **Renombrar en Drive / Apps Script (lo hace el usuario):** proyecto `1GsH8Dja…` → "Cotizador Helgen (código de la app)";
