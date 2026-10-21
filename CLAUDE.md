@@ -510,8 +510,8 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - Proyectos fase 2: órdenes de compra, gastos y adicionales (§6.10). Cobranza ya construida (§6.11).
 - **Cobranza: publicada el 20/10/2026** (API @6 + interfaz en Cloudflare). Hechos: respaldos, `clasp push`, `prepararCobranza()`
   (carpeta y libro creados y restringidos, §2 y §6.11), `ROL_COBRANZA` = efrain@, tania@, leo@ y `ADMIN_DESBLOQUEO` = efrain@,
-  `clasp deploy` y `wrangler deploy`. Falta: 6) compartir la carpeta de cobranza como lector con tania@ y leo@ (Google les manda
-  correo; agregarlos **por persona**, nunca "helgen.tech"); 7) retirar el deployment de prueba
+  `clasp deploy`, `wrangler deploy` y carpeta compartida como lector con tania@ y leo@ (por persona, acceso general Restringido;
+  comprobado el 20/10/2026: carpeta y libro sin acceso del dominio). Falta: 7) retirar el deployment de prueba
   (`clasp undeploy AKfycbz9naWO…` desde una carpeta temporal ligada a `1wp8_SQ…`) y apagar el servidor local de prueba.
   Al publicar, la primera apertura del catálogo real crea la pestaña "Tipo de cambio" y la columna I (§4.2).
 - Rol de cobranza **sin** desbloqueo (Tania) solo se probó con las pruebas automáticas, no con su cuenta real.
