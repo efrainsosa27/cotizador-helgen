@@ -171,7 +171,11 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 - Internas: `carpetaCobranza_` y `libroCobranza_` (se crean solas la primera vez; si el ID existe pero no se encuentra, **error**:
   no se crea otra a escondidas), `libroCobranzaSiExiste_` (las cotizaciones no crean el libro), `hojaCobranza_(libro, nombre)`
   (encabezados que se migran solos, `HOJAS_COBRANZA`), `datosCobranza_`, `escribirEsquema_`, `bitacora_`, `cotizacionesDeProyecto_`.
-- `prepararCobranza()` — correr desde el editor: crea carpeta y libro (no comparte nada) y sirve para autorizar permisos.
+- `privado_(item)` — deja un archivo o carpeta en "Restringido" borrando los permisos `domain`/`anyone` con la API REST de Drive
+  (§6.11); se aplica a la carpeta, el libro, las subcarpetas de año y proyecto y cada comprobante, **siempre de arriba abajo**
+  (un permiso heredado no se puede quitar en el hijo: 403 `cannotDeletePermission`). Si falla, lanza error.
+- `prepararCobranza()` — correr desde el editor: crea carpeta y libro (o los repara si ya existen), restringe primero la
+  carpeta y luego el libro, y registra `ROL_COBRANZA`. Sirve para autorizar permisos. No comparte nada.
 
 ### 4.6 Lógica pura (sin Google; se prueba en Node)
 - `redondear(n)`, `formatoMoneda(n)`, `escaparHtml(s)`, `importeConLetra(n, moneda)` ("MIL CIENTO SESENTA PESOS 02/100 M.N.";
@@ -467,7 +471,13 @@ npx --yes wrangler@4 deploy
 - Comprobar la API con `curl` usando `-d` sin `-X POST` (con `-X POST -L` curl repite el POST en la redirección de Google y
   sale "No se encontró la página"). Sin token → `{"ok":false,"error":"Inicia sesión con tu cuenta @helgen.tech.","codigo":"SESION"}`.
 - El flujo completo exige sesión @helgen.tech: Claude lo prueba en el Chrome del usuario (ver "Pruebas en el navegador");
-  los errores del servidor se ven con `npx clasp logs` o en el editor (Ejecuciones). Los datos se pueden revisar en solo lectura con el conector de Drive.
+  los errores del servidor se ven con `npx clasp logs` o en el editor (Ejecuciones). Los datos se pueden revisar en solo lectura con el conector de Drive
+  (permisos con `get_file_permissions`, hojas con el conector de Sheets). **El conector de Drive no puede compartir** ("The caller
+  does not have permission", 20/10/2026): compartir lo hace el usuario desde Drive y Claude lo verifica después.
+- `clasp push` solo cambia el código del editor (`@HEAD`); el equipo sigue en la versión del deployment hasta `clasp deploy`. Por eso
+  se puede subir, correr una función desde el editor para probarla o autorizarla, corregir y volver a subir antes de publicar
+  (así se corrigió `privado_()` el 20/10/2026). Tras cada push, comprobar con un `clasp clone` en carpeta temporal que el editor
+  quedó igual al repositorio. Si el editor ya estaba abierto, recargarlo antes de correr la función.
 - Al agregar funciones que llamen servicios de Google, extender los simulacros de `tests/`. Si la interfaz necesita una
   función nueva, agregarla a `API_FUNCIONES`.
 
@@ -513,7 +523,15 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
   `clasp deploy`, `wrangler deploy` y carpeta compartida como lector con tania@ y leo@ (por persona, acceso general Restringido;
   comprobado el 20/10/2026: carpeta y libro sin acceso del dominio). Entorno de prueba retirado el mismo día: deployment
   `AKfycbz9naWO…` eliminado (404) y servidor local `127.0.0.1:8788` apagado.
-  Al publicar, la primera apertura del catálogo real crea la pestaña "Tipo de cambio" y la columna I (§4.2).
+  Al publicar se encontró y corrigió que Workspace comparte con el dominio lo que se crea (§6.11; commits `7685545` a `c75e754`).
+  **Revisión en el cotizador real (20/10/2026, Claude in Chrome, sin crear nada):** sesión sin errores, selector MXN/USD, pestaña
+  Cobranza (aparece a los ~3 s), lista con `PRY-2026-0001` y su vista (Cancelado, `HLG-2026-0006`, sin aceptada; no se marcó nada),
+  catálogo con precio USD ($1,000 ÷ 18.4250 = $54.27, Google Finance). En la hoja: columna I y pestaña "Tipo de cambio" creadas
+  solas (B4 = 18.4250); libro de cobranza con encabezados y sin datos.
+- Catálogo real: solo tiene el renglón `HSE-EJ` "EJEMPLO" ($1,000, sin "Actualizado"). Parece de ejemplo: borrarlo o cargar los
+  productos reales (ver la idea de importar el "Catálogo Maestro de Precios - Helgen Energy").
+- Idea (no hecha): ocultar "Marcar aceptada" (y firmar) en proyectos `Cancelado`. Hoy el botón aparece, pero el servidor lo
+  rechaza ("El proyecto … está cancelado.", en `marcarAceptada` y `firmarContrato`).
 - Rol de cobranza **sin** desbloqueo (Tania) solo se probó con las pruebas automáticas, no con su cuenta real.
 - Precio USD del catálogo (20/10/2026): el tipo de cambio usado se guarda en `Cotizaciones!V` (no sale en el PDF). Leer
   `GOOGLEFINANCE` desde Apps Script **sí funciona** (comprobado en PRUEBAS: 18.4248); si un día falla, usar el valor manual (B3).
