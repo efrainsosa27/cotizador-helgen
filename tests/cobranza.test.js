@@ -351,4 +351,38 @@ assert.deepEqual([v.proyecto.estado,v.puedeAceptar,v.puedeFirmar],['Cancelado',f
 falla('tania','marcarAceptada',[p3,c3b],/está cancelado/); falla('tania','firmarContrato',[p3,HOY_ISO],/está cancelado/);
 db.pest.Proyectos.m[filaP3][6]='Activo';
 assert.deepEqual([ok('tania','getCobranzaProyecto',p3).puedeAceptar,ok('tania','getCobranzaProyecto',p3).puedeFirmar],[true,true],'reactivado');
+
+// --- Resumen de cobranza (todos los proyectos): solo rol de cobranza; mismas cifras que la vista de cada proyecto ---
+falla('ana','resumenCobranzaGeneral',[],/No tienes permiso de cobranza/,'PERMISO');
+falla('intruso','resumenCobranzaGeneral',[],/@helgen.tech/,'SESION');
+let rs=ok('tania','resumenCobranzaGeneral');
+assert.deepEqual(rs.proyectos.map(x=>x.folio+':'+x.estadoContrato),[p1+':Firmado',p2+':Firmado',p3+':Por firmar'],'firmados por saldo, luego por firmar');
+const r1=rs.proyectos[0], v1=ok('tania','getCobranzaProyecto',p1);
+assert.deepEqual([r1.contratado,r1.pagado,r1.saldo,r1.avance],[v1.resumen.contratado,v1.resumen.pagado,v1.resumen.saldo,v1.resumen.avance],'igual que la vista');
+assert.deepEqual([r1.contratado,r1.pagado,r1.saldo,r1.avance,r1.siguienteEtapa,r1.siguienteSaldo,r1.ultimoPago,r1.moneda],
+  [1160,800,360,69,'Instalación',244,HOY_ISO,'MXN'],'el pago cancelado no cuenta');
+assert.deepEqual([r1.costoOc,r1.margen,r1.margenPorcentaje,r1.ordenes],[0,1000,100,0],'sin órdenes: margen = contratado sin IVA');
+const r2=rs.proyectos[1];
+assert.deepEqual([r2.moneda,r2.contratado,r2.pagado,r2.saldo,r2.siguienteEtapa,r2.margen],['USD',1000,1000,0,'',862.07],'pago en MXN convertido a USD');
+assert.deepEqual([rs.proyectos[2].contratado,rs.proyectos[2].pagado],[116,0]);
+const tMXN=rs.totales.find(t=>t.moneda==='MXN'), tUSD=rs.totales.find(t=>t.moneda==='USD');
+assert.deepEqual([tMXN.proyectos,tMXN.conSaldo,tMXN.contratado,tMXN.cobrado,tMXN.porCobrar,tMXN.avance,tMXN.margen,tMXN.margenPorcentaje,tMXN.porFirmar,tMXN.montoPorFirmar],
+  [1,1,1160,800,360,69,1000,100,1,116],'MXN: el por firmar no suma');
+assert.deepEqual([tUSD.proyectos,tUSD.conSaldo,tUSD.contratado,tUSD.cobrado,tUSD.porCobrar,tUSD.avance],[1,0,1000,1000,0,100],'USD aparte: nunca se suma con MXN');
+assert.deepEqual(rs.totales.map(t=>t.moneda),['MXN','USD']);
+// Proyecto cancelado: no aparece ni suma
+db.pest.Proyectos.m[filaP3][6]='Cancelado';
+rs=ok('tania','resumenCobranzaGeneral');
+assert(!rs.proyectos.some(x=>x.folio===p3)); assert.equal(rs.totales.find(t=>t.moneda==='MXN').porFirmar,0);
+db.pest.Proyectos.m[filaP3][6]='Activo';
+// Solo lee: no escribe en ningún libro
+const antes=JSON.stringify(Object.values(libros).map(L=>Object.keys(L.pest).map(k=>L.pest[k].m.length)));
+ok('tania','resumenCobranzaGeneral');
+assert.equal(JSON.stringify(Object.values(libros).map(L=>Object.keys(L.pest).map(k=>L.pest[k].m.length))),antes,'el resumen no escribe');
+// Lógica pura: sin esquema (etapa única), orden en otra moneda → margen a revisar (y totales sin margen)
+const pu=P.resumenGeneralCobranza({contratos:[{proyectoFolio:'PRY-1',estado:'Firmado',moneda:'MXN',marca:'helgen',total:116,subtotal:100}],
+  esquemas:[],pagos:[],proyectos:[{folio:'PRY-1',estado:'Cerrado',nombre:'N',cliente:'C'}],
+  ordenes:[{proyectoFolio:'PRY-1',estado:'Emitida',monedaProyecto:'USD',subtotalProyecto:5}]});
+assert.deepEqual([pu.proyectos[0].siguienteEtapa,pu.proyectos[0].saldo,pu.proyectos[0].margen,!!pu.proyectos[0].margenError,pu.totales[0].margen],
+  ['Total',116,null,true,null],'cerrado sí aparece; margen con monedas mezcladas se marca');
 console.log('OK cobranza');

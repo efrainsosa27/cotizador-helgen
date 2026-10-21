@@ -274,13 +274,49 @@
 
   <!-- ===== COBRANZA (solo rol de cobranza; el servidor lo vuelve a revisar en cada llamada) ===== -->
   <section id="vistaCob" class="oculto">
+    <!-- Resumen de todos los proyectos (al entrar a la pestaña); clic en un renglón abre el proyecto -->
+    <div id="cobVistaResumen">
+      <div class="modulo">
+        <h2>1 · Resumen de cobranza</h2>
+        <div id="resTotales" class="nota">Cargando…</div>
+        <div class="acciones">
+          <input id="resBuscar" placeholder="Buscar por folio, cliente o nombre…" oninput="pintarResumenCob()" style="flex:1; min-width:220px">
+          <select id="resMoneda" onchange="pintarResumenCob()" style="width:auto">
+            <option value="">Todas las monedas</option><option value="MXN">MXN</option><option value="USD">USD</option>
+          </select>
+          <select id="resMarca" onchange="pintarResumenCob()" style="width:auto">
+            <option value="">Todas las líneas</option><option value="helgen">Helgen</option><option value="energy">Helgen Energy</option>
+          </select>
+          <label style="display:flex; align-items:center; gap:6px; margin:0; white-space:nowrap">
+            <input type="checkbox" id="resSaldo" onchange="pintarResumenCob()" style="width:auto"> Solo con saldo</label>
+          <button type="button" class="btn btn-sec" onclick="cargarResumenCob()">Actualizar</button>
+          <button type="button" class="btn btn-sec" onclick="descargarCsvCob()">Descargar CSV</button>
+        </div>
+      </div>
+      <div class="modulo">
+        <h2>2 · Proyectos</h2>
+        <div style="overflow-x:auto">
+          <table style="font-size:12px">
+            <thead><tr><th>Proyecto</th><th>Contrato</th><th class="num">Contratado</th><th class="num">Cobrado</th>
+              <th class="num">Saldo</th><th style="width:90px">Avance</th><th>Siguiente etapa · último pago</th>
+              <th class="num">Costo OC</th><th class="num">Margen</th></tr></thead>
+            <tbody id="resLista"></tbody>
+          </table>
+        </div>
+        <div class="nota" style="margin-top:8px">Haz clic en un proyecto para ver su contrato, esquema y pagos. Contratado, cobrado y saldo
+          con IVA; costo de órdenes de compra y margen sin IVA. Los contratos "Por firmar" no suman a los totales; los proyectos
+          cancelados no aparecen.</div>
+      </div>
+    </div>
+
+    <div id="cobVistaProyecto" class="oculto">
     <div class="modulo">
       <h2>1 · Proyecto y contrato</h2>
       <div class="proy-fila">
         <div><label>Proyecto</label>
           <input id="cobProyecto" list="cobProyectosList" autocomplete="off" placeholder="Busca por folio, cliente o nombre">
           <datalist id="cobProyectosList"></datalist></div>
-        <button type="button" class="btn btn-sec" onclick="cargarProyectosCob()">Actualizar lista</button>
+        <button type="button" class="btn btn-sec" onclick="verResumenCob()">← Resumen</button>
       </div>
       <div id="cobInfo" class="nota" style="margin-top:6px">Elige un proyecto para ver su contrato, esquema y pagos.</div>
       <div id="cobDetalle" class="oculto">
@@ -330,6 +366,7 @@
         <thead><tr><th>Folio</th><th>Fecha</th><th class="num">Monto</th><th class="num">Aplicado</th><th>Método / referencia</th><th>Etapa</th><th>Registró</th><th>Comprobante</th><th></th></tr></thead>
         <tbody id="cobPagos"></tbody>
       </table>
+    </div>
     </div>
   </section>
 
@@ -975,8 +1012,84 @@
   $('cobProyecto').addEventListener('change', () => { const p = proyectoCobElegido(); if (p) abrirProyectoCob(p.folio); });
 
   function abrirProyectoCob(folio) {
+    $('cobVistaResumen').classList.add('oculto'); $('cobVistaProyecto').classList.remove('oculto');
     $('cobInfo').textContent = 'Cargando…';
     google.script.run.withSuccessHandler(pintarCobranza).withFailureHandler(mostrarError).getCobranzaProyecto(folio);
+  }
+
+  // ---- Resumen de cobranza (todos los proyectos; lo calcula el servidor con las mismas cifras que cada proyecto) ----
+  let RESUMEN = null;
+
+  function verResumenCob() {
+    $('cobVistaProyecto').classList.add('oculto'); $('cobVistaResumen').classList.remove('oculto');
+    cargarResumenCob();
+  }
+
+  function cargarResumenCob() {
+    if (!RESUMEN) $('resTotales').textContent = 'Cargando…';
+    google.script.run.withSuccessHandler(r => { RESUMEN = r; pintarResumenCob(); })
+      .withFailureHandler(mostrarError).resumenCobranzaGeneral();
+  }
+
+  /** Renglones del resumen que pasan los filtros (búsqueda, moneda, línea, solo con saldo). */
+  function filtrarResumenCob() {
+    const q = $('resBuscar').value.trim().toLowerCase(), m = $('resMoneda').value, l = $('resMarca').value, conSaldo = $('resSaldo').checked;
+    return ((RESUMEN && RESUMEN.proyectos) || []).filter(p => (!q || (p.folio + ' ' + p.cliente + ' ' + p.nombre).toLowerCase().includes(q)) &&
+      (!m || p.moneda === m) && (!l || p.marca === l) && (!conSaldo || (p.estadoContrato === 'Firmado' && p.saldo > 0.004)));
+  }
+
+  function pintarResumenCob() {
+    if (!RESUMEN) return;
+    const tile = (k, x, clase) => '<div class="tile"><span>' + esc(k) + '</span><b' + (clase ? ' class="' + clase + '"' : '') + '>' + x + '</b></div>';
+    // Totales: uno por moneda, solo contratos firmados (los filtros aplican a la tabla, no a los totales)
+    $('resTotales').innerHTML = RESUMEN.totales.length ? RESUMEN.totales.map(t =>
+      '<div class="sat-titulo" style="margin-top:4px">' + esc(t.moneda) + ' · ' + t.proyectos + (t.proyectos === 1 ? ' contrato firmado' : ' contratos firmados') +
+      (t.porFirmar ? ' · ' + t.porFirmar + ' por firmar (' + dinero(t.montoPorFirmar, t.moneda) + ', no suman)' : '') + '</div>' +
+      '<div class="tiles">' + tile('Contratado (con IVA)', dinero(t.contratado, t.moneda)) + tile('Cobrado', dinero(t.cobrado, t.moneda)) +
+      tile('Por cobrar', dinero(t.porCobrar, t.moneda)) + tile('Avance', t.avance + '%') +
+      tile('Proyectos con saldo', t.conSaldo + ' de ' + t.proyectos) +
+      tile('Margen (sin IVA)', t.margen == null ? '—' : dinero(t.margen, t.moneda) + (t.margenPorcentaje == null ? '' : ' · ' + t.margenPorcentaje + '%'),
+        t.margen != null && t.margen < 0 ? 'negativo' : '') + '</div>').join('')
+      : '<span class="nota">Todavía no hay proyectos con cotización aceptada.</span>';
+    const lista = filtrarResumenCob();
+    $('resLista').innerHTML = lista.length ? lista.map(p => {
+      const firmado = p.estadoContrato === 'Firmado';
+      return '<tr class="fila-cat" data-folio="' + esc(p.folio) + '"><td style="min-width:190px"><b style="white-space:nowrap">' + esc(p.folio) + '</b>' +
+        ' <span class="nota">· ' + esc(MARCA_TXT[p.marca] || '') + '</span><div class="nota">' + esc(p.cliente) + ' · ' + esc(p.nombre) +
+        (p.estadoProyecto !== 'Activo' ? ' · ' + esc(p.estadoProyecto) : '') + '</div></td><td>' +
+        '<span class="chip ' + (firmado ? 'firmado' : 'aceptada') + '" style="white-space:nowrap">' + esc(p.estadoContrato) + '</span></td>' +
+        '<td class="num">' + dinero(p.contratado, p.moneda) + '</td><td class="num">' + dinero(p.pagado, p.moneda) + '</td>' +
+        '<td class="num"><b>' + dinero(p.saldo, p.moneda) + '</b></td>' +
+        '<td><div class="barra" title="' + p.avance + '%"><i style="width:' + Math.max(0, Math.min(100, p.avance)) + '%"></i></div><span class="nota">' + p.avance + '%</span></td>' +
+        '<td>' + (p.siguienteEtapa ? esc(p.siguienteEtapa) + ' · ' + dinero(p.siguienteSaldo, p.moneda) : 'Pagado') +
+        '<div class="nota">' + (p.ultimoPago ? 'Último pago ' + esc(fechaMx(p.ultimoPago)) : 'Sin pagos') + '</div></td>' +
+        '<td class="num">' + (p.costoOc == null ? '—' : dinero(p.costoOc, p.moneda) + '<div class="nota">' + p.ordenes + (p.ordenes === 1 ? ' orden' : ' órdenes') + '</div>') + '</td>' +
+        '<td class="num">' + (p.margen == null ? '<span class="nota aviso-moneda" title="' + esc(p.margenError) + '">Revisar</span>'
+          : '<b' + (p.margen < 0 ? ' class="aviso-moneda"' : '') + '>' + dinero(p.margen, p.moneda) + '</b><div class="nota">' + p.margenPorcentaje + '%</div>') + '</td></tr>';
+    }).join('') : '<tr><td colspan="9" class="nota">' + ((RESUMEN.proyectos || []).length ? 'Ningún proyecto coincide con los filtros.' : 'Sin proyectos con contrato.') + '</td></tr>';
+    $('resLista').querySelectorAll('tr[data-folio]').forEach(tr => tr.onclick = () => abrirProyectoCob(tr.dataset.folio));
+  }
+
+  /** CSV de los renglones filtrados (UTF-8 con BOM para que Excel lea los acentos). Texto que empiece con = + - @ va con apóstrofo. */
+  function csvResumenCob(lista) {
+    const texto = s => { const v = String(s ?? ''); return '"' + (/^[=+\-@]/.test(v) ? "'" + v : v).replace(/"/g, '""') + '"'; };
+    const num = n => n == null ? '' : r2(n).toFixed(2);
+    const enc = ['Folio', 'Proyecto', 'Cliente', 'Línea de negocio', 'Contrato', 'Moneda', 'Contratado con IVA', 'Cobrado', 'Saldo', 'Avance %',
+      'Siguiente etapa', 'Saldo siguiente etapa', 'Último pago', 'Órdenes de compra', 'Costo OC sin IVA', 'Margen sin IVA', 'Margen %'];
+    const filas = lista.map(p => [texto(p.folio), texto(p.nombre), texto(p.cliente), texto(MARCA_TXT[p.marca] || ''), texto(p.estadoContrato),
+      texto(p.moneda), num(p.contratado), num(p.pagado), num(p.saldo), String(p.avance), texto(p.siguienteEtapa),
+      p.siguienteEtapa ? num(p.siguienteSaldo) : '', texto(p.ultimoPago), String(p.ordenes), num(p.costoOc), num(p.margen),
+      p.margenPorcentaje == null ? '' : String(p.margenPorcentaje)].join(','));
+    return '﻿' + [enc.map(texto).join(',')].concat(filas).join('\r\n');
+  }
+
+  function descargarCsvCob() {
+    if (!RESUMEN) { mostrarError('Espera a que cargue el resumen.'); return; }
+    const url = URL.createObjectURL(new Blob([csvResumenCob(filtrarResumenCob())], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'cobranza-' + (RESUMEN.hoy || 'resumen') + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   /** Pinta todo a partir de la respuesta del servidor (vistaCobranza_). */
@@ -1368,7 +1481,7 @@
     $('tabHist').classList.toggle('activo', t === 'hist');
     if (t === 'hist') cargarHistorial();
     if (t === 'cat') cargarCatalogo();
-    if (t === 'cob') cargarProyectosCob();
+    if (t === 'cob') { cargarProyectosCob(); verResumenCob(); }
     if (t === 'com') cargarProyectosCom();
     $('aviso').className = 'aviso';
   }

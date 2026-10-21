@@ -271,6 +271,17 @@ v=ok('tania','getCobranzaProyecto',p2);
 assert.deepEqual([v.margen.moneda,v.margen.contratado,v.margen.totalCostos,v.margen.margen,v.margen.porcentaje],['USD',5000,100,4900,98]);
 v=ok('tania','getCobranzaProyecto',p3); assert.deepEqual([v.margen.totalCostos,v.margen.margen],[0,100],'sin órdenes');
 
+// --- Resumen de cobranza: costo de órdenes y margen por proyecto (las mismas cifras que la vista) ---
+const rs=ok('tania','resumenCobranzaGeneral');
+const rp1=rs.proyectos.find(x=>x.folio===p1), rp2=rs.proyectos.find(x=>x.folio===p2);
+assert.deepEqual([rp1.ordenes,rp1.costoOc,rp1.margen,rp1.margenPorcentaje],[2,3850,6150,61.5],'la cancelada no cuenta');
+assert.deepEqual([rp2.moneda,rp2.costoOc,rp2.margen,rp2.margenPorcentaje],['USD',100,4900,98]);
+assert(!rs.proyectos.some(x=>x.folio===p4),'proyecto cancelado fuera del resumen');
+assert.deepEqual(rs.proyectos.filter(x=>x.estadoContrato==='Por firmar').map(x=>x.folio),[p3]);
+const tm=rs.totales.find(t=>t.moneda==='MXN');
+assert.deepEqual([tm.contratadoSinIva,tm.costoOc,tm.margen,tm.margenPorcentaje],[10000,3850,6150,61.5],'el por firmar no suma al margen');
+falla('pedro','resumenCobranzaGeneral',[],/No tienes permiso de cobranza/,'PERMISO');
+
 // --- Con órdenes vigentes en MXN, la aceptada no puede cambiar a USD (tras desbloquear) ---
 ok('efrain','desbloquearContrato',p1,'Prueba de moneda con órdenes');
 falla('efrain','marcarAceptada',[p1,c1usd],/órdenes de compra en MXN/);

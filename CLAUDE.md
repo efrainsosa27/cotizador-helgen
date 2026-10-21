@@ -165,6 +165,8 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 ### 4.5.2 Cobranza (sección 4.2 del archivo; ver §6.11)
 - Todas empiezan con `exigirCobranza_()` (token + correo en `ROL_COBRANZA`; si no, `errorPermiso_` → `codigo: "PERMISO"`).
 - *(UI)* `listarProyectosCobranza(busqueda)` (todos los estados + estado del contrato), `getCobranzaProyecto(folio)`,
+  `resumenCobranzaGeneral()` (resumen de todos los proyectos; solo lee: una lectura de Contratos, Esquemas, Pagos, Proyectos y
+  órdenes de compra; calcula con `resumenGeneralCobranza`),
   `marcarAceptada(proyecto, cotizacion, confirmado)` (al pasar de Helgen a Energy pone el 60/30/10; si eso reemplaza un esquema
   distinto devuelve `{confirmar, mensaje}` sin cambiar nada; entre cotizaciones de la misma línea conserva el esquema),
   `guardarEsquema(proyecto, etapas, motivo)` (Energy: solo `ADMIN_DESBLOQUEO` y motivo obligatorio en la Bitacora), `firmarContrato(proyecto, 'AAAA-MM-DD')`,
@@ -225,16 +227,21 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 - SAT: `palabrasSat`, `SINONIMOS_SAT`, `PALABRAS_SERVICIO_SAT`, `buscarClavesSat(consulta, filas, n)`, `candidatosSat`,
   `solicitudIaSat`, `leerRespuestaIaSat` (solo acepta claves que estaban entre los candidatos). Modelo: `MODELO_IA_SAT`.
 - `construirHtmlPdf(d, cfg, logoUrl)` — HTML del PDF (ver reglas 3–4).
+- Resumen de cobranza: `resumenGeneralCobranza({contratos, esquemas, pagos, proyectos, ordenes})` → `{totales (por moneda), proyectos}`
+  (ver §6.11 "Resumen de cobranza"); usa `resumenCobranza` por proyecto, así las cifras son las mismas que en su vista.
 - Compras: `normalizarProveedor`, `proveedorId` (RFC válido no genérico o `SIN-RFC:razón social`), `fusionarProveedor` (un dato
   vacío no borra uno anterior), `proveedoresDesdeFilas` (con `etiqueta` y `fila`), `normalizarOrdenCompra(p, {moneda, ubicacion, hoy,
   ivaTasa})` (entrega obligatoria y no anterior a hoy; lugar = ubicación del proyecto si viene vacío; condiciones obligatorias; IVA
   16/8/0 % (`IVA_OC`); renglones con costo capturado; tipo de cambio obligatorio si la moneda no es la del proyecto;
-  `subtotalProyecto` sin IVA en la moneda del proyecto), `margenProyecto(contratado, moneda, costos)` (lanza error si un costo
+  `subtotalProyecto` sin IVA en la moneda del proyecto), `costosDeOrdenes(ordenes, monedaContrato)` (suma `subtotal_proyecto`
+  por moneda; la usan el margen de la vista y el resumen), `margenProyecto(contratado, moneda, costos)` (lanza error si un costo
   está en otra moneda; `porcentaje` con 1 decimal), `nombreArchivoOc`, `terminosOcParaPdf(cfg)` (si la celda está vacía, los
   iniciales), `construirHtmlOrdenCompra(d, cfg, logoUrl)` (mismas reglas que el de cotización; sin tipo de cambio ni línea de negocio).
 
 ### 4.7 Interfaz (`web/cotizador/index.html`)
-Pestañas: **Nueva cotización**, **Historial**, **Catálogo**, **Cobranza** (solo si `permisos.cobranza`; con tarjeta de margen
+Pestañas: **Nueva cotización**, **Historial**, **Catálogo**, **Cobranza** (solo si `permisos.cobranza`; al entrar muestra el
+**resumen** `#cobVistaResumen` — `verResumenCob`, `cargarResumenCob`, `filtrarResumenCob`, `pintarResumenCob`, `csvResumenCob`,
+`descargarCsvCob` —; clic en un renglón → `abrirProyectoCob` muestra `#cobVistaProyecto` con "← Resumen"; tarjeta de margen
 `#cobMargen`) y **Compras** (solo si `permisos.compras`): `cargarProyectosCom`, `pintarCompras(vista)` (al cambiar de proyecto
 limpia el formulario), `recibirProveedores`/`autorrellenarProveedor`, `agregarRenglonOc` (el catálogo llena clave, descripción y
 unidad; el costo queda vacío; listas `#ocCatalogo`/`#ocClaves` sin precio), `recalcularOc`, `pintarTcOc` (tipo de cambio si la
@@ -469,6 +476,13 @@ Compras: `ROL_COMPRAS` (correos separados por coma: efrain@, tania@, leo@; cread
   proyecto por más de **1.00** (moneda del proyecto) se rechaza. Si la moneda del pago es otra, tipo de cambio del día
   obligatorio (pesos por dólar) y se guarda el monto aplicado en la moneda del proyecto: **nunca se suman MXN y USD**.
 - **Cancelar pago:** rol de cobranza, con motivo; el pago queda como Cancelado (nunca se borra) y deja de contar.
+- **Resumen de cobranza** (construido 21/10/2026; decisiones del usuario): pantalla inicial de la pestaña Cobranza. Totales por
+  moneda (nunca MXN + USD): contratado con IVA, cobrado, por cobrar, avance, proyectos con saldo y margen sin IVA. Tabla por
+  proyecto: contratado, cobrado, saldo, avance, siguiente etapa por cobrar, último pago, costo de órdenes y margen; firmados del
+  mayor saldo al menor y luego los **"Por firmar"** (aceptada sin firmar: se muestran pero **no suman** a los totales). Los
+  proyectos **Cancelados no aparecen** (no deberían tener contrato; si lo tienen, se excluyen). Filtros (búsqueda, moneda,
+  línea, solo con saldo) solo para la tabla; los totales son de todos. **Descargar CSV** de la tabla filtrada (UTF-8 con BOM
+  para Excel; texto que empiece con `= + - @` con apóstrofo). Solo lee: no escribe en ningún libro.
 - **USD en cotizaciones:** el catálogo guarda el precio en pesos y la columna I lo convierte a dólares con el tipo de cambio del
   día (Google Finance, o el manual de la pestaña "Tipo de cambio"; **no es el FIX de Banxico**). En USD la interfaz pone el precio en
   dólares al elegir un producto; al cambiar de moneda convierte los renglones del catálogo cuyo precio no se tocó (los capturados a
@@ -535,7 +549,7 @@ node tests/sat.test.js . "$HOME/Library/CloudStorage/GoogleDrive-efrain@helgen.t
 node tests/sesion.test.js .                                    # token en doPost, vendedor_* (vendedor falso se ignora)
 node tests/proyectos.test.js .                                 # folio PRY, carpetas, proyecto_folio, subcarpetas que se reparan
 node tests/interfaz.test.js .                                  # interfaz con DOM y fetch simulados: proyecto rechazado, USD, pestañas Cobranza (con margen) y Compras
-node tests/cobranza.test.js .                                  # cobranza por doPost: permisos, aceptada, esquema, firma, desbloqueo, pagos, monedas
+node tests/cobranza.test.js .                                  # cobranza por doPost: permisos, aceptada, esquema, firma, desbloqueo, pagos, monedas, resumen
 node tests/compras.test.js .                                   # compras por doPost: ROL_COMPRAS, órdenes, PDF, proveedores, recibir/cancelar, margen, monedas
 node tests/probar-busqueda-sat.js Code.js "<ruta>/SAT_c_ClaveProdServ.csv"   # ver qué sugiere la búsqueda por palabras
 
@@ -613,6 +627,10 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
   **Revisión en el cotizador real (21/10/2026, Claude in Chrome, sin crear nada):** sesión sin errores, pestañas Cobranza y
   Compras visibles con los dos roles, Compras sin proyectos ("No hay proyectos activos con contrato firmado": en la hoja real
   ningún contrato está firmado), vista de cobranza de `PRY-2026-0001` (Cancelado) carga con `margen: null`. Libro de compras vacío.
+- **Resumen de cobranza: construido el 21/10/2026, SIN PUBLICAR** (código y pruebas en Node; revisado en local con datos de
+  ejemplo). Falta: prueba en PRUEBAS (`PRY-2026-0003`/`0004` tienen pagos y órdenes; tú sin cobranza = `pruebasComprasSinCobranza()`),
+  `clasp push` + comprobar, `clasp deploy` (@9), `wrangler deploy` y revisión en el cotizador real. Solo lee: no requiere respaldo
+  ni permisos nuevos de Google.
 - Tania y Leo (rol de compras) no se han probado con sus cuentas reales; la primera orden real será también la primera prueba de
   PDF en la carpeta real.
 - Subcarpetas "Órdenes de compra" de los proyectos viejos: quedan vacías y sin uso. Si el usuario lo pide, comprobar con el

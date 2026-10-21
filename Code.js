@@ -98,6 +98,7 @@ const API_FUNCIONES = {
   // Cobranza (solo ROL_COBRANZA; cada función lo revisa)
   listarProyectosCobranza: listarProyectosCobranza,
   getCobranzaProyecto: getCobranzaProyecto,
+  resumenCobranzaGeneral: resumenCobranzaGeneral,
   marcarAceptada: marcarAceptada,
   guardarEsquema: guardarEsquema,
   firmarContrato: firmarContrato,
@@ -1337,16 +1338,7 @@ function vistaCobranza_(libro, proyecto) {
 function margenDeContrato_(contrato) {
   try {
     const ordenes = ordenesDeProyecto_(libroComprasSiExiste_(), contrato.proyectoFolio).filter(o => o.estado !== OC_CANCELADA);
-    const porMoneda = {};
-    ordenes.forEach(o => {
-      const m = o.monedaProyecto || contrato.moneda;
-      const x = porMoneda[m] || (porMoneda[m] = { concepto: 'Órdenes de compra', moneda: m, monto: 0, cantidad: 0 });
-      x.monto = (aCentavos(x.monto) + aCentavos(o.subtotalProyecto)) / 100;
-      x.cantidad++;
-    });
-    const costos = Object.keys(porMoneda).map(m => porMoneda[m]);
-    if (!costos.length) costos.push({ concepto: 'Órdenes de compra', moneda: contrato.moneda, monto: 0, cantidad: 0 });
-    return margenProyecto(contrato.subtotal, contrato.moneda, costos);
+    return margenProyecto(contrato.subtotal, contrato.moneda, costosDeOrdenes(ordenes, contrato.moneda));
   } catch (e) {
     return { error: 'No se pudo calcular el margen: ' + e.message };
   }
@@ -1376,6 +1368,30 @@ function getCobranzaProyecto(folio) {
   exigirCobranza_();
   const libro = libroCobranza_();
   return vistaCobranza_(libro, proyectoParaCobranza_(folio));
+}
+
+/**
+ * Resumen de cobranza de todos los proyectos con contrato (solo rol de cobranza; solo lee). Lee una vez Contratos, Esquemas,
+ * Pagos, Proyectos y las órdenes de compra, y calcula con resumenGeneralCobranza (las mismas cifras que la vista de cada proyecto).
+ */
+function resumenCobranzaGeneral() {
+  exigirCobranza_();
+  const libro = libroCobranza_();
+  const contratos = filasCobranza_(hojaCobranza_(libro, 'Contratos'), 'Contratos')
+    .map((r, i) => contratoDesdeFila_(r, i + 2)).filter(c => c.proyectoFolio);
+  const esquemas = filasCobranza_(hojaCobranza_(libro, 'Esquemas'), 'Esquemas')
+    .map(r => ({ proyectoFolio: String(r[0]), orden: Number(r[1]), etapa: String(r[2]), porcentaje: Number(r[3]) }));
+  const pagos = filasCobranza_(hojaCobranza_(libro, 'Pagos'), 'Pagos').map((r, i) => pagoDesdeFila_(r, i + 2));
+  const hoja = hojaProyectos_();
+  const proyectos = proyectosDesdeFilas(hoja.getLastRow() > 1
+    ? hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : []);
+  const libroCompras = libroComprasSiExiste_();
+  const ordenes = libroCompras
+    ? filasDeArea_(hojaCompras_(libroCompras, 'OrdenesCompra'), HOJAS_COMPRAS, 'OrdenesCompra')
+      .filter(r => String(r[0] || '').trim()).map((r, i) => ordenDesdeFila_(r, i + 2))
+    : [];
+  return Object.assign(resumenGeneralCobranza({ contratos: contratos, esquemas: esquemas, pagos: pagos, proyectos: proyectos,
+    ordenes: ordenes }), { hoy: hoyIso_() });
 }
 
 /**
@@ -2445,6 +2461,98 @@ function margenProyecto(contratado, moneda, costos) {
     moneda: moneda, contratado: contratadoCts / 100, costos: lista, totalCostos: costosCts / 100, margen: margenCts / 100,
     porcentaje: contratadoCts > 0 ? Math.round(margenCts / contratadoCts * 1000) / 10 : 0,
   };
+}
+
+/**
+ * Costos de órdenes de compra para margenProyecto: suma de subtotal_proyecto (sin IVA) de las órdenes recibidas (el que llama
+ * quita las canceladas), agrupada por moneda del proyecto. Sin órdenes: un costo en 0 en la moneda del contrato.
+ */
+function costosDeOrdenes(ordenes, monedaContrato) {
+  const porMoneda = {};
+  (ordenes || []).forEach(o => {
+    const m = o.monedaProyecto || monedaContrato;
+    const x = porMoneda[m] || (porMoneda[m] = { concepto: 'Órdenes de compra', moneda: m, monto: 0, cantidad: 0 });
+    x.monto = (aCentavos(x.monto) + aCentavos(o.subtotalProyecto)) / 100;
+    x.cantidad++;
+  });
+  const costos = Object.keys(porMoneda).map(m => porMoneda[m]);
+  return costos.length ? costos : [{ concepto: 'Órdenes de compra', moneda: monedaContrato, monto: 0, cantidad: 0 }];
+}
+
+/**
+ * Resumen de cobranza de todos los proyectos. d = {contratos, esquemas: [{proyectoFolio, orden, etapa, porcentaje}], pagos,
+ * proyectos, ordenes}. Los proyectos Cancelados no aparecen. Un renglón por contrato: "Firmado" o "Por firmar" (aceptada sin
+ * firmar: se muestra pero no suma a los totales). Pagado y saldo salen de resumenCobranza (lo mismo que la vista del proyecto);
+ * margen = contratado sin IVA − órdenes de compra no canceladas. Totales por moneda, solo de contratos firmados: nunca se suman
+ * MXN y USD. Renglones: firmados primero, del mayor saldo al menor; luego los por firmar.
+ */
+function resumenGeneralCobranza(d) {
+  const may = s => String(s || '').trim().toUpperCase();
+  const proyectos = {};
+  (d.proyectos || []).forEach(p => { proyectos[may(p.folio)] = p; });
+  const agrupar = (lista, campo) => {
+    const m = {};
+    (lista || []).forEach(x => { const k = may(x[campo]); (m[k] = m[k] || []).push(x); });
+    return m;
+  };
+  const esquemas = agrupar(d.esquemas, 'proyectoFolio'), pagos = agrupar(d.pagos, 'proyectoFolio');
+  const ordenes = agrupar(d.ordenes, 'proyectoFolio');
+
+  const renglones = [];
+  (d.contratos || []).forEach(c => {
+    const folio = may(c.proyectoFolio);
+    const p = proyectos[folio];
+    if (!p || p.estado === 'Cancelado') return;
+    let etapas = (esquemas[folio] || []).slice().sort((a, b) => a.orden - b.orden)
+      .map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje }));
+    if (!etapas.length) etapas = [{ etapa: 'Total', porcentaje: 100 }];
+    const pagosP = pagos[folio] || [];
+    const r = resumenCobranza(c, etapas, pagosP);
+    const siguiente = r.etapas.find(e => aCentavos(e.saldo) > 0);
+    const ultimoPago = pagosP.filter(x => x.estado === 'Vigente').map(x => String(x.fecha || '')).sort().pop() || '';
+    const ocs = (ordenes[folio] || []).filter(o => o.estado !== OC_CANCELADA);
+    let margen = null, margenError = '';
+    try {
+      margen = margenProyecto(c.subtotal, c.moneda, costosDeOrdenes(ocs, c.moneda));
+    } catch (e) {
+      margenError = e.message;
+    }
+    renglones.push({
+      folio: p.folio, nombre: p.nombre, cliente: p.cliente, estadoProyecto: p.estado, marca: c.marca, moneda: c.moneda,
+      estadoContrato: c.estado === ESTADO_FIRMADO ? 'Firmado' : 'Por firmar', cotizacion: c.cotizacion, fechaFirma: c.fechaFirma,
+      contratado: r.contratado, subtotal: r.subtotal, pagado: r.pagado, saldo: r.saldo, avance: r.avance,
+      siguienteEtapa: siguiente ? siguiente.etapa : '', siguienteSaldo: siguiente ? siguiente.saldo : 0, ultimoPago: ultimoPago,
+      ordenes: ocs.length, costoOc: margen ? margen.totalCostos : null, margen: margen ? margen.margen : null,
+      margenPorcentaje: margen ? margen.porcentaje : null, margenError: margenError,
+    });
+  });
+  renglones.sort((a, b) => (a.estadoContrato === b.estadoContrato ? 0 : a.estadoContrato === 'Firmado' ? -1 : 1) ||
+    b.saldo - a.saldo || (a.folio < b.folio ? -1 : 1));
+
+  // Totales por moneda (en centavos para no acumular errores de redondeo)
+  const tot = {};
+  renglones.forEach(x => {
+    const t = tot[x.moneda] || (tot[x.moneda] = { moneda: x.moneda, proyectos: 0, conSaldo: 0, contratado: 0, cobrado: 0,
+      porCobrar: 0, contratadoSinIva: 0, costoOc: 0, porFirmar: 0, montoPorFirmar: 0, margenError: false });
+    if (x.estadoContrato !== 'Firmado') { t.porFirmar++; t.montoPorFirmar += aCentavos(x.contratado); return; }
+    t.proyectos++;
+    if (aCentavos(x.saldo) > 0) t.conSaldo++;
+    t.contratado += aCentavos(x.contratado); t.cobrado += aCentavos(x.pagado); t.porCobrar += aCentavos(x.saldo);
+    t.contratadoSinIva += aCentavos(x.subtotal);
+    if (x.margenError) t.margenError = true; else t.costoOc += aCentavos(x.costoOc);
+  });
+  const totales = Object.keys(tot).sort().map(k => {
+    const t = tot[k];
+    const margenCts = t.contratadoSinIva - t.costoOc;
+    return {
+      moneda: t.moneda, proyectos: t.proyectos, conSaldo: t.conSaldo, contratado: t.contratado / 100, cobrado: t.cobrado / 100,
+      porCobrar: t.porCobrar / 100, avance: t.contratado > 0 ? Math.min(100, Math.round(t.cobrado / t.contratado * 1000) / 10) : 0,
+      contratadoSinIva: t.contratadoSinIva / 100, costoOc: t.costoOc / 100, margen: t.margenError ? null : margenCts / 100,
+      margenPorcentaje: t.margenError || t.contratadoSinIva <= 0 ? null : Math.round(margenCts / t.contratadoSinIva * 1000) / 10,
+      porFirmar: t.porFirmar, montoPorFirmar: t.montoPorFirmar / 100,
+    };
+  });
+  return { totales: totales, proyectos: renglones };
 }
 
 /** Nombre del PDF de una orden: "OC-2026-0001 — <proveedor>.pdf", sin caracteres raros. */

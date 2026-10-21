@@ -137,7 +137,47 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   assert(!B.$('tabCob').classList.contains('oculto'),'con permiso ve la pestaña');
   assert(B.$('tabCom').classList.contains('oculto'),'cobranza sin compras no ve Compras');
   B.respuestas.listarProyectosCobranza={ok:true,datos:[{...PRY,contrato:''}]};
+  // Resumen de todos los proyectos: aparece al entrar a la pestaña
+  const RES={hoy:'2026-10-21',totales:[{moneda:'MXN',proyectos:2,conSaldo:1,contratado:11600,cobrado:5000,porCobrar:6600,avance:43.1,
+      contratadoSinIva:10000,costoOc:4850,margen:5150,margenPorcentaje:51.5,porFirmar:1,montoPorFirmar:116},
+    {moneda:'USD',proyectos:1,conSaldo:0,contratado:1000,cobrado:1000,porCobrar:0,avance:100,contratadoSinIva:862.07,costoOc:1200,margen:-337.93,margenPorcentaje:-39.2,porFirmar:0,montoPorFirmar:0}],
+    proyectos:[{folio:'PRY-2026-0003',nombre:'Techo',cliente:'=Luis, "SA"',estadoProyecto:'Activo',marca:'helgen',moneda:'MXN',estadoContrato:'Firmado',
+      contratado:11600,subtotal:10000,pagado:5000,saldo:6600,avance:43.1,siguienteEtapa:'Instalación',siguienteSaldo:3480,ultimoPago:'2026-10-20',ordenes:2,costoOc:4850,margen:5150,margenPorcentaje:51.5,margenError:''},
+      {folio:'PRY-2026-0004',nombre:'Texas',cliente:'Solar Corp',estadoProyecto:'Cerrado',marca:'energy',moneda:'USD',estadoContrato:'Firmado',
+      contratado:1000,subtotal:862.07,pagado:1000,saldo:0,avance:100,siguienteEtapa:'',siguienteSaldo:0,ultimoPago:'2026-10-19',ordenes:1,costoOc:1200,margen:-337.93,margenPorcentaje:-39.2,margenError:''},
+      {folio:'PRY-2026-0005',nombre:'Nuevo',cliente:'Ana',estadoProyecto:'Activo',marca:'helgen',moneda:'MXN',estadoContrato:'Por firmar',
+      contratado:116,subtotal:100,pagado:0,saldo:116,avance:0,siguienteEtapa:'Anticipo',siguienteSaldo:69.6,ultimoPago:'',ordenes:0,costoOc:null,margen:null,margenPorcentaje:null,margenError:'hay costos en USD'}]};
+  B.respuestas.resumenCobranzaGeneral={ok:true,datos:RES};
   B.run("verTab('cob')"); await esperar();
+  assert(!B.$('cobVistaResumen').classList.contains('oculto')&&B.$('cobVistaProyecto').classList.contains('oculto'),'al entrar se ve el resumen');
+  const tt=B.$('resTotales').innerHTML;
+  assert(/MXN · 2 contratos firmados · 1 por firmar \(\$116\.00 MXN, no suman\)/.test(tt)&&/Por cobrar<\/span><b>\$6,600\.00 MXN/.test(tt)&&/1 de 2/.test(tt),tt);
+  assert(/Margen \(sin IVA\)<\/span><b>\$5,150\.00 MXN · 51\.5%/.test(tt)&&/class="negativo">-\$337\.93 USD · -39\.2%/.test(tt),'margen por moneda');
+  let rl=B.$('resLista').innerHTML;
+  assert.deepEqual((rl.match(/data-folio="([^"]+)"/g)||[]).length,3);
+  assert(/chip aceptada" style="white-space:nowrap">Por firmar/.test(rl)&&/Instalación · \$3,480\.00 MXN/.test(rl)&&/Último pago 20\/10\/2026/.test(rl)&&/>Pagado</.test(rl)&&/Sin pagos/.test(rl)&&/· Cerrado/.test(rl)&&/· Helgen Energy/.test(rl),rl);
+  assert(/aviso-moneda" title="hay costos en USD">Revisar/.test(rl)&&/aviso-moneda">-\$337\.93 USD/.test(rl));
+  // Filtros (solo la tabla)
+  B.$('resMoneda').value='USD'; B.run('pintarResumenCob()'); assert.deepEqual(B.$('resLista').innerHTML.match(/data-folio="([^"]+)"/g),['data-folio="PRY-2026-0004"']);
+  B.$('resMoneda').value=''; B.$('resSaldo').checked=true; B.run('pintarResumenCob()');
+  assert.deepEqual(B.$('resLista').innerHTML.match(/data-folio="([^"]+)"/g),['data-folio="PRY-2026-0003"'],'solo con saldo: firmados con saldo');
+  B.$('resSaldo').checked=false; B.$('resBuscar').value='ana'; B.run('pintarResumenCob()');
+  assert.deepEqual(B.$('resLista').innerHTML.match(/data-folio="([^"]+)"/g),['data-folio="PRY-2026-0005"']);
+  B.$('resBuscar').value='zzz'; B.run('pintarResumenCob()'); assert(/Ningún proyecto coincide/.test(B.$('resLista').innerHTML));
+  B.$('resBuscar').value='';
+  // CSV: encabezados, números con punto, texto entrecomillado, fórmulas neutralizadas
+  const csv=B.run('csvResumenCob(RESUMEN.proyectos)').split('\r\n');
+  assert.equal(csv[0].charCodeAt(0),0xFEFF,'BOM para Excel'); assert(csv[0].includes('"Contratado con IVA","Cobrado","Saldo"'));
+  assert.equal(csv[1],'"PRY-2026-0003","Techo","\'=Luis, ""SA""","Helgen","Firmado","MXN",11600.00,5000.00,6600.00,43.1,"Instalación",3480.00,"2026-10-20",2,4850.00,5150.00,51.5');
+  assert(csv[3].endsWith(',0,,,'),'sin margen: celdas vacías'); assert.equal(csv.length,4);
+  // Clic en un renglón abre el proyecto; "← Resumen" regresa
+  B.respuestas.getCobranzaProyecto={ok:true,datos:{proyecto:PRY,cotizaciones:[],contrato:null,esquema:[],resumen:null,pagos:[],puedeAceptar:true,puedeFirmar:false,metodos:[],hoy:'2026-10-20'}};
+  B.run("abrirProyectoCob('PRY-2026-0001')"); await esperar();
+  assert(B.$('cobVistaResumen').classList.contains('oculto')&&!B.$('cobVistaProyecto').classList.contains('oculto'),'se abre el proyecto');
+  const nRes=B.llamadas.filter(c=>c.funcion==='resumenCobranzaGeneral').length;
+  B.run('verResumenCob()'); await esperar();
+  assert(!B.$('cobVistaResumen').classList.contains('oculto')&&B.$('cobVistaProyecto').classList.contains('oculto'));
+  assert.equal(B.llamadas.filter(c=>c.funcion==='resumenCobranzaGeneral').length,nRes+1,'al regresar se actualiza el resumen');
   assert(/PRY-2026-0001 — Luis — Solar MX — Techo/.test(B.$('cobProyectosList').innerHTML)&&/Sin aceptada/.test(B.$('cobProyectosList').innerHTML));
   const cots=[{folio:'HLG-2026-0010',fecha:'20/10/2026',marca:'helgen',moneda:'MXN',subtotal:1000,total:1160,pdf:'p'},
               {folio:'HLG-2026-0011',fecha:'20/10/2026',marca:'energy',moneda:'MXN',subtotal:2000,total:2320,pdf:'p'}];
