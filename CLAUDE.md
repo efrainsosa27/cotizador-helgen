@@ -39,6 +39,7 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 | Respaldos de la migración | Carpeta "Respaldos 2026-10-19" `1hxx0tgh4cLZMqoyf-eT8l14UAde7Y-L1` (copias de base de datos y catálogo antes del cambio) |
 | Respaldos antes de Proyectos | Carpeta "Respaldos 2026-10-20" `1rFGY_k_YRRo243p3xL2RpibQ9jkEo634`: Base de datos `1PBQvmwI412IMyJb74qBWN5ZcyhSuxK3xGU9cV5KPxTE`, Catálogo `1GxBpAvQxVNJyFJSLnaY9umA5L2qf4dqX36S4uehHUNc` (antes de la pestaña Proyectos y la columna T) |
 | Respaldos antes de Cobranza | Carpeta "Respaldos 2026-10-20 (antes de Cobranza)" `1C_yGbX0Gk_cZBwegdswPFvuzCVDdyTLF` (en la carpeta maestra): Base de datos `14C3d7w2ouaygtCGi0BP1QocGiqG4gf5Umh9O4KHgdow`, Catálogo `140_1sfwXF9u_aL1egDPYSbsE0rMwELGPZ5rkGVdzQnc` (antes de las columnas U:V, la columna I del catálogo y la pestaña "Tipo de cambio"). Verificadas contra los originales |
+| Respaldos antes de Compras (20/10/2026) | Carpeta "Respaldos 2026-10-20 (antes de Compras)" `1QWHfc7K5w5lk5vU_jt1lCSrn4PY5YyKA` (en la carpeta maestra): Base de datos `1dCTVyMH50_55WzIfN-waUvoXaKYOliet_scZSCyKHYo`, Catálogo `1Y-Ho8kKfZsLd0lris8IIHOR5X_LExRcxThbje0Z5G9s`. Libro de cobranza: carpeta "Respaldo 2026-10-20 (antes de Compras)" `1H_BjW-VEdKbO-4LpF5aeKvFWwPiprKu2` **dentro de la carpeta de cobranza** (nunca en la maestra), copia `1KIhAfkEZhMWzzp81Y8jMFjSs6a2Ki6L7LcO13cvbFgU` (solo encabezados). Las tres verificadas pestaña por pestaña contra los originales. Copias hechas con el conector de Drive: Workspace les puso "helgen.tech: lector" (§6.11); la carpeta de cobranza de respaldo la restringe el usuario a mano |
 | Worker de Cloudflare | `cotizador-helgen`, cuenta de efrain@helgen.tech `badd8bca60b008822a73ca24e983ff43` |
 | Dueño de todo / cuenta de clasp | `efrain@helgen.tech` (la API se ejecuta como esta cuenta) |
 | Proyecto de prueba "PRUEBAS — Cotizador Helgen (no usar)" | `1wp8_SQofXXUuMkUjmDyyUxYLxx-LdFv-20JaXE7q9entLfEvDKgYtnt0`; deployment `AKfycbwVu2q5…` retirado el 20/10/2026 (404). Para Cobranza (20/10/2026): deployment `AKfycbz9naWOw4Jj0qlta0RjCNifgZLvvJqXpqRnrrsALewSnmn7ydnEIw_zYriIHZjbQ5ugQw`, **retirado** al publicar (404); su `Pruebas.js` crea "PRUEBAS — Cobranza" y tiene `pruebasRondaSinRol()` / `pruebasRondaConRol()`. Solo datos inventados (§10.5). **No es la API.** |
@@ -597,8 +598,8 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - Ideas mencionadas: enviar PDF por correo, duplicar cotización, estatus (Enviada/Aceptada/Rechazada), descuentos por renglón.
 - Proyectos: gastos, nómina, horas (fase 4) y adicionales (§6.10). Cobranza (§6.11) y órdenes de compra (§6.12) ya construidas.
 - **Compras (fase 3): construida el 20/10/2026, SIN PUBLICAR** (código y pruebas en Node; commit "Compras: órdenes de compra…").
-  Falta, en este orden: 1) **respaldo** (copias de la Base de datos, el Catálogo y el libro de cobranza en "Respaldos AAAA-MM-DD
-  (antes de Compras)", verificadas); 2) prueba de punta a punta en el proyecto PRUEBAS (§10.5) con `Pruebas.js` ampliado
+  Falta, en este orden: 1) ~~respaldo~~ **hecho el 20/10/2026** (§2; falta que el usuario deje en "Restringido" la carpeta de
+  respaldo dentro de cobranza y Claude lo verifique); 2) prueba de punta a punta en el proyecto PRUEBAS (§10.5) con `Pruebas.js` ampliado
   ("PRUEBAS — Compras", `ROL_COMPRAS` sin efrain@ para probar al usuario sin rol, y luego compras sin cobranza y con los dos);
   3) el usuario crea `ROL_COMPRAS` (efrain@, tania@, leo@); 4) `clasp push` + comprobar con `clasp clone`; 5) el usuario corre
   `prepararCompras()` (no hay permisos nuevos de Google: mismos servicios que cobranza; si el editor pide autorizar, aceptar);
