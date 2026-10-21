@@ -2484,7 +2484,7 @@ function costosDeOrdenes(ordenes, monedaContrato) {
  * proyectos, ordenes}. Los proyectos Cancelados no aparecen. Un renglón por contrato: "Firmado" o "Por firmar" (aceptada sin
  * firmar: se muestra pero no suma a los totales). Pagado y saldo salen de resumenCobranza (lo mismo que la vista del proyecto);
  * margen = contratado sin IVA − órdenes de compra no canceladas. Totales por moneda, solo de contratos firmados: nunca se suman
- * MXN y USD. Renglones: firmados primero, del mayor saldo al menor; luego los por firmar.
+ * MXN y USD. Renglones: firmados primero (por moneda y del mayor saldo al menor); luego los por firmar.
  */
 function resumenGeneralCobranza(d) {
   const may = s => String(s || '').trim().toUpperCase();
@@ -2526,8 +2526,9 @@ function resumenGeneralCobranza(d) {
       margenPorcentaje: margen ? margen.porcentaje : null, margenError: margenError,
     });
   });
+  // Saldos de monedas distintas no se comparan entre sí: primero por moneda (MXN, USD), luego del mayor saldo al menor
   renglones.sort((a, b) => (a.estadoContrato === b.estadoContrato ? 0 : a.estadoContrato === 'Firmado' ? -1 : 1) ||
-    b.saldo - a.saldo || (a.folio < b.folio ? -1 : 1));
+    (a.moneda === b.moneda ? 0 : a.moneda < b.moneda ? -1 : 1) || b.saldo - a.saldo || (a.folio < b.folio ? -1 : 1));
 
   // Totales por moneda (en centavos para no acumular errores de redondeo)
   const tot = {};

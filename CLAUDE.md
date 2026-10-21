@@ -478,8 +478,8 @@ Compras: `ROL_COMPRAS` (correos separados por coma: efrain@, tania@, leo@; cread
 - **Cancelar pago:** rol de cobranza, con motivo; el pago queda como Cancelado (nunca se borra) y deja de contar.
 - **Resumen de cobranza** (construido 21/10/2026; decisiones del usuario): pantalla inicial de la pestaña Cobranza. Totales por
   moneda (nunca MXN + USD): contratado con IVA, cobrado, por cobrar, avance, proyectos con saldo y margen sin IVA. Tabla por
-  proyecto: contratado, cobrado, saldo, avance, siguiente etapa por cobrar, último pago, costo de órdenes y margen; firmados del
-  mayor saldo al menor y luego los **"Por firmar"** (aceptada sin firmar: se muestran pero **no suman** a los totales). Los
+  proyecto: contratado, cobrado, saldo, avance, siguiente etapa por cobrar, último pago, costo de órdenes y margen; firmados por
+  moneda (MXN, USD) y del mayor saldo al menor (nunca se comparan saldos de monedas distintas) y luego los **"Por firmar"** (aceptada sin firmar: se muestran pero **no suman** a los totales). Los
   proyectos **Cancelados no aparecen** (no deberían tener contrato; si lo tienen, se excluyen). Filtros (búsqueda, moneda,
   línea, solo con saldo) solo para la tabla; los totales son de todos. **Descargar CSV** de la tabla filtrada (UTF-8 con BOM
   para Excel; texto que empiece con `= + - @` con apóstrofo). Solo lee: no escribe en ningún libro.
@@ -627,10 +627,16 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
   **Revisión en el cotizador real (21/10/2026, Claude in Chrome, sin crear nada):** sesión sin errores, pestañas Cobranza y
   Compras visibles con los dos roles, Compras sin proyectos ("No hay proyectos activos con contrato firmado": en la hoja real
   ningún contrato está firmado), vista de cobranza de `PRY-2026-0001` (Cancelado) carga con `margen: null`. Libro de compras vacío.
-- **Resumen de cobranza: construido el 21/10/2026, SIN PUBLICAR** (código y pruebas en Node; revisado en local con datos de
-  ejemplo). Falta: prueba en PRUEBAS (`PRY-2026-0003`/`0004` tienen pagos y órdenes; tú sin cobranza = `pruebasComprasSinCobranza()`),
-  `clasp push` + comprobar, `clasp deploy` (@9), `wrangler deploy` y revisión en el cotizador real. Solo lee: no requiere respaldo
-  ni permisos nuevos de Google.
+- **Resumen de cobranza: construido el 21/10/2026, SIN PUBLICAR.** Probado en PRUEBAS el 21/10/2026 (Claude in Chrome, sesión del
+  usuario; deployment de prueba `AKfycbz3DZuN…`, ya **retirado**, 404). R1 (con cobranza): totales MXN 11,600 / 8,000 / 3,600 (69 %),
+  margen 5,150 (51.5 %); USD 5,800 / 1,100 / 4,700 (19 %), margen 4,900 (98 %); cada renglón igual a la vista de su proyecto; pago
+  cancelado excluido; clic en renglón, "← Resumen", filtros y texto del CSV correctos. Se encontró y corrigió el orden (comparaba
+  saldos de MXN y USD; prueba en `cobranza.test.js`). El botón "Descargar CSV" no lo usó Claude (descargar pide permiso del
+  usuario). R2 (`pruebasComprasSinCobranza()`, efrain@ sin cobranza): sin pestaña y `resumenCobranzaGeneral` → `PERMISO`.
+  PRUEBAS quedó en la ronda C2 (efrain@ con compras, sin cobranza). Falta: `clasp push` + comprobar, `clasp deploy` (@9),
+  `wrangler deploy` y revisión en el cotizador real. Solo lee: no requiere respaldo ni permisos nuevos de Google.
+- Al probar con Claude in Chrome, un clic por `ref` en la pestaña Cobranza no se aplicó (la página siguió en Nueva cotización);
+  por coordenadas sí. Si una acción "no responde", revisar primero qué pestaña está visible antes de buscar un error en el código.
 - Tania y Leo (rol de compras) no se han probado con sus cuentas reales; la primera orden real será también la primera prueba de
   PDF en la carpeta real.
 - Subcarpetas "Órdenes de compra" de los proyectos viejos: quedan vacías y sin uso. Si el usuario lo pide, comprobar con el

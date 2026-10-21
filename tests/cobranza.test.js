@@ -385,4 +385,9 @@ const pu=P.resumenGeneralCobranza({contratos:[{proyectoFolio:'PRY-1',estado:'Fir
   ordenes:[{proyectoFolio:'PRY-1',estado:'Emitida',monedaProyecto:'USD',subtotalProyecto:5}]});
 assert.deepEqual([pu.proyectos[0].siguienteEtapa,pu.proyectos[0].saldo,pu.proyectos[0].margen,!!pu.proyectos[0].margenError,pu.totales[0].margen],
   ['Total',116,null,true,null],'cerrado sí aparece; margen con monedas mezcladas se marca');
+// Orden: no compara saldos de monedas distintas (MXN primero, luego USD; dentro de cada una del mayor saldo al menor)
+const ct=(f,m,t)=>({proyectoFolio:f,estado:'Firmado',moneda:m,marca:'helgen',total:t,subtotal:t});
+const po=P.resumenGeneralCobranza({contratos:[ct('A','USD',4700),ct('B','MXN',3600),ct('C','MXN',9000),{...ct('D','MXN',99999),estado:'Aceptada'}],esquemas:[],pagos:[],
+  proyectos:['A','B','C','D'].map(f=>({folio:f,estado:'Activo',nombre:f,cliente:f})),ordenes:[]});
+assert.deepEqual(po.proyectos.map(x=>x.folio),['C','B','A','D']);
 console.log('OK cobranza');
