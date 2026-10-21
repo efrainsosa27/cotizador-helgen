@@ -26,7 +26,7 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 |---|---|
 | **Cotizador (lo usa el equipo)** | `https://cotizador-helgen.cotizador-helgen.workers.dev/cotizador/` (portada en `/`) |
 | Proyecto Apps Script de la API (`scriptId` en `.clasp.json`) | `1GsH8DjaFEZ9dltqBUTUEFE_frblSYimRRCvPkqKdRB5UhmBwwYHLSwyS` (nombre anterior "Cotizador Helgen — PRUEBAS interfaz web"; ver §9) |
-| Deployment de la API (siempre actualizar este; `API_URL` en `web/cotizador/index.html`) | `AKfycbwBjF7ra_4O8INsxBq0eh-4r-BlSsJ4LLxcJgVCPRpx1U1a-Pz1CUSdYtvj_Mh0S6y2` (@5 al 20/10/2026 = nombre del vendedor en Historial; @4 = Proyectos; @3 = 19/10/2026; `access: ANYONE_ANONYMOUS` + token) |
+| Deployment de la API (siempre actualizar este; `API_URL` en `web/cotizador/index.html`) | `AKfycbwBjF7ra_4O8INsxBq0eh-4r-BlSsJ4LLxcJgVCPRpx1U1a-Pz1CUSdYtvj_Mh0S6y2` (@6 al 20/10/2026 = Cobranza y USD; @5 = nombre del vendedor en Historial; @4 = Proyectos; @3 = 19/10/2026; `access: ANYONE_ANONYMOUS` + token) |
 | Client ID de OAuth (`CLIENT_ID_GOOGLE` en `web/cotizador/index.html` y `Code.js`) | `884526916417-cn5fh45io0nnpvlad2439thkpius4063.apps.googleusercontent.com` (no es secreto) |
 | Carpeta maestra en Drive "Cotizador Helgen" | `1lf3Z4d3e_oqFbYJse4QbyYkWowYT9HCo` |
 | Base de datos "Cotizador Helgen — Base de datos" (`SPREADSHEET_ID`) | `1ozFsyt1OjSnSv-PVpRWZjgqeWt6voQREbjvOJAXPEaI` |
@@ -508,11 +508,10 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - `GUIA.md` describe el proyecto anterior; actualizarla si se va a usar.
 - Ideas mencionadas: enviar PDF por correo, duplicar cotización, estatus (Enviada/Aceptada/Rechazada), descuentos por renglón.
 - Proyectos fase 2: órdenes de compra, gastos y adicionales (§6.10). Cobranza ya construida (§6.11).
-- **Cobranza: probada en PRUEBAS (20/10/2026, §10.6), falta publicarla.** Orden (cada paso con confirmación del usuario):
-  1) ~~respaldos~~ **hechos** el 20/10/2026 (§2, "Respaldos 2026-10-20 (antes de Cobranza)"); 2) `npx clasp push --force` a la API real;
-  3) correr `prepararCobranza()` en el editor (crea carpeta y libro; si pide permisos, aceptarlos aquí) y capturar `ROL_COBRANZA`
-  y `ADMIN_DESBLOQUEO`; 4) `npx clasp deploy --deploymentId AKfycbwBjF7…`; 5) `npx --yes wrangler@4 deploy`; 6) compartir la carpeta
-  de cobranza como lector con tania@ y leo@ (Google les manda correo) y anotar su ID en §2; 7) retirar el deployment de prueba
+- **Cobranza: publicada el 20/10/2026** (API @6 + interfaz en Cloudflare). Hechos: respaldos, `clasp push`, `prepararCobranza()`
+  (carpeta y libro creados y restringidos, §2 y §6.11), `ROL_COBRANZA` = efrain@, tania@, leo@ y `ADMIN_DESBLOQUEO` = efrain@,
+  `clasp deploy` y `wrangler deploy`. Falta: 6) compartir la carpeta de cobranza como lector con tania@ y leo@ (Google les manda
+  correo; agregarlos **por persona**, nunca "helgen.tech"); 7) retirar el deployment de prueba
   (`clasp undeploy AKfycbz9naWO…` desde una carpeta temporal ligada a `1wp8_SQ…`) y apagar el servidor local de prueba.
   Al publicar, la primera apertura del catálogo real crea la pestaña "Tipo de cambio" y la columna I (§4.2).
 - Rol de cobranza **sin** desbloqueo (Tania) solo se probó con las pruebas automáticas, no con su cuenta real.
