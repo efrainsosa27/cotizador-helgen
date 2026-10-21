@@ -39,10 +39,10 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 | Respaldos de la migración | Carpeta "Respaldos 2026-10-19" `1hxx0tgh4cLZMqoyf-eT8l14UAde7Y-L1` (copias de base de datos y catálogo antes del cambio) |
 | Respaldos antes de Proyectos | Carpeta "Respaldos 2026-10-20" `1rFGY_k_YRRo243p3xL2RpibQ9jkEo634`: Base de datos `1PBQvmwI412IMyJb74qBWN5ZcyhSuxK3xGU9cV5KPxTE`, Catálogo `1GxBpAvQxVNJyFJSLnaY9umA5L2qf4dqX36S4uehHUNc` (antes de la pestaña Proyectos y la columna T) |
 | Respaldos antes de Cobranza | Carpeta "Respaldos 2026-10-20 (antes de Cobranza)" `1C_yGbX0Gk_cZBwegdswPFvuzCVDdyTLF` (en la carpeta maestra): Base de datos `14C3d7w2ouaygtCGi0BP1QocGiqG4gf5Umh9O4KHgdow`, Catálogo `140_1sfwXF9u_aL1egDPYSbsE0rMwELGPZ5rkGVdzQnc` (antes de las columnas U:V, la columna I del catálogo y la pestaña "Tipo de cambio"). Verificadas contra los originales |
-| Respaldos antes de Compras (20/10/2026) | Carpeta "Respaldos 2026-10-20 (antes de Compras)" `1QWHfc7K5w5lk5vU_jt1lCSrn4PY5YyKA` (en la carpeta maestra): Base de datos `1dCTVyMH50_55WzIfN-waUvoXaKYOliet_scZSCyKHYo`, Catálogo `1Y-Ho8kKfZsLd0lris8IIHOR5X_LExRcxThbje0Z5G9s`. Libro de cobranza: carpeta "Respaldo 2026-10-20 (antes de Compras)" `1H_BjW-VEdKbO-4LpF5aeKvFWwPiprKu2` **dentro de la carpeta de cobranza** (nunca en la maestra), copia `1KIhAfkEZhMWzzp81Y8jMFjSs6a2Ki6L7LcO13cvbFgU` (solo encabezados). Las tres verificadas pestaña por pestaña contra los originales. Copias hechas con el conector de Drive: Workspace les puso "helgen.tech: lector" (§6.11); la carpeta de cobranza de respaldo la restringe el usuario a mano |
+| Respaldos antes de Compras (20/10/2026) | Carpeta "Respaldos 2026-10-20 (antes de Compras)" `1QWHfc7K5w5lk5vU_jt1lCSrn4PY5YyKA` (en la carpeta maestra): Base de datos `1dCTVyMH50_55WzIfN-waUvoXaKYOliet_scZSCyKHYo`, Catálogo `1Y-Ho8kKfZsLd0lris8IIHOR5X_LExRcxThbje0Z5G9s`. Libro de cobranza: carpeta "Respaldo 2026-10-20 (antes de Compras)" `1H_BjW-VEdKbO-4LpF5aeKvFWwPiprKu2` **dentro de la carpeta de cobranza** (nunca en la maestra), copia `1KIhAfkEZhMWzzp81Y8jMFjSs6a2Ki6L7LcO13cvbFgU` (solo encabezados). Las tres verificadas pestaña por pestaña contra los originales. Copias hechas con el conector de Drive: Workspace les puso "helgen.tech: lector" (§6.11); el usuario dejó en Restringido la carpeta de respaldo de cobranza el 21/10/2026 (comprobado: carpeta y copia solo con efrain@, tania@ y leo@) |
 | Worker de Cloudflare | `cotizador-helgen`, cuenta de efrain@helgen.tech `badd8bca60b008822a73ca24e983ff43` |
 | Dueño de todo / cuenta de clasp | `efrain@helgen.tech` (la API se ejecuta como esta cuenta) |
-| Proyecto de prueba "PRUEBAS — Cotizador Helgen (no usar)" | `1wp8_SQofXXUuMkUjmDyyUxYLxx-LdFv-20JaXE7q9entLfEvDKgYtnt0`; deployment `AKfycbwVu2q5…` retirado el 20/10/2026 (404). Para Cobranza (20/10/2026): deployment `AKfycbz9naWOw4Jj0qlta0RjCNifgZLvvJqXpqRnrrsALewSnmn7ydnEIw_zYriIHZjbQ5ugQw`, **retirado** al publicar (404); su `Pruebas.js` crea "PRUEBAS — Cobranza" y tiene `pruebasRondaSinRol()` / `pruebasRondaConRol()`. Solo datos inventados (§10.5). **No es la API.** |
+| Proyecto de prueba "PRUEBAS — Cotizador Helgen (no usar)" | `1wp8_SQofXXUuMkUjmDyyUxYLxx-LdFv-20JaXE7q9entLfEvDKgYtnt0`; deployment `AKfycbwVu2q5…` retirado el 20/10/2026 (404). Para Cobranza (20/10/2026): deployment `AKfycbz9naWOw4Jj0qlta0RjCNifgZLvvJqXpqRnrrsALewSnmn7ydnEIw_zYriIHZjbQ5ugQw`, **retirado** al publicar (404); su `Pruebas.js` crea "PRUEBAS — Cobranza" y tiene `pruebasRondaSinRol()` / `pruebasRondaConRol()`. Para Compras (20/10/2026): deployment `AKfycbxK3ldf…`, **retirado** al terminar (404); `Pruebas.js` con `configurarCompras()` y rondas C1–C3 (§10.7). Está en la carpeta `1w-T05ql…` (lo movió el usuario). Solo datos inventados (§10.5). **No es la API.** |
 | **Proyecto anterior (EN DESUSO)** | `1X-qSKgvqKwuDj4iPZBhXlakR5udau9ibVMevhwvlLXgtSkjV4IoQxqwU`; deployment `AKfycbxahS3…` en @10 = aviso "El cotizador se mudó". Código en `anterior/` (§11) |
 
 Los IDs que usa el código están en **Script Properties** del proyecto `1GsH8Dja…` (ver §5). Esta tabla es solo referencia.
@@ -444,6 +444,11 @@ Compras: `ROL_COMPRAS` (correos separados por coma: efrain@, tania@, leo@; cread
   hacer lo mismo. **`DriveApp.setSharing` no sirve aquí** (da "Access denied: DriveApp." aun siendo dueño, con `Permission.NONE`
   o `VIEW`): `privado_()` borra los permisos `domain`/`anyone` con la API REST de Drive (`UrlFetchApp` + `ScriptApp.getOAuthToken()`,
   sin permisos nuevos).
+- **Lo mismo pasa con lo que se crea fuera del código** (20/10/2026: la carpeta y la copia del respaldo de cobranza hechas con el
+  conector de Drive nacieron con "helgen.tech: lector"; el conector no puede quitarlo, lo hizo el usuario). Después de crear
+  algo en un área privada, revisar sus permisos con `get_file_permissions`. Y **dentro de una carpeta que lee el dominio**
+  ("ARCHIVO PRUEBAS…", la carpeta maestra) el acceso es heredado: `privado_()` falla con 403 `cannotDeletePermission` (a propósito:
+  no deja nada abierto). Por eso las áreas privadas se crean en la raíz de Mi unidad.
 - **Permisos en el servidor:** `ROL_COBRANZA` (Script Properties, no en el código) para ver y cambiar todo lo de cobranza;
   `ADMIN_DESBLOQUEO` solo para desbloquear. Los demás reciben `codigo: "PERMISO"` y `getDatosIniciales` no les manda nada de
   cobranza (solo `permisos` en falso para ocultar la pestaña).
@@ -570,6 +575,9 @@ npx --yes wrangler@4 deploy
   `confirm`/`prompt` se responden reemplazándolos desde la página (si no, bloquean la automatización); casos de error también
   directo al servidor con `google.script.run` para comprobar que el servidor rechaza (no solo la interfaz). Revisar después en
   solo lectura el libro/hoja y Drive con los conectores.
+- **Llamadas largas** (guardar con PDF tarda ~15 s): si la conexión con Chrome se corta, la llamada puede terminar igual. No
+  repetirla: primero leer el estado. Para varias llamadas seguidas, correrlas en segundo plano guardando el resultado en `window`
+  y leerlo aparte (pasó el 20/10/2026: un reenvío con otro `idSolicitud` creó `OC-2026-0003` duplicada, que se canceló).
 - **Lo que Claude no hace (se le pide al usuario):** iniciar sesión o escribir contraseñas, aceptar permisos de Google, correr
   funciones desde el editor de Apps Script (`configurarPruebas`, `pruebasRondaConRol`, `prepararCobranza`…), y probar con la cuenta de
   otra persona (p. ej. Tania): eso queda como pendiente o lo hace esa persona.
@@ -632,7 +640,11 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - **Acceso del dominio a la Base de datos y a la carpeta maestra** (lector para todo helgen.tech): se queda por ahora; revisarlo
   junto con la idea "cada vendedor ve solo sus cotizaciones" (quitarlo impide abrir los PDF desde el Historial).
 - Tania y Leo eran **editores** de la Base de datos (20/10/2026); el usuario los baja a lector.
-- Mover el proyecto de prueba (ya sin deployment, §10.5) a la carpeta `1w-T05ql…` junto a los "ARCHIVO PRUEBAS" (lo hace el usuario).
+- ~~Mover el proyecto de prueba a la carpeta `1w-T05ql…`~~ hecho por el usuario (comprobado el 20/10/2026).
+- PRUEBAS, limpieza opcional (lo hace el usuario): carpeta vacía "PRUEBAS — Compras" `1hlqlrwwq_olMttqvYtoXid4vS7a6NRXb` dentro de
+  "ARCHIVO PRUEBAS — Cotizaciones Helgen (PDF)" (sin uso, a la Papelera). "PRUEBAS — Cobranza" la lee todo el dominio porque
+  hereda el acceso de esa carpeta: solo tiene datos inventados; si se vuelve a probar un pago ahí, `privado_` fallará (moverla a
+  la raíz de Mi unidad, como la de compras).
 
 ## 10. Interfaz web y sesión con Google
 
@@ -724,10 +736,10 @@ Para probar Proyectos con la sesión real **sin tocar la hoja real** se creó un
   `0009`, `0010` Energy) y `PRY-2026-0004` (B, USD: `HLG-2026-0011`); pagos `PAG-2026-0001` a `0004` (`0002` cancelado).
 - Comprobantes de prueba generados en el scratchpad de la sesión (un PDF mínimo y un JPG); no están en el repositorio.
 
-### 10.7 Prueba de Compras en PRUEBAS (preparada el 20/10/2026)
+### 10.7 Prueba de Compras en PRUEBAS (hecha el 20/10/2026)
 - PRUEBAS (`1wp8_SQ…`) tiene el `Code.js`/`Logo.js`/`appsscript.json` del commit de Compras (`1a02e2d`), comprobado con `clasp clone`.
-  Deployment nuevo de prueba: `AKfycbxK3ldf4zuqhZdBuDP6V_1VMy1T3ygk3RvEL8AYjvrGTQqL2DAtrFOt07cESOQFWFaesQ` (@6). **Retirarlo al
-  terminar** (`clasp undeploy` desde una carpeta temporal ligada a `1wp8_SQ…`). Interfaz: copia de `web/` en el scratchpad con ese
+  Deployment de prueba: `AKfycbxK3ldf4zuqhZdBuDP6V_1VMy1T3ygk3RvEL8AYjvrGTQqL2DAtrFOt07cESOQFWFaesQ` (@6), **retirado** al
+  terminar (`clasp undeploy` desde una carpeta temporal ligada a `1wp8_SQ…`; para reusarlo, `clasp deploy` da otra URL). Interfaz: copia de `web/` en el scratchpad con ese
   `API_URL` y título "PRUEBAS — Cotizador Helgen", servida en `http://127.0.0.1:8788/cotizador/` (el `API_URL` del repo no cambia).
 - `Pruebas.js` (solo en PRUEBAS) ahora además tiene: `configurarCompras()` (crea "PRUEBAS — Compras (no usar)" **en la raíz de Mi
   unidad** y su libro, los restringe con `privado_`. Primero se intentó dentro de "ARCHIVO PRUEBAS — Cotizaciones Helgen (PDF)",
