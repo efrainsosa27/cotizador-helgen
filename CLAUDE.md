@@ -600,7 +600,7 @@ El commit y el push no publican nada: el equipo sigue usando la versión anterio
 - **Compras (fase 3): construida el 20/10/2026, SIN PUBLICAR** (código y pruebas en Node; commit "Compras: órdenes de compra…").
   Falta, en este orden: 1) ~~respaldo~~ **hecho el 20/10/2026** (§2; falta que el usuario deje en "Restringido" la carpeta de
   respaldo dentro de cobranza y Claude lo verifique: al 20/10/2026 seguía con "helgen.tech: lector", solo encabezados);
-  2) prueba (PRUEBAS ya preparado, §10.7) de punta a punta en el proyecto PRUEBAS (§10.5) con `Pruebas.js` ampliado
+  2) ~~prueba~~ **hecha el 20/10/2026, todo pasó** (§10.7) de punta a punta en el proyecto PRUEBAS (§10.5) con `Pruebas.js` ampliado
   ("PRUEBAS — Compras", `ROL_COMPRAS` sin efrain@ para probar al usuario sin rol, y luego compras sin cobranza y con los dos);
   3) el usuario crea `ROL_COMPRAS` (efrain@, tania@, leo@); 4) `clasp push` + comprobar con `clasp clone`; 5) el usuario corre
   `prepararCompras()` (no hay permisos nuevos de Google: mismos servicios que cobranza; si el editor pide autorizar, aceptar);
@@ -735,6 +735,22 @@ Para probar Proyectos con la sesión real **sin tocar la hoja real** se creó un
   `pruebasComprasSinRol()` (C1: efrain@ sin compras, con cobranza), `pruebasComprasSinCobranza()` (C2: efrain@ con compras, sin
   cobranza), `pruebasComprasCompleta()` (C3: los dos) y `diagnosticoCompras()` (solo lee). Proyectos firmados para probar:
   `PRY-2026-0003` (MXN) y `PRY-2026-0004` (USD).
+- Carpeta "PRUEBAS — Compras (no usar)" `14fqJMc8UEgZBo2IdL-M8jc03HarsbD-U` (raíz de Mi unidad) y libro "PRUEBAS — Compras (datos)"
+  `1ILvHcwRvDcEQv3XDwZW2M9inHUMxl9zI2_52RlSvQNs`, solo efrain@ (comprobado). Al terminar quedó la ronda C3 (los dos roles).
+- **Resultado (20/10/2026, Claude in Chrome con la sesión del usuario): todos los casos pasaron.** C1 (sin `ROL_COMPRAS`): sin
+  pestaña Compras, las 5 funciones → `PERMISO`, `getDatosIniciales` sin datos de órdenes, margen con 0 órdenes en Cobranza.
+  C2 (compras sin cobranza): sin pestaña Cobranza (`getCobranzaProyecto` → `PERMISO`), lista solo con proyectos firmados y sin
+  montos; con clics: catálogo sin costo (no usa el precio de venta), rechazo sin costo sin gastar folio, emitir, autorrelleno del
+  proveedor y RFC que actualiza la misma fila, USD en proyecto MXN (rechazo sin TC, luego con TC), Recibida y Cancelar con motivo;
+  directo al servidor: recibir dos veces, cancelar recibida, fecha futura, proyecto cancelado, proyecto USD con orden en MXN,
+  idempotencia y `marca` del navegador ignorada. C3: margen `PRY-2026-0003` = 10,000 − (3,000 + 1,850) = 5,150 MXN (51.5 %);
+  `PRY-2026-0004` = 5,000 − 100 = 4,900 USD (98 %). Libro, bitácora, PDF (texto y permisos: solo efrain@) revisados en solo lectura.
+  Datos de prueba: `OC-2026-0001` (Emitida), `0002` (USD, Recibida), `0003` (Cancelada: duplicado porque se cortó la conexión con
+  Chrome a media llamada y se reenvió con otro id), `0004` (PRY-0004). No probado: proyecto **activo** sin contrato firmado (no hay
+  uno en PRUEBAS; lo cubre `tests/compras.test.js`) ni cambiar la aceptada de moneda con órdenes vigentes (no hay cotización de otra
+  moneda en esos proyectos; también en Node). `permisos.desbloqueo` sale `true` sin cobranza (viene de `ADMIN_DESBLOQUEO`; no abre
+  nada porque desbloquear exige cobranza).
+- Entorno retirado el mismo día: deployment `AKfycbxK3ldf…` eliminado (404) y servidor local apagado.
 
 ## 11. Migración al proyecto nuevo (19/10/2026)
 
