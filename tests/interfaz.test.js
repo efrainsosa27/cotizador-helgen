@@ -286,6 +286,8 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   B.run('pintarCobranza('+JSON.stringify({...firmada,puedeDesbloquear:true})+')');
   assert(/Desbloquear contrato/.test(B.$('cobContrato').innerHTML));
 
+  // .oculto gana sobre clases con display propio (.acciones, .tiles…), aunque estén definidas después (pasó en PRUEBAS, 23/10/2026)
+  assert(/\.oculto \{ display:none !important; \}/.test(html),'.oculto con !important');
   // ===== Compras (con permiso, sin cobranza): requisiciones → orden → pago → cierre =====
   const C=montar({ivaTasa:0.16,catalogo:CAT,tipoCambio:TC,clientes:[],proyectos:[],marcas:{},permisos:{cobranza:false,desbloqueo:false,compras:true,requisicion:false}});
   await esperar(5);

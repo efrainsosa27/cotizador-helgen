@@ -145,7 +145,7 @@ assert.deepEqual([pp.fecha,pp.monto,pp.monedaPago,pp.tipoCambio,pp.montoAplicado
 assert.equal(P.normalizarPagoProveedor({fecha:'2026-10-21',monto:2319,metodo:'Efectivo'},ORDEN).referencia,'','efectivo sin referencia');
 assert.equal(P.normalizarPagoProveedor({fecha:'2026-10-21',monto:125.41,monedaPago:'USD',tipoCambio:18.5,metodo:'Cheque',referencia:'1'},ORDEN).montoAplicado,2320.09);
 for(const [mal,re] of [[{monto:2321.01},/debe ser igual al total de la orden \(\$2,320\.00 MXN\)/],[{monto:2318.99},/igual al total/],
-  [{monto:0},/mayor a 0/],[{monedaPago:'USD',monto:125.41},/tipo de cambio/],[{metodo:'Bitcoin'},/método de pago/],
+  [{monto:0},/mayor a 0/],[{monedaPago:'USD',monto:125.41},/La orden es en MXN y el pago en USD: captura el tipo de cambio/],[{metodo:'Bitcoin'},/método de pago/],
   [{referencia:''},/referencia/],[{fecha:'2026-10-23'},/no puede ser futura/],[{fecha:'2026-10-19'},/anterior a la orden/],[{fecha:''},/obligatoria/]]){
   assert.throws(()=>P.normalizarPagoProveedor({fecha:'2026-10-21',monto:2320,metodo:'Transferencia',referencia:'R',...mal},ORDEN),re,JSON.stringify(mal));
 }

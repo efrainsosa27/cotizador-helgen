@@ -49,7 +49,7 @@
   .aviso { padding:12px 14px; border-radius:6px; margin-bottom:16px; display:none; }
   .aviso.ok { background:#E6FBF7; border:1px solid var(--teal); display:block; }
   .aviso.error { background:#FEE2E2; border:1px solid #DC2626; display:block; }
-  .oculto { display:none; }
+  .oculto { display:none !important; } /* gana sobre .acciones, .tiles, .grid… (display) aunque estén definidas después */
   .fila-cat { cursor:pointer; }
   .fila-cat:hover td { background:var(--cielo); }
   .fila-cat.editando td { background:#E6FBF7; }

@@ -3207,8 +3207,12 @@ function normalizarPagoProveedor(p, orden) {
   const d = p || {};
   const fecha = validarFechaIso(d.fecha, orden.hoy, 'La fecha del pago');
   if (orden.fechaOrden && fecha < orden.fechaOrden) throw new Error('La fecha del pago no puede ser anterior a la orden (' + orden.fechaOrden + ').');
-  const pago = normalizarPago(Object.assign({}, d, { fecha: fecha, etapaOrden: 1 }),
-    { moneda: orden.moneda, etapas: 1, hoy: orden.hoy });
+  let pago;
+  try {
+    pago = normalizarPago(Object.assign({}, d, { fecha: fecha, etapaOrden: 1 }), { moneda: orden.moneda, etapas: 1, hoy: orden.hoy });
+  } catch (e) {
+    throw new Error(String(e.message).replace('El proyecto es en', 'La orden es en')); // aquí la moneda de referencia es la de la orden
+  }
   if (Math.abs(aCentavos(pago.montoAplicado) - aCentavos(orden.total)) > aCentavos(TOLERANCIA_PAGO)) {
     throw new Error('El pago (' + formatoMoneda(pago.montoAplicado) + ' ' + orden.moneda + ') debe ser igual al total de la orden (' +
       formatoMoneda(orden.total) + ' ' + orden.moneda + ').');
