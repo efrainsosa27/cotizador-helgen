@@ -13,8 +13,9 @@ Desde el **19/10/2026** (§11) la interfaz se sirve desde **Cloudflare** y habla
 2. El servidor **recalcula** subtotal, IVA y total, asigna un **folio único** `HLG-AAAA-0001` y genera el **PDF**.
 3. El PDF se guarda en Drive (carpeta por año) y la cotización queda como una fila en Google Sheets, con el vendedor del token.
 
-Además: **proyectos** (opcionales: folio `PRY-AAAA-0001` y carpeta propia en Drive; §6.9), **cobranza por proyecto**
+Además: **proyectos** (opcionales: folio `PRY-AAAA-0001-XXX` con clave de 3 letras y carpeta propia en Drive; §6.9), **cobranza por proyecto**
 (cotización aceptada, contrato firmado, esquema de pagos y pagos `PAG-AAAA-0001` con comprobante; solo rol de cobranza; §6.11),
+**carga rápida y sincronización sin recargar** (una llamada `bootstrap` al entrar, caché por versiones y consulta cada 20 s; §6.14),
 **órdenes de compra por proyecto** (`OC-AAAA-0001` con PDF, proveedores y margen del proyecto; solo rol de compras; el margen solo
 lo ve cobranza; §6.12), **requisiciones de materiales** (`REQ-AAAA-0001`: un trabajador pide sin precios y adjunta la cotización del
 proveedor; compras la autoriza y genera la OC, la paga `PGP-AAAA-0001` y el trabajador confirma que recibió; §6.13), cotizaciones en **MXN o USD**, historial con búsqueda, catálogo de productos con precios (Google Sheets aparte), clientes sugeridos con
@@ -28,7 +29,7 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 |---|---|
 | **Cotizador (lo usa el equipo)** | `https://cotizador-helgen.cotizador-helgen.workers.dev/cotizador/` (portada en `/`) |
 | Proyecto Apps Script de la API (`scriptId` en `.clasp.json`) | `1GsH8DjaFEZ9dltqBUTUEFE_frblSYimRRCvPkqKdRB5UhmBwwYHLSwyS` (nombre anterior "Cotizador Helgen — PRUEBAS interfaz web"; ver §9) |
-| Deployment de la API (siempre actualizar este; `API_URL` en `web/cotizador/index.html`) | `AKfycbwBjF7ra_4O8INsxBq0eh-4r-BlSsJ4LLxcJgVCPRpx1U1a-Pz1CUSdYtvj_Mh0S6y2` (@10 al 23/10/2026 = requisiciones de materiales y pago a proveedores; @9 = resumen de cobranza; @8 = Compras: órdenes de compra, proveedores y margen; @7 = ocultar aceptar/firmar en proyectos cancelados; @6 = Cobranza y USD; @5 = nombre del vendedor en Historial; @4 = Proyectos; @3 = 19/10/2026; `access: ANYONE_ANONYMOUS` + token) |
+| Deployment de la API (siempre actualizar este; `API_URL` en `web/cotizador/index.html`) | `AKfycbwBjF7ra_4O8INsxBq0eh-4r-BlSsJ4LLxcJgVCPRpx1U1a-Pz1CUSdYtvj_Mh0S6y2` (@11 al 23/10/2026 = carga rápida, sincronización sin recargar, requisiciones en cualquier proyecto y clave de proyecto; @10 = requisiciones de materiales y pago a proveedores; @9 = resumen de cobranza; @8 = Compras: órdenes de compra, proveedores y margen; @7 = ocultar aceptar/firmar en proyectos cancelados; @6 = Cobranza y USD; @5 = nombre del vendedor en Historial; @4 = Proyectos; @3 = 19/10/2026; `access: ANYONE_ANONYMOUS` + token) |
 | Client ID de OAuth (`CLIENT_ID_GOOGLE` en `web/cotizador/index.html` y `Code.js`) | `884526916417-cn5fh45io0nnpvlad2439thkpius4063.apps.googleusercontent.com` (no es secreto) |
 | Carpeta maestra en Drive "Cotizador Helgen" | `1lf3Z4d3e_oqFbYJse4QbyYkWowYT9HCo` |
 | Base de datos "Cotizador Helgen — Base de datos" (`SPREADSHEET_ID`) | `1ozFsyt1OjSnSv-PVpRWZjgqeWt6voQREbjvOJAXPEaI` |
@@ -41,11 +42,12 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 | Respaldos antes de Proyectos | Carpeta "Respaldos 2026-10-20" `1rFGY_k_YRRo243p3xL2RpibQ9jkEo634`: Base de datos `1PBQvmwI412IMyJb74qBWN5ZcyhSuxK3xGU9cV5KPxTE`, Catálogo `1GxBpAvQxVNJyFJSLnaY9umA5L2qf4dqX36S4uehHUNc` (antes de la pestaña Proyectos y la columna T) |
 | Respaldos antes de Cobranza | Carpeta "Respaldos 2026-10-20 (antes de Cobranza)" `1C_yGbX0Gk_cZBwegdswPFvuzCVDdyTLF` (en la carpeta maestra): Base de datos `14C3d7w2ouaygtCGi0BP1QocGiqG4gf5Umh9O4KHgdow`, Catálogo `140_1sfwXF9u_aL1egDPYSbsE0rMwELGPZ5rkGVdzQnc` (antes de las columnas U:V, la columna I del catálogo y la pestaña "Tipo de cambio"). Verificadas contra los originales |
 | Respaldos antes de Compras (20/10/2026) | Carpeta "Respaldos 2026-10-20 (antes de Compras)" `1QWHfc7K5w5lk5vU_jt1lCSrn4PY5YyKA` (en la carpeta maestra): Base de datos `1dCTVyMH50_55WzIfN-waUvoXaKYOliet_scZSCyKHYo`, Catálogo `1Y-Ho8kKfZsLd0lris8IIHOR5X_LExRcxThbje0Z5G9s`. Libro de cobranza: carpeta "Respaldo 2026-10-20 (antes de Compras)" `1H_BjW-VEdKbO-4LpF5aeKvFWwPiprKu2` **dentro de la carpeta de cobranza** (nunca en la maestra), copia `1KIhAfkEZhMWzzp81Y8jMFjSs6a2Ki6L7LcO13cvbFgU` (solo encabezados). Las tres verificadas pestaña por pestaña contra los originales. Copias hechas con el conector de Drive: Workspace les puso "helgen.tech: lector" (§6.11); el usuario dejó en Restringido la carpeta de respaldo de cobranza el 21/10/2026 (comprobado: carpeta y copia solo con efrain@, tania@ y leo@) |
+| Respaldos antes de carga rápida y claves (23/10/2026) | Base de datos y Catálogo: carpeta "Respaldos 2026-10-23 (antes de carga y claves)" `18i8S6NsEdQqs1zd83ehP8g9bxL6e8Adc` (en la carpeta maestra), copias `19sW5zKbSSl_-avfJ131kM8UgnM6aOFIlXQKwKuGw07g` y `1ycjtw7b6TLYYYeMiRhfVakL0BsMXdrekSiaPw8TCEDI`. Libro de cobranza: carpeta "Respaldo 2026-10-23 (antes de carga y claves)" `1YvtmlKR_bDgYAvsTv2I7txD85zBM8SMO` **dentro de la carpeta de cobranza**, copia `1a7FpjNTYkOh7IiqnGbLIiLET1n3Nd5gDQcglafEAYN4`. Libro de compras: carpeta con el mismo nombre `1DRos9fjHh5SeZle49AjqTYXwStfbQemW` **dentro de la carpeta de compras**, copia `1P3thpiq6jhnWESE8PnfYLlem5cQ3NRW6OfO6lUcEMpY` (cobranza y compras solo encabezados). Las 4 verificadas pestaña por pestaña. Las privadas nacieron con "helgen.tech: lector" aunque se crearon con herencia desactivada; el usuario las dejó en Restringido el 23/10/2026 (comprobado: carpetas con efrain@, tania@ y leo@; copias solo efrain@) |
 | Respaldos antes de Requisiciones (23/10/2026) | Base de datos: carpeta "Respaldos 2026-10-23 (antes de Requisiciones)" `1rUAEWtUV_z4uXJCS406NOPQLc4BK7YtK` (en la carpeta maestra), copia `1N3NZVURGWyHDQ6fXzUG7AtHbr6YhK7xHwi5YFNaZpro`. Libro de compras: carpeta "Respaldo 2026-10-23 (antes de Requisiciones)" `17Yn700vHeCNebrDj-4mXzeP5YxgXfW2G` **dentro de la carpeta de compras**, copia `1CiMuP7Z2oBh_Lrp4ma1LG7vSKFc69d1a_P46edfFDDE` (solo encabezados). Verificadas pestaña por pestaña. Nacieron con "helgen.tech: lector" (§6.11); el usuario dejó en Restringido la carpeta de compras el 23/10/2026 (comprobado: carpeta con efrain@, tania@ y leo@; copia solo efrain@) |
 | **Manual del Cotizador Helgen** (para personas) | Documento de Claude Docs `https://claude.ai/artifact/AN8w8T2SKmDXSTa1zpFt2C` (id `AN8w8T2SKmDXSTa1zpFt2C`; pestaña `1cdc8401-1062`, cuerpo `86e49b65-80a1`). Se actualiza **junto con este archivo** (regla 14 y §8) |
 | Worker de Cloudflare | `cotizador-helgen`, cuenta de efrain@helgen.tech `badd8bca60b008822a73ca24e983ff43` |
 | Dueño de todo / cuenta de clasp | `efrain@helgen.tech` (la API se ejecuta como esta cuenta) |
-| Proyecto de prueba "PRUEBAS — Cotizador Helgen (no usar)" | `1wp8_SQofXXUuMkUjmDyyUxYLxx-LdFv-20JaXE7q9entLfEvDKgYtnt0`; deployment `AKfycbwVu2q5…` retirado el 20/10/2026 (404). Para Cobranza (20/10/2026): deployment `AKfycbz9naWOw4Jj0qlta0RjCNifgZLvvJqXpqRnrrsALewSnmn7ydnEIw_zYriIHZjbQ5ugQw`, **retirado** al publicar (404); su `Pruebas.js` crea "PRUEBAS — Cobranza" y tiene `pruebasRondaSinRol()` / `pruebasRondaConRol()`. Para Compras (20/10/2026): deployment `AKfycbxK3ldf…`, **retirado** al terminar (404); `Pruebas.js` con `configurarCompras()` y rondas C1–C3 (§10.7). Para Requisiciones (23/10/2026): deployment `AKfycbybSSE0…`, **retirado** al publicar (404); `Pruebas.js` con `configurarRequisiciones()` y rondas R1–R3 (§10.8). Está en la carpeta `1w-T05ql…` (lo movió el usuario). Solo datos inventados (§10.5). **No es la API.** |
+| Proyecto de prueba "PRUEBAS — Cotizador Helgen (no usar)" | `1wp8_SQofXXUuMkUjmDyyUxYLxx-LdFv-20JaXE7q9entLfEvDKgYtnt0`; deployment `AKfycbwVu2q5…` retirado el 20/10/2026 (404). Para Cobranza (20/10/2026): deployment `AKfycbz9naWOw4Jj0qlta0RjCNifgZLvvJqXpqRnrrsALewSnmn7ydnEIw_zYriIHZjbQ5ugQw`, **retirado** al publicar (404); su `Pruebas.js` crea "PRUEBAS — Cobranza" y tiene `pruebasRondaSinRol()` / `pruebasRondaConRol()`. Para Compras (20/10/2026): deployment `AKfycbxK3ldf…`, **retirado** al terminar (404); `Pruebas.js` con `configurarCompras()` y rondas C1–C3 (§10.7). Para Requisiciones (23/10/2026): deployment `AKfycbybSSE0…`, **retirado** al publicar (404); `Pruebas.js` con `configurarRequisiciones()` y rondas R1–R3 (§10.8). Para carga rápida y claves (23/10/2026): deployment `AKfycbxnFS1f…`, **retirado** al publicar (404); quedó con el código de la API @11 y en la ronda R2 (§10.9). Está en la carpeta `1w-T05ql…` (lo movió el usuario). Solo datos inventados (§10.5). **No es la API.** |
 | **Proyecto anterior (EN DESUSO)** | `1X-qSKgvqKwuDj4iPZBhXlakR5udau9ibVMevhwvlLXgtSkjV4IoQxqwU`; deployment `AKfycbxahS3…` en @10 = aviso "El cotizador se mudó". Código en `anterior/` (§11) |
 
 Los IDs que usa el código están en **Script Properties** del proyecto `1GsH8Dja…` (ver §5). Esta tabla es solo referencia.
@@ -102,6 +104,30 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 - `migrarConfig_(hoja)` — actualiza hojas `Config` viejas: `TERMINOS` → `TERMINOS_HELGEN` + `TERMINOS_ENERGY`, agrega claves
   nuevas de `CONFIG_INICIAL`, cambia valores de ejemplo (`CONFIG_EJEMPLO_ANTERIOR`) por los reales y repara celdas `#ERROR!`.
 
+### 4.1.1 Carga inicial, caché y sincronización (sección 1.1 del archivo; ver §6.14)
+- `bootstrap()` *(UI, al cargar)* — única llamada al entrar: `versiones`, `permisos` (`permisosUsuario_`), `soloRequisicion`, IVA,
+  vigencia, catálogo (sin precios con `SOLO_REQUISICION`), clientes y proyectos (cotizar) y, según el rol, `req: {proyectos, mias}`,
+  `com: {proyectos, requisiciones}`, `cob: {proyectos, resumen}`. Las listas pesadas (mis requisiciones, requisiciones de compras,
+  resumen de cobranza) solo van si ya están en caché (si no, `null` y la interfaz las pide al abrir su pestaña). Cada pieza va en
+  `intentar_`: si falla, `null` y su texto en `errores`. `getDatosIniciales()` = alias (interfaces viejas en caché del navegador).
+- `sincronizar(versiones, ctx)` *(UI, cada 20 s)* — revisa las hojas que se editan a mano (`proyectosCache_(true)`…), compara versiones
+  y devuelve `{versiones, permisos, soloRequisicion, cambios}` más **solo** las listas o vistas que cambiaron y que el rol puede ver:
+  `catalogo`, `clientes`, `proyectos`, `reqProyectos`, `misReq`, `comProyectos`, `comRequisiciones` (con el filtro `ctx.rcBuscar/rcEstado`),
+  `requisicion` (`ctx.req`), `comprasProyecto` (`ctx.comProyecto`), `cobProyectos`, `cobranzaProyecto` (`ctx.cobProyecto`), `resumen`
+  (`ctx.cobResumen`). Con `SOLO_REQUISICION` nunca manda lo demás aunque el contexto lo pida.
+- Versiones: `COLECCIONES` (proyectos, contratos, cotizaciones, catalogo, requisiciones, oc, pagosCobranza, pagosProveedores) en
+  Script Properties `VER_<colección>`; `CAMBIOS_API` dice qué sube cada función; `doPost` llama `subirVersiones_` (con el candado de
+  script) **después** de que la escritura terminó bien (no si devolvió `{confirmar}`). Durante una escritura `SIN_CACHE_` = lo que
+  devuelve sale de la hoja. **Toda función nueva que escriba debe agregarse a `CAMBIOS_API`.**
+- Caché: `enCache_(base, colecciones, ttl, fn)` (clave = base + versiones; sin `fn` solo lee), `leerCache_`/`guardarCache_` (JSON en trozos
+  de 30 000 caracteres), `TTL_CACHE` = 6 h. `fuenteConHuella_(nombre, colección, cadaSeg, leer, revisar)` para hojas editables a mano:
+  dato 6 h; con `revisar` (solo `sincronizar`) relee la hoja si pasaron `cadaSeg` (marca `R_<nombre>`) y si la huella MD5 cambió con la
+  misma versión, sube la versión. Fuentes: `proyectosCache_` (5 min), `contratosCache_`, `catalogoCache_`, `clientesCache_` (10 min);
+  `configLigera_`. `REVISAR_A_MANO_` asegura esas fuentes antes de armar una clave. `MEMO_` = lo leído en la petición (propiedades,
+  fuentes); `doPost` lo limpia. `enRol_` lee de `propiedades_()`.
+- En caché por versión: `listarProyectos`, `listarProyectosCobranza/Compras/Requisicion`, `misRequisiciones` (por correo),
+  `listarRequisiciones` (por filtro), `resumenCobranzaGeneral`, historial (folio con clave). Las vistas de detalle no.
+
 ### 4.2 Catálogo de productos
 - `hojaCatalogo_()` — abre "Catálogo Helgen"; si no existe, `crearCatalogo_()` (bajo candado). Llama `asegurarColumnasSat_()`.
 - `crearCatalogo_()` — crea el archivo con formato, validaciones (clave única con `COUNTIF`, precio ≥ 0), migra la pestaña
@@ -132,8 +158,8 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 - `existeEnSat_(pestana, clave)` — valida una clave con `TextFinder` (celda completa).
 
 ### 4.4 Datos para la interfaz
-- `getDatosIniciales()` *(UI, al cargar)* — IVA, vigencia, marcas, catálogo, clientes, `usuario` (correo), `vendedor` (`{email, nombre, apellido}`)
-  y `permisos` (`{cobranza, desbloqueo, compras, requisicion}`; solo para mostrar pestañas: cada función lo vuelve a revisar).
+- `getDatosIniciales()` — desde el 23/10/2026 es alias de `bootstrap()` (§4.1.1): IVA, vigencia, marcas, catálogo, clientes, `usuario`,
+  `vendedor` y `permisos` (`{cobranza, desbloqueo, compras, requisicion}`; solo para mostrar pestañas: cada función lo vuelve a revisar).
   Con `SOLO_REQUISICION` devuelve `soloRequisicion: true`, catálogo sin precios y sin clientes ni proyectos (§4.5.4).
 - `getClientes()` *(UI)* — clientes que ya cotizaron, calculados desde la hoja `Cotizaciones` (`clientesDesdeFilas`).
 - `listarCotizaciones(busqueda)` *(UI)* — últimas 100 cotizaciones, filtro por folio/cliente/empresa/proyecto; `vendedor` =
@@ -157,14 +183,20 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 ### 4.5.1 Proyectos (sección 4.1 del archivo)
 - `hojaProyectos_()` — pestaña `Proyectos` de la base de datos; la crea sola (lista desplegable de Estado en G) y reescribe
   solo la fila 1 si faltan encabezados (`ENCABEZADOS_PROYECTOS`).
-- `listarProyectos(busqueda, incluirInactivos)` *(UI)* — busca por folio, cliente o nombre; por omisión solo `Activo` y **sin
-  contrato firmado** (el buscador de cotizaciones; `foliosConContratoFirmado_`); máx. 50, recientes primero. No devuelve `carpeta_id`.
-- `crearProyecto(p)` *(UI)* — exige vendedor; `normalizarProyecto`; candado + idempotencia (`PRY_<idSolicitud>`, 6 h);
-  folio `PRY-AAAA-NNNN`; **primero** crea la carpeta y **después** la fila (estado `Activo`). Devuelve `{folio, …, url}`.
+- `listarProyectos(busqueda, incluirInactivos)` *(UI)* — busca por folio (con o sin clave), clave, cliente o nombre; por omisión solo
+  `Activo` y **sin contrato firmado** (el buscador de cotizaciones; `contratosCache_`); máx. 50, recientes primero; `proyectoParaLista_`
+  (con `clave` y `folioVisible`; sin `carpeta_id`).
+- `crearProyecto(p)` *(UI)* — exige vendedor; `normalizarProyecto` (incluye `clave`: la capturada o `claveSugerida`); candado +
+  idempotencia (`PRY_<idSolicitud>`, 6 h); folio `PRY-AAAA-NNNN` + clave en la columna L; **primero** crea la carpeta
+  ("PRY-AAAA-NNNN-XXX — Cliente — Nombre") y **después** la fila (estado `Activo`). Devuelve `{folio, clave, folioVisible, …, url}`.
+- `buscarProyecto_` acepta el folio con o sin clave (`folioInterno`). `guardarCotizacion` guarda siempre la llave interna en la columna T.
+- `asignarClavesProyectos()` (editor; vista previa en el registro) y `asignarClavesProyectosAplicar()` — clave sugerida a los proyectos
+  sin clave y su carpeta principal (por `carpeta_id`) pasa a "PRY-AAAA-NNNN-XXX — …"; una carpeta que no empieza con su folio
+  (renombrada a mano) no se toca; los que ya tienen clave no cambian; sube la versión de proyectos.
 - `buscarProyecto_(hoja, folio)`, `carpetaProyectos_()` (`PROYECTOS_FOLDER_ID`; si falta o está en la Papelera la crea en la
   carpeta maestra = padre de la base de datos), `subcarpeta_(padre, nombre)` (por nombre, ignora la Papelera, crea si falta),
   `crearCarpetaProyecto_`, `subcarpetaProyecto_(proyecto, nombreSub)` (ver §6.9).
-- `getDatosIniciales()` incluye `proyectos` (activos; si falla, `[]` y la app carga igual).
+- `bootstrap()` incluye `proyectos` (activos sin contrato firmado; si falla, `[]` y la app carga igual).
 
 ### 4.5.2 Cobranza (sección 4.2 del archivo; ver §6.11)
 - Todas empiezan con `exigirCobranza_()` (token + correo en `ROL_COBRANZA`; si no, `errorPermiso_` → `codigo: "PERMISO"`).
@@ -194,13 +226,14 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
 
 ### 4.5.3 Compras (sección 4.3 del archivo; ver §6.12)
 - Todas empiezan con `exigirCompras_()` (token + correo en `ROL_COMPRAS`; si no, `codigo: "PERMISO"`).
-- *(UI)* `listarProyectosCompras(busqueda)` (solo `Activo` con contrato firmado; con `moneda` y `marca`, **sin montos**),
+- *(UI)* `listarProyectosCompras(busqueda)` (`Activo` y `Cerrado`, con o sin contrato; `monedaDeProyecto_`: `moneda`, `marca`, `sinContrato`, `contrato`; **sin montos**),
   `getComprasProyecto(folio)` (`vistaCompras_`: proyecto, `moneda`, `marca`, órdenes con su `reqFolio`; sin contrato ni margen;
   solo consulta), `cancelarOrdenCompra(folio, motivo)` (solo Emitida: una Pagada o Recibida no se cancela; motivo ≥ 5; si la orden
   viene de una requisición Autorizada, la requisición regresa a Solicitada sin `oc_folio`).
 - **Desde el 23/10/2026 no hay emisión directa ni "Recibida" desde compras**: `guardarOrdenCompra` y `marcarOcRecibida` ya no existen.
-  La orden la emite `emitirOrdenCompra_(libro, datos, proyecto, reqFolio)` (dentro del candado de `autorizarRequisicion`: proyecto
-  Activo y firmado; folio `siguienteFolio_('OC', hoja, 'CONSECUTIVO_OC_')`; proveedor; PDF con la línea "Requisición: REQ-…";
+  La orden la emite `emitirOrdenCompra_(libro, datos, proyecto, reqFolio)` (dentro del candado de `autorizarRequisicion`: proyecto no
+  `Cancelado`, con o sin contrato; moneda y línea de `monedaDeProyecto_(contratosDelLibro_()…)`: la aceptada o MXN y sin línea; el PDF
+  lleva el folio con clave; folio `siguienteFolio_('OC', hoja, 'CONSECUTIVO_OC_')`; proveedor; PDF con la línea "Requisición: REQ-…";
   fila con `req_folio`; Bitacora) y queda Recibida al cerrar su requisición (§4.5.4).
 - Internas: `carpetaCompras_`, `libroCompras_`, `libroComprasSiExiste_`, `hojaCompras_`, `ordenDesdeFila_`, `ordenesDeProyecto_`,
   `proveedoresDelLibro_`, `guardarProveedor_` (alta o actualización por id; si llega con RFC y existía sin RFC, esa fila toma el RFC),
@@ -215,8 +248,8 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
   `doPost`, toda función fuera de `FUNCIONES_SOLO_REQUISICION` se niega con `PERMISO` ("Tu cuenta solo tiene acceso a
   Requisiciones."), antes de ejecutarla; `getDatosIniciales` les manda `soloRequisicion: true`, catálogo **sin precios** y nada de
   clientes, proyectos ni tipo de cambio.
-- *(UI, solicitante)* `listarProyectosRequisicion(busqueda)` (Activos con contrato firmado; solo `{folio, nombre}`; busca por folio y
-  nombre, no por cliente), `misRequisiciones()` (**filtra por el correo del token**; `reqParaSolicitante_`: estado, motivo, renglones,
+- *(UI, solicitante)* `listarProyectosRequisicion(busqueda)` (`Activo` y `Cerrado`, con o sin contrato; solo `{folio, clave, folioVisible,
+  nombre, estado}`; busca por folio, clave y nombre, no por cliente), `misRequisiciones()` (**filtra por el correo del token**; `reqParaSolicitante_`: estado, motivo, renglones,
   eventos, `puedeEditar`/`puedeCancelar`/`puedeCerrar`; nunca orden, montos, cliente ni pagos), `guardarRequisicion(p)` (nueva o
   reenvío de una Devuelta con `p.folio`; idempotencia `REQ_<idSolicitud>`; cotización obligatoria al crear, opcional al reenviar),
   `cancelarRequisicion(folio, motivo)` (Solicitada o Devuelta), `cerrarRequisicion(folio, notas)` ("Recibí el material": solo el
@@ -250,6 +283,9 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
   normalizados. `normalizarProyecto(p)`, `nombreCarpetaProyecto(folio, cliente, nombre)` (quita `/ \ : * ? " < > |`),
   `proyectosDesdeFilas`, `filtrarProyectos`.
 - `normalizarProducto(p)`, `indiceDeClave(claves, clave)`.
+- Clave de proyecto: `PALABRAS_SIN_CLAVE`, `claveSugerida(nombre)` (regla en §6.9), `validarClaveProyecto(clave, nombre)` (exactamente
+  3 letras A–Z; vacía = sugerida), `folioVisible(folio, clave)`, `folioInterno(texto)` ("PRY-2026-0002-DRO" → "PRY-2026-0002").
+  `proyectosDesdeFilas` agrega `clave` (columna L) y `folioVisible`; `filtrarProyectos` busca también por ellos.
 - `nombresDeVendedores(filas)` (correo en minúsculas → "Nombre Apellido"), `vendedorDeFila(r, nombres)`.
 - `terminosParaPdf(cfg, marca)` — renglones de T&C de la marca; agrega la línea de vigencia si falta.
 - `textoCelda(s)` — antepone `'` a texto que empiece con `= + - @` para que Sheets no lo lea como fórmula.
@@ -294,8 +330,17 @@ si el servidor lo pide), `guardarEsquemaCob`, `firmarCob`, `desbloquearCob`, `re
 `recalcular` (vista previa; el servidor recalcula), `guardar`, `limpiar`, `cargarHistorial`, `recibirClientes`,
 `autorrellenarCliente`, `pintarDatalists`, `cargarCatalogo`, `pintarCatalogo`, `editarProd`, `guardarProd`, `sugerirSat`, `verTab`.
 Proyectos (módulo "1 · Cliente y proyecto"): `recibirProyectos`, `proyectoElegido`, `alElegirProyecto` (si "Nombre" está vacío,
-lo llena buscando el cliente por `cliente_id`), `abrirNuevoProyecto`, `crearProyecto` (usa el cliente de los campos de arriba).
-Autocompletado con `<datalist>`: clientes (en "Nombre"), proyectos activos (`PRY-… — cliente — nombre`), productos por
+lo llena buscando el cliente por `cliente_id`), `abrirNuevoProyecto`, `crearProyecto` (usa el cliente de los campos de arriba; manda
+`clave`). Clave: `#npClave` (se llena con `claveSugerida`, copia de la de `Code.js`, mientras no se edite a mano: `CLAVE_A_MANO`),
+`#npFolio`, `pintarFolioNuevo`. `folioVis(p)` muestra `PRY-AAAA-NNNN-XXX` en todas las listas; `p.folio` (interno) es lo que se manda.
+Arranque y sincronización (§6.14): `aplicarPermisos`, `leerRolesGuardados`/`guardarRoles` (localStorage `cotizadorHelgenRoles:<correo>`),
+`rolesDeUltimaSesion` (evento `sesion-lista` de la capa de sesión), `recibirBootstrap`, `CARGADO` (qué listas llegaron), `VERS`,
+`sincronizarAhora`, `contextoSync`, `aplicarSync`, `iniciarSincronizacion` (`setInterval` 20 s si `document.visibilityState` es
+visible, `visibilitychange`, foco en los buscadores `proyecto`/`resProyecto`/`cobProyecto`/`comProyecto`/`reqProyecto`),
+`sinInterrumpir`/`listoVista` (si hay captura en `cobVistaProyecto`, `comVistaReq` o `comModOrdenes`, aviso "Otra persona cambió…
+Actualizar" en vez de repintar), `recibirProyectosReq/Com/Cob`, `COM_FILTRO`. `verTab(t, recienCargado)` ya no vuelve a pedir lo
+que trajo el bootstrap. La capa de sesión expone `window.sesionVigente()` y `window.correoSesion()`.
+Autocompletado con `<datalist>`: clientes (en "Nombre"), proyectos activos (`PRY-…-XXX — cliente — nombre`), productos por
 descripción y por clave, unidades SAT.
 Capa de sesión y `fetch` en `<script id="api-web">` (§10.2).
 
@@ -347,9 +392,10 @@ filas 0001–0004 no las tienen llenas. La T se agregó con Proyectos (10/2026):
 `TERMINOS_HELGEN`, `TERMINOS_ENERGY`, `TERMINOS_OC` (pie de las órdenes de compra; se agrega sola) (un término por renglón
 dentro de la celda).
 
-**Pestaña `Proyectos`** (1 fila por proyecto): Folio (`PRY-AAAA-NNNN`), Fecha, Nombre, Cliente ("nombre — empresa"),
+**Pestaña `Proyectos`** (1 fila por proyecto): Folio (`PRY-AAAA-NNNN`: la llave interna), Fecha, Nombre, Cliente ("nombre — empresa"),
 `cliente_id` (ver `idCliente`), Ubicación, Estado (Activo/Cerrado/Cancelado; **se cambia con la lista desplegable en la hoja**,
-no hay pantalla), `carpeta_id`, `vendedor_email`, `vendedor_nombre`, `vendedor_apellido`.
+no hay pantalla), `carpeta_id`, `vendedor_email`, `vendedor_nombre`, `vendedor_apellido`, `clave` (L, desde el 23/10/2026: 3 letras;
+se muestra como `PRY-AAAA-NNNN-XXX`; vacía en proyectos anteriores hasta correr `asignarClavesProyectosAplicar()`; no cambia).
 
 **"Catálogo Helgen" / pestaña `Catalogo`**: Clave (única, mayúsculas), Descripción, Unidad, Precio unitario (sin IVA, MXN),
 Actualizado, Actualizó, Clave SAT, Unidad SAT, Precio USD (sin IVA, automático; columna I con fórmula, no escribir ahí).
@@ -404,6 +450,9 @@ Requisiciones (23/10/2026): `ROL_REQUISICION` (efrain@, tania@, leo@: piden mate
 `SOLO_REQUISICION` (adriana@, miguel@, paola@, jesus@: **solo** la pestaña Requisiciones; ya incluye el permiso de pedir y manda
 sobre cualquier otro rol), `CONSECUTIVO_REQ_AAAA`, `CONSECUTIVO_PGP_AAAA`. Las cuentas de `SOLO_REQUISICION` también deben estar
 en los usuarios de prueba de OAuth (§10.1; agregadas por el usuario el 23/10/2026).
+Versiones (23/10/2026, §6.14): `VER_proyectos`, `VER_contratos`, `VER_cotizaciones`, `VER_catalogo`, `VER_requisiciones`, `VER_oc`,
+`VER_pagosCobranza`, `VER_pagosProveedores` (se crean y suben solas; no editarlas: si se borran, solo se recalcula el caché).
+**Un cambio de rol (`ROL_*`, `SOLO_REQUISICION`) se aplica sin recargar la página** en la siguiente consulta (≤ 20 s).
 
 ## 6. Decisiones tomadas (y por qué)
 
@@ -488,6 +537,15 @@ en los usuarios de prueba de OAuth (§10.1; agregadas por el usuario el 23/10/20
   solo para proyectos nuevos: los viejos conservan las suyas, vacías; **no se borran** a escondidas — si el usuario lo pide, revisar
   antes que estén vacías). Un proyecto con contrato firmado **no admite cotizaciones nuevas** y sale del buscador de
   cotizaciones (se revisará con los adicionales).
+- **Clave de proyecto** (23/10/2026, decisión A del usuario): folio visible `PRY-AAAA-NNNN-XXX` (ej. `PRY-2026-0002-DRO`), pero la
+  **llave interna sigue siendo `PRY-AAAA-NNNN`** en `proyecto_folio` de Cotizaciones, Cobranza y Compras (nada se migró). Regla:
+  nombre en mayúsculas sin acentos (Ñ → N), sin números ni símbolos y sin DE, DEL, LA, LAS, EL, LOS, Y, EN, PARA; 1 palabra = sus 3
+  primeras letras (DROGHEDA → DRO); 2 = 2 letras de la primera + inicial de la segunda (Casa del Lago → CAL); 3 o más = iniciales
+  de las tres primeras (Planta de Agua Norte → PAN); se completa con X (Y → XXX, Yo → YOX). Se sugiere al crear y se puede editar
+  (exactamente 3 letras A–Z, validado en el servidor); después no cambia. Puede repetirse entre proyectos (el número los distingue).
+- Al crear, la carpeta del proyecto se llama "PRY-AAAA-NNNN-XXX — Cliente — Nombre". Las carpetas privadas de Cobranza y Compras
+  (`Cobranza/AAAA/PRY-AAAA-NNNN`, `Compras/AAAA/PRY-AAAA-NNNN`) **se quedan con el folio corto**: se buscan por nombre y renombrarlas
+  haría que el sistema creara otras.
 
 ### 6.10 Modelo futuro (fase 4 y después; NO construido)
 - Gastos, nómina y horas por proyecto: folio (`GAS-AAAA-NNNN`), contador `CONSECUTIVO_<TIPO>_AAAA`, columna **`proyecto_folio`**.
@@ -518,9 +576,9 @@ en los usuarios de prueba de OAuth (§10.1; agregadas por el usuario el 23/10/20
 - **Permisos en el servidor:** `ROL_COBRANZA` (Script Properties, no en el código) para ver y cambiar todo lo de cobranza;
   `ADMIN_DESBLOQUEO` solo para desbloquear. Los demás reciben `codigo: "PERMISO"` y `getDatosIniciales` no les manda nada de
   cobranza (solo `permisos` en falso para ocultar la pestaña).
-- La pestaña Cobranza aparece cuando responde `getDatosIniciales` (2–3 s en la prueba): antes la página no sabe si hay rol. Los
-  permisos se leen al cargar: tras cambiar `ROL_COBRANZA` hay que recargar la página. Ideas si molesta (no hechas): recordar el
-  permiso en `sessionStorage` o poner en caché partes de la carga inicial.
+- Desde el 23/10/2026 las pestañas se dibujan al instante con los roles de la última sesión (localStorage) y se corrigen con el
+  bootstrap; un cambio de `ROL_COBRANZA` se aplica sin recargar en la siguiente consulta (§6.14). Es solo interfaz: el servidor
+  revisa el rol en cada llamada.
 - **Aceptada:** una por proyecto; se puede cambiar hasta firmar. Monto contratado = total **con IVA**; subtotal de referencia.
   **Línea de negocio y moneda del proyecto salen de la aceptada.** Si ya hay pagos (tras un desbloqueo), la nueva aceptada debe
   tener la misma moneda.
@@ -558,8 +616,9 @@ en los usuarios de prueba de OAuth (§10.1; agregadas por el usuario el 23/10/20
   `getDatosIniciales` solo les manda `permisos.compras` en falso. Compras **no** recibe montos del contrato ni margen (solo la moneda
   y la línea de negocio del proyecto). El **margen solo lo ve `ROL_COBRANZA`** (va en `vistaCobranza_`). Agregar a alguien a
   `ROL_COMPRAS` le da acceso en la app; para abrir los PDF también hay que compartirle la carpeta de compras en Drive (por persona).
-- **Solo en proyectos `Activo` con contrato firmado** (decisión del usuario, 20/10/2026): así la moneda y el contratado ya están
-  fijos. Si después se desbloquea el contrato, el proyecto sale de la lista y no admite órdenes nuevas; las que tiene se conservan.
+- **Proyectos `Activo` y `Cerrado`, con o sin contrato** (decisión del usuario, 23/10/2026; antes solo `Activo` con contrato
+  firmado). Los `Cancelado` no. Moneda y línea de negocio de la orden: las de la cotización aceptada (firmada o no); sin aceptada,
+  **MXN y sin línea** (decisión C). Con órdenes vigentes en una moneda no se puede aceptar una cotización de otra (`marcarAceptada`).
 - **Datos de la orden:** proveedor (de la lista o nuevo), fecha de entrega (obligatoria, no anterior a hoy), lugar de entrega (por
   omisión la ubicación del proyecto), condiciones de pago (obligatorias), moneda (por omisión la del proyecto), IVA 16 / 8 / 0 %
   (por omisión `IVA_TASA`), notas. Renglones del catálogo (llena clave, descripción y unidad) o a mano; **el costo siempre se
@@ -574,6 +633,9 @@ en los usuarios de prueba de OAuth (§10.1; agregadas por el usuario el 23/10/20
   faltó algo).
 - **Proveedores:** pestaña propia que se llena sola al emitir (por RFC, o por razón social si no trae RFC; un dato vacío no borra
   uno anterior; si un proveedor sin RFC llega después con RFC, su fila toma el RFC).
+- **Sin cotización aceptada** la vista de Cobranza muestra el costo de las órdenes vigentes por moneda y "Margen: Sin contrato"
+  (`margenSinContrato_`); con aceptada sin firmar, el margen se calcula contra la aceptada (como antes). El resumen de cobranza
+  sigue listando solo proyectos con aceptada.
 - **Margen** = contratado sin IVA (`Contratos.subtotal`) − suma de `subtotal_proyecto` de las órdenes no canceladas (Emitidas, Pagadas y Recibidas), en
   monto y porcentaje. Una orden en otra moneda que el proyecto exige tipo de cambio al crearla y guarda su costo convertido;
   **nunca se suman MXN y USD**: con órdenes vigentes, la aceptada no puede cambiar de moneda (igual que con pagos).
@@ -592,7 +654,8 @@ en los usuarios de prueba de OAuth (§10.1; agregadas por el usuario el 23/10/20
 - **Estados:** Solicitada → Autorizada (genera la OC) → Pagada → Cerrada; Solicitada → Rechazada (motivo, final) | Devuelta (motivo;
   el trabajador corrige renglones, puede reemplazar la cotización y reenvía: vuelve a Solicitada con el mismo folio) ; Solicitada o
   Devuelta → Cancelada (el trabajador, con motivo). Nada se borra: los renglones anteriores quedan como versión anterior y la
-  cotización anterior se queda en Drive. Proyecto Activo con contrato firmado para pedir y para autorizar.
+  cotización anterior se queda en Drive. Proyecto `Activo` o `Cerrado`, con o sin contrato, para pedir, autorizar y pagar (desde
+  el 23/10/2026; antes solo Activo con contrato firmado); `Cancelado` no. **Los pagos de clientes siguen exigiendo contrato firmado.**
 - **Autorizar:** vista lado a lado (renglones y la cotización). El formulario de la orden viene precargado con los renglones (las
   notas se agregan a la descripción; compras puede ajustar cantidades y renglones); proveedor con autollenado, costo por renglón,
   moneda, IVA 16/8/0, tipo de cambio si aplica, entrega y condiciones. La OC guarda `req_folio` y su PDF solo agrega "Requisición: REQ-…".
@@ -605,6 +668,24 @@ en los usuarios de prueba de OAuth (§10.1; agregadas por el usuario el 23/10/20
 - **Cierre:** "Recibí el material" (solo el solicitante, solo si está Pagada; notas opcionales) → Cerrada y la OC Recibida con la fecha
   y el correo del trabajador. Compras puede cerrar en su lugar con motivo obligatorio.
 - **Fuera de alcance por ahora:** notificaciones por correo, pagos parciales o varios pagos por orden.
+
+### 6.14 Carga rápida y sincronización sin recargar (construida y publicada el 23/10/2026; API @11)
+- **Antes:** una llamada `getDatosIniciales` de 5.1 s (servidor 3.2–3.9 s: Config 0.8–1.7, catálogo 0.9–1.4, proyectos 0.7–1.0,
+  clientes 0.3) y las pestañas con rol aparecían al responder; al abrir cada pestaña, 2 llamadas más de 2.6–4.6 s.
+- **Ahora (medido en PRUEBAS y en el real):** pestañas a los 0.04 s (roles de la última sesión), todo utilizable a 1.8–2.1 s con caché;
+  consulta sin cambios 1.6–1.8 s (servidor 0.4–0.6 s). Con el caché vacío (nadie entró en 6 h, o justo después de publicar) el
+  bootstrap tarda ~5 s (9 s la primera ejecución de una versión nueva) y las requisiciones se piden al abrir su pestaña (~4 s).
+  **~1.7 s de cada llamada son el viaje fijo de Apps Script** (redirección de Google): no se pueden quitar.
+- localStorage solo guarda los roles por correo (nunca datos: clientes ni montos), para dibujar pestañas; el servidor manda.
+- Los cambios hechos **desde la app** se ven en los demás navegadores en ≤ 20 s; los hechos **a mano en las hojas** (Estado del
+  proyecto, precios del catálogo, filas borradas) en ≤ ~5–10 min + 20 s (medido: 85 s), porque la consulta de fondo relee esas hojas
+  cada pocos minutos y compara su huella. El tipo de cambio de Google Finance también cambia la huella del catálogo (se vuelve a
+  mandar el catálogo; es pequeño).
+- Una vista con captura en curso no se repinta sola: aparece "Otra persona cambió esta información. Actualizar".
+- La consulta corre como el dueño (cuota de efrain@): ~3 llamadas por minuto por navegador visible. La verificación del token sigue
+  en caché (10 min).
+- Idea no hecha: un activador diario (p. ej. 7:00) que llene el caché para que la primera carga del día no sea en frío (requiere
+  autorizar un permiso nuevo de Google, `script.scriptapp`).
 
 ## 7. Reglas del proyecto (no romper)
 1. Los totales SIEMPRE se recalculan en el servidor (`normalizarCotizacion`). El navegador solo muestra una vista previa.
@@ -632,6 +713,8 @@ en los usuarios de prueba de OAuth (§10.1; agregadas por el usuario el 23/10/20
     Claude in Chrome, donde ya tiene su sesión de @helgen.tech. Detalle en §8 "Pruebas en el navegador".
 14. **Cada vez que se actualice este CLAUDE.md, se actualiza en el mismo turno el Manual del Cotizador Helgen** (pedido del usuario,
     21/10/2026; §2 y §8 "Manual del Cotizador"). Los dos deben contar lo mismo; si no se pudo actualizar el manual, decirlo.
+15. Toda función nueva que escriba datos va en `CAMBIOS_API` con las colecciones que cambia (si no, los demás navegadores no se
+    enteran y su caché queda viejo hasta 6 h). Lo que la interfaz recibe de `sincronizar` respeta los mismos roles que las funciones.
 
 ## 8. Cómo trabajar
 
@@ -641,11 +724,11 @@ mkdir -p /tmp/salida-pdf && node tests/cotizacion.test.js Code.js /tmp/salida-pd
 node tests/catalogo.test.js .                                  # catálogo: migración, alta, edición, duplicados
 node tests/sat.test.js . "$HOME/Library/CloudStorage/GoogleDrive-efrain@helgen.tech/Mi unidad/Cotizador Helgen/Catálogos SAT"
 node tests/sesion.test.js .                                    # token en doPost, vendedor_* (vendedor falso se ignora)
-node tests/proyectos.test.js .                                 # folio PRY, carpetas, proyecto_folio, subcarpetas que se reparan
+node tests/proyectos.test.js .                                 # folio PRY, clave (sugerida, validada, folio visible), carpetas, asignarClavesProyectos, subcarpetas que se reparan
 node tests/interfaz.test.js .                                  # interfaz con DOM y fetch simulados: proyecto rechazado, USD, Cobranza (con margen), Compras (requisición → OC → pago → cierre), Requisiciones y SOLO_REQUISICION
 node tests/cobranza.test.js .                                  # cobranza por doPost: permisos, aceptada, esquema, firma, desbloqueo, pagos, monedas, resumen
 node tests/compras.test.js .                                   # compras por doPost: ROL_COMPRAS, órdenes (desde requisiciones), PDF, proveedores, pagar/recibir/cancelar, margen, monedas
-node tests/requisiciones.test.js .                             # requisiciones por doPost: permisos (solo las suyas, SOLO_REQUISICION), estados, folios REQ/PGP, OC, pago, cierre
+node tests/requisiciones.test.js .                             # requisiciones por doPost: permisos (solo las suyas, SOLO_REQUISICION), estados, folios REQ/PGP, OC, pago, cierre; bootstrap y sincronizar por rol, caché por versiones, cambio a mano en la hoja
 node tests/probar-busqueda-sat.js Code.js "<ruta>/SAT_c_ClaveProdServ.csv"   # ver qué sugiere la búsqueda por palabras
 
 # Subir y publicar la API (misma API_URL)
@@ -722,6 +805,20 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
   rechaza el cambio, decirlo y anotarlo en §9 como pendiente.
 
 ## 9. Pendientes e ideas
+- **Carga rápida, sincronización, requisiciones en cualquier proyecto y clave: publicados el 23/10/2026** (API @11 + interfaz;
+  commits `d56dd38` y `a971f2b`). Hechos: medición antes (§6.14), respaldos (§2, verificados y restringidos), prueba en PRUEBAS (§10.9),
+  editor real comparado antes (= `070b45d`) y después (= repo) con `clasp clone`, `clasp push`, `clasp deploy` @11, `wrangler deploy`,
+  deployment de prueba retirado (404) y servidor local apagado. **Revisión en el cotizador real (Claude in Chrome, sin crear nada):**
+  una sola llamada al entrar (9.2 s la primera, en frío; 2.0 s al recargar), 6 pestañas, roles guardados, DROGHEDA en Requisiciones y
+  en Compras ("MXN · sin contrato"), resumen de cobranza y vista de DROGHEDA sin margen (no tiene órdenes). La columna L de la hoja
+  real se crea sola la primera vez que se lee Proyectos.
+  - **Pendiente (lo hace el usuario):** en el editor real, recargar y correr `asignarClavesProyectos` (vista previa en el registro:
+    debe decir `PRY-2026-0001 → PPO` y `PRY-2026-0002 "DROGHEDA" → PRY-2026-0002-DRO`) y después `asignarClavesProyectosAplicar`.
+    Antes, repetirlo en PRUEBAS: el 23/10/2026 el usuario lo corrió ahí pero no se escribió nada (columna L vacía en 0001–0004 y
+    carpetas sin renombrar; el editor de PRUEBAS sí tenía la función, comprobado con `clasp clone`; probablemente el editor no se
+    había recargado). La función está probada en Node (`proyectos.test.js`).
+  - No probado con cuentas reales de otras personas (Tania, Leo, `SOLO_REQUISICION`): lo cubren las pruebas en Node.
+  - Idea: activador diario para llenar el caché temprano (§6.14).
 - **Renombrar en Drive / Apps Script (lo hace el usuario):** proyecto `1GsH8Dja…` → "Cotizador Helgen (código de la app)";
   carpeta `1w-T05ql…` → "Cotizador Helgen — API web"; proyecto anterior → "Cotizador Helgen (EN DESUSO — no usar)";
   los archivos de prueba sin uso → "ARCHIVO PRUEBAS — …" (§10.4).
@@ -945,6 +1042,22 @@ Para probar Proyectos con la sesión real **sin tocar la hoja real** se creó un
   visibles después de devolver) → `!important` + prueba; el aviso del pago decía "El proyecto es en…" → "La orden es en…" + prueba.
 - Lección: tras recargar la página se pierden las funciones auxiliares definidas desde la consola (`llamar`): volver a definirlas
   antes de lanzar llamadas en segundo plano (si no, el `async` falla en silencio).
+
+### 10.9 Prueba de carga rápida, sincronización, requisiciones sin contrato y clave en PRUEBAS (23/10/2026)
+- PRUEBAS (`1wp8_SQ…`) con el `Code.js` del repo + (solo ahí, mientras se midió) tiempos `_t` en `doPost` y una función `pruebasEnfriar`
+  que subía todas las versiones (= caché vacío); al terminar quedó con el código limpio de @11. Deployment `AKfycbxnFS1f…` (@11–@14),
+  **retirado** (404). Interfaz: copia de `web/` en el scratchpad con marcas `performance.mark` (solo ahí). Ronda R2 (los tres roles).
+- **Resultado (Claude in Chrome con la sesión del usuario): todo pasó.** Medición en §6.14. Un proyecto creado por fuera
+  (`PRY-2026-0005-BOS`) apareció en 5 s en las 4 listas sin recargar; con clics: "Casa del Lago" sugirió CAL, editada a "cdl" →
+  `PRY-2026-0006-CDL` (columna L y carpeta "PRY-2026-0006-CDL — …"); el servidor rechazó "C1", "ABCD" y "ÑAN"; búsqueda por clave y por
+  folio completo; `REQ-2026-0005` en el proyecto sin contrato → `OC-2026-0008` (MXN, "sin contrato") → `PGP-2026-0004`; Cobranza:
+  "Costo de órdenes $1,000.00 MXN · Margen: Sin contrato"; pago de cliente sin contrato rechazado; carpeta privada de compras con folio
+  corto y solo efrain@; `PRY-2026-0006` puesto en Cerrado a mano en la hoja → la página lo mostró "Cerrado" a los 85 s.
+- Errores encontrados y corregidos antes de publicar (con prueba en Node): el resumen podía salir del caché antes de detectar un
+  cambio a mano (`REVISAR_A_MANO_`); al recibir un rol nuevo una lista llegaba y otra vieja la pisaba (cargas al final de
+  `aplicarSync`); una consulta de más tras el bootstrap; caché frío de 12 s → TTL de 6 h por versión, revisión de hojas solo en la
+  consulta de fondo, memoria por petición y listas pesadas solo si están en caché.
+- Datos de prueba: `PRY-2026-0005-BOS`, `PRY-2026-0006-CDL` (Cerrado), `REQ-2026-0005` (Pagada), `OC-2026-0008`, `PGP-2026-0004`.
 
 ## 11. Migración al proyecto nuevo (19/10/2026)
 
