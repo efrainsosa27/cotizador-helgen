@@ -1,4 +1,4 @@
-// Compras (fase 3): órdenes de compra por proyecto, proveedores, PDF y margen. Permisos con ROL_COMPRAS validados en el
+// Compras (fase 3): órdenes de compra por proyecto (siempre desde una requisición autorizada), proveedores, PDF y margen. Permisos con ROL_COMPRAS validados en el
 // servidor; el margen solo lo ve ROL_COBRANZA. Todo por doPost con tokens simulados (mismos simulacros que cobranza.test.js).
 // Uso: node tests/compras.test.js .   (carpeta con Code.js y Logo.js)
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
@@ -61,13 +61,14 @@ const db=libro('DB','Base de datos',{Config:hoja([['Clave','Valor'],['PREFIJO_FO
 libro('CAT','Catálogo',{Catalogo:hoja([['Clave','Descripción','Unidad','Precio unitario (sin IVA)','Actualizado','Actualizó','Clave SAT','Unidad SAT']])});
 const props={SPREADSHEET_ID:'DB',FOLDER_ID:pdfRaiz.id,CATALOGO_ID:'CAT',
   ROL_COBRANZA:'efrain@helgen.tech, tania@helgen.tech',ADMIN_DESBLOQUEO:'efrain@helgen.tech',
-  ROL_COMPRAS:'efrain@helgen.tech; Pedro@helgen.tech, intruso@gmail.com'},cache={};
+  ROL_COMPRAS:'efrain@helgen.tech; Pedro@helgen.tech, intruso@gmail.com',ROL_REQUISICION:'obrero@helgen.tech'},cache={};
 
-// ---- Tokens: efrain (cobranza + compras + admin), tania (cobranza sin compras), pedro (compras sin cobranza), ana (vendedora sin rol) ----
+// ---- Tokens: efrain (cobranza + compras + admin), tania (cobranza sin compras), pedro (compras sin cobranza), ana (vendedora sin rol),
+// obrero (solo ROL_REQUISICION: pide materiales) ----
 const ahora=Math.floor(Date.now()/1000);
 const claims=(email,n,a)=>({aud:CID,iss:'https://accounts.google.com',exp:String(ahora+3000),email,email_verified:'true',hd:'helgen.tech',given_name:n,family_name:a});
 const tokens={efrain:claims('efrain@helgen.tech','Efrain','Sosa'),tania:claims('tania@helgen.tech','Tania','R'),
-  ana:claims('ana@helgen.tech','Ana','López'),pedro:claims('pedro@helgen.tech','Pedro','Ruiz'),intruso:{...claims('intruso@gmail.com','X','Y'),hd:undefined}};
+  ana:claims('ana@helgen.tech','Ana','López'),obrero:claims('obrero@helgen.tech','Juan','Obrero'),pedro:claims('pedro@helgen.tech','Pedro','Ruiz'),intruso:{...claims('intruso@gmail.com','X','Y'),hd:undefined}};
 
 const fmt=(d,tz,f)=>f.replace('yyyy',d.getFullYear()).replace('MM',pad(d.getMonth()+1)).replace('dd',pad(d.getDate()))
   .replace('HH',pad(d.getHours())).replace('mm',pad(d.getMinutes())).replace('ss',pad(d.getSeconds()));
@@ -159,25 +160,37 @@ const cot=(proyectoFolio,precio,extra)=>ok('ana','guardarCotizacion',{cliente:{n
 const c1=cot(p1,10000), c1usd=cot(p1,100,{moneda:'USD'}), c2=cot(p2,5000,{moneda:'USD',marca:'energy'}), c3=cot(p3,100), c4=cot(p4,100);
 for(const [p,c] of [[p1,c1],[p2,c2],[p4,c4]]){ok('efrain','marcarAceptada',p,c,true);ok('efrain','firmarContrato',p,HOY_ISO)}
 ok('efrain','marcarAceptada',p3,c3);
-const filaP4=db.pest.Proyectos.m.findIndex(r=>r[0]===p4); db.pest.Proyectos.m[filaP4][6]='Cancelado';
 // Los proyectos nuevos ya no tienen subcarpeta "Órdenes de compra"
 const carpP1=carpetas[db.pest.Proyectos.m.find(r=>r[0]===p1)[7]];
 assert.deepEqual(carpP1.hijos.map(h=>h.nombre),['Cotizaciones']);
 
 // --- Sin rol de compras: no ve la pestaña ni recibe datos; el servidor rechaza todo con PERMISO ---
-assert.deepEqual({...ok('ana','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:false});
-assert.deepEqual({...ok('tania','getDatosIniciales').permisos},{cobranza:true,desbloqueo:false,compras:false});
-assert.deepEqual({...ok('pedro','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:true});
-assert.deepEqual({...ok('efrain','getDatosIniciales').permisos},{cobranza:true,desbloqueo:true,compras:true});
-const OC=f=>'OC-'+ANIO+'-'+f;
-const COMPRAS=[['listarProyectosCompras',['']],['getComprasProyecto',[p1]],['guardarOrdenCompra',[{proyectoFolio:p1,...base}]],
-  ['marcarOcRecibida',[OC('0001'),HOY_ISO]],['cancelarOrdenCompra',[OC('0001'),'motivo largo']]];
-for(const quien of ['ana','tania']) for(const [f,args] of COMPRAS) falla(quien,f,args,/No tienes permiso de compras/,'PERMISO');
+assert.deepEqual({...ok('ana','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:false,requisicion:false});
+assert.deepEqual({...ok('tania','getDatosIniciales').permisos},{cobranza:true,desbloqueo:false,compras:false,requisicion:false});
+assert.deepEqual({...ok('pedro','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:true,requisicion:false});
+assert.deepEqual({...ok('efrain','getDatosIniciales').permisos},{cobranza:true,desbloqueo:true,compras:true,requisicion:false});
+assert.deepEqual({...ok('obrero','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:false,requisicion:true});
+const OC=f=>'OC-'+ANIO+'-'+f, REQ=f=>'REQ-'+ANIO+'-'+f;
+const COMPRAS=[['listarProyectosCompras',['']],['getComprasProyecto',[p1]],['cancelarOrdenCompra',[OC('0001'),'motivo largo']],
+  ['listarRequisiciones',['']],['getRequisicion',[REQ('0001')]],['autorizarRequisicion',[REQ('0001'),{}]],
+  ['rechazarRequisicion',[REQ('0001'),'motivo largo']],['devolverRequisicion',[REQ('0001'),'motivo largo']],
+  ['registrarPagoProveedor',[{reqFolio:REQ('0001')}]],['cancelarPagoProveedor',['PGP-'+ANIO+'-0001','motivo largo']],
+  ['cerrarRequisicionCompras',[REQ('0001'),'motivo largo']]];
+for(const quien of ['ana','tania','obrero']) for(const [f,args] of COMPRAS) falla(quien,f,args,/No tienes permiso de compras/,'PERMISO');
 for(const [f,args] of COMPRAS) falla('intruso',f,args,/@helgen.tech/,'SESION');
+// Las órdenes solo salen de una requisición: ya no hay emisión directa ni "Recibida" desde compras
+for(const f of ['guardarOrdenCompra','marcarOcRecibida']) falla('pedro',f,[{}],/Función no permitida/);
 assert.equal(props.COMPRAS_DB_ID,undefined,'una llamada sin rol no crea nada');
 assert.throws(()=>ctx.getComprasProyecto(p1),/Inicia sesión/,'desde el editor (sin token) tampoco');
 // Compras sin cobranza: no ve cobranza (ni el margen)
 falla('pedro','getCobranzaProyecto',[p1],/No tienes permiso de cobranza/,'PERMISO');
+
+// Requisiciones (las pide obrero): toda orden de compra sale de una requisición autorizada
+const PDF=Buffer.from('%PDF-1.4 cotizacion del proveedor').toString('base64');
+const req=(proyectoFolio)=>ok('obrero','guardarRequisicion',{proyectoFolio,renglones:[{descripcion:'Material',cantidad:1,unidad:'pza'}],
+  cotizacion:{nombre:'cot.pdf',datos:PDF},idSolicitud:'rq'+(++nId)}).folio;
+const reqP4=req(p4);
+const filaP4=db.pest.Proyectos.m.findIndex(r=>r[0]===p4); db.pest.Proyectos.m[filaP4][6]='Cancelado';
 
 // --- Lista: solo Activos con contrato firmado, con su moneda y sin montos ---
 const lista=ok('pedro','listarProyectosCompras','');
@@ -185,28 +198,28 @@ assert.deepEqual(lista.map(p=>p.folio+':'+p.moneda+':'+p.marca),[p2+':USD:energy
 assert(!/total|subtotal|contrat/i.test(JSON.stringify(lista)),'sin montos del contrato');
 assert.deepEqual(ok('pedro','listarProyectosCompras','texas').map(p=>p.folio),[p2]);
 
-// --- Vista: sin montos del contrato ni margen; crea el libro y la carpeta privados ---
+// --- Vista: sin montos del contrato ni margen; el libro y la carpeta son privados ---
 let v=ok('pedro','getComprasProyecto',p1.toLowerCase());
-assert.deepEqual([v.proyecto.folio,v.moneda,v.marca,v.puedeEmitir,v.ordenes.length,v.proyecto.ubicacion],[p1,'MXN','helgen',true,0,'Querétaro, Qro.']);
+assert.deepEqual([v.proyecto.folio,v.moneda,v.marca,v.ordenes.length,v.proyecto.ubicacion],[p1,'MXN','helgen',0,'Querétaro, Qro.']);
 assert(!('margen' in v)&&!('contrato' in v)&&!/11600|10000/.test(JSON.stringify(v)),'compras no ve el contratado ni el margen');
 const carpCom=carpetas[props.COMPRAS_FOLDER_ID], LC=libros[props.COMPRAS_DB_ID];
 assert.equal(ruta(carpCom),'Mi unidad/Cotizador Helgen — Compras');
 assert.equal(LC.nombre,'Cotizador Helgen — Compras (datos)'); assert.equal(archivos[LC.id].padre,carpCom);
-assert.deepEqual(Object.keys(LC.pest).sort(),['Bitacora','OrdenesCompra','Proveedores']);
+assert.deepEqual(Object.keys(LC.pest).sort(),['Bitacora','OrdenesCompra','PagosProveedores','Proveedores','Requisiciones','RequisicionesEventos','RequisicionesRenglones']);
 assert.deepEqual([carpCom.acceso,archivos[LC.id].acceso],['PRIVATE','PRIVATE'],'carpeta y libro de compras restringidos');
 const H=n=>LC.pest[n].m, bit=()=>H('Bitacora').slice(1);
-assert.equal(ok('pedro','getComprasProyecto',p3).puedeEmitir,false,'sin contrato firmado no se emite');
 
-// --- Emitir: folio, línea de negocio del contrato (no del navegador), costo capturado, PDF privado ---
-const oc=(extra)=>({proyectoFolio:p1,...base,fechaEntrega:HOY_ISO,proveedor:{razonSocial:'Paneles del Bajío',contacto:'Luis Pérez',telefono:'+52 442 111 2233'},
+// --- Emitir (al autorizar): folio, línea de negocio del contrato (no del navegador), costo capturado, PDF privado ---
+const oc=(extra)=>({...base,fechaEntrega:HOY_ISO,proveedor:{razonSocial:'Paneles del Bajío',contacto:'Luis Pérez',telefono:'+52 442 111 2233'},
   renglones:[{clave:'PAN-550',descripcion:'Panel solar 550 W',unidad:'PZA',cantidad:2,costo:1000,precio:4100}],
-  notas:'<script>x</script>',marca:'energy',idSolicitud:'o'+(++nId),...extra});
-let r=ok('pedro','guardarOrdenCompra',oc({idSolicitud:'oc1'}));
-assert.deepEqual([r.folio,r.total,r.moneda],[OC('0001'),2320,'MXN']);
+  notas:'<script>x</script>',marca:'energy',proyectoFolio:p2,idSolicitud:'o'+(++nId),...extra});
+const emitir=(quien,proyectoFolio,x)=>{const R=req(proyectoFolio);const r=ok(quien,'autorizarRequisicion',R,x);return {...r,folio:r.ocFolio,req:R}};
+let r=emitir('pedro',p1,oc({idSolicitud:'oc1'}));
+assert.deepEqual([r.folio,r.total,r.moneda,r.req,r.vista.requisicion.estado,r.vista.requisicion.ocFolio],[OC('0001'),2320,'MXN',REQ('0002'),'Autorizada',OC('0001')]);
 let f=H('OrdenesCompra')[1];
-assert.deepEqual([f[0],f[1],f[2],f[3],f[4],f[5],f[7],f[9],f[10],f[11],f[12],f[13],f[14],f[15],f[16],f[17],f[18],f[19],f[20],f[25],f[26],f[28]],
+assert.deepEqual([f[0],f[1],f[2],f[3],f[4],f[5],f[7],f[9],f[10],f[11],f[12],f[13],f[14],f[15],f[16],f[17],f[18],f[19],f[20],f[25],f[26],f[28],f[34]],
   [r.folio,HOY_ISO,p1,'Helgen','SIN-RFC:paneles del bajio','Paneles del Bajío','Luis Pérez','+52 442 111 2233',HOY_ISO,'Querétaro, Qro.',
-   'Crédito 30 días','MXN',0.16,2000,320,2320,'MXN','',2000,'pedro@helgen.tech','Pedro Ruiz','Emitida']);
+   'Crédito 30 días','MXN',0.16,2000,320,2320,'MXN','',2000,'pedro@helgen.tech','Pedro Ruiz','Emitida',REQ('0002')],'el proyecto sale de la requisición, no del navegador');
 assert.deepEqual(JSON.parse(f[21]).map(x=>x.costo+'/'+x.importe+'/'+('precio' in x)),['1000/2000/false'],'el costo es el capturado; el precio de venta no se guarda');
 const pdfOc=archivos[f[23]];
 assert.equal(ruta(pdfOc.padre),'Mi unidad/Cotizador Helgen — Compras/'+ANIO+'/'+p1);
@@ -214,53 +227,61 @@ assert.equal(pdfOc.blob.name,r.folio+' — Paneles del Bajío.pdf'); assert.equa
 assert.deepEqual([pdfOc.acceso,pdfOc.padre.acceso,pdfOc.padre.padre.acceso],['PRIVATE','PRIVATE','PRIVATE'],'PDF y subcarpetas restringidos');
 const html=pdfOc.blob.html;
 assert(/ORDEN DE COMPRA/.test(html)&&/Helgen Servicios Especializados/.test(html)&&/RFC HSE240304PC1/.test(html));
+assert(/>Requisición<\/td>/.test(html)&&html.includes(REQ('0002')),'el PDF lleva la línea "Requisición: REQ-…"');
 for(const t of ['Favor de indicar el folio de esta orden en su factura.','Facturar a nombre de la razón social y RFC indicados arriba.',
   'Precios fijos según esta orden; cualquier cambio requiere una nueva orden.','Entregar en el lugar y fecha indicados.']) assert(html.includes(t),'término: '+t);
 assert(/&lt;script&gt;/.test(html)&&!/<script>x/.test(html),'notas escapadas');
 assert(!/4,100|4100/.test(html),'sin precio de venta'); assert(html.includes('DOS MIL TRESCIENTOS VEINTE PESOS 00/100 M.N.'));
 // Idempotencia
-assert.equal(ok('pedro','guardarOrdenCompra',oc({idSolicitud:'oc1'})).folio,r.folio); assert.equal(H('OrdenesCompra').length,2);
-// Rechazos que no gastan folio
-falla('pedro','guardarOrdenCompra',[oc({proyectoFolio:p3})],/contrato firmado/);
-falla('pedro','guardarOrdenCompra',[oc({proyectoFolio:p4})],/está cancelado: no admite órdenes/);
-falla('pedro','guardarOrdenCompra',[oc({moneda:'USD'})],/proyecto es en MXN y la orden en USD: captura el tipo de cambio/);
-falla('pedro','guardarOrdenCompra',[oc({renglones:[{descripcion:'Inversor',cantidad:1,costo:''}]})],/costo unitario de "Inversor"/);
-falla('pedro','guardarOrdenCompra',[oc({proyectoFolio:'PRY-2000-0001'})],/No existe el proyecto/);
+assert.equal(ok('pedro','autorizarRequisicion',REQ('0002'),oc({idSolicitud:'oc1'})).ocFolio,r.folio); assert.equal(H('OrdenesCompra').length,2);
+// Rechazos que no gastan folio (la requisición sigue Solicitada)
+falla('obrero','guardarRequisicion',[{proyectoFolio:p3,renglones:[{descripcion:'A',cantidad:1}],cotizacion:{datos:PDF}}],/activos con contrato firmado/);
+falla('pedro','autorizarRequisicion',[reqP4,oc()],/está cancelado: no admite órdenes/);
+const rPend=req(p1);
+falla('pedro','autorizarRequisicion',[rPend,oc({moneda:'USD'})],/proyecto es en MXN y la orden en USD: captura el tipo de cambio/);
+falla('pedro','autorizarRequisicion',[rPend,oc({renglones:[{descripcion:'Inversor',cantidad:1,costo:''}]})],/costo unitario de "Inversor"/);
+falla('pedro','autorizarRequisicion',['REQ-2000-0001',oc()],/No existe la requisición/);
+falla('pedro','autorizarRequisicion',[REQ('0002'),oc()],/está autorizada: no se puede autorizar/);
 assert.equal(props['CONSECUTIVO_OC_'+ANIO],'1','los rechazos no gastan folio'); assert.equal(H('OrdenesCompra').length,2);
+assert.equal(ok('pedro','getRequisicion',rPend).requisicion.estado,'Solicitada');
 // Orden en USD en un proyecto MXN: tipo de cambio obligatorio; el costo para el margen queda en pesos
-r=ok('efrain','guardarOrdenCompra',oc({moneda:'USD',tipoCambio:18.5,ivaTasa:0,renglones:[{descripcion:'Inversor',cantidad:1,costo:100}],
+r=emitir('efrain',p1,oc({moneda:'USD',tipoCambio:18.5,ivaTasa:0,renglones:[{descripcion:'Inversor',cantidad:1,costo:100}],
   proveedor:{razonSocial:'Paneles del Bajío',rfc:'PDB200101AB1',correo:'ventas@pdb.mx'},lugarEntrega:'Bodega Norte',fechaEntrega:MANANA}));
+const R2=r.req;
 f=H('OrdenesCompra')[2];
 assert.deepEqual([r.folio,f[4],f[13],f[14],f[16],f[17],f[18],f[19],f[20],f[11]],[OC('0002'),'PDB200101AB1','USD',0,0,100,'MXN',18.5,1850,'Bodega Norte']);
 assert(/P\. Unitario|Costo unit\. \(USD\)/.test(archivos[f[23]].blob.html)&&/Moneda/.test(archivos[f[23]].blob.html)&&!/18\.5/.test(archivos[f[23]].blob.html),'USD en el PDF; el tipo de cambio no sale');
 // Proveedor: el que tenía solo razón social toma el RFC (una sola fila) y conserva el contacto
 assert.equal(H('Proveedores').length,2,'un solo proveedor');
 assert.deepEqual(H('Proveedores')[1].slice(0,6),['PDB200101AB1','Paneles del Bajío','PDB200101AB1','Luis Pérez','ventas@pdb.mx','+52 442 111 2233']);
+assert.deepEqual(ok('pedro','getRequisicion',rPend).proveedores.map(p=>p.etiqueta+'|'+p.rfc+'|'+p.contacto),['Paneles del Bajío|PDB200101AB1|Luis Pérez']);
 v=ok('pedro','getComprasProyecto',p1);
-assert.deepEqual(v.proveedores.map(p=>p.etiqueta+'|'+p.rfc+'|'+p.contacto),['Paneles del Bajío|PDB200101AB1|Luis Pérez']);
-assert.deepEqual(v.ordenes.map(x=>x.folio),[OC('0002'),OC('0001')],'más reciente primero');
+assert.deepEqual(v.ordenes.map(x=>x.folio+':'+x.reqFolio),[OC('0002')+':'+R2,OC('0001')+':'+REQ('0002')],'más reciente primero, con su requisición');
 // Proyecto USD de Helgen Energy pagado en pesos: costo en dólares; el PDF dice Helgen (no Helgen Energy)
-r=ok('pedro','guardarOrdenCompra',oc({proyectoFolio:p2,moneda:'MXN',tipoCambio:18.5,renglones:[{descripcion:'Cable',cantidad:1,costo:1850}],
-  proveedor:{razonSocial:'Cables SA'}}));
+r=emitir('pedro',p2,oc({moneda:'MXN',tipoCambio:18.5,renglones:[{descripcion:'Cable',cantidad:1,costo:1850}],proveedor:{razonSocial:'Cables SA'}}));
 f=H('OrdenesCompra')[3];
 assert.deepEqual([f[3],f[13],f[18],f[20],f[11]],['Helgen Energy','MXN','USD',100,'Austin, TX'],'la línea de negocio sale del contrato');
 assert(/Helgen Servicios Especializados/.test(archivos[f[23]].blob.html)&&!/HELGEN ENERGY|Helgen Energy/.test(archivos[f[23]].blob.html));
 // Una tercera orden en p1 que se cancela
-const r3=ok('pedro','guardarOrdenCompra',oc({renglones:[{descripcion:'Estructura',cantidad:1,costo:5000}]}));
+const r3=emitir('pedro',p1,oc({renglones:[{descripcion:'Estructura',cantidad:1,costo:5000}]}));
 
-// --- Recibida y cancelada (nunca se borran) ---
-falla('pedro','marcarOcRecibida',[OC('0002'),'2099-01-01'],/no puede ser futura/);
-falla('pedro','marcarOcRecibida',[OC('0002'),AYER],/anterior a la orden/);
-v=ok('pedro','marcarOcRecibida',OC('0002'),HOY_ISO);
-assert.deepEqual(v.ordenes.find(x=>x.folio===OC('0002')).estado+'|'+v.ordenes.find(x=>x.folio===OC('0002')).fechaRecepcion,'Recibida|'+HOY_ISO);
-falla('pedro','marcarOcRecibida',[OC('0002'),HOY_ISO],/ya está recibida/);
+// --- Pagada, recibida (al cerrar la requisición) y cancelada (nunca se borran) ---
+const pagoR2={reqFolio:R2,fecha:HOY_ISO,monto:100,monedaPago:'USD',metodo:'Transferencia',referencia:'SPEI 1',comprobante:{nombre:'p.pdf',datos:PDF},idSolicitud:'pg1'};
+v=ok('pedro','registrarPagoProveedor',pagoR2).vista;
+assert.deepEqual([v.requisicion.estado,v.orden.estado],['Pagada','Pagada']);
+falla('pedro','cancelarOrdenCompra',[OC('0002'),'Ya no se necesita'],/ya está pagada: no se puede cancelar/);
+ok('obrero','cerrarRequisicion',R2,'');
+f=H('OrdenesCompra')[2];
+assert.deepEqual([f[28],f[29],f[30]],['Recibida',HOY_ISO,'obrero@helgen.tech'],'recibida con la fecha y el correo del solicitante');
 falla('pedro','cancelarOrdenCompra',[OC('0002'),'Ya no se necesita'],/ya se recibió: no se puede cancelar/);
 falla('pedro','cancelarOrdenCompra',[r3.folio,''],/motivo/);
 v=ok('pedro','cancelarOrdenCompra',r3.folio,'El proveedor no tiene existencias');
 const fc=H('OrdenesCompra').find(x=>x[0]===r3.folio);
 assert.deepEqual([fc[28],fc[31],!!fc[32],fc[33]],['Cancelada','pedro@helgen.tech',true,'El proveedor no tiene existencias']);
+let vr=ok('pedro','getRequisicion',r3.req);
+assert.deepEqual([vr.requisicion.estado,vr.requisicion.ocFolio,vr.orden,vr.puedeAutorizar],['Solicitada','',null,true],'su requisición regresa a Solicitada para autorizarla de nuevo');
+assert(/Se canceló la orden/.test(vr.eventos[vr.eventos.length-1].nota));
 falla('pedro','cancelarOrdenCompra',[r3.folio,'otra vez'],/ya está cancelada/);
-falla('pedro','marcarOcRecibida',[r3.folio,HOY_ISO],/ya está cancelada/);
 assert.equal(H('OrdenesCompra').length,5,'la cancelada sigue en la hoja');
 
 // --- Margen (solo cobranza): contratado sin IVA − órdenes vigentes sin IVA, en la moneda del proyecto ---
@@ -287,13 +308,16 @@ ok('efrain','desbloquearContrato',p1,'Prueba de moneda con órdenes');
 falla('efrain','marcarAceptada',[p1,c1usd],/órdenes de compra en MXN/);
 // Sin contrato firmado: sale de la lista y no se emiten órdenes; las que tiene se siguen viendo
 assert.deepEqual(ok('pedro','listarProyectosCompras','').map(p=>p.folio),[p2]);
-v=ok('pedro','getComprasProyecto',p1); assert.deepEqual([v.puedeEmitir,v.ordenes.length],[false,3]);
-falla('pedro','guardarOrdenCompra',[oc()],/contrato firmado/);
+v=ok('pedro','getComprasProyecto',p1); assert.equal(v.ordenes.length,3);
+assert.equal(ok('pedro','getRequisicion',rPend).puedeAutorizar,false);
+falla('pedro','autorizarRequisicion',[rPend,oc()],/contrato firmado/);
+falla('obrero','guardarRequisicion',[{proyectoFolio:p1,renglones:[{descripcion:'A',cantidad:1}],cotizacion:{datos:PDF}}],/activos con contrato firmado/);
 ok('efrain','firmarContrato',p1,HOY_ISO);
 
 // --- Bitácora, separación de datos y reparación del acceso ---
 const acciones=bit().map(b=>b[2]);
-for(const a of ['Emitir orden de compra','Recibir orden de compra','Cancelar orden de compra']) assert(acciones.includes(a),'bitácora: '+a);
+for(const a of ['Solicitar requisición','Autorizar requisición','Emitir orden de compra','Registrar pago a proveedor','Cerrar requisición',
+  'Cancelar orden de compra','Requisición a Solicitada']) assert(acciones.includes(a),'bitácora: '+a);
 assert(bit().every(b=>/@helgen\.tech$/.test(b[1])));
 assert.equal(bit().find(b=>b[2]==='Cancelar orden de compra')[5],'El proveedor no tiene existencias');
 assert.deepEqual(Object.keys(db.pest).sort(),['Config','Cotizaciones','Proyectos'],'nada de compras en la Base de datos');

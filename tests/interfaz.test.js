@@ -1,7 +1,9 @@
 // Interfaz (web/cotizador/index.html): corre la capa api-web y el script de la app con un DOM y un fetch simulados.
 // Cubre: si el servidor rechaza el proyecto (codigo PROYECTO), se limpia el campo, se refresca la lista y se avisa;
 // moneda USD (el catálogo no pone precio); pestaña Cobranza solo con permiso; aceptar con confirmación; pago con comprobante;
-// margen en Cobranza; pestaña Compras solo con permiso, renglones del catálogo sin costo, tipo de cambio, recibir y cancelar.
+// margen en Cobranza; pestaña Compras solo con permiso: requisición → orden precargada (renglones sin costo, tipo de cambio),
+// pago con comprobante, cancelar el pago, cerrar con motivo; pestaña Requisiciones (nueva, corregir, recibí el material) y
+// SOLO_REQUISICION (solo esa pestaña).
 // Uso: node tests/interfaz.test.js .   (carpeta del proyecto)
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
 const html=fs.readFileSync(path.join(process.argv[2],'web/cotizador/index.html'),'utf8');
@@ -18,14 +20,16 @@ const TC={valor:18.45,fuente:'Google Finance'};
 
 /** App cargada con un DOM y un servidor simulados nuevos. */
 function montar(datosIniciales){
-  function elemento(tag){const e={tag,value:'',textContent:'',innerHTML:'',className:'',title:'',src:'',placeholder:'',disabled:false,hijos:[],oyentes:{},
+  function elemento(tag){const e={tag,value:'',textContent:'',className:'',title:'',src:'',placeholder:'',disabled:false,hijos:[],oyentes:{},
    _clases:new Set(),porClase:{},
    classList:{add:c=>e._clases.add(c),remove:c=>e._clases.delete(c),contains:c=>e._clases.has(c),toggle:(c,f)=>f?e._clases.add(c):e._clases.delete(c)},
    addEventListener:(t,f)=>(e.oyentes[t]=e.oyentes[t]||[]).push(f),
    disparar:t=>(e.oyentes[t]||[]).forEach(f=>f({target:e})),
    focus(){},remove(){},appendChild:h=>e.hijos.push(h),
    querySelector:sel=>e.porClase[sel]||(e.porClase[sel]=elemento('input')),
-   querySelectorAll:sel=>sel==='tr'?e.hijos:sel==='input'?Object.values(e.porClase):[]};return e}
+   querySelectorAll:sel=>sel==='tr'?e.hijos:sel==='input'?Object.values(e.porClase):[]};
+   // Como el DOM: innerHTML = '' quita los renglones agregados con appendChild
+   let h='';Object.defineProperty(e,'innerHTML',{get:()=>h,set:v=>{h=v;if(v==='')e.hijos.length=0}});return e}
   const porId={};
   const document={getElementById:id=>porId[id]||(porId[id]=elemento('div')),
    querySelector:()=>({src:'data:logo'}),createElement:t=>elemento(t)};
@@ -282,68 +286,186 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   B.run('pintarCobranza('+JSON.stringify({...firmada,puedeDesbloquear:true})+')');
   assert(/Desbloquear contrato/.test(B.$('cobContrato').innerHTML));
 
-  // ===== Compras (con permiso, sin cobranza) =====
-  const C=montar({ivaTasa:0.16,catalogo:CAT,tipoCambio:TC,clientes:[],proyectos:[],marcas:{},permisos:{cobranza:false,desbloqueo:false,compras:true}});
+  // ===== Compras (con permiso, sin cobranza): requisiciones → orden → pago → cierre =====
+  const C=montar({ivaTasa:0.16,catalogo:CAT,tipoCambio:TC,clientes:[],proyectos:[],marcas:{},permisos:{cobranza:false,desbloqueo:false,compras:true,requisicion:false}});
   await esperar(5);
-  assert(!C.$('tabCom').classList.contains('oculto')&&C.$('tabCob').classList.contains('oculto'),'compras ve Compras y no Cobranza');
+  assert(!C.$('tabCom').classList.contains('oculto')&&C.$('tabCob').classList.contains('oculto')&&C.$('tabReq').classList.contains('oculto'),'compras ve Compras y no Cobranza ni Requisiciones');
   assert(/PAN-550 · PZA/.test(C.$('ocCatalogo').innerHTML)&&!/4,100|4100|222/.test(C.$('ocCatalogo').innerHTML+C.$('ocClaves').innerHTML),'listas sin precio de venta');
+  const RQ={folio:'REQ-2026-0001',fecha:'2026-10-20',proyectoFolio:'PRY-2026-0001',proyectoNombre:'Techo',solicitante:'Juan Obrero',solicitanteEmail:'juan@helgen.tech',
+    estado:'Solicitada',ocFolio:'',renglones:2};
   C.respuestas.listarProyectosCompras={ok:true,datos:[{...PRY,moneda:'MXN',marca:'helgen'}]};
-  C.run("verTab('com')"); await esperar();
+  C.respuestas.listarRequisiciones={ok:true,datos:[RQ]};
+  C.$('rcEstado').value='Solicitada'; C.run("verTab('com')"); await esperar();
+  assert.deepEqual(C.llamadas.find(c=>c.funcion==='listarRequisiciones').args,['','Solicitada']);
+  assert(/REQ-2026-0001/.test(C.$('rcLista').innerHTML)&&/Juan Obrero/.test(C.$('rcLista').innerHTML)&&/abrirReqCom/.test(C.$('rcLista').innerHTML));
   assert(/PRY-2026-0001 — Luis — Solar MX — Techo/.test(C.$('comProyectosList').innerHTML)&&/MXN · Helgen/.test(C.$('comProyectosList').innerHTML));
   const PROV={id:'PDB200101AB1',razonSocial:'Paneles del Bajío',rfc:'PDB200101AB1',contacto:'Luis Pérez',correo:'v@pdb.mx',telefono:'442',etiqueta:'Paneles del Bajío'};
-  const vistaCom=(extra={})=>({proyecto:PRY,moneda:'MXN',marca:'helgen',puedeEmitir:true,ordenes:[],proveedores:[PROV],ivaTasas:[0.16,0.08,0],hoy:'2026-10-20',...extra});
-  C.respuestas.getComprasProyecto={ok:true,datos:vistaCom()};
-  C.$('comProyecto').value='PRY-2026-0001 — Luis — Solar MX — Techo'; C.$('comProyecto').disparar('change'); await esperar();
-  assert.equal(C.llamadas.find(c=>c.funcion==='getComprasProyecto').args[0],'PRY-2026-0001');
-  assert(!C.$('comModRenglones').classList.contains('oculto')&&!C.$('comForm').classList.contains('oculto')&&!C.$('comProveedor').classList.contains('oculto'));
+  const vistaReq=(extra={},req={})=>({requisicion:{folio:'REQ-2026-0001',fecha:'2026-10-20',proyectoFolio:'PRY-2026-0001',solicitante:'Juan Obrero',
+      solicitanteEmail:'juan@helgen.tech',estado:'Solicitada',motivo:'',cotizacionId:'COT1',cotizacionUrl:'https://drive/cot',ocFolio:'',...req},
+    renglones:[{renglon:1,descripcion:'Cable THW 10',cantidad:100,unidad:'M',notas:'rojo'},{renglon:2,descripcion:'Tubo',cantidad:12,unidad:'PZA',notas:''}],
+    eventos:[{fecha:'2026-10-20 10:00',estado:'Solicitada',nombre:'Juan Obrero',correo:'juan@helgen.tech',nota:''}],
+    proyecto:PRY,moneda:'MXN',marca:'helgen',orden:null,pagos:[],proveedores:[PROV],ivaTasas:[0.16,0.08,0],metodos:['Transferencia','Efectivo','Cheque'],hoy:'2026-10-20',
+    puedeAutorizar:true,puedeRevisar:true,puedePagar:false,puedeCancelarPago:false,puedeCerrar:false,...extra});
+  C.respuestas.getRequisicion={ok:true,datos:vistaReq()};
+  C.run("abrirReqCom('REQ-2026-0001')"); await esperar();
+  assert.deepEqual(C.llamadas.find(c=>c.funcion==='getRequisicion').args,['REQ-2026-0001']);
+  assert(C.$('comVistaLista').classList.contains('oculto')&&!C.$('comVistaReq').classList.contains('oculto'));
+  assert.equal(C.$('rcCotVisor').src,'https://drive.google.com/file/d/COT1/preview','la cotización a un lado');
+  assert(/Cable THW 10/.test(C.$('rcRenglones').innerHTML)&&!C.$('rcRevision').classList.contains('oculto')&&!C.$('comModOc').classList.contains('oculto')&&C.$('comModPago').classList.contains('oculto'));
+  // El formulario de la OC viene precargado con los renglones (notas en la descripción) y sin costo
+  const filasOc=C.$('ocFilas').hijos;
+  assert.deepEqual(filasOc.map(t=>[t.querySelector('.desc').value,t.querySelector('.cant').value,t.querySelector('.uni').value,t.querySelector('.costo').value]),
+    [['Cable THW 10 — rojo',100,'M',''],['Tubo',12,'PZA','']]);
   assert.deepEqual([C.$('ocLugar').value,C.$('ocMoneda').value,C.$('ocIva').value,C.$('ocEntrega').min],['Qro','MXN','0.16','2026-10-20'],'por omisión: ubicación, moneda del proyecto, IVA');
-  assert(/Moneda del proyecto: <b>MXN<\/b>/.test(C.$('comInfo').innerHTML)&&/no tiene órdenes/.test(C.$('ocLista').innerHTML));
   // Proveedor registrado: se autorrellena
   C.$('prvRazon').value='Paneles del Bajío'; C.$('prvRazon').disparar('change');
   assert.deepEqual([C.$('prvRfc').value,C.$('prvContacto').value,C.$('prvCorreo').value],['PDB200101AB1','Luis Pérez','v@pdb.mx']);
   // Renglón del catálogo: clave, descripción y unidad; el costo queda vacío
-  const ren=C.$('ocFilas').hijos[C.$('ocFilas').hijos.length-1];
+  C.run('agregarRenglonOc()');
+  const ren=filasOc[filasOc.length-1];
   ren.querySelector('.desc').value='Panel solar 550 W'; ren.querySelector('.desc').disparar('change');
   assert.deepEqual([ren.querySelector('.clave').value,ren.querySelector('.uni').value,ren.querySelector('.costo').value],['PAN-550','PZA',''],'sin precio de venta');
-  ren.querySelector('.cant').value='2'; ren.querySelector('.costo').value='1000'; C.run('recalcularOc()');
-  assert.equal(C.$('ocTot').textContent,'$2,320.00 MXN');
+  filasOc[0].querySelector('.costo').value='10'; filasOc[1].querySelector('.costo').value='50'; ren.querySelector('.cant').value='2'; ren.querySelector('.costo').value='1000'; C.run('recalcularOc()');
+  assert.equal(C.$('ocTot').textContent,'$4,176.00 MXN');
   C.$('ocIva').value='0'; C.run('recalcularOc()');
-  assert.deepEqual([C.$('ocTot').textContent,C.$('ocLblIva').textContent],['$2,000.00 MXN','IVA (0%)']);
+  assert.deepEqual([C.$('ocTot').textContent,C.$('ocLblIva').textContent],['$3,600.00 MXN','IVA (0%)']);
   // Moneda distinta a la del proyecto: aparece el tipo de cambio
   assert(C.$('ocTcCaja').classList.contains('oculto'));
   C.$('ocMoneda').value='USD'; C.run('pintarTcOc()');
   assert(!C.$('ocTcCaja').classList.contains('oculto')); assert.equal(C.$('ocLblTot').textContent,'TOTAL USD');
   C.$('ocTc').value='18.5'; C.$('ocEntrega').value='2026-10-25'; C.$('ocCondiciones').value='Contado';
-  const ORD={folio:'OC-2026-0001',fecha:'2026-10-20',proveedor:'Paneles del Bajío',moneda:'USD',total:2000,tipoCambio:18.5,fechaEntrega:'2026-10-25',
-    lugarEntrega:'Qro',estado:'Emitida',pdfUrl:'https://drive/oc'};
-  C.respuestas.guardarOrdenCompra={ok:true,datos:{folio:'OC-2026-0001',url:'https://drive/oc',total:2000,moneda:'USD',vista:vistaCom({ordenes:[ORD]})}};
+  const ORD={folio:'OC-2026-0001',fecha:'2026-10-20',proveedor:'Paneles del Bajío',moneda:'USD',total:3200,tipoCambio:18.5,fechaEntrega:'2026-10-25',
+    lugarEntrega:'Qro',condicionesPago:'Contado',estado:'Emitida',pdfUrl:'https://drive/oc',reqFolio:'REQ-2026-0001'};
+  const autorizada=vistaReq({orden:ORD,puedeAutorizar:false,puedeRevisar:false,puedePagar:true},{estado:'Autorizada',ocFolio:'OC-2026-0001'});
+  C.respuestas.autorizarRequisicion={ok:true,datos:{folio:'REQ-2026-0001',ocFolio:'OC-2026-0001',url:'https://drive/oc',total:3200,moneda:'USD',vista:autorizada}};
   const idOc=C.run('ID_OC'); C.run('guardarOc()'); await esperar();
-  const go=C.llamadas.find(c=>c.funcion==='guardarOrdenCompra').args[0];
-  assert.deepEqual([go.proyectoFolio,go.proveedor.razonSocial,go.proveedor.rfc,go.moneda,go.tipoCambio,go.ivaTasa,go.fechaEntrega,go.lugarEntrega,go.condicionesPago,go.idSolicitud],
-    ['PRY-2026-0001','Paneles del Bajío','PDB200101AB1','USD','18.5','0','2026-10-25','Qro','Contado',idOc]);
-  const rr=go.renglones.find(x=>x.descripcion==='Panel solar 550 W');
+  const go=C.llamadas.find(c=>c.funcion==='autorizarRequisicion');
+  assert.equal(go.args[0],'REQ-2026-0001');
+  assert.deepEqual([go.args[1].proveedor.razonSocial,go.args[1].proveedor.rfc,go.args[1].moneda,go.args[1].tipoCambio,go.args[1].ivaTasa,go.args[1].fechaEntrega,
+    go.args[1].lugarEntrega,go.args[1].condicionesPago,go.args[1].idSolicitud,'proyectoFolio' in go.args[1]],
+    ['Paneles del Bajío','PDB200101AB1','USD','18.5','0','2026-10-25','Qro','Contado',idOc,false],'el proyecto sale de la requisición en el servidor');
+  const rr=go.args[1].renglones.find(x=>x.descripcion==='Panel solar 550 W');
   assert.deepEqual([rr.clave,rr.cantidad,rr.costo,'precio' in rr,'_tr' in rr],['PAN-550',2,'1000',false,false]);
-  assert(/OC-2026-0001/.test(C.$('aviso').innerHTML)&&C.run('ID_OC')!==idOc,'id nuevo para la siguiente orden');
-  assert.deepEqual([C.$('ocMoneda').value,C.$('ocTc').value,C.$('prvRazon').value],['MXN','',''],'se limpia el formulario');
-  assert(C.$('ocTcCaja').classList.contains('oculto'));
-  const li=C.$('ocLista').innerHTML;
-  assert(/OC-2026-0001/.test(li)&&/\$2,000\.00 USD/.test(li)&&/TC 18\.5/.test(li)&&/25\/10\/2026/.test(li)&&/recibirOc/.test(li)&&/cancelarOc/.test(li));
-  // Recibida: pide fecha; si se cancela el diálogo no llama
-  C.dialogos.prompt=null; C.run("recibirOc('OC-2026-0001')"); await esperar();
-  assert(!C.llamadas.some(c=>c.funcion==='marcarOcRecibida'));
-  C.respuestas.marcarOcRecibida={ok:true,datos:vistaCom({ordenes:[{...ORD,estado:'Recibida',fechaRecepcion:'2026-10-20',recibio:'pedro@helgen.tech'}]})};
-  C.dialogos.prompt=' 2026-10-20 '; C.run("recibirOc('OC-2026-0001')"); await esperar();
-  assert.deepEqual(C.llamadas.find(c=>c.funcion==='marcarOcRecibida').args,['OC-2026-0001','2026-10-20']);
-  assert(/chip firmado/.test(C.$('ocLista').innerHTML)&&!/recibirOc|cancelarOc/.test(C.$('ocLista').innerHTML),'recibida: sin acciones');
-  // Cancelar: motivo obligatorio; permiso revocado → error del servidor
-  C.dialogos.prompt='  '; C.run("cancelarOc('OC-2026-0001')"); await esperar();
-  assert(!C.llamadas.some(c=>c.funcion==='cancelarOrdenCompra'));
-  C.respuestas.cancelarOrdenCompra={ok:false,codigo:'PERMISO',error:'No tienes permiso de compras.'};
-  C.dialogos.prompt='Sin existencias'; C.run("cancelarOc('OC-2026-0001')"); await esperar();
-  assert.deepEqual(C.llamadas.find(c=>c.funcion==='cancelarOrdenCompra').args,['OC-2026-0001','Sin existencias']);
+  assert(/REQ-2026-0001/.test(C.$('aviso').innerHTML)&&/OC-2026-0001/.test(C.$('aviso').innerHTML));
+  assert(C.$('comModOc').classList.contains('oculto')&&!C.$('comModPago').classList.contains('oculto')&&!C.$('rcFormPago').classList.contains('oculto'));
+  assert(/OC-2026-0001/.test(C.$('rcOrden').innerHTML)&&/\$3,200\.00 USD/.test(C.$('rcOrden').innerHTML)&&/cancelarOcDesdeReq/.test(C.$('rcOrden').innerHTML));
+  assert.deepEqual([C.$('ppMonto').value,C.$('ppMoneda').value,C.$('ppFecha').max],[3200,'USD','2026-10-20'],'el pago se precarga con el total de la orden');
+  // Pago: comprobante obligatorio; en otra moneda pide tipo de cambio
+  C.run('registrarPagoProv()'); await esperar();
+  assert(!C.llamadas.some(c=>c.funcion==='registrarPagoProveedor')&&/Adjunta el comprobante/.test(C.$('aviso').innerHTML));
+  C.$('ppMoneda').value='MXN'; C.run('pintarTcPago()'); assert(!C.$('ppTcCaja').classList.contains('oculto'));
+  C.$('ppMonto').value='59200'; C.$('ppTc').value='18.5'; C.$('ppRef').value='SPEI 1';
+  C.$('ppArchivo').files=[{name:'spei.pdf',type:'application/pdf',size:2000,b64:'JVBERi0='}];
+  const pagada=vistaReq({orden:{...ORD,estado:'Pagada'},pagos:[{folio:'PGP-2026-0001',fecha:'2026-10-20',monto:59200,monedaPago:'MXN',tipoCambio:18.5,montoAplicado:3200,monedaOc:'USD',
+    metodo:'Transferencia',referencia:'SPEI 1',estado:'Vigente',comprobanteUrl:'https://drive/pgp'}],puedeAutorizar:false,puedeRevisar:false,puedeCancelarPago:true,puedeCerrar:true},{estado:'Pagada',ocFolio:'OC-2026-0001'});
+  C.respuestas.registrarPagoProveedor={ok:true,datos:{folio:'PGP-2026-0001',url:'https://drive/pgp',vista:pagada}};
+  const idPgp=C.run('ID_PGP'); C.run('registrarPagoProv()'); await esperar(20);
+  const rpp=C.llamadas.find(c=>c.funcion==='registrarPagoProveedor').args[0];
+  assert.deepEqual([rpp.reqFolio,rpp.monto,rpp.monedaPago,rpp.tipoCambio,rpp.metodo,rpp.referencia,rpp.comprobante.datos,rpp.idSolicitud],
+    ['REQ-2026-0001','59200','MXN','18.5','Transferencia','SPEI 1','JVBERi0=',idPgp]);
+  assert(/PGP-2026-0001/.test(C.$('rcPagos').innerHTML)&&/cancelarPagoProv/.test(C.$('rcPagos').innerHTML)&&C.$('rcFormPago').classList.contains('oculto')&&!C.$('rcCierre').classList.contains('oculto'));
+  assert(!/cancelarOcDesdeReq/.test(C.$('rcOrden').innerHTML),'una orden pagada ya no se cancela');
+  // Cancelar el pago: motivo obligatorio
+  C.dialogos.prompt='  '; C.run("cancelarPagoProv('PGP-2026-0001')"); await esperar();
+  assert(!C.llamadas.some(c=>c.funcion==='cancelarPagoProveedor'));
+  C.respuestas.cancelarPagoProveedor={ok:true,datos:autorizada};
+  C.dialogos.prompt='Tipo de cambio equivocado'; C.run("cancelarPagoProv('PGP-2026-0001')"); await esperar();
+  assert.deepEqual(C.llamadas.find(c=>c.funcion==='cancelarPagoProveedor').args,['PGP-2026-0001','Tipo de cambio equivocado']);
+  // Cerrar en lugar del solicitante: motivo obligatorio
+  C.run('pintarReqCom('+JSON.stringify(pagada)+')');
+  C.$('rcMotivoCierre').value=''; C.run('cerrarReqCom()'); await esperar();
+  assert(!C.llamadas.some(c=>c.funcion==='cerrarRequisicionCompras')&&/Escribe por qué cierras/.test(C.$('aviso').innerHTML));
+  C.respuestas.cerrarRequisicionCompras={ok:true,datos:vistaReq({orden:{...ORD,estado:'Recibida',fechaRecepcion:'2026-10-20',recibio:'pedro@helgen.tech'},puedeAutorizar:false,puedeRevisar:false},{estado:'Cerrada'})};
+  C.$('rcMotivoCierre').value='Ya no está en la obra'; C.$('rcNotasCierre').value='Completo'; C.run('cerrarReqCom()'); await esperar();
+  assert.deepEqual(C.llamadas.find(c=>c.funcion==='cerrarRequisicionCompras').args,['REQ-2026-0001','Ya no está en la obra','Completo']);
+  assert(C.$('rcCierre').classList.contains('oculto')&&/Recibida el 20\/10\/2026/.test(C.$('rcOrden').innerHTML));
+  // Devolver: motivo obligatorio; permiso revocado → error del servidor
+  C.run('pintarReqCom('+JSON.stringify(vistaReq())+')');
+  C.dialogos.prompt=null; C.run("revisarReqCom('devolverRequisicion')"); await esperar();
+  assert(!C.llamadas.some(c=>c.funcion==='devolverRequisicion'));
+  C.respuestas.devolverRequisicion={ok:false,codigo:'PERMISO',error:'No tienes permiso de compras.'};
+  C.dialogos.prompt='Falta el calibre'; C.run("revisarReqCom('devolverRequisicion')"); await esperar();
+  assert.deepEqual(C.llamadas.find(c=>c.funcion==='devolverRequisicion').args,['REQ-2026-0001','Falta el calibre']);
   assert(/No tienes permiso de compras/.test(C.$('aviso').innerHTML));
-  // Proyecto que ya no admite órdenes (p. ej. contrato desbloqueado): solo la lista
-  C.run('pintarCompras('+JSON.stringify(vistaCom({proyecto:{...PRY,folio:'PRY-2026-0002'},puedeEmitir:false,moneda:''}))+')');
-  assert(C.$('comModRenglones').classList.contains('oculto')&&C.$('comForm').classList.contains('oculto')&&/no admite órdenes nuevas/.test(C.$('comNoEmite').textContent));
+  // Órdenes por proyecto: con su requisición; sin "Recibida" (se recibe al cerrar la requisición); cancelar solo emitidas
+  C.respuestas.getComprasProyecto={ok:true,datos:{proyecto:PRY,moneda:'MXN',marca:'helgen',ordenes:[ORD,{...ORD,folio:'OC-2026-0002',estado:'Pagada'}],hoy:'2026-10-20'}};
+  C.$('comProyecto').value='PRY-2026-0001 — Luis — Solar MX — Techo'; C.$('comProyecto').disparar('change'); await esperar();
+  const li=C.$('ocLista').innerHTML;
+  assert(/OC-2026-0001/.test(li)&&/REQ-2026-0001/.test(li)&&/\$3,200\.00 USD/.test(li)&&/TC 18\.5/.test(li)&&/25\/10\/2026/.test(li)&&/chip firmado">Pagada/.test(li));
+  assert(!/recibirOc|marcarOcRecibida/.test(li)&&(li.match(/cancelarOc\(/g)||[]).length===1,'sin botón Recibida; solo la emitida se cancela');
+  assert(!/guardarOrdenCompra|marcarOcRecibida|function recibirOc/.test(html),'ya no hay emisión directa ni "Recibida" desde compras');
+  C.dialogos.prompt='Sin existencias'; C.respuestas.cancelarOrdenCompra={ok:true,datos:{proyecto:PRY,moneda:'MXN',marca:'helgen',ordenes:[{...ORD,estado:'Cancelada'}],hoy:'2026-10-20'}};
+  C.run("cancelarOc('OC-2026-0001')"); await esperar();
+  assert.deepEqual(C.llamadas.find(c=>c.funcion==='cancelarOrdenCompra').args,['OC-2026-0001','Sin existencias']);
+  assert(/fila-cancelada/.test(C.$('ocLista').innerHTML));
+
+  // ===== Requisiciones: quien pide materiales (ROL_REQUISICION, sin otros roles) =====
+  const RQS=[{folio:'REQ-2026-0002',fecha:'2026-10-20',proyectoFolio:'PRY-2026-0001',proyectoNombre:'Techo',estado:'Devuelta',motivo:'Falta el calibre',notasRecepcion:'',
+      renglones:[{renglon:1,descripcion:'Tubo',cantidad:12,unidad:'PZA',notas:''}],eventos:[{fecha:'2026-10-20 10:00',estado:'Solicitada',nombre:'Juan',nota:''},
+      {fecha:'2026-10-20 11:00',estado:'Devuelta',nombre:'Pedro Ruiz',nota:'Falta el calibre'}],puedeEditar:true,puedeCancelar:true,puedeCerrar:false},
+    {folio:'REQ-2026-0001',fecha:'2026-10-19',proyectoFolio:'PRY-2026-0001',proyectoNombre:'Techo',estado:'Pagada',motivo:'',notasRecepcion:'',
+      renglones:[{renglon:1,descripcion:'Cable',cantidad:100,unidad:'M',notas:'rojo'}],eventos:[{fecha:'2026-10-20 12:00',estado:'Pagada',nombre:'Pedro Ruiz',nota:''}],
+      puedeEditar:false,puedeCancelar:false,puedeCerrar:true}];
+  const R=montar({ivaTasa:0.16,catalogo:CAT,tipoCambio:TC,clientes:[],proyectos:[],marcas:{},permisos:{cobranza:false,desbloqueo:false,compras:false,requisicion:true}});
+  R.respuestas.listarProyectosRequisicion={ok:true,datos:[{folio:'PRY-2026-0001',nombre:'Techo'}]};
+  R.respuestas.misRequisiciones={ok:true,datos:RQS};
+  await esperar(5);
+  assert(!R.$('tabReq').classList.contains('oculto')&&R.$('tabCom').classList.contains('oculto')&&!R.$('tabNueva').classList.contains('oculto'),'con ROL_REQUISICION usa el cotizador y ve Requisiciones');
+  assert(/Panel solar 550 W/.test(R.$('reqCatalogo').innerHTML)&&!/4,100|4100|222/.test(R.$('reqCatalogo').innerHTML),'sugerencias sin precio');
+  R.run("verTab('req')"); await esperar();
+  assert.equal(R.$('reqProyectosList').innerHTML,'<option value="PRY-2026-0001 — Techo">','solo folio y nombre');
+  const lista=R.$('reqLista').innerHTML;
+  assert(/REQ-2026-0002/.test(lista)&&/Motivo:<\/b> Falta el calibre/.test(lista)&&/editarReq\('REQ-2026-0002'\)/.test(lista)&&/cancelarReq\('REQ-2026-0002'\)/.test(lista));
+  assert(/recibiMaterial\('REQ-2026-0001'\)/.test(lista)&&!/recibiMaterial\('REQ-2026-0002'\)/.test(lista)&&/Pedro Ruiz/.test(lista),'"Recibí el material" solo en la pagada; historial con quién');
+  // Nueva: proyecto, renglones y cotización obligatorios
+  const filasR=R.$('reqFilas').hijos;
+  assert.equal(filasR.length,1,'un renglón vacío al entrar');
+  filasR[0].querySelector('.desc').value='Panel solar 550 W'; filasR[0].querySelector('.desc').disparar('change');
+  assert.equal(filasR[0].querySelector('.uni').value,'PZA','del catálogo solo la unidad');
+  filasR[0].querySelector('.cant').value='10'; filasR[0].querySelector('.notas').value='Monocristalino';
+  R.run('enviarRequisicion()'); await esperar();
+  assert(/Elige un proyecto/.test(R.$('aviso').innerHTML));
+  R.$('reqProyecto').value='PRY-2026-0001 — Techo';
+  R.run('enviarRequisicion()'); await esperar();
+  assert(/Adjunta la cotización/.test(R.$('aviso').innerHTML)&&!R.llamadas.some(c=>c.funcion==='guardarRequisicion'));
+  R.$('reqArchivo').files=[{name:'cot.jpg',type:'image/jpeg',size:11*1024*1024,b64:'/9j/'}];
+  R.run('enviarRequisicion()'); await esperar();
+  assert(/pesa más de 10 MB/.test(R.$('aviso').innerHTML)&&!R.llamadas.some(c=>c.funcion==='guardarRequisicion'));
+  R.$('reqArchivo').files=[{name:'cot.jpg',type:'image/jpeg',size:2000,b64:'/9j/'}];
+  R.respuestas.guardarRequisicion=c=>({ok:true,datos:{folio:c.args[0].folio||'REQ-2026-0003',requisiciones:RQS}});
+  const idReq=R.run('ID_REQ'); R.run('enviarRequisicion()'); await esperar(20);
+  let gr=R.llamadas.filter(c=>c.funcion==='guardarRequisicion')[0].args[0];
+  assert.deepEqual([gr.folio,gr.proyectoFolio,gr.renglones,gr.cotizacion.datos,gr.idSolicitud],
+    ['','PRY-2026-0001',[{descripcion:'Panel solar 550 W',cantidad:'10',unidad:'PZA',notas:'Monocristalino'}],'/9j/',idReq]);
+  assert(!('precio' in gr.renglones[0])&&!('costo' in gr.renglones[0]),'sin precios');
+  assert(/REQ-2026-0003<\/b> enviada/.test(R.$('aviso').innerHTML)&&R.run('ID_REQ')!==idReq);
+  // Corregir una devuelta: mismo folio, sin cambiar de proyecto; la cotización nueva es opcional
+  R.run("editarReq('REQ-2026-0002')");
+  assert.deepEqual([R.$('reqProyecto').disabled,R.$('reqTitulo').textContent,R.$('btnReq').textContent],[true,'1 · Corregir REQ-2026-0002','Reenviar requisición']);
+  assert(/Falta el calibre/.test(R.$('reqEditando').innerHTML));
+  const fr=R.$('reqFilas').hijos; fr[fr.length-1].querySelector('.desc').value='Tubo conduit cédula 40';
+  R.$('reqArchivo').files=[];
+  R.run('enviarRequisicion()'); await esperar(20);
+  gr=R.llamadas.filter(c=>c.funcion==='guardarRequisicion')[1].args[0];
+  assert.deepEqual([gr.folio,gr.cotizacion,gr.renglones.map(x=>x.descripcion)],['REQ-2026-0002',null,['Tubo conduit cédula 40']]);
+  assert(/corregida y reenviada/.test(R.$('aviso').innerHTML)&&!R.$('reqProyecto').disabled);
+  // Recibí el material (notas opcionales); cancelar pide motivo
+  R.respuestas.cerrarRequisicion={ok:true,datos:RQS};
+  R.dialogos.prompt=null; R.run("recibiMaterial('REQ-2026-0001')"); await esperar();
+  assert(!R.llamadas.some(c=>c.funcion==='cerrarRequisicion'),'si cancela el diálogo no cierra');
+  R.dialogos.prompt='Faltó 1 pieza'; R.run("recibiMaterial('REQ-2026-0001')"); await esperar();
+  assert.deepEqual(R.llamadas.find(c=>c.funcion==='cerrarRequisicion').args,['REQ-2026-0001','Faltó 1 pieza']);
+  R.dialogos.prompt=' '; R.run("cancelarReq('REQ-2026-0002')"); await esperar();
+  assert(!R.llamadas.some(c=>c.funcion==='cancelarRequisicion'));
+
+  // ===== SOLO_REQUISICION: solo la pestaña Requisiciones =====
+  const S=montar({soloRequisicion:true,ivaTasa:0.16,catalogo:[{clave:'PAN-550',descripcion:'Panel solar 550 W',unidad:'PZA'}],tipoCambio:null,clientes:[],proyectos:[],
+    marcas:{},permisos:{cobranza:false,desbloqueo:false,compras:false,requisicion:true}});
+  S.respuestas.listarProyectosRequisicion={ok:true,datos:[]}; S.respuestas.misRequisiciones={ok:true,datos:[]};
+  await esperar(10);
+  for(const t of ['tabNueva','tabHist','tabCat','tabCob','tabCom']) assert(S.$(t).classList.contains('oculto'),'oculta '+t);
+  assert(!S.$('tabReq').classList.contains('oculto')&&!S.$('vistaReq').classList.contains('oculto')&&S.$('vistaNueva').classList.contains('oculto'));
+  assert(S.llamadas.some(c=>c.funcion==='misRequisiciones')&&/Todavía no tienes requisiciones/.test(S.$('reqLista').innerHTML));
+  assert(!S.llamadas.some(c=>['listarCotizaciones','getCatalogo','listarProyectos'].includes(c.funcion)),'no llama nada más');
   console.log('OK interfaz');
 })().catch(e=>{console.error(e);process.exit(1)});

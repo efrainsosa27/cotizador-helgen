@@ -105,12 +105,24 @@ const API_FUNCIONES = {
   desbloquearContrato: desbloquearContrato,
   registrarPago: registrarPago,
   cancelarPago: cancelarPago,
-  // Compras (solo ROL_COMPRAS; cada función lo revisa)
+  // Compras (solo ROL_COMPRAS; cada función lo revisa). Las órdenes salen de autorizarRequisicion.
   listarProyectosCompras: listarProyectosCompras,
   getComprasProyecto: getComprasProyecto,
-  guardarOrdenCompra: guardarOrdenCompra,
-  marcarOcRecibida: marcarOcRecibida,
   cancelarOrdenCompra: cancelarOrdenCompra,
+  listarRequisiciones: listarRequisiciones,
+  getRequisicion: getRequisicion,
+  autorizarRequisicion: autorizarRequisicion,
+  rechazarRequisicion: rechazarRequisicion,
+  devolverRequisicion: devolverRequisicion,
+  registrarPagoProveedor: registrarPagoProveedor,
+  cancelarPagoProveedor: cancelarPagoProveedor,
+  cerrarRequisicionCompras: cerrarRequisicionCompras,
+  // Requisiciones del solicitante (ROL_REQUISICION o SOLO_REQUISICION; solo las suyas)
+  listarProyectosRequisicion: listarProyectosRequisicion,
+  misRequisiciones: misRequisiciones,
+  guardarRequisicion: guardarRequisicion,
+  cancelarRequisicion: cancelarRequisicion,
+  cerrarRequisicion: cerrarRequisicion,
 };
 
 /**
@@ -134,6 +146,10 @@ function doPost(e) {
     const nombre = String(cuerpo.funcion || '');
     if (!Object.prototype.hasOwnProperty.call(API_FUNCIONES, nombre)) {
       throw new Error('Función no permitida: ' + (nombre || '(vacía)') + '.');
+    }
+    // Cuentas de SOLO_REQUISICION: solo su pestaña (nada de cotizaciones, historial, catálogo, clientes ni proyectos)
+    if (FUNCIONES_SOLO_REQUISICION.indexOf(nombre) === -1 && esSoloRequisicion_()) {
+      throw errorPermiso_('Tu cuenta solo tiene acceso a Requisiciones.');
     }
     const args = Array.isArray(cuerpo.args) ? cuerpo.args : [];
     respuesta = { ok: true, datos: API_FUNCIONES[nombre].apply(null, args) };
@@ -642,6 +658,15 @@ function guardarProducto(p) {
 function getDatosIniciales() {
   const cfg = getConfig_();
   const hojaCat = hojaCatalogo_();
+  if (esSoloRequisicion_()) {
+    // Solo la pestaña Requisiciones: catálogo sin precios (para sugerir descripción y unidad), sin clientes ni proyectos
+    return {
+      soloRequisicion: true, ivaTasa: cfg.IVA_TASA, marcas: MARCAS,
+      catalogo: getCatalogo_(hojaCat).map(p => ({ clave: p.clave, descripcion: p.descripcion, unidad: p.unidad })),
+      tipoCambio: null, clientes: [], proyectos: [], usuario: usuarioActual_(), vendedor: VENDEDOR_,
+      permisos: { cobranza: false, desbloqueo: false, compras: false, requisicion: true },
+    };
+  }
   return {
     ivaTasa: cfg.IVA_TASA,
     vigenciaDias: cfg.VIGENCIA_DIAS,
@@ -653,7 +678,7 @@ function getDatosIniciales() {
     usuario: usuarioActual_(),
     vendedor: VENDEDOR_,
     // Solo para mostrar u ocultar las pestañas Cobranza y Compras; cada función lo vuelve a revisar
-    permisos: { cobranza: esCobranza_(), desbloqueo: esAdminDesbloqueo_(), compras: esCompras_() },
+    permisos: { cobranza: esCobranza_(), desbloqueo: esAdminDesbloqueo_(), compras: esCompras_(), requisicion: esRequisicion_() },
   };
 }
 
@@ -1639,13 +1664,14 @@ function prepararCobranza() {
 
 // ====== 4.3 COMPRAS (Fase 3): órdenes de compra por proyecto ======
 // Libro aparte "Cotizador Helgen — Compras (datos)" dentro de la carpeta "Cotizador Helgen — Compras" (fuera de la carpeta
-// maestra y de la de cobranza). Solo el rol de compras (ROL_COMPRAS) crea, ve, recibe y cancela órdenes; el servidor lo
-// revisa en cada llamada. PDF en Compras/AAAA/<folio del proyecto>/. El margen (contratado − órdenes) solo lo ve cobranza.
+// maestra y de la de cobranza). Solo el rol de compras (ROL_COMPRAS) ve, paga y cancela órdenes; el servidor lo revisa en
+// cada llamada. Toda orden sale de una requisición autorizada (4.4). PDF en Compras/AAAA/<folio del proyecto>/.
+// El margen (contratado − órdenes) solo lo ve cobranza.
 
 const NOMBRE_CARPETA_COMPRAS = 'Cotizador Helgen — Compras';
 const NOMBRE_LIBRO_COMPRAS = 'Cotizador Helgen — Compras (datos)';
 const PREFIJO_OC = 'OC';
-const OC_EMITIDA = 'Emitida', OC_RECIBIDA = 'Recibida', OC_CANCELADA = 'Cancelada';
+const OC_EMITIDA = 'Emitida', OC_PAGADA = 'Pagada', OC_RECIBIDA = 'Recibida', OC_CANCELADA = 'Cancelada';
 
 /** Estructura del libro de compras (mismo formato que HOJAS_COBRANZA). */
 const HOJAS_COMPRAS = {
@@ -1653,10 +1679,26 @@ const HOJAS_COMPRAS = {
     enc: ['folio', 'fecha', 'proyecto_folio', 'marca', 'proveedor_id', 'proveedor', 'rfc', 'contacto', 'correo', 'telefono',
       'fecha_entrega', 'lugar_entrega', 'condiciones_pago', 'moneda', 'iva_tasa', 'subtotal', 'iva', 'total', 'moneda_proyecto',
       'tipo_cambio', 'subtotal_proyecto', 'renglones (JSON)', 'notas', 'pdf_id', 'pdf_url', 'elaboro_email', 'elaboro_nombre',
-      'fecha_registro', 'estado', 'fecha_recepcion', 'recibio', 'cancelado_por', 'fecha_cancelacion', 'motivo_cancelacion'],
+      'fecha_registro', 'estado', 'fecha_recepcion', 'recibio', 'cancelado_por', 'fecha_cancelacion', 'motivo_cancelacion',
+      'req_folio'],
     numeros: [15, 16, 17, 18, 20, 21],
   },
   Proveedores: { enc: ['id', 'razon_social', 'rfc', 'contacto', 'correo', 'telefono', 'actualizado'], numeros: [] },
+  // Requisiciones (4.4): sin costos; los renglones se versionan (al reenviar una devuelta se agrega la versión nueva)
+  Requisiciones: {
+    enc: ['folio', 'fecha', 'proyecto_folio', 'solicitante_email', 'solicitante_nombre', 'estado', 'motivo',
+      'cotizacion_pdf_id', 'cotizacion_pdf_url', 'oc_folio', 'reviso_email', 'fecha_revision', 'actualizado', 'notas_recepcion'],
+    numeros: [],
+  },
+  RequisicionesRenglones: { enc: ['req_folio', 'version', 'renglon', 'descripcion', 'cantidad', 'unidad', 'notas'], numeros: [2, 3, 5] },
+  // Historial que ve el solicitante (estado, quién y cuándo); sin montos
+  RequisicionesEventos: { enc: ['req_folio', 'fecha', 'estado', 'correo', 'nombre', 'nota'], numeros: [] },
+  PagosProveedores: {
+    enc: ['folio', 'fecha_pago', 'fecha_registro', 'oc_folio', 'req_folio', 'proyecto_folio', 'monto', 'moneda_pago',
+      'tipo_cambio', 'monto_aplicado', 'moneda_oc', 'metodo', 'referencia', 'comprobante_id', 'comprobante_url',
+      'registro_email', 'registro_nombre', 'estado', 'cancelado_por', 'fecha_cancelacion', 'motivo_cancelacion'],
+    numeros: [7, 9, 10],
+  },
   Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
 };
 const COL_ESTADO_OC = 29; // AC: estado, recepción (AD:AE) y cancelación (AF:AH)
@@ -1692,7 +1734,7 @@ function ordenDesdeFila_(r, fila) {
     tipoCambio: r[19] === '' ? '' : Number(r[19]), subtotalProyecto: Number(r[20]) || 0, renglones: renglones,
     notas: String(r[22] || ''), pdfUrl: String(r[24] || ''), elaboro: String(r[26] || r[25] || ''),
     estado: String(r[28] || OC_EMITIDA), fechaRecepcion: fechaIso_(r[29]), recibio: String(r[30] || ''),
-    canceladoPor: String(r[31] || ''), motivoCancelacion: String(r[33] || ''), fila: fila,
+    canceladoPor: String(r[31] || ''), motivoCancelacion: String(r[33] || ''), reqFolio: String(r[34] || ''), fila: fila,
   };
 }
 
@@ -1738,7 +1780,7 @@ function proyectoParaCompras_(folio) {
   return proyecto;
 }
 
-/** Respuesta para la pestaña Compras: proyecto, moneda, órdenes y proveedores. Sin montos del contrato ni margen. */
+/** Respuesta para "Órdenes por proyecto" en la pestaña Compras: proyecto, moneda y órdenes. Sin montos del contrato ni margen. */
 function vistaCompras_(libro, proyecto) {
   const c = contratosFirmados_()[proyecto.folio.toUpperCase()] || null;
   return {
@@ -1746,15 +1788,12 @@ function vistaCompras_(libro, proyecto) {
       ubicacion: proyecto.ubicacion },
     moneda: c ? c.moneda : '',
     marca: c ? c.marca : '',
-    puedeEmitir: !!c && proyecto.estado === 'Activo',
     ordenes: ordenesDeProyecto_(libro, proyecto.folio).map(o => { const x = Object.assign({}, o); delete x.fila; return x; }).reverse(),
-    proveedores: proveedoresDelLibro_(libro).map(p => { const x = Object.assign({}, p); delete x.fila; return x; }),
-    ivaTasas: IVA_OC,
     hoy: hoyIso_(),
   };
 }
 
-/** Proyectos donde se pueden emitir órdenes: Activos y con contrato firmado (con su moneda; sin montos). */
+/** Proyectos Activos con contrato firmado (con su moneda; sin montos), para ver sus órdenes. */
 function listarProyectosCompras(busqueda) {
   exigirCompras_();
   const firmados = contratosFirmados_();
@@ -1775,69 +1814,55 @@ function getComprasProyecto(folio) {
 }
 
 /**
- * Emite una orden de compra con su PDF. p = {proyectoFolio, proveedor: {razonSocial, rfc, contacto, correo, telefono},
- * fechaEntrega, lugarEntrega, condicionesPago, moneda, tipoCambio, ivaTasa, renglones: [{clave, descripcion, unidad,
- * cantidad, costo}], notas, idSolicitud}. Solo en proyectos Activos con contrato firmado. La línea de negocio sale del
- * contrato (nunca del navegador); el costo es el capturado (nunca el precio de venta del catálogo).
+ * Emite una orden de compra con su PDF (solo desde autorizarRequisicion, dentro del candado). d0 = {proveedor:
+ * {razonSocial, rfc, contacto, correo, telefono}, fechaEntrega, lugarEntrega, condicionesPago, moneda, tipoCambio, ivaTasa,
+ * renglones: [{clave, descripcion, unidad, cantidad, costo}], notas}. Solo en proyectos Activos con contrato firmado. La línea
+ * de negocio sale del contrato (nunca del navegador); el costo es el capturado (nunca el precio de venta del catálogo).
  */
-function guardarOrdenCompra(p) {
-  exigirCompras_();
-  const d0 = p || {};
+function emitirOrdenCompra_(libro, d0, proyecto, reqFolio) {
   const cfg = getConfig_();
-  const libro = libroCompras_();
+  if (proyecto.estado !== 'Activo') {
+    throw new Error('El proyecto ' + proyecto.folio + ' está ' + proyecto.estado.toLowerCase() + ': no admite órdenes de compra.');
+  }
+  const c = contratosFirmados_()[proyecto.folio.toUpperCase()];
+  if (!c) throw new Error('Solo se emiten órdenes de compra en proyectos con contrato firmado.');
+  const oc = normalizarOrdenCompra(d0, { moneda: c.moneda, ubicacion: proyecto.ubicacion, hoy: hoyIso_(), ivaTasa: cfg.IVA_TASA });
 
-  const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
-  const cache = CacheService.getScriptCache();
-  const claveCache = idSolicitud ? 'OC_' + idSolicitud : '';
+  const hoja = hojaCompras_(libro, 'OrdenesCompra');
+  const folio = siguienteFolio_(PREFIJO_OC, hoja, 'CONSECUTIVO_OC_');
+  const proveedor = guardarProveedor_(libro, oc.proveedor);
+  const ahora = new Date();
+  const elaboro = [VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ') || VENDEDOR_.email;
 
-  return conCandado_(() => {
-    if (claveCache) {
-      const previo = cache.get(claveCache);
-      if (previo) return JSON.parse(previo);
-    }
-    const proyecto = proyectoParaCompras_(d0.proyectoFolio);
-    if (proyecto.estado !== 'Activo') {
-      throw new Error('El proyecto ' + proyecto.folio + ' está ' + proyecto.estado.toLowerCase() + ': no admite órdenes de compra.');
-    }
-    const c = contratosFirmados_()[proyecto.folio.toUpperCase()];
-    if (!c) throw new Error('Solo se emiten órdenes de compra en proyectos con contrato firmado.');
-    const oc = normalizarOrdenCompra(d0, { moneda: c.moneda, ubicacion: proyecto.ubicacion, hoy: hoyIso_(), ivaTasa: cfg.IVA_TASA });
+  // PDF (razón social y datos fiscales de Helgen, iguales en Helgen y Helgen Energy)
+  const html = construirHtmlOrdenCompra(Object.assign({}, oc, {
+    folio: folio, fecha: Utilities.formatDate(ahora, 'America/Mexico_City', 'dd/MM/yyyy'), proveedor: proveedor,
+    proyectoFolio: proyecto.folio, reqFolio: reqFolio,
+    elaboro: elaboro + (elaboro === VENDEDOR_.email ? '' : ' (' + VENDEDOR_.email + ')'),
+  }), cfg, logoDataUrl_(cfg.LOGO_FILE_ID));
+  const pdf = Utilities.newBlob(html, 'text/html', folio + '.html').getAs('application/pdf')
+    .setName(nombreArchivoOc(folio, proveedor.razonSocial));
+  const archivo = privado_(carpetaProyectoCompras_(proyecto.folio).createFile(pdf));
 
-    const hoja = hojaCompras_(libro, 'OrdenesCompra');
-    const folio = siguienteFolio_(PREFIJO_OC, hoja, 'CONSECUTIVO_OC_');
-    const proveedor = guardarProveedor_(libro, oc.proveedor);
-    const ahora = new Date();
-    const elaboro = [VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ') || VENDEDOR_.email;
+  const t = textoCelda;
+  hoja.appendRow([
+    folio, textoFecha_(hoyIso_()), proyecto.folio, MARCAS[c.marca], t(proveedor.id), t(proveedor.razonSocial), t(proveedor.rfc),
+    t(proveedor.contacto), t(proveedor.correo), t(proveedor.telefono), textoFecha_(oc.fechaEntrega), t(oc.lugarEntrega),
+    t(oc.condicionesPago), oc.moneda, oc.ivaTasa, oc.subtotal, oc.iva, oc.total, oc.monedaProyecto, oc.tipoCambio,
+    oc.subtotalProyecto, JSON.stringify(oc.renglones), t(oc.notas), archivo.getId(), archivo.getUrl(), t(VENDEDOR_.email),
+    t(elaboro), Utilities.formatDate(ahora, 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), OC_EMITIDA, '', '', '', '', '',
+    reqFolio || '',
+  ]);
+  bitacora_(libro, 'Emitir orden de compra', proyecto.folio, folio + (reqFolio ? ' · ' + reqFolio : '') + ' · ' +
+    proveedor.razonSocial + ' · ' + formatoMoneda(oc.total) + ' ' + oc.moneda + (oc.tipoCambio ? ' · TC ' + oc.tipoCambio + ' = ' +
+    formatoMoneda(oc.subtotalProyecto) + ' ' + oc.monedaProyecto + ' sin IVA' : '') + ' · ' + MARCAS[c.marca], '', HOJAS_COMPRAS);
+  return { folio: folio, url: archivo.getUrl(), total: oc.total, moneda: oc.moneda };
+}
 
-    // PDF (razón social y datos fiscales de Helgen, iguales en Helgen y Helgen Energy)
-    const html = construirHtmlOrdenCompra(Object.assign({}, oc, {
-      folio: folio, fecha: Utilities.formatDate(ahora, 'America/Mexico_City', 'dd/MM/yyyy'), proveedor: proveedor,
-      proyectoFolio: proyecto.folio, elaboro: elaboro + (elaboro === VENDEDOR_.email ? '' : ' (' + VENDEDOR_.email + ')'),
-    }), cfg, logoDataUrl_(cfg.LOGO_FILE_ID));
-    const pdf = Utilities.newBlob(html, 'text/html', folio + '.html').getAs('application/pdf')
-      .setName(nombreArchivoOc(folio, proveedor.razonSocial));
-    const anio = String(proyecto.folio).split('-')[1] || hoyIso_().slice(0, 4);
-    // De arriba abajo: un permiso heredado de la carpeta no se puede quitar en el hijo
-    const carpeta = privado_(subcarpeta_(privado_(subcarpeta_(carpetaCompras_(), anio)), proyecto.folio));
-    const archivo = privado_(carpeta.createFile(pdf));
-
-    const t = textoCelda;
-    hoja.appendRow([
-      folio, textoFecha_(hoyIso_()), proyecto.folio, MARCAS[c.marca], t(proveedor.id), t(proveedor.razonSocial), t(proveedor.rfc),
-      t(proveedor.contacto), t(proveedor.correo), t(proveedor.telefono), textoFecha_(oc.fechaEntrega), t(oc.lugarEntrega),
-      t(oc.condicionesPago), oc.moneda, oc.ivaTasa, oc.subtotal, oc.iva, oc.total, oc.monedaProyecto, oc.tipoCambio,
-      oc.subtotalProyecto, JSON.stringify(oc.renglones), t(oc.notas), archivo.getId(), archivo.getUrl(), t(VENDEDOR_.email),
-      t(elaboro), Utilities.formatDate(ahora, 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), OC_EMITIDA, '', '', '', '', '',
-    ]);
-    bitacora_(libro, 'Emitir orden de compra', proyecto.folio, folio + ' · ' + proveedor.razonSocial + ' · ' +
-      formatoMoneda(oc.total) + ' ' + oc.moneda + (oc.tipoCambio ? ' · TC ' + oc.tipoCambio + ' = ' +
-      formatoMoneda(oc.subtotalProyecto) + ' ' + oc.monedaProyecto + ' sin IVA' : '') + ' · ' + MARCAS[c.marca], '', HOJAS_COMPRAS);
-    SpreadsheetApp.flush();
-
-    const resultado = { folio: folio, url: archivo.getUrl(), total: oc.total, moneda: oc.moneda, vista: vistaCompras_(libro, proyecto) };
-    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
-    return resultado;
-  });
+/** Compras/AAAA/<folio del proyecto>/ (restringidas de arriba abajo: un permiso heredado no se puede quitar en el hijo). */
+function carpetaProyectoCompras_(proyectoFolio) {
+  const anio = String(proyectoFolio).split('-')[1] || hoyIso_().slice(0, 4);
+  return privado_(subcarpeta_(privado_(subcarpeta_(carpetaCompras_(), anio)), proyectoFolio));
 }
 
 /** Busca una orden por folio en el libro de compras (o error). */
@@ -1852,55 +1877,589 @@ function buscarOrden_(libro, folioOc) {
   return { hoja: hoja, orden: orden };
 }
 
-/** Marca una orden Emitida como Recibida (completa), con la fecha de recepción (AAAA-MM-DD, no futura). */
-function marcarOcRecibida(folioOc, fecha) {
-  exigirCompras_();
-  const libro = libroCompras_();
-  return conCandado_(() => {
-    const { hoja, orden } = buscarOrden_(libro, folioOc);
-    if (orden.estado !== OC_EMITIDA) throw new Error('La orden ' + orden.folio + ' ya está ' + orden.estado.toLowerCase() + '.');
-    const recepcion = validarFechaIso(fecha, hoyIso_(), 'La fecha de recepción');
-    if (orden.fecha && recepcion < orden.fecha) throw new Error('La fecha de recepción no puede ser anterior a la orden (' + orden.fecha + ').');
-    hoja.getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(recepcion), textoCelda(VENDEDOR_.email)]]);
-    bitacora_(libro, 'Recibir orden de compra', orden.proyectoFolio, orden.folio + ' · recibida el ' + recepcion, '', HOJAS_COMPRAS);
-    SpreadsheetApp.flush();
-    return vistaCompras_(libro, proyectoParaCompras_(orden.proyectoFolio));
-  });
-}
-
-/** Cancela una orden Emitida (no se borra), con motivo; queda en la Bitacora y deja de contar en el margen. */
+/**
+ * Cancela una orden Emitida (no se borra), con motivo; queda en la Bitacora y deja de contar en el margen. Una pagada o
+ * recibida ya no se cancela. Su requisición regresa a Solicitada (sin orden) para autorizarla de nuevo.
+ */
 function cancelarOrdenCompra(folioOc, motivo) {
   exigirCompras_();
-  const m = String(motivo || '').trim();
-  if (m.length < 5) throw new Error('Escribe el motivo de la cancelación.');
-  if (m.length > 500) throw new Error('El motivo debe tener máximo 500 caracteres.');
+  const m = motivoObligatorio_(motivo, 'Escribe el motivo de la cancelación.');
   const libro = libroCompras_();
   return conCandado_(() => {
     const { hoja, orden } = buscarOrden_(libro, folioOc);
     if (orden.estado === OC_CANCELADA) throw new Error('La orden ' + orden.folio + ' ya está cancelada.');
+    if (orden.estado === OC_PAGADA) throw new Error('La orden ' + orden.folio + ' ya está pagada: no se puede cancelar.');
     if (orden.estado !== OC_EMITIDA) throw new Error('La orden ' + orden.folio + ' ya se recibió: no se puede cancelar.');
     hoja.getRange(orden.fila, COL_ESTADO_OC).setValue(OC_CANCELADA);
     hoja.getRange(orden.fila, COL_ESTADO_OC + 3, 1, 3).setValues([[textoCelda(VENDEDOR_.email),
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
     bitacora_(libro, 'Cancelar orden de compra', orden.proyectoFolio, orden.folio + ' · ' + orden.proveedor + ' · ' +
       formatoMoneda(orden.total) + ' ' + orden.moneda, m, HOJAS_COMPRAS);
+    if (orden.reqFolio) {
+      const { hoja: hR, req } = buscarReq_(libro, orden.reqFolio);
+      if (req.estado === REQ_AUTORIZADA && req.ocFolio.toUpperCase() === orden.folio.toUpperCase()) {
+        cambiarReq_(hR, req, transicionReq(req.estado, 'cancelarOc'), { ocFolio: '' });
+        eventoReq_(libro, req.folio, REQ_SOLICITADA, 'Se canceló la orden de compra; queda pendiente de autorizar de nuevo.');
+        bitacora_(libro, 'Requisición a Solicitada', req.proyectoFolio, req.folio + ' · se canceló ' + orden.folio, m, HOJAS_COMPRAS);
+      }
+    }
     SpreadsheetApp.flush();
     return vistaCompras_(libro, proyectoParaCompras_(orden.proyectoFolio));
   });
 }
 
+/** Motivo obligatorio (5 a 500 caracteres). */
+function motivoObligatorio_(motivo, mensaje) {
+  const m = String(motivo || '').trim();
+  if (m.length < 5) throw new Error(mensaje || 'Escribe el motivo.');
+  if (m.length > 500) throw new Error('El motivo debe tener máximo 500 caracteres.');
+  return m;
+}
+
+// ====== 4.4 REQUISICIONES DE MATERIALES Y PAGO A PROVEEDORES ======
+// Un trabajador (ROL_REQUISICION) pide materiales para un proyecto, sin precios, con la cotización del proveedor adjunta.
+// Compras (ROL_COMPRAS) la autoriza (genera la orden de compra), la rechaza o la devuelve; paga la orden (PGP) y el
+// solicitante confirma que recibió el material (cierra la requisición y la orden queda Recibida). Todo en el libro de
+// compras; archivos en Compras/AAAA/<folio del proyecto>/Requisiciones/. El solicitante solo ve SUS requisiciones (el
+// servidor filtra por el correo del token) y nunca montos, cliente, margen, pagos ni órdenes.
+// SOLO_REQUISICION: cuentas que solo usan esta pestaña (el servidor les niega cotizar, historial, catálogo y proyectos).
+
+const PREFIJO_REQ = 'REQ', PREFIJO_PGP = 'PGP';
+const SUBCARPETA_REQUISICIONES = 'Requisiciones';
+
+/** Funciones que puede llamar una cuenta de SOLO_REQUISICION (todo lo demás se le niega en doPost). */
+const FUNCIONES_SOLO_REQUISICION = ['getDatosIniciales', 'listarProyectosRequisicion', 'misRequisiciones',
+  'guardarRequisicion', 'cancelarRequisicion', 'cerrarRequisicion'];
+
+/** ¿Solo puede usar requisiciones? (SOLO_REQUISICION; manda sobre cualquier otro rol). */
+function esSoloRequisicion_() {
+  return enRol_('SOLO_REQUISICION');
+}
+
+/** ¿Puede pedir materiales? (ROL_REQUISICION, o SOLO_REQUISICION, que lo incluye). */
+function esRequisicion_() {
+  return enRol_('ROL_REQUISICION') || esSoloRequisicion_();
+}
+
+function exigirRequisicion_() {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + '.');
+  if (!esRequisicion_()) throw errorPermiso_('No tienes permiso para hacer requisiciones.');
+}
+
+function hojaReq_(libro) { return hojaCompras_(libro, 'Requisiciones'); }
+
+function reqDesdeFila_(r, fila) {
+  return {
+    folio: String(r[0]), fecha: fechaIso_(r[1]), proyectoFolio: String(r[2]), solicitanteEmail: String(r[3] || '').toLowerCase(),
+    solicitante: String(r[4] || r[3] || ''), estado: String(r[5] || REQ_SOLICITADA), motivo: String(r[6] || ''),
+    cotizacionId: String(r[7] || ''), cotizacionUrl: String(r[8] || ''), ocFolio: String(r[9] || ''),
+    reviso: String(r[10] || ''), fechaRevision: fechaTexto_(r[11]), actualizado: fechaTexto_(r[12]),
+    notasRecepcion: String(r[13] || ''), fila: fila,
+  };
+}
+
+/** Requisición por folio (o error). */
+function buscarReq_(libro, folioReq) {
+  const folio = String(folioReq || '').trim().toUpperCase();
+  const hoja = hojaReq_(libro);
+  let req = null;
+  filasDeArea_(hoja, HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
+    if (String(r[0]).toUpperCase() === folio) req = reqDesdeFila_(r, i + 2);
+  });
+  if (!req) throw new Error('No existe la requisición ' + folio + '.');
+  return { hoja: hoja, req: req };
+}
+
+/** Cambia estado (y otros campos) de una requisición en su fila. extra = {motivo, ocFolio, revisar (bool), notasRecepcion}. */
+function cambiarReq_(hoja, req, estado, extra) {
+  const x = extra || {};
+  const ahora = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
+  const t = textoCelda;
+  hoja.getRange(req.fila, 6, 1, 2).setValues([[estado, t('motivo' in x ? x.motivo : req.motivo)]]);
+  if ('ocFolio' in x) hoja.getRange(req.fila, 10).setValue(x.ocFolio);
+  if (x.revisar) hoja.getRange(req.fila, 11, 1, 2).setValues([[t(VENDEDOR_.email), ahora]]);
+  hoja.getRange(req.fila, 13).setValue(ahora);
+  if ('notasRecepcion' in x) hoja.getRange(req.fila, 14).setValue(t(x.notasRecepcion));
+  req.estado = estado;
+}
+
+/** Renglón del historial que ve el solicitante (sin montos). */
+function eventoReq_(libro, folio, estado, nota) {
+  const t = textoCelda;
+  hojaCompras_(libro, 'RequisicionesEventos').appendRow([folio,
+    Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), estado, t(VENDEDOR_.email),
+    t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ') || VENDEDOR_.email), t(nota || '')]);
+}
+
+/** {folio: {version, renglones}} con la versión vigente (la mayor) de los renglones de cada requisición. */
+function renglonesDeReqs_(libro) {
+  const mapa = {};
+  filasDeArea_(hojaCompras_(libro, 'RequisicionesRenglones'), HOJAS_COMPRAS, 'RequisicionesRenglones').forEach(r => {
+    const f = String(r[0]).toUpperCase();
+    if (!f) return;
+    const v = Number(r[1]) || 1;
+    const x = mapa[f] || (mapa[f] = { version: 0, renglones: [] });
+    if (v > x.version) { x.version = v; x.renglones = []; }
+    if (v === x.version) {
+      x.renglones.push({ renglon: Number(r[2]) || x.renglones.length + 1, descripcion: String(r[3] || ''), cantidad: Number(r[4]) || 0,
+        unidad: String(r[5] || ''), notas: String(r[6] || '') });
+    }
+  });
+  Object.keys(mapa).forEach(f => mapa[f].renglones.sort((a, b) => a.renglon - b.renglon));
+  return mapa;
+}
+
+/** {folio: [eventos en orden]} del historial de requisiciones. */
+function eventosDeReqs_(libro) {
+  const mapa = {};
+  filasDeArea_(hojaCompras_(libro, 'RequisicionesEventos'), HOJAS_COMPRAS, 'RequisicionesEventos').forEach(r => {
+    const f = String(r[0]).toUpperCase();
+    if (!f) return;
+    (mapa[f] = mapa[f] || []).push({ fecha: fechaTexto_(r[1]), estado: String(r[2] || ''), correo: String(r[3] || ''),
+      nombre: String(r[4] || r[3] || ''), nota: String(r[5] || '') });
+  });
+  return mapa;
+}
+
+/** Escribe los renglones de una versión (las versiones anteriores se quedan: nada se borra). */
+function escribirRenglonesReq_(libro, folio, version, renglones) {
+  const hoja = hojaCompras_(libro, 'RequisicionesRenglones');
+  const t = textoCelda;
+  renglones.forEach((r, i) => hoja.appendRow([folio, version, i + 1, t(r.descripcion), r.cantidad, t(r.unidad), t(r.notas)]));
+}
+
+/** {folio: nombre} de los proyectos (para mostrar el nombre sin el cliente). */
+function nombresDeProyectos_() {
+  const hoja = hojaProyectos_();
+  const filas = hoja.getLastRow() > 1 ? hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
+  const mapa = {};
+  proyectosDesdeFilas(filas).forEach(p => { mapa[p.folio.toUpperCase()] = p; });
+  return mapa;
+}
+
+/** Bytes de un archivo adjunto ({nombre, datos base64}); null si no viene. */
+function bytesDeAdjunto_(adjunto, mensaje) {
+  try {
+    return adjunto && adjunto.datos ? Utilities.base64Decode(String(adjunto.datos)) : null;
+  } catch (e) {
+    throw new Error(mensaje || 'No se pudo leer el archivo. Vuelve a adjuntarlo.');
+  }
+}
+
+/** Compras/AAAA/<folio del proyecto>/Requisiciones/ (restringida). */
+function carpetaRequisiciones_(proyectoFolio) {
+  return privado_(subcarpeta_(carpetaProyectoCompras_(proyectoFolio), SUBCARPETA_REQUISICIONES));
+}
+
+/** Lo que ve el solicitante de una requisición: estado, renglones e historial. Sin montos, cliente, orden ni pagos. */
+function reqParaSolicitante_(req, ren, eventos, proyectos) {
+  const p = proyectos[req.proyectoFolio.toUpperCase()];
+  return {
+    folio: req.folio, fecha: req.fecha, proyectoFolio: req.proyectoFolio, proyectoNombre: p ? p.nombre : '',
+    estado: req.estado, motivo: req.motivo, notasRecepcion: req.notasRecepcion,
+    renglones: (ren && ren.renglones) || [], eventos: eventos || [],
+    puedeEditar: req.estado === REQ_DEVUELTA, puedeCancelar: req.estado === REQ_SOLICITADA || req.estado === REQ_DEVUELTA,
+    puedeCerrar: req.estado === REQ_PAGADA,
+  };
+}
+
+/** Proyectos donde se pueden pedir materiales: Activos con contrato firmado. Solo folio y nombre (sin cliente ni montos). */
+function listarProyectosRequisicion(busqueda) {
+  exigirRequisicion_();
+  const firmados = contratosFirmados_();
+  const q = textoNormal(busqueda);
+  const proyectos = nombresDeProyectos_();
+  return Object.keys(proyectos).map(f => proyectos[f]).reverse()
+    .filter(p => p.estado === 'Activo' && firmados[p.folio.toUpperCase()])
+    .filter(p => !q || textoNormal(p.folio + ' ' + p.nombre).includes(q))
+    .slice(0, 50)
+    .map(p => ({ folio: p.folio, nombre: p.nombre }));
+}
+
+/** Requisiciones del usuario del token (nunca las de otros), más recientes primero. */
+function misRequisiciones() {
+  exigirRequisicion_();
+  const libro = libroCompras_();
+  const yo = String(VENDEDOR_.email).toLowerCase();
+  const ren = renglonesDeReqs_(libro), ev = eventosDeReqs_(libro), proyectos = nombresDeProyectos_();
+  const lista = [];
+  filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
+    const req = reqDesdeFila_(r, i + 2);
+    if (req.folio && req.solicitanteEmail === yo) {
+      const f = req.folio.toUpperCase();
+      lista.push(reqParaSolicitante_(req, ren[f], ev[f], proyectos));
+    }
+  });
+  return lista.reverse();
+}
+
 /**
- * Correr desde el editor: crea la carpeta "Cotizador Helgen — Compras" (en Mi unidad) y su libro, y deja los dos en
- * "Restringido" (también si ya existían). No comparte nada: a quien deba abrir los PDF se le comparte la carpeta en Drive.
+ * Nueva requisición o reenvío de una devuelta. p = {folio? (reenvío), proyectoFolio, renglones: [{descripcion, cantidad,
+ * unidad, notas}], cotizacion: {nombre, datos (base64)}, idSolicitud}. Nueva: cotización obligatoria; proyecto Activo con
+ * contrato firmado. Reenvío: solo el solicitante y solo si está Devuelta; mismo folio y proyecto; la cotización es opcional
+ * (si viene, se agrega otro archivo: el anterior no se borra). Queda en Solicitada.
+ */
+function guardarRequisicion(p) {
+  exigirRequisicion_();
+  const d0 = p || {};
+  const renglones = normalizarRequisicion(d0);
+  const bytes = bytesDeAdjunto_(d0.cotizacion, 'No se pudo leer la cotización. Vuelve a adjuntarla.');
+  const reenvio = !!String(d0.folio || '').trim();
+  if (!reenvio && !bytes) throw new Error('Adjunta la cotización del proveedor (PDF o imagen).');
+  const tipo = bytes ? validarArchivo(bytes, 'la cotización del proveedor', 'La cotización') : null;
+  const libro = libroCompras_();
+
+  const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
+  const cache = CacheService.getScriptCache();
+  const claveCache = idSolicitud ? 'REQ_' + idSolicitud : '';
+
+  return conCandado_(() => {
+    if (claveCache) {
+      const previo = cache.get(claveCache);
+      if (previo) return JSON.parse(previo);
+    }
+    const yo = String(VENDEDOR_.email).toLowerCase();
+    const t = textoCelda;
+    let folio, version;
+    if (reenvio) {
+      const { hoja, req } = buscarReq_(libro, d0.folio);
+      if (req.solicitanteEmail !== yo) throw errorPermiso_('Solo quien hizo la requisición ' + req.folio + ' puede corregirla.');
+      const nuevo = transicionReq(req.estado, 'reenviar');
+      folio = req.folio;
+      version = ((renglonesDeReqs_(libro)[folio.toUpperCase()] || {}).version || 1) + 1;
+      if (bytes) {
+        const archivo = privado_(carpetaRequisiciones_(req.proyectoFolio).createFile(Utilities.newBlob(bytes, tipo.mime,
+          nombreArchivoReq(folio, 'Cotización', tipo.ext, version))));
+        hoja.getRange(req.fila, 8, 1, 2).setValues([[archivo.getId(), archivo.getUrl()]]);
+      }
+      escribirRenglonesReq_(libro, folio, version, renglones);
+      cambiarReq_(hoja, req, nuevo, { motivo: '' });
+      eventoReq_(libro, folio, nuevo, 'Corregida y reenviada' + (bytes ? ' con otra cotización.' : '.'));
+      bitacora_(libro, 'Reenviar requisición', req.proyectoFolio, folio + ' · versión ' + version + ' · ' + renglones.length +
+        ' renglón(es)' + (bytes ? ' · cotización nueva' : ''), '', HOJAS_COMPRAS);
+    } else {
+      const proyecto = proyectoParaCompras_(d0.proyectoFolio);
+      if (proyecto.estado !== 'Activo' || !contratosFirmados_()[proyecto.folio.toUpperCase()]) {
+        throw new Error('Solo se piden materiales para proyectos activos con contrato firmado.');
+      }
+      const hoja = hojaReq_(libro);
+      folio = siguienteFolio_(PREFIJO_REQ, hoja, 'CONSECUTIVO_REQ_');
+      version = 1;
+      const archivo = privado_(carpetaRequisiciones_(proyecto.folio).createFile(Utilities.newBlob(bytes, tipo.mime,
+        nombreArchivoReq(folio, 'Cotización', tipo.ext, 1))));
+      const ahora = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
+      hoja.appendRow([folio, textoFecha_(hoyIso_()), proyecto.folio, t(yo),
+        t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ') || yo), REQ_SOLICITADA, '', archivo.getId(),
+        archivo.getUrl(), '', '', '', ahora, '']);
+      escribirRenglonesReq_(libro, folio, 1, renglones);
+      eventoReq_(libro, folio, REQ_SOLICITADA, '');
+      bitacora_(libro, 'Solicitar requisición', proyecto.folio, folio + ' · ' + renglones.length + ' renglón(es)', '', HOJAS_COMPRAS);
+    }
+    SpreadsheetApp.flush();
+    const resultado = { folio: folio, requisiciones: misRequisiciones() };
+    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
+    return resultado;
+  });
+}
+
+/** El solicitante cancela su requisición (Solicitada o Devuelta), con motivo. No se borra. */
+function cancelarRequisicion(folioReq, motivo) {
+  exigirRequisicion_();
+  const m = motivoObligatorio_(motivo, 'Escribe el motivo de la cancelación.');
+  const libro = libroCompras_();
+  return conCandado_(() => {
+    const { hoja, req } = buscarReq_(libro, folioReq);
+    if (req.solicitanteEmail !== String(VENDEDOR_.email).toLowerCase()) {
+      throw errorPermiso_('Solo quien hizo la requisición ' + req.folio + ' puede cancelarla.');
+    }
+    cambiarReq_(hoja, req, transicionReq(req.estado, 'cancelar'), { motivo: m });
+    eventoReq_(libro, req.folio, REQ_CANCELADA, m);
+    bitacora_(libro, 'Cancelar requisición', req.proyectoFolio, req.folio, m, HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    return misRequisiciones();
+  });
+}
+
+/** Cierre: la requisición pasa a Cerrada y su orden a Recibida (hoy, con el correo de quien cierra). */
+function cerrarReq_(libro, hoja, req, nota, motivo) {
+  const nuevo = transicionReq(req.estado, 'cerrar');
+  const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
+  if (orden.estado !== OC_PAGADA) throw new Error('La orden ' + orden.folio + ' no está pagada.');
+  cambiarReq_(hoja, req, nuevo, { notasRecepcion: nota, motivo: motivo || req.motivo });
+  hO.getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(hoyIso_()), textoCelda(VENDEDOR_.email)]]);
+  eventoReq_(libro, req.folio, REQ_CERRADA, [motivo ? 'Cerrada por compras: ' + motivo : 'Material recibido', nota].filter(Boolean).join(' · '));
+  bitacora_(libro, 'Cerrar requisición', req.proyectoFolio, req.folio + ' · ' + orden.folio + ' recibida el ' + hoyIso_() +
+    (nota ? ' · ' + nota : ''), motivo || '', HOJAS_COMPRAS);
+}
+
+/** "Recibí el material": solo el solicitante y solo si está Pagada. notas opcionales (p. ej. "faltó 1 pieza"). */
+function cerrarRequisicion(folioReq, notas) {
+  exigirRequisicion_();
+  const nota = notaOpcional_(notas);
+  const libro = libroCompras_();
+  return conCandado_(() => {
+    const { hoja, req } = buscarReq_(libro, folioReq);
+    if (req.solicitanteEmail !== String(VENDEDOR_.email).toLowerCase()) {
+      throw errorPermiso_('Solo quien hizo la requisición ' + req.folio + ' puede confirmar que recibió el material.');
+    }
+    cerrarReq_(libro, hoja, req, nota, '');
+    SpreadsheetApp.flush();
+    return misRequisiciones();
+  });
+}
+
+function notaOpcional_(notas) {
+  const n = String(notas || '').trim();
+  if (n.length > 500) throw new Error('Las notas deben tener máximo 500 caracteres.');
+  return n;
+}
+
+// ---- Requisiciones: lado de compras ----
+
+/** Todas las requisiciones (compras), más recientes primero. Filtro opcional por estado y por folio/proyecto/solicitante. */
+function listarRequisiciones(busqueda, estado) {
+  exigirCompras_();
+  const libro = libroCompras_();
+  const ren = renglonesDeReqs_(libro), proyectos = nombresDeProyectos_();
+  const q = textoNormal(busqueda), e = String(estado || '').trim();
+  const lista = [];
+  filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
+    const req = reqDesdeFila_(r, i + 2);
+    if (!req.folio) return;
+    const p = proyectos[req.proyectoFolio.toUpperCase()];
+    const x = { folio: req.folio, fecha: req.fecha, proyectoFolio: req.proyectoFolio, proyectoNombre: p ? p.nombre : '',
+      solicitante: req.solicitante, solicitanteEmail: req.solicitanteEmail, estado: req.estado, ocFolio: req.ocFolio,
+      actualizado: req.actualizado, renglones: ((ren[req.folio.toUpperCase()] || {}).renglones || []).length };
+    if (e && x.estado !== e) return;
+    if (q && !textoNormal([x.folio, x.proyectoFolio, x.proyectoNombre, x.solicitante, x.solicitanteEmail, x.ocFolio].join(' ')).includes(q)) return;
+    lista.push(x);
+  });
+  return lista.reverse().slice(0, 200);
+}
+
+function pagoProvDesdeFila_(r, fila) {
+  return {
+    folio: String(r[0]), fecha: fechaIso_(r[1]), fechaRegistro: fechaTexto_(r[2]), ocFolio: String(r[3]), reqFolio: String(r[4] || ''),
+    proyectoFolio: String(r[5] || ''), monto: Number(r[6]) || 0, monedaPago: String(r[7] || ''),
+    tipoCambio: r[8] === '' ? '' : Number(r[8]), montoAplicado: Number(r[9]) || 0, monedaOc: String(r[10] || ''),
+    metodo: String(r[11] || ''), referencia: String(r[12] || ''), comprobanteId: String(r[13] || ''),
+    comprobanteUrl: String(r[14] || ''), registro: String(r[16] || r[15] || ''), estado: String(r[17] || 'Vigente'),
+    canceladoPor: String(r[18] || ''), fechaCancelacion: fechaTexto_(r[19]), motivoCancelacion: String(r[20] || ''), fila: fila,
+  };
+}
+
+/** Pagos de una orden (en orden de registro). */
+function pagosDeOrden_(libro, folioOc) {
+  const f = String(folioOc || '').toUpperCase();
+  const lista = [];
+  if (!f) return lista;
+  filasDeArea_(hojaCompras_(libro, 'PagosProveedores'), HOJAS_COMPRAS, 'PagosProveedores').forEach((r, i) => {
+    if (String(r[3]).toUpperCase() === f) lista.push(pagoProvDesdeFila_(r, i + 2));
+  });
+  return lista;
+}
+
+/** Vista de una requisición para compras: renglones, cotización, historial, proyecto (moneda del contrato), orden y pagos. */
+function vistaRequisicion_(libro, folioReq) {
+  const { req } = buscarReq_(libro, folioReq);
+  const f = req.folio.toUpperCase();
+  const proyecto = buscarProyecto_(hojaProyectos_(), req.proyectoFolio);
+  const c = contratosFirmados_()[req.proyectoFolio.toUpperCase()] || null;
+  let orden = null;
+  if (req.ocFolio) { orden = buscarOrden_(libro, req.ocFolio).orden; delete orden.fila; }
+  const pagos = req.ocFolio ? pagosDeOrden_(libro, req.ocFolio).map(x => { delete x.fila; return x; }) : [];
+  const proyectoActivo = !!proyecto && proyecto.estado === 'Activo' && !!c;
+  const r = Object.assign({}, req); delete r.fila;
+  return {
+    requisicion: r,
+    renglones: (renglonesDeReqs_(libro)[f] || {}).renglones || [],
+    eventos: eventosDeReqs_(libro)[f] || [],
+    proyecto: proyecto ? { folio: proyecto.folio, nombre: proyecto.nombre, cliente: proyecto.cliente, estado: proyecto.estado,
+      ubicacion: proyecto.ubicacion } : { folio: req.proyectoFolio, nombre: '', cliente: '', estado: '', ubicacion: '' },
+    moneda: c ? c.moneda : '', marca: c ? c.marca : '',
+    orden: orden, pagos: pagos,
+    proveedores: proveedoresDelLibro_(libro).map(p => { const x = Object.assign({}, p); delete x.fila; return x; }),
+    ivaTasas: IVA_OC, metodos: METODOS_PAGO, hoy: hoyIso_(),
+    puedeAutorizar: req.estado === REQ_SOLICITADA && proyectoActivo,
+    puedeRevisar: req.estado === REQ_SOLICITADA,
+    puedePagar: req.estado === REQ_AUTORIZADA && !!orden && orden.estado === OC_EMITIDA,
+    puedeCancelarPago: req.estado === REQ_PAGADA,
+    puedeCerrar: req.estado === REQ_PAGADA,
+  };
+}
+
+function getRequisicion(folioReq) {
+  exigirCompras_();
+  return vistaRequisicion_(libroCompras_(), folioReq);
+}
+
+/**
+ * Autoriza una requisición Solicitada: emite su orden de compra (mismo flujo y PDF, con la línea "Requisición: REQ-…") y la
+ * requisición pasa a Autorizada con su oc_folio. oc = datos de la orden (ver emitirOrdenCompra_) + idSolicitud.
+ */
+function autorizarRequisicion(folioReq, oc) {
+  exigirCompras_();
+  const d0 = oc || {};
+  const libro = libroCompras_();
+  const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
+  const cache = CacheService.getScriptCache();
+  const claveCache = idSolicitud ? 'OC_' + idSolicitud : '';
+
+  return conCandado_(() => {
+    if (claveCache) {
+      const previo = cache.get(claveCache);
+      if (previo) return JSON.parse(previo);
+    }
+    const { hoja, req } = buscarReq_(libro, folioReq);
+    const nuevo = transicionReq(req.estado, 'autorizar');
+    const proyecto = proyectoParaCompras_(req.proyectoFolio);
+    const r = emitirOrdenCompra_(libro, d0, proyecto, req.folio);
+    cambiarReq_(hoja, req, nuevo, { motivo: '', ocFolio: r.folio, revisar: true });
+    eventoReq_(libro, req.folio, nuevo, '');
+    bitacora_(libro, 'Autorizar requisición', proyecto.folio, req.folio + ' · ' + r.folio, '', HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    const resultado = { folio: req.folio, ocFolio: r.folio, url: r.url, total: r.total, moneda: r.moneda,
+      vista: vistaRequisicion_(libro, req.folio) };
+    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
+    return resultado;
+  });
+}
+
+/** Rechazar (final) o devolver (el solicitante la corrige) una requisición Solicitada; motivo obligatorio. */
+function revisarRequisicion_(folioReq, motivo, accion) {
+  exigirCompras_();
+  const m = motivoObligatorio_(motivo, 'Escribe el motivo (lo verá quien hizo la requisición).');
+  const libro = libroCompras_();
+  return conCandado_(() => {
+    const { hoja, req } = buscarReq_(libro, folioReq);
+    const nuevo = transicionReq(req.estado, accion);
+    cambiarReq_(hoja, req, nuevo, { motivo: m, revisar: true });
+    eventoReq_(libro, req.folio, nuevo, m);
+    bitacora_(libro, (accion === 'rechazar' ? 'Rechazar' : 'Devolver') + ' requisición', req.proyectoFolio, req.folio, m, HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    return vistaRequisicion_(libro, req.folio);
+  });
+}
+function rechazarRequisicion(folioReq, motivo) { return revisarRequisicion_(folioReq, motivo, 'rechazar'); }
+function devolverRequisicion(folioReq, motivo) { return revisarRequisicion_(folioReq, motivo, 'devolver'); }
+
+/**
+ * Pago a proveedor (uno por orden): p = {reqFolio o ocFolio, fecha, monto, monedaPago, tipoCambio, metodo, referencia,
+ * comprobante: {nombre, datos}, idSolicitud}. La requisición debe estar Autorizada y su orden Emitida; el monto (convertido a
+ * la moneda de la orden) debe ser el total de la orden ±1.00. La orden y la requisición pasan a Pagada.
+ */
+function registrarPagoProveedor(p) {
+  exigirCompras_();
+  const d0 = p || {};
+  const bytes = bytesDeAdjunto_(d0.comprobante, 'No se pudo leer el comprobante. Vuelve a adjuntarlo.');
+  const tipo = validarComprobante(bytes);
+  const libro = libroCompras_();
+
+  const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
+  const cache = CacheService.getScriptCache();
+  const claveCache = idSolicitud ? 'PGP_' + idSolicitud : '';
+
+  return conCandado_(() => {
+    if (claveCache) {
+      const previo = cache.get(claveCache);
+      if (previo) return JSON.parse(previo);
+    }
+    let reqFolio = String(d0.reqFolio || '').trim();
+    if (!reqFolio && d0.ocFolio) reqFolio = buscarOrden_(libro, d0.ocFolio).orden.reqFolio;
+    if (!reqFolio) throw new Error('Esta orden no tiene requisición: no se puede registrar el pago.');
+    const { hoja, req } = buscarReq_(libro, reqFolio);
+    const nuevo = transicionReq(req.estado, 'pagar');
+    const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
+    if (d0.ocFolio && String(d0.ocFolio).trim().toUpperCase() !== orden.folio.toUpperCase()) {
+      throw new Error('La orden ' + String(d0.ocFolio).toUpperCase() + ' no es la de la requisición ' + req.folio + '.');
+    }
+    if (orden.estado !== OC_EMITIDA) throw new Error('La orden ' + orden.folio + ' está ' + orden.estado.toLowerCase() + ': no se puede pagar.');
+    if (pagosDeOrden_(libro, orden.folio).some(x => x.estado === 'Vigente')) throw new Error('La orden ' + orden.folio + ' ya tiene un pago.');
+    const pago = normalizarPagoProveedor(d0, { moneda: orden.moneda, total: orden.total, fechaOrden: orden.fecha, hoy: hoyIso_() });
+
+    const hP = hojaCompras_(libro, 'PagosProveedores');
+    const folio = siguienteFolio_(PREFIJO_PGP, hP, 'CONSECUTIVO_PGP_');
+    const n = pagosDeOrden_(libro, orden.folio).length + 1;
+    const archivo = privado_(carpetaRequisiciones_(req.proyectoFolio).createFile(Utilities.newBlob(bytes, tipo.mime,
+      nombreArchivoReq(req.folio, 'Comprobante pago', tipo.ext, n))));
+    const t = textoCelda;
+    hP.appendRow([folio, textoFecha_(pago.fecha), Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'),
+      orden.folio, req.folio, req.proyectoFolio, pago.monto, pago.monedaPago, pago.tipoCambio, pago.montoAplicado, orden.moneda,
+      pago.metodo, t(pago.referencia), archivo.getId(), archivo.getUrl(), t(VENDEDOR_.email),
+      t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '']);
+    hO.getRange(orden.fila, COL_ESTADO_OC).setValue(OC_PAGADA);
+    cambiarReq_(hoja, req, nuevo, {});
+    eventoReq_(libro, req.folio, nuevo, '');
+    bitacora_(libro, 'Registrar pago a proveedor', req.proyectoFolio, folio + ' · ' + orden.folio + ' · ' + req.folio + ' · ' +
+      formatoMoneda(pago.monto) + ' ' + pago.monedaPago + (pago.tipoCambio ? ' · TC ' + pago.tipoCambio + ' = ' +
+      formatoMoneda(pago.montoAplicado) + ' ' + orden.moneda : '') + ' · ' + pago.metodo, '', HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    const resultado = { folio: folio, url: archivo.getUrl(), vista: vistaRequisicion_(libro, req.folio) };
+    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
+    return resultado;
+  });
+}
+
+/** Cancela un pago a proveedor (no se borra), con motivo: la orden vuelve a Emitida y la requisición a Autorizada. */
+function cancelarPagoProveedor(folioPago, motivo) {
+  exigirCompras_();
+  const m = motivoObligatorio_(motivo, 'Escribe el motivo de la cancelación.');
+  const libro = libroCompras_();
+  return conCandado_(() => {
+    const folio = String(folioPago || '').trim().toUpperCase();
+    const hP = hojaCompras_(libro, 'PagosProveedores');
+    let pago = null;
+    filasDeArea_(hP, HOJAS_COMPRAS, 'PagosProveedores').forEach((r, i) => {
+      if (String(r[0]).toUpperCase() === folio) pago = pagoProvDesdeFila_(r, i + 2);
+    });
+    if (!pago) throw new Error('No existe el pago ' + folio + '.');
+    if (pago.estado !== 'Vigente') throw new Error('El pago ' + pago.folio + ' ya está cancelado.');
+    const { hoja, req } = buscarReq_(libro, pago.reqFolio);
+    if (req.estado === REQ_CERRADA) throw new Error('La requisición ' + req.folio + ' ya está cerrada (material recibido): el pago no se puede cancelar.');
+    const nuevo = transicionReq(req.estado, 'cancelarPago');
+    const { hoja: hO, orden } = buscarOrden_(libro, pago.ocFolio);
+    hP.getRange(pago.fila, 18, 1, 4).setValues([['Cancelado', textoCelda(VENDEDOR_.email),
+      Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
+    if (orden.estado === OC_PAGADA) hO.getRange(orden.fila, COL_ESTADO_OC).setValue(OC_EMITIDA);
+    cambiarReq_(hoja, req, nuevo, {});
+    eventoReq_(libro, req.folio, nuevo, 'Se canceló el pago.');
+    bitacora_(libro, 'Cancelar pago a proveedor', req.proyectoFolio, pago.folio + ' · ' + orden.folio + ' · ' + req.folio + ' · ' +
+      formatoMoneda(pago.monto) + ' ' + pago.monedaPago, m, HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    return vistaRequisicion_(libro, req.folio);
+  });
+}
+
+/** Compras cierra una requisición Pagada en lugar del solicitante (p. ej. ya no está en la obra), con motivo obligatorio. */
+function cerrarRequisicionCompras(folioReq, motivo, notas) {
+  exigirCompras_();
+  const m = motivoObligatorio_(motivo, 'Escribe por qué cierras la requisición en lugar de quien la pidió.');
+  const nota = notaOpcional_(notas);
+  const libro = libroCompras_();
+  return conCandado_(() => {
+    const { hoja, req } = buscarReq_(libro, folioReq);
+    cerrarReq_(libro, hoja, req, nota, m);
+    SpreadsheetApp.flush();
+    return vistaRequisicion_(libro, req.folio);
+  });
+}
+
+/**
+ * Correr desde el editor: crea la carpeta "Cotizador Helgen — Compras" (en Mi unidad) y su libro (con todas sus pestañas,
+ * también las de requisiciones), y deja los dos en "Restringido" (también si ya existían). No comparte nada: a quien deba abrir los PDF se le comparte la carpeta en Drive.
  */
 function prepararCompras() {
   const libro = libroCompras_();
   const carpeta = carpetaCompras_(); // primero la carpeta: el libro hereda su acceso y Drive no deja quitarlo en el hijo
   const archivoLibro = privado_(DriveApp.getFileById(libro.getId()));
+  Object.keys(HOJAS_COMPRAS).forEach(n => hojaCompras_(libro, n)); // pestañas nuevas (requisiciones, pagos) y encabezados
   getConfig_(); // agrega TERMINOS_OC a la pestaña Config si falta
   Logger.log('Carpeta de compras: ' + carpeta.getUrl() + ' (restringida)');
   Logger.log('Libro de compras:   ' + archivoLibro.getUrl() + ' (restringido)');
-  Logger.log('ROL_COMPRAS: ' + (PropertiesService.getScriptProperties().getProperty('ROL_COMPRAS') || '(vacío: nadie tiene acceso)'));
+  const props = PropertiesService.getScriptProperties();
+  Logger.log('ROL_COMPRAS: ' + (props.getProperty('ROL_COMPRAS') || '(vacío: nadie tiene acceso)'));
+  Logger.log('ROL_REQUISICION: ' + (props.getProperty('ROL_REQUISICION') || '(vacío)'));
+  Logger.log('SOLO_REQUISICION: ' + (props.getProperty('SOLO_REQUISICION') || '(vacío)'));
 }
 
 // ====== 5. LÓGICA PURA (sin servicios de Google; se puede probar fuera) ======
@@ -2296,8 +2855,16 @@ function normalizarPago(p, proyecto) {
  * Script vienen con signo (-128…127). Acepta PDF, JPG, PNG y HEIC; máximo MAX_COMPROBANTE. Devuelve {mime, ext}.
  */
 function validarComprobante(bytes) {
-  if (!bytes || !bytes.length) throw new Error('Adjunta el comprobante de pago (PDF o imagen).');
-  if (bytes.length > MAX_COMPROBANTE) throw new Error('El comprobante pesa más de 10 MB. Reduce la imagen o el PDF.');
+  return validarArchivo(bytes, 'el comprobante de pago', 'El comprobante');
+}
+
+/**
+ * Igual que validarComprobante para otro archivo (p. ej. la cotización de una requisición). que = "la cotización del
+ * proveedor" (para "Adjunta …"); sujeto = "La cotización" (para "… pesa más de 10 MB" y "… debe ser PDF o imagen").
+ */
+function validarArchivo(bytes, que, sujeto) {
+  if (!bytes || !bytes.length) throw new Error('Adjunta ' + que + ' (PDF o imagen).');
+  if (bytes.length > MAX_COMPROBANTE) throw new Error(sujeto + ' pesa más de 10 MB. Reduce la imagen o el PDF.');
   const b = i => (bytes[i] || 0) & 0xFF;
   const txt = (desde, n) => String.fromCharCode.apply(null, Array.from({ length: n }, (_, i) => b(desde + i)));
   if (txt(0, 5) === '%PDF-') return { mime: 'application/pdf', ext: 'pdf' };
@@ -2306,7 +2873,7 @@ function validarComprobante(bytes) {
   if (txt(4, 4) === 'ftyp' && ['heic', 'heix', 'hevc', 'heim', 'heis', 'mif1', 'msf1'].indexOf(txt(8, 4)) !== -1) {
     return { mime: 'image/heic', ext: 'heic' };
   }
-  throw new Error('El comprobante debe ser PDF o imagen (JPG, PNG o HEIC).');
+  throw new Error(sujeto + ' debe ser PDF o imagen (JPG, PNG o HEIC).');
 }
 
 /** Correos de una propiedad ("a@helgen.tech, b@helgen.tech"), en minúsculas; solo del dominio. */
@@ -2566,6 +3133,93 @@ function nombreArchivoOc(folio, proveedor) {
 function terminosOcParaPdf(cfg) {
   const lineas = String((cfg && cfg.TERMINOS_OC) || '').split('\n').map(t => t.trim()).filter(Boolean);
   return lineas.length ? lineas : TERMINOS_OC_INICIALES.split('\n');
+}
+
+// ---- Requisiciones de materiales y pago a proveedores ----
+
+const REQ_SOLICITADA = 'Solicitada', REQ_AUTORIZADA = 'Autorizada', REQ_PAGADA = 'Pagada', REQ_CERRADA = 'Cerrada',
+  REQ_RECHAZADA = 'Rechazada', REQ_DEVUELTA = 'Devuelta', REQ_CANCELADA = 'Cancelada';
+const MAX_RENGLONES_REQ = 100;
+
+/**
+ * Cambios de estado válidos de una requisición: acción → {de: [estados], a: estado}.
+ * Solicitada → Autorizada (genera la orden) → Pagada → Cerrada; Solicitada → Rechazada (final) | Devuelta → Solicitada;
+ * Solicitada/Devuelta → Cancelada (el solicitante). Cancelar el pago: Pagada → Autorizada; cancelar la orden: Autorizada →
+ * Solicitada.
+ */
+const TRANSICIONES_REQ = {
+  autorizar: { de: [REQ_SOLICITADA], a: REQ_AUTORIZADA },
+  rechazar: { de: [REQ_SOLICITADA], a: REQ_RECHAZADA },
+  devolver: { de: [REQ_SOLICITADA], a: REQ_DEVUELTA },
+  reenviar: { de: [REQ_DEVUELTA], a: REQ_SOLICITADA },
+  cancelar: { de: [REQ_SOLICITADA, REQ_DEVUELTA], a: REQ_CANCELADA },
+  pagar: { de: [REQ_AUTORIZADA], a: REQ_PAGADA },
+  cancelarPago: { de: [REQ_PAGADA], a: REQ_AUTORIZADA },
+  cerrar: { de: [REQ_PAGADA], a: REQ_CERRADA },
+  cancelarOc: { de: [REQ_AUTORIZADA], a: REQ_SOLICITADA },
+};
+const VERBOS_REQ = { autorizar: 'autorizar', rechazar: 'rechazar', devolver: 'devolver', reenviar: 'reenviar', cancelar: 'cancelar',
+  pagar: 'pagar', cancelarPago: 'cancelar el pago de', cerrar: 'cerrar', cancelarOc: 'regresar a Solicitada' };
+
+/** Estado nuevo de una requisición tras la acción; error si no se puede desde su estado actual. */
+function transicionReq(estado, accion) {
+  const t = TRANSICIONES_REQ[accion];
+  if (!t) throw new Error('Acción no válida.');
+  if (t.de.indexOf(estado) === -1) {
+    throw new Error('La requisición está ' + String(estado || '').toLowerCase() + ': no se puede ' + VERBOS_REQ[accion] +
+      ' (solo si está ' + t.de.map(e => e.toLowerCase()).join(' o ') + ').');
+  }
+  return t.a;
+}
+
+/**
+ * Renglones de una requisición (sin costos): [{descripcion, cantidad, unidad, notas}]. Los renglones sin descripción se
+ * ignoran; al menos uno; cantidad mayor a 0; unidad por omisión PZA.
+ */
+function normalizarRequisicion(p) {
+  const limpio = s => String(s == null ? '' : s).trim().replace(/\s+/g, ' ');
+  const renglones = ((p && Array.isArray(p.renglones)) ? p.renglones : [])
+    .filter(r => limpio(r && r.descripcion))
+    .map(r => {
+      const descripcion = limpio(r.descripcion);
+      const cantTxt = r.cantidad, cantidad = Number(cantTxt);
+      if (descripcion.length > 500) throw new Error('La descripción "' + descripcion.slice(0, 30) + '…" debe tener máximo 500 caracteres.');
+      if (cantTxt === '' || cantTxt == null || !isFinite(cantidad) || cantidad <= 0) {
+        throw new Error('La cantidad de "' + descripcion.slice(0, 40) + '" debe ser mayor a 0.');
+      }
+      if (cantidad > 1e7) throw new Error('La cantidad de "' + descripcion.slice(0, 40) + '" no es válida.');
+      const notas = limpio(r.notas);
+      if (notas.length > 300) throw new Error('Las notas de "' + descripcion.slice(0, 30) + '…" deben tener máximo 300 caracteres.');
+      return { descripcion: descripcion, cantidad: Math.round(cantidad * 10000) / 10000,
+        unidad: limpio(r.unidad).toUpperCase().slice(0, 20) || 'PZA', notas: notas };
+    });
+  if (!renglones.length) throw new Error('Agrega al menos un renglón con descripción y cantidad.');
+  if (renglones.length > MAX_RENGLONES_REQ) throw new Error('Una requisición admite máximo ' + MAX_RENGLONES_REQ + ' renglones.');
+  return renglones;
+}
+
+/**
+ * Valida un pago a proveedor. orden = {moneda, total, fechaOrden, hoy}. Fecha no futura ni anterior a la orden; método y
+ * referencia como en cobranza; si la moneda del pago es otra, tipo de cambio obligatorio (pesos por dólar). El monto en la
+ * moneda de la orden debe ser su total, con tolerancia de TOLERANCIA_PAGO (1.00).
+ */
+function normalizarPagoProveedor(p, orden) {
+  const d = p || {};
+  const fecha = validarFechaIso(d.fecha, orden.hoy, 'La fecha del pago');
+  if (orden.fechaOrden && fecha < orden.fechaOrden) throw new Error('La fecha del pago no puede ser anterior a la orden (' + orden.fechaOrden + ').');
+  const pago = normalizarPago(Object.assign({}, d, { fecha: fecha, etapaOrden: 1 }),
+    { moneda: orden.moneda, etapas: 1, hoy: orden.hoy });
+  if (Math.abs(aCentavos(pago.montoAplicado) - aCentavos(orden.total)) > aCentavos(TOLERANCIA_PAGO)) {
+    throw new Error('El pago (' + formatoMoneda(pago.montoAplicado) + ' ' + orden.moneda + ') debe ser igual al total de la orden (' +
+      formatoMoneda(orden.total) + ' ' + orden.moneda + ').');
+  }
+  return { fecha: pago.fecha, monto: pago.monto, monedaPago: pago.monedaPago, tipoCambio: pago.tipoCambio,
+    montoAplicado: pago.montoAplicado, metodo: pago.metodo, referencia: pago.referencia };
+}
+
+/** "REQ-2026-0001 — Cotización.pdf"; el archivo n (n > 1) lleva " (n)": el anterior no se borra. */
+function nombreArchivoReq(folio, que, ext, n) {
+  return String(folio) + ' — ' + que + (n > 1 ? ' (' + n + ')' : '') + '.' + ext;
 }
 
 // ---- Búsqueda en catálogos del SAT (c_ClaveProdServ / c_ClaveUnidad) ----
@@ -3033,6 +3687,7 @@ function construirHtmlOrdenCompra(d, cfg, logoUrl) {
     '<table style="width:auto;margin-left:auto;">' +
     '<tr><td colspan="2" style="font-size:20px;font-weight:bold;letter-spacing:2px;color:' + AZUL + ';padding:0 0 3px;text-align:right;">ORDEN DE COMPRA</td></tr>' +
     docFila('Folio', d.folio, true) + docFila('Fecha', d.fecha) + docFila('Proyecto', d.proyectoFolio) +
+    (d.reqFolio ? docFila('Requisición', d.reqFolio) : '') +
     (usd ? docFila('Moneda', 'USD (dólares estadounidenses)', true) : '') +
     '</table></td></tr></table>' +
     '<div style="border-top:3px solid ' + AQUA + ';margin-top:8px;"></div>' +
