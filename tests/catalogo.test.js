@@ -23,7 +23,7 @@ let borradas=[],creados=0,catSS;
 const db={getId:()=>'db',getSheetByName:n=>dbSheets[n]||null,getSheets:()=>Object.values(dbSheets),deleteSheet:h=>{borradas.push(h.getName());delete dbSheets[h.getName()]}};
 const props={SPREADSHEET_ID:'db',FOLDER_ID:'f'};
 const ctx={console,Date,
- PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperty:(k,v)=>props[k]=v})},
+ PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperty:(k,v)=>props[k]=v,getProperties:()=>Object.assign({},props),setProperties:o=>Object.assign(props,o)})},
  LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},
  Session:{getActiveUser:()=>({getEmail:()=>'efrain@helgen.tech'})},
  SpreadsheetApp:{flush(){},newDataValidation:()=>chain,

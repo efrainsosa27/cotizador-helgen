@@ -74,14 +74,14 @@ const fmt=(d,tz,f)=>f.replace('yyyy',d.getFullYear()).replace('MM',pad(d.getMont
   .replace('HH',pad(d.getHours())).replace('mm',pad(d.getMinutes())).replace('ss',pad(d.getSeconds()));
 const firmados=b=>[...b].map(x=>x>127?x-256:x); // Apps Script entrega bytes con signo
 const ctx={console:{...console,warn(){}},Date,JSON,
- PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperty:(k,v)=>props[k]=v})},
- CacheService:{getScriptCache:()=>({get:k=>cache[k]??null,put:(k,v)=>cache[k]=v})},
+ PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperty:(k,v)=>props[k]=v,getProperties:()=>Object.assign({},props),setProperties:o=>Object.assign(props,o)})},
+ CacheService:{getScriptCache:()=>({get:k=>cache[k]??null,put:(k,v)=>cache[k]=v,getAll:ks=>Object.fromEntries(ks.filter(k=>k in cache).map(k=>[k,cache[k]])),putAll:o=>Object.assign(cache,o)})},
  LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},
  Session:{getActiveUser:()=>({getEmail:()=>''})},
  Logger:{log(){}},
  Utilities:{formatDate:fmt,newBlob:(a,b,c)=>typeof a==='string'?{getAs:()=>({setName:n=>({name:n,html:a})})}:{bytes:a,mime:b,name:c},
   base64Encode:b=>Buffer.from(b).toString('base64'),base64Decode:s=>firmados(Buffer.from(s,'base64')),
-  DigestAlgorithm:{SHA_256:'sha256'},computeDigest:(a,s)=>[...require('crypto').createHash('sha256').update(s).digest()]},
+  DigestAlgorithm:{SHA_256:'sha256',MD5:'md5'},base64EncodeWebSafe:b=>Buffer.from(b).toString('base64url'),computeDigest:(a,s)=>[...require('crypto').createHash(a||'sha256').update(s).digest()]},
  ScriptApp:{getOAuthToken:()=>'TOKEN-SCRIPT'},
  UrlFetchApp:{fetch:(url,op)=>{if(/googleapis\.com\/drive\//.test(url))return apiDrive(url,op);const t=decodeURIComponent(url.split('id_token=')[1]);const c=tokens[t];
   return{getResponseCode:()=>c?200:400,getContentText:()=>JSON.stringify(c||{error:'invalid_token'})}}},
@@ -190,12 +190,14 @@ const PDF=Buffer.from('%PDF-1.4 cotizacion del proveedor').toString('base64');
 const req=(proyectoFolio)=>ok('obrero','guardarRequisicion',{proyectoFolio,renglones:[{descripcion:'Material',cantidad:1,unidad:'pza'}],
   cotizacion:{nombre:'cot.pdf',datos:PDF},idSolicitud:'rq'+(++nId)}).folio;
 const reqP4=req(p4);
-const filaP4=db.pest.Proyectos.m.findIndex(r=>r[0]===p4); db.pest.Proyectos.m[filaP4][6]='Cancelado';
+const filaP4=db.pest.Proyectos.m.findIndex(r=>r[0]===p4); db.pest.Proyectos.m[filaP4][6]='Cancelado'; // a mano en la hoja
+for (const k of Object.keys(cache)) if (k.startsWith('F_proyectos')) delete cache[k]; // pasan los 5 min del caché
 
-// --- Lista: solo Activos con contrato firmado, con su moneda y sin montos ---
+// --- Lista: Activos y Cerrados con o sin contrato (los Cancelados no), con su moneda y sin montos ---
 const lista=ok('pedro','listarProyectosCompras','');
-assert.deepEqual(lista.map(p=>p.folio+':'+p.moneda+':'+p.marca),[p2+':USD:energy',p1+':MXN:helgen']);
-assert(!/total|subtotal|contrat/i.test(JSON.stringify(lista)),'sin montos del contrato');
+assert.deepEqual(lista.map(p=>p.folio+':'+p.moneda+':'+p.marca+':'+p.sinContrato),
+  [p3+':MXN:helgen:false',p2+':USD:energy:false',p1+':MXN:helgen:false'],'p3 tiene aceptada sin firmar; p4 está cancelado');
+assert(!/total|subtotal|contratado|margen/i.test(JSON.stringify(lista)),'sin montos del contrato');
 assert.deepEqual(ok('pedro','listarProyectosCompras','texas').map(p=>p.folio),[p2]);
 
 // --- Vista: sin montos del contrato ni margen; el libro y la carpeta son privados ---
@@ -235,7 +237,7 @@ assert(!/4,100|4100/.test(html),'sin precio de venta'); assert(html.includes('DO
 // Idempotencia
 assert.equal(ok('pedro','autorizarRequisicion',REQ('0002'),oc({idSolicitud:'oc1'})).ocFolio,r.folio); assert.equal(H('OrdenesCompra').length,2);
 // Rechazos que no gastan folio (la requisición sigue Solicitada)
-falla('obrero','guardarRequisicion',[{proyectoFolio:p3,renglones:[{descripcion:'A',cantidad:1}],cotizacion:{datos:PDF}}],/activos con contrato firmado/);
+falla('obrero','guardarRequisicion',[{proyectoFolio:p4,renglones:[{descripcion:'A',cantidad:1}],cotizacion:{datos:PDF}}],/está cancelado: no se piden materiales/);
 falla('pedro','autorizarRequisicion',[reqP4,oc()],/está cancelado: no admite órdenes/);
 const rPend=req(p1);
 falla('pedro','autorizarRequisicion',[rPend,oc({moneda:'USD'})],/proyecto es en MXN y la orden en USD: captura el tipo de cambio/);
@@ -306,12 +308,10 @@ falla('pedro','resumenCobranzaGeneral',[],/No tienes permiso de cobranza/,'PERMI
 // --- Con órdenes vigentes en MXN, la aceptada no puede cambiar a USD (tras desbloquear) ---
 ok('efrain','desbloquearContrato',p1,'Prueba de moneda con órdenes');
 falla('efrain','marcarAceptada',[p1,c1usd],/órdenes de compra en MXN/);
-// Sin contrato firmado: sale de la lista y no se emiten órdenes; las que tiene se siguen viendo
-assert.deepEqual(ok('pedro','listarProyectosCompras','').map(p=>p.folio),[p2]);
+// Sin contrato firmado (desbloqueado) sigue en la lista y admite requisiciones y órdenes en la moneda de su aceptada
+assert.deepEqual(ok('pedro','listarProyectosCompras','').map(p=>p.folio+':'+p.moneda),[p3+':MXN',p2+':USD',p1+':MXN']);
 v=ok('pedro','getComprasProyecto',p1); assert.equal(v.ordenes.length,3);
-assert.equal(ok('pedro','getRequisicion',rPend).puedeAutorizar,false);
-falla('pedro','autorizarRequisicion',[rPend,oc()],/contrato firmado/);
-falla('obrero','guardarRequisicion',[{proyectoFolio:p1,renglones:[{descripcion:'A',cantidad:1}],cotizacion:{datos:PDF}}],/activos con contrato firmado/);
+assert.equal(ok('pedro','getRequisicion',rPend).puedeAutorizar,true);
 ok('efrain','firmarContrato',p1,HOY_ISO);
 
 // --- Bitácora, separación de datos y reparación del acceso ---
@@ -327,4 +327,30 @@ assert.deepEqual(Object.keys(libros[props.COBRANZA_DB_ID].pest).sort(),['Bitacor
 assert(vivos(maestra).every(x=>!/Compras/.test(x.nombre)),'nada de compras en la carpeta maestra');
 carpCom.acceso='DOMAIN'; archivos[LC.id].acceso='DOMAIN'; ctx.prepararCompras();
 assert.deepEqual([carpCom.acceso,archivos[LC.id].acceso],['PRIVATE','PRIVATE'],'prepararCompras repara el acceso');
+
+// --- Proyecto sin cotización aceptada: requisición, orden (MXN, sin línea de negocio) y pago; Cobranza ve "Sin contrato" ---
+const p5=proy('Bodega Norte','p5','Saltillo');
+const cerrado=proy('Ya terminado','p6','');
+db.pest.Proyectos.m[db.pest.Proyectos.m.findIndex(r=>r[0]===cerrado)][6]='Cerrado';
+for (const k of Object.keys(cache)) if (k.startsWith('F_proyectos')) delete cache[k];
+const rl=ok('obrero','listarProyectosRequisicion','');
+assert(rl.some(p=>p.folio===p5)&&rl.some(p=>p.folio===cerrado)&&!rl.some(p=>p.folio===p4),'Activos y Cerrados sin contrato; Cancelados no');
+assert.equal(ok('obrero','listarProyectosRequisicion','BON').map(p=>p.folio)[0],p5,'se busca por clave');
+const r5=req(p5);
+let v5=ok('pedro','getRequisicion',r5);
+assert.deepEqual([v5.moneda,v5.marca,v5.sinContrato,v5.puedeAutorizar],['MXN','',true,true]);
+const o5=ok('pedro','autorizarRequisicion',r5,oc({idSolicitud:'o5',proyectoFolio:p5,renglones:[{descripcion:'Cemento',cantidad:4,costo:250}]}));
+const fo5=H('OrdenesCompra').find(x=>x[0]===o5.ocFolio);
+assert.deepEqual([fo5[2],fo5[3],fo5[13],fo5[18],fo5[20]],[p5,'','MXN','MXN',1000],'sin contrato: MXN y sin línea de negocio');
+ok('pedro','registrarPagoProveedor',{reqFolio:r5,fecha:HOY_ISO,monto:1160,monedaPago:'MXN',metodo:'Transferencia',referencia:'SPEI 5',
+  comprobante:{nombre:'p.pdf',datos:PDF},idSolicitud:'pg5'});
+assert.equal(ok('pedro','getRequisicion',r5).requisicion.estado,'Pagada');
+const vc5=ok('efrain','getCobranzaProyecto',p5);
+assert.deepEqual([vc5.contrato,vc5.margen.sinContrato,vc5.margen.costos[0].moneda,vc5.margen.costos[0].monto,vc5.margen.costos[0].cantidad],
+  [null,true,'MXN',1000,1],'Cobranza: costo de las órdenes y "Sin contrato"');
+falla('efrain','registrarPago',[{proyectoFolio:p5,fecha:HOY_ISO,monto:100,monedaPago:'MXN',metodo:'Efectivo',comprobante:{nombre:'p.pdf',datos:PDF}}],
+  /contrato firmado/);
+// Con órdenes en MXN no se puede aceptar una cotización en USD (nunca se mezclan monedas)
+const c5usd=cot(p5,100,{moneda:'USD'});
+falla('efrain','marcarAceptada',[p5,c5usd],/órdenes de compra en MXN/);
 console.log('OK compras');

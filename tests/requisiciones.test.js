@@ -77,14 +77,14 @@ const fmt=(d,tz,f)=>f.replace('yyyy',d.getFullYear()).replace('MM',pad(d.getMont
   .replace('HH',pad(d.getHours())).replace('mm',pad(d.getMinutes())).replace('ss',pad(d.getSeconds()));
 const firmados=b=>[...b].map(x=>x>127?x-256:x); // Apps Script entrega bytes con signo
 const ctx={console:{...console,warn(){}},Date,JSON,
- PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperty:(k,v)=>props[k]=v})},
- CacheService:{getScriptCache:()=>({get:k=>cache[k]??null,put:(k,v)=>cache[k]=v})},
+ PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperty:(k,v)=>props[k]=v,getProperties:()=>Object.assign({},props),setProperties:o=>Object.assign(props,o)})},
+ CacheService:{getScriptCache:()=>({get:k=>cache[k]??null,put:(k,v)=>cache[k]=v,getAll:ks=>Object.fromEntries(ks.filter(k=>k in cache).map(k=>[k,cache[k]])),putAll:o=>Object.assign(cache,o)})},
  LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},
  Session:{getActiveUser:()=>({getEmail:()=>''})},
  Logger:{log(){}},
  Utilities:{formatDate:fmt,newBlob:(a,b,c)=>typeof a==='string'?{getAs:()=>({setName:n=>({name:n,html:a})})}:{bytes:a,mime:b,name:c},
   base64Encode:b=>Buffer.from(b).toString('base64'),base64Decode:s=>firmados(Buffer.from(s,'base64')),
-  DigestAlgorithm:{SHA_256:'sha256'},computeDigest:(a,s)=>[...require('crypto').createHash('sha256').update(s).digest()]},
+  DigestAlgorithm:{SHA_256:'sha256',MD5:'md5'},base64EncodeWebSafe:b=>Buffer.from(b).toString('base64url'),computeDigest:(a,s)=>[...require('crypto').createHash(a||'sha256').update(s).digest()]},
  ScriptApp:{getOAuthToken:()=>'TOKEN-SCRIPT'},
  UrlFetchApp:{fetch:(url,op)=>{if(/googleapis\.com\/drive\//.test(url))return apiDrive(url,op);const t=decodeURIComponent(url.split('id_token=')[1]);const c=tokens[t];
   return{getResponseCode:()=>c?200:400,getContentText:()=>JSON.stringify(c||{error:'invalid_token'})}}},
@@ -185,10 +185,15 @@ for(const [f,args] of [['getClientes',[]],['listarCotizaciones',['']],['getCatal
 }
 assert.equal(ok('obrero','listarCotizaciones','').length>0,true,'ROL_REQUISICION sin SOLO usa el cotizador como siempre');
 
-// --- Proyectos para pedir: Activos con contrato firmado; solo folio y nombre ---
+// --- Proyectos para pedir: Activos y Cerrados, con o sin contrato; solo folio, clave y nombre ---
 const lp=ok('luis','listarProyectosRequisicion','');
-assert.deepEqual(lp.map(p=>({...p})),[{folio:p2,nombre:'Planta Texas'},{folio:p1,nombre:'Techo solar'}]);
+assert.deepEqual(lp.map(p=>({...p})),[
+  {folio:p3,clave:'SIF',folioVisible:p3+'-SIF',nombre:'Sin firmar',estado:'Activo'},
+  {folio:p2,clave:'PLT',folioVisible:p2+'-PLT',nombre:'Planta Texas',estado:'Activo'},
+  {folio:p1,clave:'TES',folioVisible:p1+'-TES',nombre:'Techo solar',estado:'Activo'}]);
 assert.deepEqual(ok('luis','listarProyectosRequisicion','texas').map(p=>p.folio),[p2]);
+assert.deepEqual(ok('luis','listarProyectosRequisicion','plt').map(p=>p.folio),[p2],'por clave');
+assert.deepEqual(ok('luis','listarProyectosRequisicion',p2+'-PLT').map(p=>p.folio),[p2],'por folio con clave');
 assert.deepEqual(ok('luis','listarProyectosRequisicion','Cliente Secreto'),[],'no busca por cliente');
 
 // --- Crear: cotización obligatoria (PDF, JPG, PNG o HEIC, máx. 10 MB); folio REQ; carpeta privada; Solicitada ---
@@ -198,7 +203,10 @@ falla('obrero','guardarRequisicion',[nueva('obrero',{cotizacion:null})],/Adjunta
 falla('obrero','guardarRequisicion',[nueva('obrero',{cotizacion:{datos:Buffer.from('hola mundo txt').toString('base64')}})],/La cotización debe ser PDF o imagen/);
 falla('obrero','guardarRequisicion',[nueva('obrero',{cotizacion:{datos:Buffer.concat([Buffer.from('%PDF-'),Buffer.alloc(10*1024*1024)]).toString('base64')}})],/pesa más de 10 MB/);
 falla('obrero','guardarRequisicion',[nueva('obrero',{renglones:[{descripcion:'A',cantidad:0}]})],/mayor a 0/);
-falla('obrero','guardarRequisicion',[nueva('obrero',{proyectoFolio:p3})],/activos con contrato firmado/);
+const filaP3=db.pest.Proyectos.m.findIndex(x=>x[0]===p3);
+db.pest.Proyectos.m[filaP3][6]='Cancelado';
+falla('obrero','guardarRequisicion',[nueva('obrero',{proyectoFolio:p3})],/está cancelado: no se piden materiales/);
+db.pest.Proyectos.m[filaP3][6]='Activo';
 falla('obrero','guardarRequisicion',[nueva('obrero',{proyectoFolio:'PRY-2000-0001'})],/No existe el proyecto/);
 assert.equal(props['CONSECUTIVO_REQ_'+ANIO],undefined,'los rechazos no gastan folio');
 let r=ok('obrero','guardarRequisicion',nueva('obrero',{idSolicitud:'rq1'}));
@@ -376,4 +384,64 @@ for(const a of ['Solicitar requisición','Devolver requisición','Reenviar requi
 assert.equal(H('Bitacora').slice(1).find(b=>b[2]==='Cancelar pago a proveedor')[5],'Se capturó con el tipo de cambio equivocado');
 assert.deepEqual(Object.keys(db.pest).sort(),['Config','Cotizaciones','Proyectos'],'nada de requisiciones en la Base de datos');
 assert(!JSON.stringify(db.pest).includes('REQ-')&&!JSON.stringify(db.pest).includes('PGP-'));
+
+// ================= Carga inicial (bootstrap) y sincronización sin recargar =================
+// bootstrap: una sola llamada con los roles y las listas que necesita cada rol
+const bE=ok('efrain','bootstrap'), bP=ok('pedro','bootstrap'), bA=ok('ana','bootstrap'), bL=ok('luis','bootstrap');
+assert.deepEqual([!!bE.cob,!!bE.com,!!bE.req],[true,true,false],'efrain: cobranza y compras');
+assert(Array.isArray(bE.cob.proyectos)&&Array.isArray(bE.com.proyectos));
+// Las listas pesadas solo van si ya están en caché (con el caché vacío, la interfaz las pide al abrir la pestaña)
+assert.equal(bE.com.requisiciones,null,'en frío: sin la lista de requisiciones');
+ok('efrain','listarRequisiciones','','');
+assert(Array.isArray(ok('efrain','bootstrap').com.requisiciones),'ya en caché: viene en el bootstrap');
+assert.deepEqual([!!bP.cob,!!bP.com,!!bP.req],[false,true,true],'pedro: compras y requisiciones');
+assert.deepEqual([!!bA.cob,!!bA.com,!!bA.req,bA.proyectos.length>0,bA.catalogo[0].precio],[false,false,false,true,4100],'ana: solo cotizar');
+assert.deepEqual([bL.soloRequisicion,!!bL.req,!!bL.com,!!bL.cob,bL.clientes.length,bL.proyectos.length,bL.tipoCambio],[true,true,false,false,0,0,null]);
+assert(!/Cliente Secreto|Empresa Oculta|4100|98765/.test(JSON.stringify(bL)),'SOLO_REQUISICION: sin clientes, precios ni montos');
+assert.deepEqual(Object.keys(bE.versiones).sort(),['catalogo','contratos','cotizaciones','oc','pagosCobranza','pagosProveedores','proyectos','requisiciones']);
+// Sin cambios: solo versiones y permisos (ninguna lista)
+let sP=ok('pedro','sincronizar',bP.versiones,{});
+assert.deepEqual([sP.cambios.length,'comRequisiciones' in sP,'reqProyectos' in sP,sP.permisos.compras],[0,false,false,true]);
+// Ana crea un proyecto: los demás lo ven en su siguiente consulta, cada quien en sus listas
+const p9=proy('Nave Industrial','p9','');
+sP=ok('pedro','sincronizar',bP.versiones,{});
+assert.deepEqual([...sP.cambios],['proyectos']);
+assert(sP.comProyectos.some(p=>p.folio===p9&&p.folioVisible===p9+'-NAI'&&p.sinContrato),'compras: el proyecto nuevo, sin contrato');
+assert(sP.reqProyectos.some(p=>p.folio===p9),'requisiciones: el proyecto nuevo');
+assert(!('cobProyectos' in sP)&&!('proyectos' in sP&&sP.proyectos==null),'pedro no recibe cobranza');
+const sE=ok('efrain','sincronizar',bE.versiones,{cobResumen:true});
+assert(sE.cobProyectos.some(p=>p.folio===p9)&&sE.comProyectos.some(p=>p.folio===p9));
+const sA=ok('ana','sincronizar',bA.versiones,{});
+assert(sA.proyectos.some(p=>p.folio===p9)&&!('comProyectos' in sA)&&!('misReq' in sA)&&!('cobProyectos' in sA));
+const sL=ok('luis','sincronizar',bL.versiones,{req:REQ('0001'),cobProyecto:p1,comProyecto:p1});
+assert(sL.reqProyectos.some(p=>p.folio===p9)&&!('proyectos' in sL)&&!('comRequisiciones' in sL)&&!('requisicion' in sL)&&!('cobranzaProyecto' in sL),
+  'SOLO_REQUISICION: aunque pida otras vistas, solo recibe lo suyo');
+assert(!/Cliente Secreto|Empresa Oculta/.test(JSON.stringify(sL)));
+// Una requisición nueva: compras recibe su lista y la requisición abierta; el solicitante solo las suyas
+const vAntes=ok('pedro','sincronizar',{},{}).versiones;
+const rq9=ok('obrero','guardarRequisicion',{proyectoFolio:p9+'-NAI',renglones:[{descripcion:'Lámina',cantidad:3}],
+  cotizacion:{nombre:'c.pdf',datos:PDF},idSolicitud:'rq9'}).folio;
+assert.equal(H('Requisiciones').find(x=>x[0]===rq9)[2],p9,'con el folio visible se guarda la llave interna');
+const sP2=ok('pedro','sincronizar',vAntes,{req:rq9,rcEstado:'Solicitada'});
+assert.deepEqual([...sP2.cambios],['requisiciones']);
+assert(sP2.comRequisiciones.some(r=>r.folio===rq9&&r.proyectoVisible===p9+'-NAI')&&sP2.comRequisiciones.every(r=>r.estado==='Solicitada'));
+assert.equal(sP2.requisicion.requisicion.folio,rq9);
+const sO=ok('obrero','sincronizar',vAntes,{});
+assert(sO.misReq.some(r=>r.folio===rq9)&&!('comRequisiciones' in sO));
+assert(!ok('rosa','sincronizar',vAntes,{}).misReq.some(r=>r.folio===rq9),'rosa no ve la requisición de obrero');
+// Las listas salen del caché hasta que algo cambia (y la escritura sube la versión)
+assert(Object.keys(cache).some(k=>k.startsWith('K_reqs_')),'lista de requisiciones en caché');
+// Cambio a mano en la hoja (Estado): la carga inicial no relee la hoja; la consulta de fondo sí, cada 5 min
+const fila9=db.pest.Proyectos.m.findIndex(x=>x[0]===p9); db.pest.Proyectos.m[fila9][6]='Cancelado';
+const vMan=ok('pedro','sincronizar',{},{}).versiones;
+assert(ok('pedro','bootstrap').com.proyectos.some(p=>p.folio===p9),'antes de la revisión sigue el dato en caché');
+delete cache['R_proyectos']; // pasan los 5 min de la revisión
+const sMan=ok('pedro','sincronizar',vMan,{});
+assert.deepEqual([...sMan.cambios],['proyectos'],'la huella cambió: sube la versión');
+assert(!sMan.comProyectos.some(p=>p.folio===p9)&&!sMan.reqProyectos.some(p=>p.folio===p9),'cancelado a mano: sale de las listas');
+assert.deepEqual([...ok('pedro','sincronizar',sMan.versiones,{}).cambios],[],'una vez avisado, no se repite');
+// Cambio de rol sin recargar la página: la siguiente consulta trae los permisos nuevos
+props.ROL_COMPRAS+=', tania@helgen.tech';
+assert.equal(ok('tania','sincronizar',vAntes,{}).permisos.compras,true);
+falla('intruso','sincronizar',[{},{}],/@helgen.tech/,'SESION');
 console.log('OK requisiciones');

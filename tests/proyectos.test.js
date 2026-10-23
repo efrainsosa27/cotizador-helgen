@@ -12,7 +12,7 @@ function hoja(m){return{m,getLastRow:()=>m.length,getMaxRows:()=>1000,setFrozenR
   getValues:()=>Array.from({length:nr},(_,i)=>{const f=(m[r-1+i]||[]).slice(c-1,c-1+nc);while(f.length<nc)f.push('');return f}),
   setValue(v){m[r-1][c-1]=v;return this},
   setValues(vs){vs.forEach((x,i)=>{m[r-1+i]=m[r-1+i]||[];x.forEach((y,j)=>m[r-1+i][c-1+j]=y)});return this},
-  setFontWeight(){return this},setBackground(){return this},setFontColor(){return this},setDataValidation(){return this}})}}
+  setFontWeight(){return this},setBackground(){return this},setFontColor(){return this},setDataValidation(){return this},setNumberFormat(){return this}})}}
 
 // Drive simulado: árbol de carpetas con Papelera
 let nId=0; const carpetas={};
@@ -37,11 +37,11 @@ const db={getSheetByName:n=>n==='Config'?cfg:n==='Cotizaciones'?cot:n==='Proyect
 const props={SPREADSHEET_ID:'DB',FOLDER_ID:pdfRaiz.id,CATALOGO_ID:'CAT'},cache={};
 const dv=()=>{const b={requireValueInList:(l)=>{b.lista=l;return b},setAllowInvalid:()=>b,setHelpText:()=>b,build:()=>({})};return b};
 const ctx={console:{...console,warn(){}},Date,JSON,
- PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperty:(k,v)=>props[k]=v})},
- CacheService:{getScriptCache:()=>({get:k=>cache[k]??null,put:(k,v)=>cache[k]=v})},
+ PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperty:(k,v)=>props[k]=v,getProperties:()=>Object.assign({},props),setProperties:o=>Object.assign(props,o)})},
+ CacheService:{getScriptCache:()=>({get:k=>cache[k]??null,put:(k,v)=>cache[k]=v,getAll:ks=>Object.fromEntries(ks.filter(k=>k in cache).map(k=>[k,cache[k]])),putAll:o=>Object.assign(cache,o)})},
  LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},
  Session:{getActiveUser:()=>({getEmail:()=>''})},
- Utilities:{formatDate:(d,tz,f)=>f==='yyyy'?'2026':'20/10/2026',newBlob:h=>({getAs:()=>({setName:n=>({name:n,html:h})})}),base64Encode:()=>''},
+ Utilities:{formatDate:(d,tz,f)=>f==='yyyy'?'2026':'20/10/2026',newBlob:h=>({getAs:()=>({setName:n=>({name:n,html:h})})}),base64Encode:b=>Buffer.from(b).toString('base64'),base64EncodeWebSafe:b=>Buffer.from(b).toString('base64url'),DigestAlgorithm:{SHA_256:'sha256',MD5:'md5'},computeDigest:(a,s)=>[...require('crypto').createHash(a||'sha256').update(s).digest()]},
  SpreadsheetApp:{flush(){},newDataValidation:dv,
   openById:id=>id==='CAT'?{getSheetByName:()=>hoja([['Clave','Descripción','Unidad','Precio unitario (sin IVA)','Actualizado','Actualizó','Clave SAT','Unidad SAT']]),getUrl:()=>'cat'}:db},
  DriveApp:{getFolderById:id=>{if(!carpetas[id])throw new Error('No se encontró');return carpetas[id]},
@@ -60,6 +60,14 @@ assert.throws(()=>ctx.normalizarProyecto({nombre:'P',cliente:{}}),/cliente del p
 assert.equal(ctx.normalizarProyecto({nombre:'P',cliente:{nombre:'Luis',empresa:'Solar MX'}}).cliente,'Luis — Solar MX');
 assert.equal(ctx.normalizarProyecto({nombre:'P',cliente:{nombre:'Solar MX',empresa:'solar mx'}}).cliente,'Solar MX');
 assert.equal(ctx.nombreCarpetaProyecto('PRY-2026-0001','A/B: "C"','Techo*1?'),'PRY-2026-0001 — A B C — Techo 1');
+// Clave de proyecto (3 letras): sugerida con el nombre, editable al crear, validada en el servidor
+for (const [nombre,clave] of [['DROGHEDA','DRO'],['Casa del Lago','CAL'],['Planta de Agua Norte','PAN'],['Ñandú','NAN'],
+  ['El Sol','SOL'],['Línea 3','LIN'],['4 Torres de Querétaro','TOQ'],['Planta para la Energía del Sol','PES'],['Y','XXX'],['',"XXX"],
+  ['Yo','YOX'],['A1 B2','ABX'],['Nave Industrial','NAI'],['Proyecto de Prueba oficial','PPO']]) assert.equal(ctx.claveSugerida(nombre),clave,nombre);
+assert.equal(ctx.validarClaveProyecto(' dro ','x'),'DRO'); assert.equal(ctx.validarClaveProyecto('','Casa del Lago'),'CAL','vacía = sugerida');
+for (const mal of ['DR','DROG','DRÓ','DR1','D-O','ÑAN']) assert.throws(()=>ctx.validarClaveProyecto(mal,'x'),/exactamente 3 letras/,mal);
+assert.deepEqual([ctx.folioVisible('PRY-2026-0002','dro'),ctx.folioVisible('PRY-2026-0002','')],['PRY-2026-0002-DRO','PRY-2026-0002']);
+assert.deepEqual(['PRY-2026-0002-DRO','pry-2026-0002',' PRY-2026-0002 ','',null].map(ctx.folioInterno),['PRY-2026-0002','PRY-2026-0002','PRY-2026-0002','','']);
 // El cliente_id de clientesDesdeFilas es el mismo que el del proyecto
 const F=(n,e,rfc)=>{const r=['F','x',n,e,rfc,'','',0,0,0,'','','','','',''];return r};
 assert.equal(ctx.clientesDesdeFilas([F('Luis','Solar MX','')])[0].id,'SIN-RFC:luis|solar mx');
@@ -69,14 +77,15 @@ assert.equal(ctx.clientesDesdeFilas([F('Luis','Solar MX','LUSM800101AB1')])[0].i
 const nuevo=(extra)=>({nombre:'Techo solar planta',ubicacion:'Querétaro',cliente:{nombre:'Luis',empresa:'Solar MX',rfc:'LUSM800101AB1'},...extra});
 const p1=ctx.crearProyecto(nuevo({idSolicitud:'p1',vendedor:{email:'impostor@helgen.tech'}}));
 assert.equal(p1.folio,'PRY-2026-0001'); assert.equal(p1.estado,'Activo'); assert.equal(p1.clienteId,'LUSM800101AB1');
-assert.equal(pry.m[0].join(','),'Folio,Fecha,Nombre,Cliente,cliente_id,Ubicación,Estado,carpeta_id,vendedor_email,vendedor_nombre,vendedor_apellido');
+assert.equal(pry.m[0].join(','),'Folio,Fecha,Nombre,Cliente,cliente_id,Ubicación,Estado,carpeta_id,vendedor_email,vendedor_nombre,vendedor_apellido,clave');
 const f1=pry.m[1];
 assert.deepEqual([f1[0],f1[2],f1[3],f1[4],f1[5],f1[6]],['PRY-2026-0001','Techo solar planta','Luis — Solar MX','LUSM800101AB1','Querétaro','Activo']);
-assert.deepEqual(f1.slice(8),['ana@helgen.tech','Ana','López'],'vendedor del servidor');
+assert.deepEqual(f1.slice(8,11),['ana@helgen.tech','Ana','López'],'vendedor del servidor');
+assert.equal(f1[11],'TSP','clave sugerida con el nombre (Techo solar planta) en la columna L');
 assert(!JSON.stringify(pry.m).includes('impostor'));
 // Carpeta: Cotizador Helgen/Proyectos/2026/<folio> — <cliente> — <nombre>/ solo con Cotizaciones (Pagos y Órdenes de compra ya no: van en cobranza y compras)
 const c1=carpetas[f1[7]];
-assert.equal(ruta(c1),'Cotizador Helgen/Proyectos/2026/PRY-2026-0001 — Luis — Solar MX — Techo solar planta');
+assert.equal(ruta(c1),'Cotizador Helgen/Proyectos/2026/PRY-2026-0001-TSP — Luis — Solar MX — Techo solar planta');
 assert.deepEqual(c1.hijos.map(h=>h.nombre),['Cotizaciones']);
 assert.equal(props.PROYECTOS_FOLDER_ID,c1.padre.padre.id); assert.equal(props.CONSECUTIVO_PROY_2026,'1');
 assert.equal(props.CONSECUTIVO_2026,undefined,'el contador de cotizaciones no cambia');
@@ -113,7 +122,7 @@ ctx.guardarCotizacion({...base,idSolicitud:'c2'});
 assert.equal(vivos(pdfRaiz).find(h=>h.nombre==='2026').archivos.length,1); assert.equal(cot.m[3][19],'');
 // Historial
 const h=ctx.listarCotizaciones('');
-assert.deepEqual(h.map(c=>c.proyecto),['Sin proyecto','PRY-2026-0001','Sin proyecto']);
+assert.deepEqual(h.map(c=>c.proyecto),['Sin proyecto','PRY-2026-0001-TSP','Sin proyecto'],'el Historial muestra el folio con clave');
 assert.deepEqual(ctx.listarCotizaciones('pry-2026-0001').map(c=>c.folio),['HLG-2026-0005'],'busca por proyecto');
 // Proyecto inexistente o cancelado: error y no se consume folio
 assert.throws(()=>ctx.guardarCotizacion({...base,proyectoFolio:'PRY-2026-0099',idSolicitud:'c3'}),

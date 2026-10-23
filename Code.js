@@ -86,6 +86,8 @@ function verificarTokenGoogle_(idToken) {
  * Son las mismas que usa google.script.run; nada más (ni setup ni funciones internas con _).
  */
 const API_FUNCIONES = {
+  bootstrap: bootstrap,
+  sincronizar: sincronizar,
   getDatosIniciales: getDatosIniciales,
   getClientes: getClientes,
   listarCotizaciones: listarCotizaciones,
@@ -133,7 +135,7 @@ const API_FUNCIONES = {
  */
 function doPost(e) {
   let respuesta;
-  VENDEDOR_ = null;
+  VENDEDOR_ = null; VERSIONES_ = null; SIN_CACHE_ = false; MEMO_ = {};
   try {
     let cuerpo;
     try {
@@ -152,15 +154,337 @@ function doPost(e) {
       throw errorPermiso_('Tu cuenta solo tiene acceso a Requisiciones.');
     }
     const args = Array.isArray(cuerpo.args) ? cuerpo.args : [];
+    const cambia = CAMBIOS_API[nombre];
+    SIN_CACHE_ = !!cambia; // lo que devuelva una escritura sale de la hoja, no del caché
     respuesta = { ok: true, datos: API_FUNCIONES[nombre].apply(null, args) };
+    // Sube la versión de lo que cambió: invalida su caché y los demás navegadores lo ven en su siguiente consulta
+    if (cambia && !(respuesta.datos && respuesta.datos.confirmar)) subirVersiones_(cambia);
   } catch (err) {
     respuesta = { ok: false, error: err && err.message ? err.message : String(err) };
     if (err && err.sesion) respuesta.codigo = 'SESION';
     else if (err && err.codigo) respuesta.codigo = err.codigo; // 'PROYECTO' (errorProyecto_), 'PERMISO' (errorPermiso_)
   } finally {
-    VENDEDOR_ = null;
+    VENDEDOR_ = null; VERSIONES_ = null; SIN_CACHE_ = false; MEMO_ = {};
   }
   return ContentService.createTextOutput(JSON.stringify(respuesta)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ====== 1.1 CARGA INICIAL, CACHÉ Y SINCRONIZACIÓN ======
+// bootstrap() es la única llamada al entrar: roles + listas según el rol. Las listas se guardan en CacheService con la
+// versión de sus colecciones en la clave; cada escritura sube la versión (doPost, CAMBIOS_API) y así invalida su caché.
+// sincronizar() recibe las versiones del navegador y devuelve solo lo que cambió, respetando los roles: la interfaz lo
+// consulta cada 20 s con la pestaña visible, sin recargar. Los permisos se siguen revisando en cada función.
+
+const COLECCIONES = ['proyectos', 'contratos', 'cotizaciones', 'catalogo', 'requisiciones', 'oc', 'pagosCobranza',
+  'pagosProveedores'];
+
+/** Colecciones que cambia cada función de la API: doPost sube su versión cuando termina bien. */
+const CAMBIOS_API = {
+  guardarCotizacion: ['cotizaciones'], guardarProducto: ['catalogo'], crearProyecto: ['proyectos'],
+  marcarAceptada: ['contratos'], guardarEsquema: ['contratos'], firmarContrato: ['contratos'],
+  desbloquearContrato: ['contratos'], registrarPago: ['pagosCobranza'], cancelarPago: ['pagosCobranza'],
+  cancelarOrdenCompra: ['oc', 'requisiciones'], guardarRequisicion: ['requisiciones'],
+  cancelarRequisicion: ['requisiciones'], cerrarRequisicion: ['requisiciones', 'oc'],
+  autorizarRequisicion: ['requisiciones', 'oc'], rechazarRequisicion: ['requisiciones'],
+  devolverRequisicion: ['requisiciones'], registrarPagoProveedor: ['pagosProveedores', 'requisiciones', 'oc'],
+  cancelarPagoProveedor: ['pagosProveedores', 'requisiciones', 'oc'], cerrarRequisicionCompras: ['requisiciones', 'oc'],
+};
+
+let VERSIONES_ = null;   // versiones leídas en esta petición (doPost las limpia)
+let SIN_CACHE_ = false;  // durante una escritura las listas se leen de la hoja (su versión todavía no sube)
+let MEMO_ = {};          // lo ya leído en esta petición (Script Properties, hojas en caché); doPost lo limpia
+
+/** Script Properties de esta petición (una sola lectura; roles y versiones salen de aquí). */
+function propiedades_(releer) {
+  if (!MEMO_.props || releer) MEMO_.props = PropertiesService.getScriptProperties().getProperties();
+  return MEMO_.props;
+}
+
+/** {proyectos: 12, contratos: 3, …} desde Script Properties (VER_<colección>). */
+function versiones_(releer) {
+  if (!VERSIONES_ || releer) {
+    const props = propiedades_(releer);
+    VERSIONES_ = {};
+    COLECCIONES.forEach(c => { VERSIONES_[c] = Number(props['VER_' + c]) || 0; });
+  }
+  return VERSIONES_;
+}
+
+/**
+ * Sube la versión de las colecciones con el candado de script (nunca se pierde un aumento). Se llama después de escribir,
+ * así quien lea la versión nueva ya encuentra los datos nuevos. No llamarla con el candado tomado.
+ */
+function subirVersiones_(colecciones) {
+  if (!colecciones || !colecciones.length) return;
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) { console.warn('Sin candado: no subió la versión de ' + colecciones.join(', ')); return; }
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const nuevas = {};
+    colecciones.forEach(c => { nuevas['VER_' + c] = String((Number(props.getProperty('VER_' + c)) || 0) + 1); });
+    props.setProperties(nuevas);
+  } finally {
+    lock.releaseLock();
+    VERSIONES_ = null; MEMO_.props = null;
+  }
+}
+
+const TROZO_CACHE = 30000; // caracteres por entrada (CacheService admite 100 KB por valor; un acento ocupa 2 bytes)
+
+/** Lee un valor JSON guardado en trozos por guardarCache_; undefined si no está o le falta un trozo. */
+function leerCache_(clave) {
+  const cache = CacheService.getScriptCache();
+  const meta = cache.get(clave);
+  if (!meta || !/^N:\d+$/.test(meta)) return undefined;
+  const claves = [];
+  for (let i = 0; i < Number(meta.slice(2)); i++) claves.push(clave + '#' + i);
+  const trozos = cache.getAll(claves);
+  if (claves.some(k => trozos[k] == null)) return undefined;
+  try {
+    return JSON.parse(claves.map(k => trozos[k]).join(''));
+  } catch (e) {
+    return undefined;
+  }
+}
+
+function guardarCache_(clave, valor, ttl) {
+  try {
+    const texto = JSON.stringify(valor), datos = {};
+    let n = 0;
+    for (let i = 0; i < texto.length; i += TROZO_CACHE) datos[clave + '#' + (n++)] = texto.slice(i, i + TROZO_CACHE);
+    if (n > 30) return; // demasiado grande: se seguirá leyendo de la hoja
+    const cache = CacheService.getScriptCache();
+    if (n) cache.putAll(datos, ttl);
+    cache.put(clave, 'N:' + n, ttl); // al final: si la ve otra petición, los trozos ya están
+  } catch (e) {
+    console.warn('No se guardó en caché ' + clave + ': ' + e.message);
+  }
+}
+
+/** Colecciones que también se editan a mano en la hoja: antes de usar su versión se revisa su huella (fuenteConHuella_). */
+const REVISAR_A_MANO_ = { proyectos: () => proyectosCache_(), contratos: () => contratosCache_(),
+  catalogo: () => catalogoCache_(), cotizaciones: () => clientesCache_() };
+
+/** Clave de caché con las versiones de sus colecciones (si cambia una, es otra clave: la anterior ya no se usa). */
+function claveCache_(base, colecciones) {
+  colecciones.forEach(c => { if (REVISAR_A_MANO_[c]) REVISAR_A_MANO_[c](); }); // si alguien editó la hoja, sube su versión
+  const v = versiones_();
+  const clave = 'K_' + base + '_' + colecciones.map(c => v[c]).join('.');
+  if (clave.length <= 200) return clave;
+  return 'K_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, clave));
+}
+
+/** Valor en caché para estas versiones o, si no está, fn() (y se guarda). Sin fn: solo lee (undefined si no está). */
+function enCache_(base, colecciones, ttl, fn) {
+  if (SIN_CACHE_) return fn ? fn() : undefined;
+  const clave = claveCache_(base, colecciones);
+  const previo = leerCache_(clave);
+  if (previo !== undefined || !fn) return previo;
+  const valor = fn();
+  guardarCache_(clave, valor, ttl);
+  return valor;
+}
+
+const TTL_CACHE = 21600; // 6 h (lo máximo de CacheService): cada escritura sube la versión y cambia la clave
+
+/**
+ * Como enCache_, para hojas que también se editan a mano (Estado del proyecto, precios del catálogo, filas borradas).
+ * El dato dura 6 h; con revisar (solo desde sincronizar, que corre en segundo plano y nadie lo espera), si pasaron más de
+ * cadaSeg segundos desde la última revisión se vuelve a leer la hoja: si cambió sin que la app escribiera (misma versión,
+ * otra huella), sube la versión para que los navegadores abiertos se enteren. Así la carga inicial nunca lee la hoja de más.
+ */
+function fuenteConHuella_(nombre, coleccion, cadaSeg, leer, revisar) {
+  if (SIN_CACHE_) return leer();
+  const memo = MEMO_['F_' + nombre];
+  if (memo && (!revisar || memo.revisado)) return memo.valor;
+  const cache = CacheService.getScriptCache();
+  const v = versiones_()[coleccion];
+  const previo = leerCache_('F_' + nombre + '_' + v);
+  if (previo !== undefined && (!revisar || cache.get('R_' + nombre))) {
+    MEMO_['F_' + nombre] = { valor: previo, revisado: !!revisar };
+    return previo;
+  }
+  const valor = leer();
+  const huella = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(valor)));
+  const anterior = String(cache.get('H_' + nombre) || '').split('|');
+  let version = v;
+  if (anterior.length === 2 && Number(anterior[0]) === v && anterior[1] !== huella) {
+    subirVersiones_([coleccion]); // alguien la editó directo en la hoja
+    version = versiones_()[coleccion];
+  }
+  guardarCache_('F_' + nombre + '_' + version, valor, TTL_CACHE);
+  cache.put('H_' + nombre, version + '|' + huella, TTL_CACHE);
+  cache.put('R_' + nombre, '1', cadaSeg);
+  MEMO_['F_' + nombre] = { valor: valor, revisado: true };
+  return valor;
+}
+
+/** Todos los proyectos de la pestaña Proyectos (con carpetaId: solo para uso interno). */
+function proyectosCache_(revisar) {
+  return fuenteConHuella_('proyectos', 'proyectos', 300, () => {
+    const hoja = hojaProyectos_();
+    const filas = hoja.getLastRow() > 1
+      ? hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
+    return proyectosDesdeFilas(filas);
+  }, revisar);
+}
+
+/** {folio: proyecto} con los proyectos en caché. */
+function mapaProyectos_() {
+  const mapa = {};
+  proyectosCache_().forEach(p => { mapa[p.folio.toUpperCase()] = p; });
+  return mapa;
+}
+
+/** Lo que la interfaz recibe de un proyecto (sin carpeta_id). */
+function proyectoParaLista_(p) {
+  return { folio: p.folio, clave: p.clave, folioVisible: p.folioVisible, nombre: p.nombre, cliente: p.cliente,
+    clienteId: p.clienteId, ubicacion: p.ubicacion, estado: p.estado, fecha: p.fecha };
+}
+
+/** {folio: {estado, moneda, marca}} de todos los contratos (aceptados y firmados). Sin libro de cobranza: ninguno. */
+function contratosCache_(revisar) {
+  return fuenteConHuella_('contratos', 'contratos', 600, () => {
+    const mapa = {}, todos = contratosDelLibro_();
+    Object.keys(todos).forEach(f => { mapa[f] = { estado: todos[f].estado, moneda: todos[f].moneda, marca: todos[f].marca }; });
+    return mapa;
+  }, revisar);
+}
+
+/** Catálogo de productos con su tipo de cambio (los precios también se editan en la hoja). */
+function catalogoCache_(revisar) {
+  return fuenteConHuella_('catalogo', 'catalogo', 600, () => {
+    const hoja = hojaCatalogo_();
+    return { productos: getCatalogo_(hoja), tipoCambio: tipoCambioCatalogo_(hoja) };
+  }, revisar);
+}
+
+/** Clientes sugeridos (salen de la hoja Cotizaciones). */
+function clientesCache_(revisar) {
+  return fuenteConHuella_('clientes', 'cotizaciones', 600, getClientes, revisar);
+}
+
+/** IVA y vigencia para la interfaz (la Config completa se sigue leyendo fresca al guardar). */
+function configLigera_() {
+  return enCache_('config', [], TTL_CACHE, () => {
+    const cfg = getConfig_();
+    return { ivaTasa: cfg.IVA_TASA, vigenciaDias: cfg.VIGENCIA_DIAS };
+  });
+}
+
+/** Permisos del usuario del token (solo para mostrar pestañas: cada función los vuelve a revisar). */
+function permisosUsuario_() {
+  if (esSoloRequisicion_()) return { cobranza: false, desbloqueo: false, compras: false, requisicion: true };
+  return { cobranza: esCobranza_(), desbloqueo: esAdminDesbloqueo_(), compras: esCompras_(), requisicion: esRequisicion_() };
+}
+
+/** Catálogo sin precios (para sugerir descripción y unidad en requisiciones). */
+const catalogoSinPrecios_ = productos => productos.map(p => ({ clave: p.clave, descripcion: p.descripcion, unidad: p.unidad }));
+
+/** Corre f() y, si falla, anota el error y devuelve null (una lista que falla no tumba toda la carga). */
+function intentar_(errores, que, f) {
+  try {
+    return f();
+  } catch (e) {
+    errores.push(que + ': ' + e.message);
+    return null;
+  }
+}
+
+/**
+ * Carga inicial en una sola llamada: roles y, según el rol, catálogo, clientes y proyectos (cotizar), proyectos y "mis
+ * requisiciones" (requisiciones), proyectos y requisiciones (compras), proyectos y resumen si ya está en caché (cobranza).
+ * Con SOLO_REQUISICION: solo lo de requisiciones y el catálogo sin precios.
+ */
+function bootstrap() {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + '.');
+  const permisos = permisosUsuario_(), solo = esSoloRequisicion_(), errores = [];
+  const cfg = configLigera_(), cat = catalogoCache_();
+  const d = {
+    versiones: versiones_(), permisos: permisos, soloRequisicion: solo, usuario: usuarioActual_(), vendedor: VENDEDOR_,
+    ivaTasa: cfg.ivaTasa, vigenciaDias: cfg.vigenciaDias, marcas: MARCAS,
+    catalogo: solo ? catalogoSinPrecios_(cat.productos) : cat.productos, tipoCambio: solo ? null : cat.tipoCambio,
+    clientes: [], proyectos: [], errores: errores,
+  };
+  if (!solo) {
+    d.clientes = intentar_(errores, 'Clientes', clientesCache_) || [];
+    d.proyectos = intentar_(errores, 'Proyectos', () => listarProyectos('', false)) || [];
+  }
+  // Las listas de requisiciones y el resumen de cobranza solo van si ya están en caché (lo normal): con el caché vacío
+  // (nadie entró en horas) costarían varios segundos, y la interfaz los pide al abrir su pestaña
+  if (permisos.requisicion) {
+    d.req = { proyectos: intentar_(errores, 'Proyectos de requisiciones', () => listarProyectosRequisicion('')),
+      mias: intentar_(errores, 'Mis requisiciones', () => misRequisiciones(true)) };
+  }
+  if (permisos.compras) {
+    d.com = { proyectos: intentar_(errores, 'Proyectos de compras', () => listarProyectosCompras('')),
+      requisiciones: intentar_(errores, 'Requisiciones', () => listarRequisiciones('', '', true)) };
+  }
+  if (permisos.cobranza) {
+    d.cob = { proyectos: intentar_(errores, 'Proyectos de cobranza', () => listarProyectosCobranza('')),
+      resumen: intentar_(errores, 'Resumen de cobranza', () => resumenCobranzaGeneral(true)) };
+  }
+  return d;
+}
+
+/** Nombre anterior de la carga inicial (por si un navegador tiene la interfaz vieja en caché). */
+function getDatosIniciales() {
+  return bootstrap();
+}
+
+/**
+ * Consulta ligera de la interfaz (cada 20 s con la pestaña visible, al cambiar de pestaña y al abrir un buscador de
+ * proyectos). vc = versiones que tiene el navegador; ctx = lo que está viendo {cobProyecto, cobResumen, comProyecto, req,
+ * rcBuscar, rcEstado}. Devuelve las versiones, los permisos y solo las listas o vistas que cambiaron y que su rol puede ver.
+ */
+function sincronizar(vc, ctx) {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + '.');
+  vc = vc || {}; ctx = ctx || {};
+  const permisos = permisosUsuario_(), solo = esSoloRequisicion_(), errores = [];
+  // Hojas que se editan a mano: cada pocos minutos (para todos) se releen y, si cambiaron, sube su versión
+  intentar_(errores, 'Proyectos', () => proyectosCache_(true));
+  if (permisos.cobranza || permisos.compras) intentar_(errores, 'Contratos', () => contratosCache_(true));
+  intentar_(errores, 'Catálogo', () => catalogoCache_(true));
+  if (!solo) intentar_(errores, 'Clientes', () => clientesCache_(true));
+  const v = versiones_(true);
+  const cambio = c => String(vc[c] == null ? '' : vc[c]) !== String(v[c]);
+  const r = { versiones: v, permisos: permisos, soloRequisicion: solo, cambios: COLECCIONES.filter(cambio), errores: errores };
+  if (!r.cambios.length) return r;
+  const algo = (...cs) => cs.some(cambio);
+
+  if (algo('catalogo')) {
+    const cat = catalogoCache_();
+    r.catalogo = solo ? catalogoSinPrecios_(cat.productos) : cat.productos;
+    if (!solo) r.tipoCambio = cat.tipoCambio;
+  }
+  if (!solo) {
+    if (algo('cotizaciones')) r.clientes = intentar_(errores, 'Clientes', clientesCache_);
+    if (algo('proyectos', 'contratos')) r.proyectos = intentar_(errores, 'Proyectos', () => listarProyectos('', false));
+  }
+  if (permisos.requisicion) {
+    if (algo('proyectos')) r.reqProyectos = intentar_(errores, 'Proyectos de requisiciones', () => listarProyectosRequisicion(''));
+    if (algo('requisiciones', 'oc', 'pagosProveedores', 'proyectos')) r.misReq = intentar_(errores, 'Mis requisiciones', misRequisiciones);
+  }
+  if (permisos.compras) {
+    if (algo('proyectos', 'contratos')) r.comProyectos = intentar_(errores, 'Proyectos de compras', () => listarProyectosCompras(''));
+    if (algo('requisiciones', 'oc', 'pagosProveedores', 'proyectos')) {
+      r.comRequisiciones = intentar_(errores, 'Requisiciones', () => listarRequisiciones(ctx.rcBuscar || '', ctx.rcEstado || ''));
+      if (ctx.req) r.requisicion = intentar_(errores, 'Requisición', () => getRequisicion(ctx.req));
+    }
+    if (ctx.comProyecto && algo('oc', 'contratos', 'proyectos')) {
+      r.comprasProyecto = intentar_(errores, 'Órdenes del proyecto', () => getComprasProyecto(ctx.comProyecto));
+    }
+  }
+  if (permisos.cobranza) {
+    if (algo('proyectos', 'contratos')) r.cobProyectos = intentar_(errores, 'Proyectos de cobranza', () => listarProyectosCobranza(''));
+    if (ctx.cobProyecto && algo('proyectos', 'contratos', 'cotizaciones', 'pagosCobranza', 'oc')) {
+      r.cobranzaProyecto = intentar_(errores, 'Cobranza del proyecto', () => getCobranzaProyecto(ctx.cobProyecto));
+    }
+    if (ctx.cobResumen && algo('proyectos', 'contratos', 'pagosCobranza', 'oc')) {
+      r.resumen = intentar_(errores, 'Resumen de cobranza', () => resumenCobranzaGeneral());
+    }
+  }
+  return r;
 }
 
 // ====== 2. INSTALACIÓN (ejecutar 1 sola vez) ======
@@ -654,44 +978,6 @@ function guardarProducto(p) {
   }
 }
 
-/** Llamada por la app al cargar. */
-function getDatosIniciales() {
-  const cfg = getConfig_();
-  const hojaCat = hojaCatalogo_();
-  if (esSoloRequisicion_()) {
-    // Solo la pestaña Requisiciones: catálogo sin precios (para sugerir descripción y unidad), sin clientes ni proyectos
-    return {
-      soloRequisicion: true, ivaTasa: cfg.IVA_TASA, marcas: MARCAS,
-      catalogo: getCatalogo_(hojaCat).map(p => ({ clave: p.clave, descripcion: p.descripcion, unidad: p.unidad })),
-      tipoCambio: null, clientes: [], proyectos: [], usuario: usuarioActual_(), vendedor: VENDEDOR_,
-      permisos: { cobranza: false, desbloqueo: false, compras: false, requisicion: true },
-    };
-  }
-  return {
-    ivaTasa: cfg.IVA_TASA,
-    vigenciaDias: cfg.VIGENCIA_DIAS,
-    marcas: MARCAS,
-    catalogo: getCatalogo_(hojaCat),
-    tipoCambio: tipoCambioCatalogo_(hojaCat),
-    clientes: getClientes(),
-    proyectos: proyectosParaInicio_(),
-    usuario: usuarioActual_(),
-    vendedor: VENDEDOR_,
-    // Solo para mostrar u ocultar las pestañas Cobranza y Compras; cada función lo vuelve a revisar
-    permisos: { cobranza: esCobranza_(), desbloqueo: esAdminDesbloqueo_(), compras: esCompras_(), requisicion: esRequisicion_() },
-  };
-}
-
-/** Proyectos activos para el buscador. Si fallan, la app carga igual (se puede cotizar "Sin proyecto"). */
-function proyectosParaInicio_() {
-  try {
-    return listarProyectos('', false);
-  } catch (e) {
-    console.warn('Sin lista de proyectos: ' + e.message);
-    return [];
-  }
-}
-
 /**
  * Clientes que ya cotizaron, tomados de la hoja Cotizaciones.
  * Si se borran sus filas de la base de datos, dejan de sugerirse.
@@ -714,14 +1000,18 @@ function listarCotizaciones(busqueda) {
   const nombres = nombresDeVendedores(filas);
   const datos = filas.reverse();
   const q = String(busqueda || '').toLowerCase().trim();
+  // Folio del proyecto con su clave (PRY-AAAA-NNNN-XXX); si no se puede leer Proyectos, el de la hoja
+  let proyectos = {};
+  try { proyectos = mapaProyectos_(); } catch (e) { /* el historial carga igual */ }
+  const proyectoDe = r => { const p = proyectos[String(r[19] || '').toUpperCase()]; return p ? p.folioVisible : r[19]; };
   return datos
-    .filter(r => !q || (r[0] + ' ' + r[2] + ' ' + r[3] + ' ' + (r[19] || '')).toLowerCase().includes(q))
+    .filter(r => !q || (r[0] + ' ' + r[2] + ' ' + r[3] + ' ' + (proyectoDe(r) || '')).toLowerCase().includes(q))
     .slice(0, 100)
     .map(r => ({
       folio: r[0], fecha: r[1], cliente: r[2], empresa: r[3], total: r[9], elaboro: r[10], pdf: r[11],
       vendedor: vendedorDeFila(r, nombres),
       // Filas anteriores a Proyectos (o cotizadas sin proyecto)
-      proyecto: r[19] || 'Sin proyecto',
+      proyecto: proyectoDe(r) || 'Sin proyecto',
       moneda: r[20] || 'MXN', // filas anteriores a USD: pesos
     }));
 }
@@ -750,7 +1040,8 @@ function guardarCotizacion(payload) {
   const cache = CacheService.getScriptCache();
   const claveCache = idSolicitud ? 'REQ_' + idSolicitud : '';
   // Proyecto opcional: vacío = "Sin proyecto" (el PDF va a la carpeta del año, como antes)
-  const proyectoFolio = String((payload && payload.proyectoFolio) || '').trim().toUpperCase();
+  // Siempre la llave interna PRY-AAAA-NNNN en la columna T, aunque llegue el folio con clave
+  const proyectoFolio = folioInterno(payload && payload.proyectoFolio);
 
   const lock = LockService.getScriptLock();
   // Evita folios duplicados si dos personas guardan a la vez
@@ -861,9 +1152,10 @@ function logoDataUrl_(fileId) {
 
 const ENCABEZADOS_PROYECTOS = [
   'Folio', 'Fecha', 'Nombre', 'Cliente', 'cliente_id', 'Ubicación', 'Estado', 'carpeta_id',
-  'vendedor_email', 'vendedor_nombre', 'vendedor_apellido'
+  'vendedor_email', 'vendedor_nombre', 'vendedor_apellido', 'clave'
 ];
 const COL_ESTADO_PROYECTO = 7;   // G
+const COL_CLAVE_PROYECTO = 12;   // L
 const COL_CARPETA_PROYECTO = 8;  // H
 const ESTADOS_PROYECTO = ['Activo', 'Cerrado', 'Cancelado'];
 // Sin "Pagos" ni "Órdenes de compra": comprobantes y órdenes van en las carpetas de cobranza y compras (no visibles para
@@ -899,21 +1191,19 @@ function hojaProyectos_() {
   if (ENCABEZADOS_PROYECTOS.some((h, i) => actuales[i] !== h)) {
     hoja.getRange(1, 1, 1, n).setValues([ENCABEZADOS_PROYECTOS])
       .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+    hoja.getRange(1, COL_CLAVE_PROYECTO, hoja.getMaxRows(), 1).setNumberFormat('@'); // la clave es texto (columna L, al final)
   }
   return hoja;
 }
 
-/** Proyectos con búsqueda por folio, cliente o nombre. Por omisión solo los Activos; los más recientes primero. */
+/** Proyectos con búsqueda por folio, clave, cliente o nombre. Por omisión solo los Activos; los más recientes primero. */
 function listarProyectos(busqueda, incluirInactivos) {
-  const hoja = hojaProyectos_();
-  const filas = hoja.getLastRow() > 1
-    ? hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
   // El buscador de cotizaciones (solo activos) no muestra proyectos con contrato firmado
-  const firmados = incluirInactivos ? {} : foliosConContratoFirmado_();
-  return filtrarProyectos(proyectosDesdeFilas(filas).filter(p => !firmados[p.folio.toUpperCase()]),
-    busqueda, incluirInactivos, 50)
-    .map(p => ({ folio: p.folio, nombre: p.nombre, cliente: p.cliente, clienteId: p.clienteId,
-      ubicacion: p.ubicacion, estado: p.estado, fecha: p.fecha }));
+  const contratos = incluirInactivos ? {} : contratosCache_();
+  return filtrarProyectos(proyectosCache_().filter(p => {
+    const c = contratos[p.folio.toUpperCase()];
+    return !(c && c.estado === ESTADO_FIRMADO);
+  }), busqueda, incluirInactivos, 50).map(proyectoParaLista_);
 }
 
 /** Error de proyecto inexistente o no Activo: doPost lo manda con codigo 'PROYECTO' y la interfaz limpia el campo. */
@@ -925,7 +1215,7 @@ function errorProyecto_(mensaje) {
 
 /** Proyecto por folio (con su número de fila), o null. */
 function buscarProyecto_(hoja, folio) {
-  const buscado = String(folio || '').trim().toUpperCase();
+  const buscado = folioInterno(folio);
   if (!buscado || hoja.getLastRow() < 2) return null;
   const filas = hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues();
   const lista = proyectosDesdeFilas(filas);
@@ -936,9 +1226,10 @@ function buscarProyecto_(hoja, folio) {
 }
 
 /**
- * Alta de proyecto (desde "Nuevo proyecto" en la interfaz). p = {nombre, ubicacion, cliente:{nombre, empresa, rfc},
- * idSolicitud}. Folio PRY-AAAA-NNNN bajo el mismo candado que las cotizaciones; primero crea la carpeta y luego la
- * fila, para que no quede un proyecto registrado sin carpeta.
+ * Alta de proyecto (desde "Nuevo proyecto" en la interfaz). p = {nombre, ubicacion, clave, cliente:{nombre, empresa, rfc},
+ * idSolicitud}. Folio PRY-AAAA-NNNN bajo el mismo candado que las cotizaciones (la clave de 3 letras va en la columna L y
+ * se muestra como PRY-AAAA-NNNN-XXX); primero crea la carpeta y luego la fila, para que no quede un proyecto registrado
+ * sin carpeta.
  */
 function crearProyecto(p) {
   const vendedor = VENDEDOR_;
@@ -962,22 +1253,69 @@ function crearProyecto(p) {
     const hoja = hojaProyectos_();
     const folio = siguienteFolio_(PREFIJO_PROYECTO, hoja, 'CONSECUTIVO_PROY_');
     const ahora = new Date();
-    const carpeta = crearCarpetaProyecto_(folio, datos, ahora.getFullYear());
+    const carpeta = crearCarpetaProyecto_(folioVisible(folio, datos.clave), datos, ahora.getFullYear());
 
     const t = textoCelda;
     hoja.appendRow([
       folio, ahora, t(datos.nombre), t(datos.cliente), t(datos.clienteId), t(datos.ubicacion), 'Activo', carpeta.getId(),
-      t(vendedor.email), t(vendedor.nombre), t(vendedor.apellido),
+      t(vendedor.email), t(vendedor.nombre), t(vendedor.apellido), datos.clave,
     ]);
     SpreadsheetApp.flush();
 
-    const resultado = { folio: folio, nombre: datos.nombre, cliente: datos.cliente, clienteId: datos.clienteId,
-      ubicacion: datos.ubicacion, estado: 'Activo', url: carpeta.getUrl() };
+    const resultado = { folio: folio, clave: datos.clave, folioVisible: folioVisible(folio, datos.clave), nombre: datos.nombre,
+      cliente: datos.cliente, clienteId: datos.clienteId, ubicacion: datos.ubicacion, estado: 'Activo',
+      fecha: Utilities.formatDate(ahora, 'America/Mexico_City', 'dd/MM/yyyy'), url: carpeta.getUrl() };
     if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
     return resultado;
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * Correr desde el editor: clave para los proyectos que no tienen (la sugerida con su nombre) y su carpeta principal (por
+ * carpeta_id) pasa de "PRY-AAAA-NNNN — …" a "PRY-AAAA-NNNN-XXX — …". Esta función solo muestra en el registro lo que haría;
+ * asignarClavesProyectosAplicar() lo hace. Una carpeta renombrada a mano (que no empieza con su folio) no se toca. Las
+ * carpetas de Cobranza y Compras se quedan con el folio corto: se buscan por nombre.
+ */
+function asignarClavesProyectos(aplicar) {
+  const cambios = conCandado_(() => {
+    const hoja = hojaProyectos_();
+    const filas = hoja.getLastRow() > 1
+      ? hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
+    const lista = [];
+    filas.forEach((r, i) => {
+      const folio = String(r[0] || '').trim();
+      if (!folio || String(r[11] || '').trim()) return; // ya tiene clave: no cambia
+      const clave = claveSugerida(r[2]);
+      const x = { fila: i + 2, folio: folio, nombre: String(r[2] || ''), clave: clave, carpeta: '(sin carpeta)' };
+      try {
+        const carpeta = DriveApp.getFolderById(String(r[7] || ''));
+        const actual = carpeta.getName();
+        if (actual === folio || actual.indexOf(folio + ' ') === 0) {
+          x.carpeta = actual + '  →  ' + folioVisible(folio, clave) + actual.slice(folio.length);
+          if (aplicar) carpeta.setName(folioVisible(folio, clave) + actual.slice(folio.length));
+        } else {
+          x.carpeta = actual + '  (renombrada a mano: no se toca)';
+        }
+      } catch (e) {
+        x.carpeta = '(no se encontró la carpeta: ' + e.message + ')';
+      }
+      if (aplicar) hoja.getRange(i + 2, COL_CLAVE_PROYECTO).setNumberFormat('@').setValue(clave);
+      lista.push(x);
+    });
+    if (aplicar) SpreadsheetApp.flush();
+    return lista;
+  });
+  if (aplicar && cambios.length) subirVersiones_(['proyectos']);
+  Logger.log((aplicar ? 'APLICADO' : 'VISTA PREVIA (no cambió nada; para aplicar corre asignarClavesProyectosAplicar)') +
+    ' · ' + cambios.length + ' proyecto(s) sin clave');
+  cambios.forEach(x => Logger.log(x.folio + ' "' + x.nombre + '" → ' + folioVisible(x.folio, x.clave) + ' · carpeta: ' + x.carpeta));
+  return cambios;
+}
+
+function asignarClavesProyectosAplicar() {
+  return asignarClavesProyectos(true);
 }
 
 /** Carpeta "Proyectos" junto a la base de datos (en la carpeta maestra). Se crea sola y se guarda en PROYECTOS_FOLDER_ID. */
@@ -1007,7 +1345,7 @@ function subcarpeta_(padre, nombre) {
   return padre.createFolder(nombre);
 }
 
-/** Proyectos/AAAA/<folio> — <cliente> — <nombre>/ con sus subcarpetas. */
+/** Proyectos/AAAA/<folio con clave> — <cliente> — <nombre>/ con sus subcarpetas. */
 function crearCarpetaProyecto_(folio, datos, anio) {
   const carpetaAnio = subcarpeta_(carpetaProyectos_(), String(anio));
   const carpeta = carpetaAnio.createFolder(nombreCarpetaProyecto(folio, datos.cliente, datos.nombre));
@@ -1028,7 +1366,7 @@ function subcarpetaProyecto_(proyecto, nombreSub) {
   } catch (e) { carpeta = null; }
   if (!carpeta) {
     const anio = Number(String(proyecto.folio).split('-')[1]) || new Date().getFullYear();
-    carpeta = crearCarpetaProyecto_(proyecto.folio, proyecto, anio);
+    carpeta = crearCarpetaProyecto_(folioVisible(proyecto.folio, proyecto.clave), proyecto, anio);
     proyecto.carpetaId = carpeta.getId();
     if (proyecto.hoja && proyecto.fila) proyecto.hoja.getRange(proyecto.fila, COL_CARPETA_PROYECTO).setValue(carpeta.getId());
   }
@@ -1073,7 +1411,7 @@ function errorPermiso_(mensaje) {
 /** ¿El usuario del token está en la lista de correos de la propiedad (rol)? Sin token (editor) o sin la propiedad: no. */
 function enRol_(propiedad) {
   if (!VENDEDOR_) return false;
-  const lista = correosDeLista(PropertiesService.getScriptProperties().getProperty(propiedad), DOMINIO_HELGEN);
+  const lista = correosDeLista(propiedades_()[propiedad], DOMINIO_HELGEN);
   return lista.indexOf(String(VENDEDOR_.email).toLowerCase()) !== -1;
 }
 
@@ -1269,16 +1607,23 @@ function datosCobranza_(libro, folio) {
   return { hojas: { contratos: hC, esquemas: hE, pagos: hP }, contrato: contrato, etapas: etapas, pagos: pagos };
 }
 
-/** {"PRY-2026-0001": <contrato>, …} de proyectos con contrato firmado. Sin libro de cobranza: ninguno. */
-function contratosFirmados_() {
+/** {"PRY-2026-0001": <contrato>, …} de todos los contratos (aceptados y firmados), leídos de la hoja. Sin libro: ninguno. */
+function contratosDelLibro_() {
   const libro = libroCobranzaSiExiste_();
   const mapa = {};
   if (!libro) return mapa;
   const hoja = libro.getSheetByName('Contratos');
   if (!hoja) return mapa;
   filasCobranza_(hoja, 'Contratos').forEach((r, i) => {
-    if (String(r[7]) === ESTADO_FIRMADO) mapa[String(r[0]).toUpperCase()] = contratoDesdeFila_(r, i + 2);
+    if (String(r[0] || '').trim()) mapa[String(r[0]).toUpperCase()] = contratoDesdeFila_(r, i + 2);
   });
+  return mapa;
+}
+
+/** {"PRY-2026-0001": <contrato>, …} de proyectos con contrato firmado. Sin libro de cobranza: ninguno. */
+function contratosFirmados_() {
+  const todos = contratosDelLibro_(), mapa = {};
+  Object.keys(todos).forEach(f => { if (todos[f].estado === ESTADO_FIRMADO) mapa[f] = todos[f]; });
   return mapa;
 }
 
@@ -1333,8 +1678,7 @@ function vistaCobranza_(libro, proyecto) {
   const c = d.contrato;
   const resumen = c && d.etapas.length ? resumenCobranza(c, d.etapas, d.pagos) : null;
   return {
-    proyecto: { folio: proyecto.folio, nombre: proyecto.nombre, cliente: proyecto.cliente, estado: proyecto.estado,
-      ubicacion: proyecto.ubicacion },
+    proyecto: datosProyectoCompras_(proyecto),
     cotizaciones: cotizacionesDeProyecto_(proyecto.folio),
     contrato: c ? { cotizacion: c.cotizacion, marca: c.marca, moneda: c.moneda, subtotal: c.subtotal, iva: c.iva,
       total: c.total, estado: c.estado, aceptadaPor: c.aceptadaPor, fechaAceptacion: c.fechaAceptacion,
@@ -1350,7 +1694,7 @@ function vistaCobranza_(libro, proyecto) {
     puedePagar: !!c && c.estado === ESTADO_FIRMADO,
     puedeDesbloquear: !!c && c.estado === ESTADO_FIRMADO && esAdminDesbloqueo_(),
     // Solo llega al rol de cobranza (vistaCobranza_ se llama después de exigirCobranza_)
-    margen: c ? margenDeContrato_(c) : null,
+    margen: c ? margenDeContrato_(c) : margenSinContrato_(proyecto.folio),
     metodos: METODOS_PAGO,
     hoy: hoyIso_(),
   };
@@ -1369,6 +1713,16 @@ function margenDeContrato_(contrato) {
   }
 }
 
+/** Sin cotización aceptada no hay margen: solo el costo de las órdenes de compra vigentes, por moneda. null si no hay. */
+function margenSinContrato_(proyectoFolio) {
+  try {
+    const ordenes = ordenesDeProyecto_(libroComprasSiExiste_(), proyectoFolio).filter(o => o.estado !== OC_CANCELADA);
+    return ordenes.length ? { sinContrato: true, costos: costosDeOrdenes(ordenes, 'MXN') } : null;
+  } catch (e) {
+    return { error: 'No se pudo calcular el costo de las órdenes: ' + e.message };
+  }
+}
+
 /** Candado de script (el mismo de folios) alrededor de una función. */
 function conCandado_(f) {
   const lock = LockService.getScriptLock();
@@ -1383,10 +1737,10 @@ function conCandado_(f) {
 /** Proyectos para el buscador de Cobranza (todos los estados), con el estado de su contrato. */
 function listarProyectosCobranza(busqueda) {
   exigirCobranza_();
-  const libro = libroCobranza_();
-  const estados = {};
-  filasCobranza_(hojaCobranza_(libro, 'Contratos'), 'Contratos').forEach(r => { estados[String(r[0]).toUpperCase()] = String(r[7]); });
-  return listarProyectos(busqueda, true).map(p => Object.assign(p, { contrato: estados[p.folio.toUpperCase()] || '' }));
+  // La primera vez que alguien de cobranza entra se crean la carpeta y el libro (después ya no se abre aquí)
+  if (!PropertiesService.getScriptProperties().getProperty(AREA_COBRANZA.propLibro)) libroCobranza_();
+  const contratos = contratosCache_();
+  return listarProyectos(busqueda, true).map(p => Object.assign(p, { contrato: (contratos[p.folio.toUpperCase()] || {}).estado || '' }));
 }
 
 function getCobranzaProyecto(folio) {
@@ -1399,17 +1753,21 @@ function getCobranzaProyecto(folio) {
  * Resumen de cobranza de todos los proyectos con contrato (solo rol de cobranza; solo lee). Lee una vez Contratos, Esquemas,
  * Pagos, Proyectos y las órdenes de compra, y calcula con resumenGeneralCobranza (las mismas cifras que la vista de cada proyecto).
  */
-function resumenCobranzaGeneral() {
+function resumenCobranzaGeneral(soloSiHay) {
   exigirCobranza_();
+  // En caché por versiones (contratos, pagos, órdenes y proyectos); soloSiHay = no calcularlo si no está (carga inicial)
+  return enCache_('resumenCob', ['proyectos', 'contratos', 'pagosCobranza', 'oc'], TTL_CACHE,
+    soloSiHay ? null : resumenCobranzaDeHojas_) || null;
+}
+
+function resumenCobranzaDeHojas_() {
   const libro = libroCobranza_();
   const contratos = filasCobranza_(hojaCobranza_(libro, 'Contratos'), 'Contratos')
     .map((r, i) => contratoDesdeFila_(r, i + 2)).filter(c => c.proyectoFolio);
   const esquemas = filasCobranza_(hojaCobranza_(libro, 'Esquemas'), 'Esquemas')
     .map(r => ({ proyectoFolio: String(r[0]), orden: Number(r[1]), etapa: String(r[2]), porcentaje: Number(r[3]) }));
   const pagos = filasCobranza_(hojaCobranza_(libro, 'Pagos'), 'Pagos').map((r, i) => pagoDesdeFila_(r, i + 2));
-  const hoja = hojaProyectos_();
-  const proyectos = proyectosDesdeFilas(hoja.getLastRow() > 1
-    ? hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : []);
+  const proyectos = proyectosCache_();
   const libroCompras = libroComprasSiExiste_();
   const ordenes = libroCompras
     ? filasDeArea_(hojaCompras_(libroCompras, 'OrdenesCompra'), HOJAS_COMPRAS, 'OrdenesCompra')
@@ -1780,31 +2138,40 @@ function proyectoParaCompras_(folio) {
   return proyecto;
 }
 
+/**
+ * Moneda y línea de negocio de las órdenes de un proyecto: las de su cotización aceptada (firmada o no). Sin aceptada,
+ * MXN y sin línea. marcarAceptada no deja aceptar otra moneda si ya hay órdenes vigentes (el margen nunca mezcla monedas).
+ */
+function monedaDeProyecto_(contrato) {
+  return { moneda: contrato ? contrato.moneda : 'MXN', marca: contrato ? contrato.marca : '', sinContrato: !contrato,
+    contrato: contrato ? contrato.estado : '' };
+}
+
+/** Datos del proyecto que ven compras y requisiciones (sin montos del contrato). */
+function datosProyectoCompras_(p) {
+  return { folio: p.folio, clave: p.clave || '', folioVisible: p.folioVisible || p.folio, nombre: p.nombre, cliente: p.cliente,
+    estado: p.estado, ubicacion: p.ubicacion };
+}
+
 /** Respuesta para "Órdenes por proyecto" en la pestaña Compras: proyecto, moneda y órdenes. Sin montos del contrato ni margen. */
 function vistaCompras_(libro, proyecto) {
-  const c = contratosFirmados_()[proyecto.folio.toUpperCase()] || null;
+  const m = monedaDeProyecto_(contratosDelLibro_()[proyecto.folio.toUpperCase()] || null);
   return {
-    proyecto: { folio: proyecto.folio, nombre: proyecto.nombre, cliente: proyecto.cliente, estado: proyecto.estado,
-      ubicacion: proyecto.ubicacion },
-    moneda: c ? c.moneda : '',
-    marca: c ? c.marca : '',
+    proyecto: datosProyectoCompras_(proyecto),
+    moneda: m.moneda,
+    marca: m.marca,
+    sinContrato: m.sinContrato,
     ordenes: ordenesDeProyecto_(libro, proyecto.folio).map(o => { const x = Object.assign({}, o); delete x.fila; return x; }).reverse(),
     hoy: hoyIso_(),
   };
 }
 
-/** Proyectos Activos con contrato firmado (con su moneda; sin montos), para ver sus órdenes. */
+/** Proyectos Activos y Cerrados (con o sin contrato; sin montos), con la moneda de sus órdenes, para ver sus órdenes. */
 function listarProyectosCompras(busqueda) {
   exigirCompras_();
-  const firmados = contratosFirmados_();
-  const hoja = hojaProyectos_();
-  const filas = hoja.getLastRow() > 1 ? hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
-  return filtrarProyectos(proyectosDesdeFilas(filas).filter(p => firmados[p.folio.toUpperCase()]), busqueda, false, 50)
-    .map(p => {
-      const c = firmados[p.folio.toUpperCase()];
-      return { folio: p.folio, nombre: p.nombre, cliente: p.cliente, ubicacion: p.ubicacion, estado: p.estado, fecha: p.fecha,
-        moneda: c.moneda, marca: c.marca };
-    });
+  const contratos = contratosCache_();
+  return filtrarProyectos(proyectosCache_().filter(p => p.estado !== 'Cancelado'), busqueda, true, 50)
+    .map(p => Object.assign(datosProyectoCompras_(p), { fecha: p.fecha }, monedaDeProyecto_(contratos[p.folio.toUpperCase()] || null)));
 }
 
 function getComprasProyecto(folio) {
@@ -1816,16 +2183,16 @@ function getComprasProyecto(folio) {
 /**
  * Emite una orden de compra con su PDF (solo desde autorizarRequisicion, dentro del candado). d0 = {proveedor:
  * {razonSocial, rfc, contacto, correo, telefono}, fechaEntrega, lugarEntrega, condicionesPago, moneda, tipoCambio, ivaTasa,
- * renglones: [{clave, descripcion, unidad, cantidad, costo}], notas}. Solo en proyectos Activos con contrato firmado. La línea
- * de negocio sale del contrato (nunca del navegador); el costo es el capturado (nunca el precio de venta del catálogo).
+ * renglones: [{clave, descripcion, unidad, cantidad, costo}], notas}. En proyectos Activos y Cerrados, con o sin contrato.
+ * La moneda del proyecto y la línea de negocio salen de la cotización aceptada (sin aceptada: MXN y sin línea; nunca del
+ * navegador); el costo es el capturado (nunca el precio de venta del catálogo).
  */
 function emitirOrdenCompra_(libro, d0, proyecto, reqFolio) {
   const cfg = getConfig_();
-  if (proyecto.estado !== 'Activo') {
-    throw new Error('El proyecto ' + proyecto.folio + ' está ' + proyecto.estado.toLowerCase() + ': no admite órdenes de compra.');
+  if (proyecto.estado === 'Cancelado') {
+    throw new Error('El proyecto ' + proyecto.folio + ' está cancelado: no admite órdenes de compra.');
   }
-  const c = contratosFirmados_()[proyecto.folio.toUpperCase()];
-  if (!c) throw new Error('Solo se emiten órdenes de compra en proyectos con contrato firmado.');
+  const c = monedaDeProyecto_(contratosDelLibro_()[proyecto.folio.toUpperCase()] || null);
   const oc = normalizarOrdenCompra(d0, { moneda: c.moneda, ubicacion: proyecto.ubicacion, hoy: hoyIso_(), ivaTasa: cfg.IVA_TASA });
 
   const hoja = hojaCompras_(libro, 'OrdenesCompra');
@@ -1837,7 +2204,7 @@ function emitirOrdenCompra_(libro, d0, proyecto, reqFolio) {
   // PDF (razón social y datos fiscales de Helgen, iguales en Helgen y Helgen Energy)
   const html = construirHtmlOrdenCompra(Object.assign({}, oc, {
     folio: folio, fecha: Utilities.formatDate(ahora, 'America/Mexico_City', 'dd/MM/yyyy'), proveedor: proveedor,
-    proyectoFolio: proyecto.folio, reqFolio: reqFolio,
+    proyectoFolio: folioVisible(proyecto.folio, proyecto.clave), reqFolio: reqFolio,
     elaboro: elaboro + (elaboro === VENDEDOR_.email ? '' : ' (' + VENDEDOR_.email + ')'),
   }), cfg, logoDataUrl_(cfg.LOGO_FILE_ID));
   const pdf = Utilities.newBlob(html, 'text/html', folio + '.html').getAs('application/pdf')
@@ -1846,7 +2213,7 @@ function emitirOrdenCompra_(libro, d0, proyecto, reqFolio) {
 
   const t = textoCelda;
   hoja.appendRow([
-    folio, textoFecha_(hoyIso_()), proyecto.folio, MARCAS[c.marca], t(proveedor.id), t(proveedor.razonSocial), t(proveedor.rfc),
+    folio, textoFecha_(hoyIso_()), proyecto.folio, MARCAS[c.marca] || '', t(proveedor.id), t(proveedor.razonSocial), t(proveedor.rfc),
     t(proveedor.contacto), t(proveedor.correo), t(proveedor.telefono), textoFecha_(oc.fechaEntrega), t(oc.lugarEntrega),
     t(oc.condicionesPago), oc.moneda, oc.ivaTasa, oc.subtotal, oc.iva, oc.total, oc.monedaProyecto, oc.tipoCambio,
     oc.subtotalProyecto, JSON.stringify(oc.renglones), t(oc.notas), archivo.getId(), archivo.getUrl(), t(VENDEDOR_.email),
@@ -1855,7 +2222,7 @@ function emitirOrdenCompra_(libro, d0, proyecto, reqFolio) {
   ]);
   bitacora_(libro, 'Emitir orden de compra', proyecto.folio, folio + (reqFolio ? ' · ' + reqFolio : '') + ' · ' +
     proveedor.razonSocial + ' · ' + formatoMoneda(oc.total) + ' ' + oc.moneda + (oc.tipoCambio ? ' · TC ' + oc.tipoCambio + ' = ' +
-    formatoMoneda(oc.subtotalProyecto) + ' ' + oc.monedaProyecto + ' sin IVA' : '') + ' · ' + MARCAS[c.marca], '', HOJAS_COMPRAS);
+    formatoMoneda(oc.subtotalProyecto) + ' ' + oc.monedaProyecto + ' sin IVA' : '') + ' · ' + (MARCAS[c.marca] || 'sin contrato'), '', HOJAS_COMPRAS);
   return { folio: folio, url: archivo.getUrl(), total: oc.total, moneda: oc.moneda };
 }
 
@@ -1928,7 +2295,7 @@ const PREFIJO_REQ = 'REQ', PREFIJO_PGP = 'PGP';
 const SUBCARPETA_REQUISICIONES = 'Requisiciones';
 
 /** Funciones que puede llamar una cuenta de SOLO_REQUISICION (todo lo demás se le niega en doPost). */
-const FUNCIONES_SOLO_REQUISICION = ['getDatosIniciales', 'listarProyectosRequisicion', 'misRequisiciones',
+const FUNCIONES_SOLO_REQUISICION = ['bootstrap', 'sincronizar', 'getDatosIniciales', 'listarProyectosRequisicion', 'misRequisiciones',
   'guardarRequisicion', 'cancelarRequisicion', 'cerrarRequisicion'];
 
 /** ¿Solo puede usar requisiciones? (SOLO_REQUISICION; manda sobre cualquier otro rol). */
@@ -2028,13 +2395,9 @@ function escribirRenglonesReq_(libro, folio, version, renglones) {
   renglones.forEach((r, i) => hoja.appendRow([folio, version, i + 1, t(r.descripcion), r.cantidad, t(r.unidad), t(r.notas)]));
 }
 
-/** {folio: nombre} de los proyectos (para mostrar el nombre sin el cliente). */
+/** {folio: proyecto} (para mostrar el nombre sin el cliente y el folio con clave). */
 function nombresDeProyectos_() {
-  const hoja = hojaProyectos_();
-  const filas = hoja.getLastRow() > 1 ? hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
-  const mapa = {};
-  proyectosDesdeFilas(filas).forEach(p => { mapa[p.folio.toUpperCase()] = p; });
-  return mapa;
+  return mapaProyectos_();
 }
 
 /** Bytes de un archivo adjunto ({nombre, datos base64}); null si no viene. */
@@ -2056,31 +2419,38 @@ function reqParaSolicitante_(req, ren, eventos, proyectos) {
   const p = proyectos[req.proyectoFolio.toUpperCase()];
   return {
     folio: req.folio, fecha: req.fecha, proyectoFolio: req.proyectoFolio, proyectoNombre: p ? p.nombre : '',
-    estado: req.estado, motivo: req.motivo, notasRecepcion: req.notasRecepcion,
+    proyectoVisible: p ? p.folioVisible : req.proyectoFolio, estado: req.estado, motivo: req.motivo, notasRecepcion: req.notasRecepcion,
     renglones: (ren && ren.renglones) || [], eventos: eventos || [],
     puedeEditar: req.estado === REQ_DEVUELTA, puedeCancelar: req.estado === REQ_SOLICITADA || req.estado === REQ_DEVUELTA,
     puedeCerrar: req.estado === REQ_PAGADA,
   };
 }
 
-/** Proyectos donde se pueden pedir materiales: Activos con contrato firmado. Solo folio y nombre (sin cliente ni montos). */
+/**
+ * Proyectos donde se pueden pedir materiales: Activos y Cerrados, con o sin contrato (los Cancelados no). Solo folio, clave
+ * y nombre (sin cliente ni montos); se busca por folio, clave y nombre.
+ */
 function listarProyectosRequisicion(busqueda) {
   exigirRequisicion_();
-  const firmados = contratosFirmados_();
   const q = textoNormal(busqueda);
-  const proyectos = nombresDeProyectos_();
-  return Object.keys(proyectos).map(f => proyectos[f]).reverse()
-    .filter(p => p.estado === 'Activo' && firmados[p.folio.toUpperCase()])
-    .filter(p => !q || textoNormal(p.folio + ' ' + p.nombre).includes(q))
+  return proyectosCache_().slice().reverse()
+    .filter(p => p.estado !== 'Cancelado')
+    .filter(p => !q || textoNormal([p.folioVisible, p.clave, p.nombre].join(' ')).includes(q))
     .slice(0, 50)
-    .map(p => ({ folio: p.folio, nombre: p.nombre }));
+    .map(p => ({ folio: p.folio, clave: p.clave, folioVisible: p.folioVisible, nombre: p.nombre, estado: p.estado }));
 }
 
-/** Requisiciones del usuario del token (nunca las de otros), más recientes primero. */
-function misRequisiciones() {
+/** Requisiciones del usuario del token (nunca las de otros), más recientes primero. En caché por usuario y versiones. */
+function misRequisiciones(soloSiHay) {
   exigirRequisicion_();
-  const libro = libroCompras_();
   const yo = String(VENDEDOR_.email).toLowerCase();
+  return enCache_('misReq_' + yo, ['requisiciones', 'oc', 'pagosProveedores', 'proyectos'], TTL_CACHE,
+    soloSiHay ? null : () => misRequisicionesDeHojas_(yo)) || null;
+}
+
+function misRequisicionesDeHojas_(yo) {
+  const libro = libroComprasSiExiste_(); // solo lee: el libro lo crea la primera requisición
+  if (!libro) return [];
   const ren = renglonesDeReqs_(libro), ev = eventosDeReqs_(libro), proyectos = nombresDeProyectos_();
   const lista = [];
   filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
@@ -2139,9 +2509,7 @@ function guardarRequisicion(p) {
         ' renglón(es)' + (bytes ? ' · cotización nueva' : ''), '', HOJAS_COMPRAS);
     } else {
       const proyecto = proyectoParaCompras_(d0.proyectoFolio);
-      if (proyecto.estado !== 'Activo' || !contratosFirmados_()[proyecto.folio.toUpperCase()]) {
-        throw new Error('Solo se piden materiales para proyectos activos con contrato firmado.');
-      }
+      if (proyecto.estado === 'Cancelado') throw new Error('El proyecto ' + proyecto.folio + ' está cancelado: no se piden materiales.');
       const hoja = hojaReq_(libro);
       folio = siguienteFolio_(PREFIJO_REQ, hoja, 'CONSECUTIVO_REQ_');
       version = 1;
@@ -2217,9 +2585,16 @@ function notaOpcional_(notas) {
 // ---- Requisiciones: lado de compras ----
 
 /** Todas las requisiciones (compras), más recientes primero. Filtro opcional por estado y por folio/proyecto/solicitante. */
-function listarRequisiciones(busqueda, estado) {
+function listarRequisiciones(busqueda, estado, soloSiHay) {
   exigirCompras_();
-  const libro = libroCompras_();
+  const clave = 'reqs_' + String(estado || '') + '_' + textoNormal(busqueda);
+  return enCache_(clave, ['requisiciones', 'oc', 'pagosProveedores', 'proyectos'], TTL_CACHE,
+    soloSiHay ? null : () => listarRequisicionesDeHojas_(busqueda, estado)) || null;
+}
+
+function listarRequisicionesDeHojas_(busqueda, estado) {
+  const libro = libroComprasSiExiste_();
+  if (!libro) return [];
   const ren = renglonesDeReqs_(libro), proyectos = nombresDeProyectos_();
   const q = textoNormal(busqueda), e = String(estado || '').trim();
   const lista = [];
@@ -2228,10 +2603,11 @@ function listarRequisiciones(busqueda, estado) {
     if (!req.folio) return;
     const p = proyectos[req.proyectoFolio.toUpperCase()];
     const x = { folio: req.folio, fecha: req.fecha, proyectoFolio: req.proyectoFolio, proyectoNombre: p ? p.nombre : '',
+      proyectoVisible: p ? p.folioVisible : req.proyectoFolio,
       solicitante: req.solicitante, solicitanteEmail: req.solicitanteEmail, estado: req.estado, ocFolio: req.ocFolio,
       actualizado: req.actualizado, renglones: ((ren[req.folio.toUpperCase()] || {}).renglones || []).length };
     if (e && x.estado !== e) return;
-    if (q && !textoNormal([x.folio, x.proyectoFolio, x.proyectoNombre, x.solicitante, x.solicitanteEmail, x.ocFolio].join(' ')).includes(q)) return;
+    if (q && !textoNormal([x.folio, x.proyectoVisible, x.proyectoNombre, x.solicitante, x.solicitanteEmail, x.ocFolio].join(' ')).includes(q)) return;
     lista.push(x);
   });
   return lista.reverse().slice(0, 200);
@@ -2264,23 +2640,23 @@ function vistaRequisicion_(libro, folioReq) {
   const { req } = buscarReq_(libro, folioReq);
   const f = req.folio.toUpperCase();
   const proyecto = buscarProyecto_(hojaProyectos_(), req.proyectoFolio);
-  const c = contratosFirmados_()[req.proyectoFolio.toUpperCase()] || null;
+  const c = monedaDeProyecto_(contratosDelLibro_()[req.proyectoFolio.toUpperCase()] || null);
   let orden = null;
   if (req.ocFolio) { orden = buscarOrden_(libro, req.ocFolio).orden; delete orden.fila; }
   const pagos = req.ocFolio ? pagosDeOrden_(libro, req.ocFolio).map(x => { delete x.fila; return x; }) : [];
-  const proyectoActivo = !!proyecto && proyecto.estado === 'Activo' && !!c;
+  const proyectoVigente = !!proyecto && proyecto.estado !== 'Cancelado'; // Activo o Cerrado, con o sin contrato
   const r = Object.assign({}, req); delete r.fila;
   return {
     requisicion: r,
     renglones: (renglonesDeReqs_(libro)[f] || {}).renglones || [],
     eventos: eventosDeReqs_(libro)[f] || [],
-    proyecto: proyecto ? { folio: proyecto.folio, nombre: proyecto.nombre, cliente: proyecto.cliente, estado: proyecto.estado,
-      ubicacion: proyecto.ubicacion } : { folio: req.proyectoFolio, nombre: '', cliente: '', estado: '', ubicacion: '' },
-    moneda: c ? c.moneda : '', marca: c ? c.marca : '',
+    proyecto: proyecto ? datosProyectoCompras_(proyecto)
+      : { folio: req.proyectoFolio, clave: '', folioVisible: req.proyectoFolio, nombre: '', cliente: '', estado: '', ubicacion: '' },
+    moneda: c.moneda, marca: c.marca, sinContrato: c.sinContrato,
     orden: orden, pagos: pagos,
     proveedores: proveedoresDelLibro_(libro).map(p => { const x = Object.assign({}, p); delete x.fila; return x; }),
     ivaTasas: IVA_OC, metodos: METODOS_PAGO, hoy: hoyIso_(),
-    puedeAutorizar: req.estado === REQ_SOLICITADA && proyectoActivo,
+    puedeAutorizar: req.estado === REQ_SOLICITADA && proyectoVigente,
     puedeRevisar: req.estado === REQ_SOLICITADA,
     puedePagar: req.estado === REQ_AUTORIZADA && !!orden && orden.estado === OC_EMITIDA,
     puedeCancelarPago: req.estado === REQ_PAGADA,
@@ -2600,7 +2976,8 @@ function idCliente(c) {
   return 'SIN-RFC:' + textoNormal(c && c.nombre) + '|' + textoNormal(c && c.empresa);
 }
 
-/** Valida y limpia un proyecto nuevo. El cliente se guarda como "nombre — empresa" más su cliente_id. */
+/** Valida y limpia un proyecto nuevo. El cliente se guarda como "nombre — empresa" más su cliente_id; la clave (3 letras)
+ * es la capturada o, si viene vacía, la sugerida con el nombre. */
 function normalizarProyecto(p) {
   const nombre = String((p && p.nombre) || '').trim().replace(/\s+/g, ' ');
   const ubicacion = String((p && p.ubicacion) || '').trim();
@@ -2615,6 +2992,7 @@ function normalizarProyecto(p) {
     nombre: nombre, ubicacion: ubicacion,
     cliente: cli.empresa && textoNormal(cli.empresa) !== textoNormal(cli.nombre) ? cli.nombre + ' — ' + cli.empresa : cli.nombre,
     clienteId: idCliente(cli),
+    clave: validarClaveProyecto(p && p.clave, nombre),
   };
 }
 
@@ -2627,25 +3005,71 @@ function nombreCarpetaProyecto(folio, cliente, nombre) {
 
 /** Filas de la pestaña Proyectos (sin encabezado) → objetos. Columnas en ENCABEZADOS_PROYECTOS. */
 function proyectosDesdeFilas(filas) {
-  return (filas || []).filter(r => String(r[0] || '').trim()).map(r => ({
-    folio: String(r[0]).trim(),
-    fecha: r[1] instanceof Date
-      ? [r[1].getDate(), r[1].getMonth() + 1].map(x => String(x).padStart(2, '0')).join('/') + '/' + r[1].getFullYear()
-      : String(r[1] || ''),
-    nombre: String(r[2] || ''), cliente: String(r[3] || ''), clienteId: String(r[4] || ''),
-    ubicacion: String(r[5] || ''),
-    estado: String(r[6] || '').trim() || 'Activo',
-    carpetaId: String(r[7] || ''),
-  }));
+  return (filas || []).filter(r => String(r[0] || '').trim()).map(r => {
+    const folio = String(r[0]).trim(), clave = String(r[11] || '').trim().toUpperCase();
+    return {
+      folio: folio,
+      fecha: r[1] instanceof Date
+        ? [r[1].getDate(), r[1].getMonth() + 1].map(x => String(x).padStart(2, '0')).join('/') + '/' + r[1].getFullYear()
+        : String(r[1] || ''),
+      nombre: String(r[2] || ''), cliente: String(r[3] || ''), clienteId: String(r[4] || ''),
+      ubicacion: String(r[5] || ''),
+      estado: String(r[6] || '').trim() || 'Activo',
+      carpetaId: String(r[7] || ''),
+      clave: clave, folioVisible: folioVisible(folio, clave),
+    };
+  });
 }
 
-/** Busca por folio, cliente o nombre (sin acentos ni mayúsculas); más recientes primero; máximo n. */
+/** Busca por folio (con o sin clave), clave, cliente o nombre (sin acentos ni mayúsculas); más recientes primero; máximo n. */
 function filtrarProyectos(lista, busqueda, incluirInactivos, n) {
   const q = textoNormal(busqueda);
   return (lista || []).slice().reverse()
     .filter(p => incluirInactivos || p.estado === 'Activo')
-    .filter(p => !q || textoNormal(p.folio + ' ' + p.cliente + ' ' + p.nombre).includes(q))
+    .filter(p => !q || textoNormal([p.folioVisible || p.folio, p.clave, p.cliente, p.nombre].join(' ')).includes(q))
     .slice(0, n || 50);
+}
+
+// ---- Clave de proyecto: folio visible PRY-AAAA-NNNN-XXX ----
+// La llave interna sigue siendo PRY-AAAA-NNNN (proyecto_folio en Cotizaciones, Cobranza y Compras); la clave va aparte
+// (columna L de Proyectos), se sugiere con el nombre, se puede editar al crear y después no cambia.
+
+const PALABRAS_SIN_CLAVE = ['DE', 'DEL', 'LA', 'LAS', 'EL', 'LOS', 'Y', 'EN', 'PARA'];
+
+/**
+ * Clave sugerida con el nombre: mayúsculas sin acentos (Ñ → N), sin números ni símbolos y sin DE, DEL, LA, LAS, EL, LOS, Y,
+ * EN, PARA. 1 palabra = sus 3 primeras letras; 2 = 2 letras de la primera + inicial de la segunda; 3 o más = iniciales de
+ * las tres primeras. Si faltan letras se completa con X. "DROGHEDA" → DRO; "Casa del Lago" → CAL; "Planta de Agua Norte" → PAN.
+ */
+function claveSugerida(nombre) {
+  const palabras = String(nombre || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase()
+    .replace(/[^A-Z]+/g, ' ').trim().split(' ').filter(p => p && PALABRAS_SIN_CLAVE.indexOf(p) === -1);
+  let c = '';
+  if (palabras.length === 1) c = palabras[0].slice(0, 3);
+  else if (palabras.length === 2) c = palabras[0].slice(0, 2) + palabras[1].charAt(0);
+  else if (palabras.length > 2) c = palabras.slice(0, 3).map(p => p.charAt(0)).join('');
+  return (c + 'XXX').slice(0, 3);
+}
+
+/** Clave capturada: exactamente 3 letras A–Z (se aceptan minúsculas); vacía = la sugerida con el nombre. */
+function validarClaveProyecto(clave, nombre) {
+  const c = String(clave == null ? '' : clave).trim().toUpperCase();
+  if (!c) return claveSugerida(nombre);
+  if (!/^[A-Z]{3}$/.test(c)) throw new Error('La clave del proyecto debe tener exactamente 3 letras (A–Z, sin acentos ni Ñ).');
+  return c;
+}
+
+/** "PRY-2026-0002" + "DRO" → "PRY-2026-0002-DRO"; sin clave (proyectos sin asignar), el folio solo. */
+function folioVisible(folio, clave) {
+  const f = String(folio || '').trim().toUpperCase(), c = String(clave || '').trim().toUpperCase();
+  return c ? f + '-' + c : f;
+}
+
+/** Llave interna a partir de lo que llegue: "PRY-2026-0002-DRO", "pry-2026-0002" o "PRY-2026-0002" → "PRY-2026-0002". */
+function folioInterno(texto) {
+  const s = String(texto || '').trim().toUpperCase();
+  const m = s.match(/^(PRY-\d{4}-\d{4})(-[A-Z]{3})?$/);
+  return m ? m[1] : s;
 }
 
 // ---- Monedas (MXN / USD) ----
@@ -3085,7 +3509,8 @@ function resumenGeneralCobranza(d) {
       margenError = e.message;
     }
     renglones.push({
-      folio: p.folio, nombre: p.nombre, cliente: p.cliente, estadoProyecto: p.estado, marca: c.marca, moneda: c.moneda,
+      folio: p.folio, folioVisible: p.folioVisible || p.folio, nombre: p.nombre, cliente: p.cliente, estadoProyecto: p.estado,
+      marca: c.marca, moneda: c.moneda,
       estadoContrato: c.estado === ESTADO_FIRMADO ? 'Firmado' : 'Por firmar', cotizacion: c.cotizacion, fechaFirma: c.fechaFirma,
       contratado: r.contratado, subtotal: r.subtotal, pagado: r.pagado, saldo: r.saldo, avance: r.avance,
       siguienteEtapa: siguiente ? siguiente.etapa : '', siguienteSaldo: siguiente ? siguiente.saldo : 0, ultimoPago: ultimoPago,

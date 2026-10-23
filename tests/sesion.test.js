@@ -23,13 +23,13 @@ const tokens={'t-bueno':BUENO,'t-gmail':{...BUENO,email:'ana@gmail.com',hd:undef
   't-otro-dominio':{...BUENO,email:'x@otra.com',hd:'otra.com'}};
 let fetches=0;
 const ctx={console,Date,JSON,
- PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperty:(k,v)=>props[k]=v})},
- CacheService:{getScriptCache:()=>({get:k=>cache[k]??null,put:(k,v)=>cache[k]=v})},
+ PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperty:(k,v)=>props[k]=v,getProperties:()=>Object.assign({},props),setProperties:o=>Object.assign(props,o)})},
+ CacheService:{getScriptCache:()=>({get:k=>cache[k]??null,put:(k,v)=>cache[k]=v,getAll:ks=>Object.fromEntries(ks.filter(k=>k in cache).map(k=>[k,cache[k]])),putAll:o=>Object.assign(cache,o)})},
  LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},
  Session:{getActiveUser:()=>({getEmail:()=>''})}, // despliegue anónimo: Google no da el correo
  Utilities:{formatDate:(d,tz,f)=>f==='yyyy'?'2026':'19/10/2026',newBlob:h=>({getAs:()=>({setName:n=>({name:n,html:h})})}),
-  base64Encode:b=>Buffer.from(b).toString('base64'),DigestAlgorithm:{SHA_256:'sha256'},
-  computeDigest:(a,s)=>[...require('crypto').createHash('sha256').update(s).digest()]},
+  base64Encode:b=>Buffer.from(b).toString('base64'),DigestAlgorithm:{SHA_256:'sha256',MD5:'md5'},base64EncodeWebSafe:b=>Buffer.from(b).toString('base64url'),
+  computeDigest:(a,s)=>[...require('crypto').createHash(a||'sha256').update(s).digest()]},
  UrlFetchApp:{fetch:url=>{fetches++;const t=decodeURIComponent(url.split('id_token=')[1]);const c=tokens[t];
   return{getResponseCode:()=>c?200:400,getContentText:()=>JSON.stringify(c||{error:'invalid_token'})}}},
  ContentService:{MimeType:{JSON:'json'},createTextOutput:t=>({t,setMimeType(){return this}})},

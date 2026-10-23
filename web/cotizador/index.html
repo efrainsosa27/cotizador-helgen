@@ -165,7 +165,7 @@
       <div class="proy">
         <div class="proy-fila">
           <div><label>Proyecto (opcional)</label>
-            <input id="proyecto" list="proyectosList" autocomplete="off" placeholder="Sin proyecto · busca por folio, cliente o nombre">
+            <input id="proyecto" list="proyectosList" autocomplete="off" placeholder="Sin proyecto · busca por folio, clave, cliente o nombre">
             <datalist id="proyectosList"></datalist></div>
           <button type="button" class="btn btn-sec" onclick="abrirNuevoProyecto()">+ Nuevo proyecto</button>
         </div>
@@ -174,6 +174,8 @@
           <div class="sat-titulo">Nuevo proyecto · cliente: <span id="npCliente"></span></div>
           <div class="grid">
             <div><label>Nombre del proyecto *</label><input id="npNombre" maxlength="80" placeholder="Ej. Techo solar planta 2"></div>
+            <div><label>Clave (3 letras) *</label><input id="npClave" maxlength="3" autocomplete="off" style="text-transform:uppercase" placeholder="Se sugiere con el nombre">
+              <div id="npFolio" class="nota">El folio será PRY-AAAA-NNNN-XXX. La clave ya no se cambia después.</div></div>
             <div><label>Ubicación</label><input id="npUbicacion" maxlength="200" placeholder="Ciudad, dirección u obra"></div>
           </div>
           <div class="acciones">
@@ -281,7 +283,7 @@
         <h2>1 · Resumen de cobranza</h2>
         <!-- Todos los proyectos (también sin cotización aceptada): desde aquí se marca la primera aceptada -->
         <div style="margin-bottom:12px"><label>Abrir un proyecto (todos, también sin cotización aceptada)</label>
-          <input id="resProyecto" list="cobProyectosList" autocomplete="off" placeholder="Busca por folio, cliente o nombre"></div>
+          <input id="resProyecto" list="cobProyectosList" autocomplete="off" placeholder="Busca por folio, clave, cliente o nombre"></div>
         <div id="resTotales" class="nota">Cargando…</div>
         <div class="acciones">
           <input id="resBuscar" placeholder="Buscar por folio, cliente o nombre…" oninput="pintarResumenCob()" style="flex:1; min-width:220px">
@@ -318,7 +320,7 @@
       <h2>1 · Proyecto y contrato</h2>
       <div class="proy-fila">
         <div><label>Proyecto</label>
-          <input id="cobProyecto" list="cobProyectosList" autocomplete="off" placeholder="Busca por folio, cliente o nombre">
+          <input id="cobProyecto" list="cobProyectosList" autocomplete="off" placeholder="Busca por folio, clave, cliente o nombre">
           <datalist id="cobProyectosList"></datalist></div>
         <button type="button" class="btn btn-sec" onclick="verResumenCob()">← Resumen</button>
       </div>
@@ -380,8 +382,8 @@
       <h2 id="reqTitulo">1 · Nueva requisición</h2>
       <div id="reqEditando" class="nota oculto" style="margin-bottom:10px"></div>
       <div class="proy-fila">
-        <div><label>Proyecto (activo y con contrato firmado) *</label>
-          <input id="reqProyecto" list="reqProyectosList" autocomplete="off" placeholder="Busca por folio o nombre del proyecto">
+        <div><label>Proyecto (activo o cerrado) *</label>
+          <input id="reqProyecto" list="reqProyectosList" autocomplete="off" placeholder="Busca por folio, clave o nombre del proyecto">
           <datalist id="reqProyectosList"></datalist></div>
         <button type="button" class="btn btn-sec" onclick="cargarProyectosReq()">Actualizar lista</button>
       </div>
@@ -426,15 +428,15 @@
         </div>
         <table style="margin-top:14px">
           <thead><tr><th>Folio</th><th>Fecha</th><th>Proyecto</th><th>Solicitante</th><th class="num">Renglones</th><th>Estado</th><th>Orden</th></tr></thead>
-          <tbody id="rcLista"></tbody>
+          <tbody id="rcLista"><tr><td colspan="7" class="nota">Cargando…</td></tr></tbody>
         </table>
         <div class="nota" style="margin-top:8px">Toda orden de compra sale de una requisición: ábrela para autorizarla, pagarla o cerrarla.</div>
       </div>
-      <div class="modulo">
+      <div class="modulo" id="comModOrdenes">
         <h2>2 · Órdenes por proyecto</h2>
         <div class="proy-fila">
-          <div><label>Proyecto (activo y con contrato firmado)</label>
-            <input id="comProyecto" list="comProyectosList" autocomplete="off" placeholder="Busca por folio, cliente o nombre">
+          <div><label>Proyecto (activo o cerrado)</label>
+            <input id="comProyecto" list="comProyectosList" autocomplete="off" placeholder="Busca por folio, clave, cliente o nombre">
             <datalist id="comProyectosList"></datalist></div>
           <button type="button" class="btn btn-sec" onclick="cargarProyectosCom()">Actualizar lista</button>
         </div>
@@ -578,7 +580,7 @@
     const $ = id => document.getElementById(id);
 
     // ---- Sesión ----
-    let token = null, expira = 0, gisListo = false;
+    let token = null, expira = 0, gisListo = false, correo = '';
     const pendientes = []; // llamadas que esperan a que se inicie sesión
 
     // Solo para mostrar el nombre y saber cuándo expira; quien decide es el servidor al verificar el token
@@ -598,13 +600,15 @@
 
     function guardarSesion(t) {
       const datos = leerToken(t);
-      token = t; expira = Number(datos.exp) || 0;
+      token = t; expira = Number(datos.exp) || 0; correo = String(datos.email || '').toLowerCase();
       try { sessionStorage.setItem(CLAVE_SESION, t); } catch (e) {}
       pintarUsuario(datos);
+      // La interfaz dibuja al instante las pestañas de la última sesión de este correo (solo interfaz)
+      document.dispatchEvent(new CustomEvent('sesion-lista', { detail: correo }));
     }
 
     function olvidarSesion() {
-      token = null; expira = 0;
+      token = null; expira = 0; correo = '';
       try { sessionStorage.removeItem(CLAVE_SESION); } catch (e) {}
       $('usuario').classList.add('oculto');
     }
@@ -685,6 +689,9 @@
     const script = { run: corredor(null, null) };
     window.google = window.google || {};
     google.script = script;
+    // Para la sincronización: no consultar sin sesión (si no, las consultas se forman en cola y abren el inicio de sesión)
+    window.sesionVigente = vigente;
+    window.correoSesion = () => correo;
 
     // ---- Google Identity Services (se carga con el <script> de accounts.google.com, abajo) ----
     window.iniciarGis = function () {
@@ -721,7 +728,7 @@
 <script src="https://accounts.google.com/gsi/client" async onload="iniciarGis()" onerror="errorGis()"></script>
 
 <script>
-  let IVA = 0.16, CATALOGO = [], CLIENTES = [], PROYECTOS = [], PERMISOS = {};
+  let IVA = 0.16, CATALOGO = [], CLIENTES = [], PROYECTOS = [], PERMISOS = {}, SOLO_REQ = false;
   let TC = { valor: null, fuente: '' }, MONEDA_ANT = 'MXN'; // tipo de cambio del catálogo (pestaña "Tipo de cambio")
   // Un id por cotización: si el envío se repite, el servidor devuelve el mismo folio en vez de crear otro.
   const nuevoId = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(36).slice(2));
@@ -737,27 +744,158 @@
   const monedaActual = () => $('moneda').value === 'USD' ? 'USD' : 'MXN';
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-  // ---- Arranque ----
-  google.script.run.withSuccessHandler(d => {
-    IVA = d.ivaTasa; CATALOGO = d.catalogo || []; TC = d.tipoCambio || TC;
-    PERMISOS = d.permisos || {};
+  // ---- Arranque: una sola llamada (bootstrap) ----
+  // Las pestañas se dibujan al instante con los roles de la última sesión de este correo (localStorage) y se corrigen al
+  // llegar el bootstrap. Es solo interfaz: el servidor vuelve a revisar los permisos en cada llamada.
+  let VERS = {}, BOOT = false, TAB = 'nueva';
+  const CARGADO = { reqProy: false, misReq: false, comProy: false, comReqs: false, cobProy: false };
+  const CLAVE_ROLES = 'cotizadorHelgenRoles:';
+  function leerRolesGuardados(correo) {
+    try { return correo ? JSON.parse(localStorage.getItem(CLAVE_ROLES + correo) || 'null') : null; } catch (e) { return null; }
+  }
+  function guardarRoles(permisos, solo) {
+    const correo = window.correoSesion ? correoSesion() : '';
+    try { if (correo) localStorage.setItem(CLAVE_ROLES + correo, JSON.stringify({ permisos: permisos, soloRequisicion: !!solo })); } catch (e) {}
+  }
+
+  /** Muestra u oculta las pestañas según los permisos; si la visible ya no corresponde, va a la primera permitida. */
+  function aplicarPermisos(permisos, solo) {
+    PERMISOS = permisos || {}; SOLO_REQ = !!solo;
+    ['tabNueva', 'tabHist', 'tabCat'].forEach(id => $(id).classList.toggle('oculto', SOLO_REQ));
     $('tabReq').classList.toggle('oculto', !PERMISOS.requisicion);
+    $('tabCob').classList.toggle('oculto', SOLO_REQ || !PERMISOS.cobranza);
+    $('tabCom').classList.toggle('oculto', SOLO_REQ || !PERMISOS.compras);
+    const boton = { nueva: 'tabNueva', hist: 'tabHist', cat: 'tabCat', req: 'tabReq', cob: 'tabCob', com: 'tabCom' }[TAB];
+    if ($(boton).classList.contains('oculto')) verTab(SOLO_REQ ? 'req' : 'nueva');
+  }
+  function rolesDeUltimaSesion(correo) {
+    if (BOOT) return;
+    const r = leerRolesGuardados(correo);
+    if (r) aplicarPermisos(r.permisos, r.soloRequisicion);
+  }
+  document.addEventListener('sesion-lista', e => rolesDeUltimaSesion(e.detail));
+  // Al terminar de cargar este script (verTab usa variables que se declaran más abajo)
+  setTimeout(() => { if (window.correoSesion && correoSesion()) rolesDeUltimaSesion(correoSesion()); }, 0);
+
+  google.script.run.withSuccessHandler(recibirBootstrap).withFailureHandler(mostrarError).bootstrap();
+
+  function recibirBootstrap(d) {
+    BOOT = true;
+    VERS = d.versiones || {};
+    IVA = d.ivaTasa; CATALOGO = d.catalogo || []; TC = d.tipoCambio || TC;
+    aplicarPermisos(d.permisos, d.soloRequisicion);
+    guardarRoles(d.permisos, d.soloRequisicion);
     pintarCatalogoReq();
-    if (d.soloRequisicion) {
-      // Cuenta que solo pide materiales: sin cotizaciones, historial ni catálogo (el servidor se los niega)
-      ['tabNueva', 'tabHist', 'tabCat', 'tabCob', 'tabCom'].forEach(id => $(id).classList.add('oculto'));
-      verTab('req');
-      return;
+    if (d.req) {
+      if (d.req.proyectos) recibirProyectosReq(d.req.proyectos);
+      if (d.req.mias) pintarMisReq(d.req.mias);
     }
-    recibirClientes(d.clientes);
-    recibirProyectos(d.proyectos);
-    // Las pestañas Cobranza, Compras y Requisiciones solo se muestran con permiso; el servidor lo revisa en cada llamada
-    $('tabCob').classList.toggle('oculto', !PERMISOS.cobranza);
-    $('tabCom').classList.toggle('oculto', !PERMISOS.compras);
-    $('lblIva').textContent = 'IVA (' + Math.round(IVA * 100) + '%)';
-    pintarDatalists();
-    agregarFila();
-  }).withFailureHandler(mostrarError).getDatosIniciales();
+    if (d.com) {
+      if (d.com.proyectos) recibirProyectosCom(d.com.proyectos);
+      if (d.com.requisiciones) { CARGADO.comReqs = true; pintarListaReqCom(d.com.requisiciones); }
+    }
+    if (d.cob) {
+      if (d.cob.proyectos) recibirProyectosCob(d.cob.proyectos);
+      if (d.cob.resumen) { RESUMEN = d.cob.resumen; pintarResumenCob(); }
+    }
+    if ((d.errores || []).length) console.warn('Carga inicial incompleta: ' + d.errores.join(' · '));
+    if (!d.soloRequisicion) {
+      recibirClientes(d.clientes);
+      recibirProyectos(d.proyectos);
+      $('lblIva').textContent = 'IVA (' + Math.round(IVA * 100) + '%)';
+      pintarDatalists();
+      if (!$('filas').querySelectorAll('tr').length) agregarFila();
+    }
+    verTab(TAB, true); // completa lo que falte de la pestaña visible (si el usuario ya la abrió mientras cargaba)
+    iniciarSincronizacion();
+  }
+
+  // ---- Sincronización sin recargar ----
+  // El servidor guarda una versión por colección (proyectos, requisiciones, órdenes, pagos…) que sube en cada escritura.
+  // Cada 20 s con la pestaña del navegador visible, al cambiar de pestaña y al abrir un buscador de proyectos, la interfaz
+  // manda sus versiones y recibe solo lo que cambió (el servidor decide qué puede ver cada rol).
+  const CADA_SYNC = 20000;
+  let SYNC_EN_CURSO = false, SYNC_OTRA = false, SYNC_INICIADA = false;
+  function contextoSync() {
+    return { cobResumen: !!RESUMEN, cobProyecto: COB ? COB.proyecto.folio : '', comProyecto: COM ? COM.proyecto.folio : '',
+      req: REQC ? REQC.requisicion.folio : '', rcBuscar: COM_FILTRO.buscar, rcEstado: COM_FILTRO.estado };
+  }
+  function sincronizarAhora() {
+    if (!BOOT || !(window.sesionVigente && sesionVigente())) return; // sin sesión no se forman consultas en cola
+    if (SYNC_EN_CURSO) { SYNC_OTRA = true; return; }
+    SYNC_EN_CURSO = true;
+    const fin = () => { SYNC_EN_CURSO = false; if (SYNC_OTRA) { SYNC_OTRA = false; sincronizarAhora(); } };
+    google.script.run.withSuccessHandler(r => { try { aplicarSync(r); } finally { fin(); } })
+      .withFailureHandler(err => { fin(); console.warn('Sincronización: ' + (err && err.message ? err.message : err)); })
+      .sincronizar(VERS, contextoSync());
+  }
+  function iniciarSincronizacion() {
+    if (SYNC_INICIADA) return;
+    SYNC_INICIADA = true;
+    setInterval(() => { if (document.visibilityState === 'visible') sincronizarAhora(); }, CADA_SYNC);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') sincronizarAhora(); });
+    ['proyecto', 'resProyecto', 'cobProyecto', 'comProyecto', 'reqProyecto'].forEach(id => $(id).addEventListener('focus', sincronizarAhora));
+  }
+
+  function aplicarSync(r) {
+    if (!r) return;
+    const cambioRol = JSON.stringify(r.permisos) !== JSON.stringify(PERMISOS) || !!r.soloRequisicion !== SOLO_REQ;
+    if (cambioRol) {
+      // Cambió un rol (Script Properties): las pestañas se ajustan sin recargar la página
+      aplicarPermisos(r.permisos, r.soloRequisicion);
+      guardarRoles(r.permisos, r.soloRequisicion);
+    }
+    VERS = r.versiones || VERS;
+    if (r.catalogo) {
+      CATALOGO = r.catalogo; if (r.tipoCambio) TC = r.tipoCambio;
+      pintarCatalogoReq(); if (!SOLO_REQ) pintarDatalists();
+    }
+    if (r.clientes) recibirClientes(r.clientes);
+    if (r.proyectos) recibirProyectos(r.proyectos);
+    if (r.reqProyectos) recibirProyectosReq(r.reqProyectos);
+    if (r.misReq) pintarMisReq(r.misReq);
+    if (r.comProyectos) recibirProyectosCom(r.comProyectos);
+    if (r.comRequisiciones) pintarListaReqCom(r.comRequisiciones);
+    if (r.requisicion && REQC && REQC.requisicion.folio === r.requisicion.requisicion.folio) {
+      sinInterrumpir('comVistaReq', () => pintarReqCom(r.requisicion));
+    }
+    if (r.comprasProyecto && COM && COM.proyecto.folio === r.comprasProyecto.proyecto.folio) {
+      sinInterrumpir('comModOrdenes', () => pintarCompras(r.comprasProyecto));
+    }
+    if (r.cobProyectos) recibirProyectosCob(r.cobProyectos);
+    if (r.cobranzaProyecto && COB && COB.proyecto.folio === r.cobranzaProyecto.proyecto.folio) {
+      sinInterrumpir('cobVistaProyecto', () => pintarCobranza(r.cobranzaProyecto));
+    }
+    if (r.resumen) { RESUMEN = r.resumen; pintarResumenCob(); }
+    if (cambioRol) {
+      // Pestaña recién permitida: se pide lo que la sincronización no trajo
+      if (PERMISOS.requisicion && !CARGADO.reqProy) cargarProyectosReq();
+      if (PERMISOS.requisicion && !CARGADO.misReq) cargarMisReq();
+      if (PERMISOS.compras && !SOLO_REQ && !CARGADO.comProy) cargarProyectosCom();
+      if (PERMISOS.compras && !SOLO_REQ && !CARGADO.comReqs) cargarRequisicionesCom();
+      if (PERMISOS.cobranza && !SOLO_REQ && !CARGADO.cobProy) cargarProyectosCob();
+    }
+  }
+
+  // Una vista donde alguien está capturando no se repinta sola: se avisa y se actualiza con un clic
+  const SUCIO = {}, PENDIENTE = {};
+  function sinInterrumpir(id, pintar) {
+    const vista = $(id), activo = document.activeElement;
+    const escribiendo = vista && activo && vista.contains(activo) && /^(INPUT|TEXTAREA|SELECT)$/.test(activo.tagName);
+    if (!SUCIO[id] && !escribiendo) { pintar(); return; }
+    PENDIENTE[id] = pintar;
+    let a = vista.querySelector('.aviso-sync');
+    if (!a) { a = document.createElement('div'); a.className = 'aviso-sync nota aviso-moneda'; a.style.marginBottom = '8px'; vista.prepend(a); }
+    a.innerHTML = 'Otra persona cambió esta información. <a href="#">Actualizar</a> (se pierde lo que no hayas guardado).';
+    a.querySelector('a').onclick = ev => { ev.preventDefault(); const f = PENDIENTE[id]; listoVista(id); if (f) f(); };
+  }
+  /** La vista se acaba de pintar con datos del servidor: ya no hay captura pendiente ni aviso. */
+  function listoVista(id) {
+    SUCIO[id] = false; delete PENDIENTE[id];
+    const a = $(id) && $(id).querySelector('.aviso-sync');
+    if (a) a.remove();
+  }
+  ['comVistaReq', 'cobVistaProyecto'].forEach(id => $(id).addEventListener('input', () => { SUCIO[id] = true; }));
 
   // ---- Conceptos ----
   function agregarFila() {
@@ -865,8 +1003,9 @@
     $('btnGuardar').disabled = true; $('btnGuardar').textContent = 'Generando PDF…';
     google.script.run
       .withSuccessHandler(r => {
+        const pr = r.proyectoFolio && PROYECTOS.find(p => p.folio === r.proyectoFolio);
         aviso('ok', 'Cotización <b>' + esc(r.folio) + '</b> guardada · Total ' + dinero(r.total, r.moneda) +
-              (r.proyectoFolio ? ' · Proyecto <b>' + esc(r.proyectoFolio) + '</b>' : '') +
+              (r.proyectoFolio ? ' · Proyecto <b>' + esc(pr ? folioVis(pr) : r.proyectoFolio) + '</b>' : '') +
               ' · <a href="' + esc(r.url) + '" target="_blank">Abrir PDF</a>');
         limpiar();
       })
@@ -933,8 +1072,10 @@
   $('cNombre').addEventListener('input', () => { if (CLIENTES.some(x => x.etiqueta === $('cNombre').value)) autorrellenarCliente(); });
 
   // ---- Proyectos (opcional al cotizar) ----
-  // La opción de la lista es "PRY-2026-0001 — Cliente — Nombre" (así se puede buscar por cualquiera de los tres)
-  const etiquetaProyecto = p => p.folio + ' — ' + p.cliente + ' — ' + p.nombre;
+  // La opción de la lista es "PRY-2026-0001-TSP — Cliente — Nombre" (así se puede buscar por folio, clave, cliente o nombre).
+  // La llave interna sigue siendo PRY-AAAA-NNNN (p.folio); la clave solo se muestra.
+  const folioVis = p => (p && (p.folioVisible || p.folio)) || '';
+  const etiquetaProyecto = p => folioVis(p) + ' — ' + p.cliente + ' — ' + p.nombre;
 
   function recibirProyectos(lista) {
     PROYECTOS = lista || [];
@@ -979,8 +1120,32 @@
   }
   function cerrarNuevoProyecto() {
     $('nuevoProy').classList.add('oculto');
-    $('npNombre').value = ''; $('npUbicacion').value = '';
+    $('npNombre').value = ''; $('npUbicacion').value = ''; $('npClave').value = ''; CLAVE_A_MANO = false; pintarFolioNuevo();
   }
+
+  // Clave del proyecto (3 letras): se sugiere con el nombre (misma regla que claveSugerida en Code.js) y se puede editar;
+  // el servidor la vuelve a validar y después ya no cambia
+  const PALABRAS_SIN_CLAVE = ['DE', 'DEL', 'LA', 'LAS', 'EL', 'LOS', 'Y', 'EN', 'PARA'];
+  function claveSugerida(nombre) {
+    const palabras = String(nombre || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase()
+      .replace(/[^A-Z]+/g, ' ').trim().split(' ').filter(p => p && PALABRAS_SIN_CLAVE.indexOf(p) === -1);
+    let c = '';
+    if (palabras.length === 1) c = palabras[0].slice(0, 3);
+    else if (palabras.length === 2) c = palabras[0].slice(0, 2) + palabras[1].charAt(0);
+    else if (palabras.length > 2) c = palabras.slice(0, 3).map(p => p.charAt(0)).join('');
+    return (c + 'XXX').slice(0, 3);
+  }
+  let CLAVE_A_MANO = false;
+  function pintarFolioNuevo() {
+    const c = $('npClave').value.trim().toUpperCase();
+    $('npFolio').textContent = /^[A-Z]{3}$/.test(c) ? 'El folio será PRY-' + new Date().getFullYear() + '-NNNN-' + c + ' (el número lo asigna el sistema). La clave ya no se cambia después.'
+      : 'La clave debe tener exactamente 3 letras (A–Z, sin acentos ni Ñ).';
+  }
+  $('npNombre').addEventListener('input', () => { if (!CLAVE_A_MANO) $('npClave').value = $('npNombre').value.trim() ? claveSugerida($('npNombre').value) : ''; pintarFolioNuevo(); });
+  $('npClave').addEventListener('input', () => {
+    $('npClave').value = $('npClave').value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
+    CLAVE_A_MANO = !!$('npClave').value; pintarFolioNuevo();
+  });
   function pintarClienteProyecto() {
     const n = $('cNombre').value.trim(), e = $('cEmpresa').value.trim();
     $('npCliente').textContent = n ? n + (e ? ' — ' + e : '') : '(primero escribe o elige el cliente arriba)';
@@ -990,6 +1155,7 @@
   function crearProyecto() {
     if (!$('cNombre').value.trim()) { mostrarError('Primero elige o escribe el cliente en "Nombre / Contacto".'); return; }
     if (!$('npNombre').value.trim()) { mostrarError('Escribe el nombre del proyecto.'); return; }
+    if (!/^[A-Z]{3}$/.test($('npClave').value.trim().toUpperCase())) { mostrarError('La clave del proyecto debe tener exactamente 3 letras (A–Z).'); return; }
     if ($('btnProy').disabled) return;
     $('btnProy').disabled = true; $('btnProy').textContent = 'Creando carpeta…';
     const listo = () => { $('btnProy').disabled = false; $('btnProy').textContent = 'Crear proyecto'; };
@@ -998,12 +1164,12 @@
         listo(); ID_PROYECTO = nuevoId();
         recibirProyectos([p].concat(PROYECTOS.filter(x => x.folio !== p.folio)));
         $('proyecto').value = etiquetaProyecto(p); pintarProyInfo(); cerrarNuevoProyecto();
-        aviso('ok', 'Proyecto <b>' + esc(p.folio) + '</b> creado y elegido para esta cotización · ' +
+        aviso('ok', 'Proyecto <b>' + esc(folioVis(p)) + '</b> creado y elegido para esta cotización · ' +
               '<a href="' + esc(p.url) + '" target="_blank">Abrir carpeta</a>');
       })
       .withFailureHandler(err => { listo(); mostrarError(err); })
       .crearProyecto({
-        nombre: $('npNombre').value, ubicacion: $('npUbicacion').value,
+        nombre: $('npNombre').value, ubicacion: $('npUbicacion').value, clave: $('npClave').value,
         cliente: { nombre: $('cNombre').value, empresa: $('cEmpresa').value, rfc: $('cRfc').value },
         idSolicitud: ID_PROYECTO,
       });
@@ -1115,15 +1281,16 @@
   // ---- Cobranza (solo rol de cobranza) ----
   let COB_PROYECTOS = [], COB = null, ESQ = [], ID_PAGO = nuevoId();
   const MARCA_TXT = { helgen: 'Helgen', energy: 'Helgen Energy' };
-  const etiquetaCob = p => p.folio + ' — ' + p.cliente + ' — ' + p.nombre;
+  const etiquetaCob = p => folioVis(p) + ' — ' + p.cliente + ' — ' + p.nombre;
 
+  function recibirProyectosCob(lista) {
+    COB_PROYECTOS = lista || []; CARGADO.cobProy = true;
+    $('cobProyectosList').innerHTML = COB_PROYECTOS.map(p =>
+      '<option value="' + esc(etiquetaCob(p)) + '" label="' + esc((p.contrato ? 'Contrato: ' + p.contrato : 'Sin aceptada') +
+      (p.estado !== 'Activo' ? ' · ' + p.estado : '')) + '">').join('');
+  }
   function cargarProyectosCob() {
-    google.script.run.withSuccessHandler(lista => {
-      COB_PROYECTOS = lista || [];
-      $('cobProyectosList').innerHTML = COB_PROYECTOS.map(p =>
-        '<option value="' + esc(etiquetaCob(p)) + '" label="' + esc((p.contrato ? 'Contrato: ' + p.contrato : 'Sin aceptada') +
-        (p.estado !== 'Activo' ? ' · ' + p.estado : '')) + '">').join('');
-    }).withFailureHandler(mostrarError).listarProyectosCobranza('');
+    google.script.run.withSuccessHandler(recibirProyectosCob).withFailureHandler(mostrarError).listarProyectosCobranza('');
   }
 
   function proyectoCobElegido() {
@@ -1149,7 +1316,8 @@
 
   function verResumenCob() {
     $('cobVistaProyecto').classList.add('oculto'); $('cobVistaResumen').classList.remove('oculto');
-    cargarResumenCob();
+    // Ya cargado: se queda (la sincronización lo mantiene al día); si no, se pide
+    if (RESUMEN) pintarResumenCob(); else if (BOOT) cargarResumenCob();
   }
 
   function cargarResumenCob() {
@@ -1161,7 +1329,7 @@
   /** Renglones del resumen que pasan los filtros (búsqueda, moneda, línea, solo con saldo). */
   function filtrarResumenCob() {
     const q = $('resBuscar').value.trim().toLowerCase(), m = $('resMoneda').value, l = $('resMarca').value, conSaldo = $('resSaldo').checked;
-    return ((RESUMEN && RESUMEN.proyectos) || []).filter(p => (!q || (p.folio + ' ' + p.cliente + ' ' + p.nombre).toLowerCase().includes(q)) &&
+    return ((RESUMEN && RESUMEN.proyectos) || []).filter(p => (!q || (folioVis(p) + ' ' + p.cliente + ' ' + p.nombre).toLowerCase().includes(q)) &&
       (!m || p.moneda === m) && (!l || p.marca === l) && (!conSaldo || (p.estadoContrato === 'Firmado' && p.saldo > 0.004)));
   }
 
@@ -1181,7 +1349,7 @@
     const lista = filtrarResumenCob();
     $('resLista').innerHTML = lista.length ? lista.map(p => {
       const firmado = p.estadoContrato === 'Firmado';
-      return '<tr class="fila-cat" data-folio="' + esc(p.folio) + '"><td style="min-width:190px"><b style="white-space:nowrap">' + esc(p.folio) + '</b>' +
+      return '<tr class="fila-cat" data-folio="' + esc(p.folio) + '"><td style="min-width:190px"><b style="white-space:nowrap">' + esc(folioVis(p)) + '</b>' +
         ' <span class="nota">· ' + esc(MARCA_TXT[p.marca] || '') + '</span><div class="nota">' + esc(p.cliente) + ' · ' + esc(p.nombre) +
         (p.estadoProyecto !== 'Activo' ? ' · ' + esc(p.estadoProyecto) : '') + '</div></td><td>' +
         '<span class="chip ' + (firmado ? 'firmado' : 'aceptada') + '" style="white-space:nowrap">' + esc(p.estadoContrato) + '</span></td>' +
@@ -1203,7 +1371,7 @@
     const num = n => n == null ? '' : r2(n).toFixed(2);
     const enc = ['Folio', 'Proyecto', 'Cliente', 'Línea de negocio', 'Contrato', 'Moneda', 'Contratado con IVA', 'Cobrado', 'Saldo', 'Avance %',
       'Siguiente etapa', 'Saldo siguiente etapa', 'Último pago', 'Órdenes de compra', 'Costo OC sin IVA', 'Margen sin IVA', 'Margen %'];
-    const filas = lista.map(p => [texto(p.folio), texto(p.nombre), texto(p.cliente), texto(MARCA_TXT[p.marca] || ''), texto(p.estadoContrato),
+    const filas = lista.map(p => [texto(folioVis(p)), texto(p.nombre), texto(p.cliente), texto(MARCA_TXT[p.marca] || ''), texto(p.estadoContrato),
       texto(p.moneda), num(p.contratado), num(p.pagado), num(p.saldo), String(p.avance), texto(p.siguienteEtapa),
       p.siguienteEtapa ? num(p.siguienteSaldo) : '', texto(p.ultimoPago), String(p.ordenes), num(p.costoOc), num(p.margen),
       p.margenPorcentaje == null ? '' : String(p.margenPorcentaje)].join(','));
@@ -1225,7 +1393,8 @@
     const c = v.contrato, r = v.resumen, firmado = c && c.estado === 'Firmado';
     const mon = c ? c.moneda : 'MXN';
     $('cobProyecto').value = etiquetaCob(v.proyecto);
-    $('cobInfo').innerHTML = '<b>' + esc(v.proyecto.folio) + '</b> · ' + esc(v.proyecto.cliente) + ' · ' + esc(v.proyecto.nombre) +
+    listoVista('cobVistaProyecto');
+    $('cobInfo').innerHTML = '<b>' + esc(folioVis(v.proyecto)) + '</b> · ' + esc(v.proyecto.cliente) + ' · ' + esc(v.proyecto.nombre) +
       (v.proyecto.estado !== 'Activo' ? ' · <span class="chip cancelado">' + esc(v.proyecto.estado) + '</span>' : '') +
       ' · Contrato: ' + (c ? '<span class="chip ' + (firmado ? 'firmado' : 'aceptada') + '">' + esc(c.estado) + '</span>' : 'sin cotización aceptada');
     $('cobDetalle').classList.remove('oculto');
@@ -1274,6 +1443,10 @@
     const mg = v.margen;
     $('cobMargen').classList.toggle('oculto', !mg);
     $('cobMargen').innerHTML = !mg ? '' : mg.error ? '<div class="nota aviso-moneda">' + esc(mg.error) + '</div>'
+      // Sin cotización aceptada no hay contratado: solo el costo de las órdenes de compra (cada moneda aparte)
+      : mg.sinContrato ? '<div class="sat-titulo" style="grid-column:1/-1;margin:0">Costo de órdenes de compra (sin IVA)</div>' +
+        mg.costos.map(x => [x.concepto + ' (' + x.cantidad + ')', dinero(x.monto, x.moneda)]).concat([['Margen', 'Sin contrato']])
+          .map(([k, x]) => '<div class="tile"><span>' + esc(k) + '</span><b>' + esc(x) + '</b></div>').join('')
       : '<div class="sat-titulo" style="grid-column:1/-1;margin:0">Margen del proyecto (sin IVA)</div>' +
         [['Contratado sin IVA', dinero(mg.contratado, mg.moneda)]]
           .concat(mg.costos.map(x => [x.concepto + ' (' + x.cantidad + ')', '− ' + dinero(x.monto, mg.moneda)]))
@@ -1439,11 +1612,14 @@
       '<option value="' + esc(p.descripcion) + '" label="' + esc(p.clave + ' · ' + p.unidad) + '">').join('');
   }
 
+  // Proyectos Activos y Cerrados (con o sin contrato); la opción es "PRY-2026-0002-DRO — Nombre"
+  function recibirProyectosReq(lista) {
+    REQ_PROYECTOS = lista || []; CARGADO.reqProy = true;
+    $('reqProyectosList').innerHTML = REQ_PROYECTOS.map(p => '<option value="' + esc(folioVis(p) + ' — ' + p.nombre) + '"' +
+      (p.estado && p.estado !== 'Activo' ? ' label="' + esc(p.estado) + '"' : '') + '>').join('');
+  }
   function cargarProyectosReq() {
-    google.script.run.withSuccessHandler(lista => {
-      REQ_PROYECTOS = lista || [];
-      $('reqProyectosList').innerHTML = REQ_PROYECTOS.map(p => '<option value="' + esc(p.folio + ' — ' + p.nombre) + '">').join('');
-    }).withFailureHandler(mostrarError).listarProyectosRequisicion('');
+    google.script.run.withSuccessHandler(recibirProyectosReq).withFailureHandler(mostrarError).listarProyectosRequisicion('');
   }
   function cargarMisReq() {
     google.script.run.withSuccessHandler(pintarMisReq).withFailureHandler(mostrarError).misRequisiciones();
@@ -1518,10 +1694,10 @@
   }
 
   function pintarMisReq(lista) {
-    MIS_REQ = lista || [];
+    MIS_REQ = lista || []; CARGADO.misReq = true;
     $('reqLista').innerHTML = !MIS_REQ.length ? '<div class="nota">Todavía no tienes requisiciones.</div>' : MIS_REQ.map(r =>
       '<div class="sat" style="margin-top:10px">' +
-      '<div class="sat-titulo">' + esc(r.folio) + ' · ' + chipReq(r.estado) + ' · ' + esc(r.proyectoFolio) + ' — ' + esc(r.proyectoNombre) + '</div>' +
+      '<div class="sat-titulo">' + esc(r.folio) + ' · ' + chipReq(r.estado) + ' · ' + esc(r.proyectoVisible || r.proyectoFolio) + ' — ' + esc(r.proyectoNombre) + '</div>' +
       (r.motivo && ['Devuelta', 'Rechazada', 'Cancelada'].indexOf(r.estado) !== -1 ? '<div class="nota"><b>Motivo:</b> ' + esc(r.motivo) + '</div>' : '') +
       '<ul style="margin:6px 0;padding-left:18px">' + r.renglones.map(x => '<li>' + esc(x.cantidad) + ' ' + esc(x.unidad) + ' — ' +
         esc(x.descripcion) + (x.notas ? ' <span class="nota">(' + esc(x.notas) + ')</span>' : '') + '</li>').join('') + '</ul>' +
@@ -1539,7 +1715,7 @@
     const r = MIS_REQ.find(x => x.folio === folio);
     if (!r) return;
     REQ_EDITANDO = folio; ID_REQ = nuevoId();
-    $('reqProyecto').value = r.proyectoFolio + ' — ' + r.proyectoNombre; $('reqProyecto').disabled = true;
+    $('reqProyecto').value = (r.proyectoVisible || r.proyectoFolio) + ' — ' + r.proyectoNombre; $('reqProyecto').disabled = true;
     $('reqFilas').innerHTML = ''; r.renglones.forEach(agregarRenglonReq);
     $('reqArchivo').value = '';
     $('reqTitulo').textContent = '1 · Corregir ' + folio;
@@ -1571,16 +1747,19 @@
     REQC = null;
     $('comVistaReq').classList.add('oculto'); $('comVistaLista').classList.remove('oculto');
     $('rcCotVisor').src = 'about:blank';
-    cargarRequisicionesCom();
+    if (BOOT && !CARGADO.comReqs) cargarRequisicionesCom(); // ya cargada: la sincronización la mantiene al día
   }
+  // Filtro con que se pidió la lista (la sincronización la vuelve a pedir igual, aunque haya texto sin buscar)
+  const COM_FILTRO = { buscar: '', estado: '' };
   function cargarRequisicionesCom() {
-    google.script.run.withSuccessHandler(pintarListaReqCom).withFailureHandler(mostrarError)
-      .listarRequisiciones($('rcBuscar').value, $('rcEstado').value);
+    COM_FILTRO.buscar = $('rcBuscar').value; COM_FILTRO.estado = $('rcEstado').value;
+    google.script.run.withSuccessHandler(l => { CARGADO.comReqs = true; pintarListaReqCom(l); }).withFailureHandler(mostrarError)
+      .listarRequisiciones(COM_FILTRO.buscar, COM_FILTRO.estado);
   }
   $('rcBuscar').addEventListener('keydown', e => { if (e.key === 'Enter') cargarRequisicionesCom(); });
   function pintarListaReqCom(lista) {
     $('rcLista').innerHTML = (lista || []).length ? lista.map(r => '<tr class="fila-cat" onclick="abrirReqCom(\'' + esc(r.folio) + '\')">' +
-      '<td style="white-space:nowrap"><b>' + esc(r.folio) + '</b></td><td>' + esc(fechaMx(r.fecha)) + '</td><td>' + esc(r.proyectoFolio) +
+      '<td style="white-space:nowrap"><b>' + esc(r.folio) + '</b></td><td>' + esc(fechaMx(r.fecha)) + '</td><td>' + esc(r.proyectoVisible || r.proyectoFolio) +
       '<div class="nota">' + esc(r.proyectoNombre) + '</div></td><td>' + esc(r.solicitante) + '</td><td class="num">' + esc(r.renglones) +
       '</td><td>' + chipReq(r.estado) + '</td><td>' + esc(r.ocFolio) + '</td></tr>').join('')
       : '<tr><td colspan="7" class="nota">No hay requisiciones con ese filtro.</td></tr>';
@@ -1594,12 +1773,14 @@
     const rq = v.requisicion;
     const cambio = !REQC || REQC.requisicion.folio !== rq.folio || REQC.requisicion.estado !== rq.estado;
     REQC = v;
+    listoVista('comVistaReq');
     $('comVistaLista').classList.add('oculto'); $('comVistaReq').classList.remove('oculto');
     $('rcTitulo').textContent = '1 · Requisición ' + rq.folio;
-    $('rcInfo').innerHTML = chipReq(rq.estado) + ' · <b>' + esc(v.proyecto.folio) + '</b> · ' + esc(v.proyecto.cliente) + ' · ' +
-      esc(v.proyecto.nombre) + (v.moneda ? ' · Moneda del proyecto: <b>' + esc(v.moneda) + '</b> · ' + esc(MARCA_TXT[v.marca] || '') : '') +
+    $('rcInfo').innerHTML = chipReq(rq.estado) + ' · <b>' + esc(folioVis(v.proyecto)) + '</b> · ' + esc(v.proyecto.cliente) + ' · ' +
+      esc(v.proyecto.nombre) + (v.proyecto.estado && v.proyecto.estado !== 'Activo' ? ' · ' + esc(v.proyecto.estado) : '') +
+      (v.moneda ? ' · Moneda del proyecto: <b>' + esc(v.moneda) + '</b> · ' + (v.sinContrato ? 'sin contrato' : esc(MARCA_TXT[v.marca] || '')) : '') +
       '<br>Pidió: ' + esc(rq.solicitante) + ' (' + esc(rq.solicitanteEmail) + ') el ' + esc(fechaMx(rq.fecha)) +
-      (rq.estado === 'Solicitada' && !v.puedeAutorizar ? '<br><span class="aviso-moneda">El proyecto ya no está activo con contrato firmado: no se puede autorizar (recházala o devuélvela).</span>' : '');
+      (rq.estado === 'Solicitada' && !v.puedeAutorizar ? '<br><span class="aviso-moneda">El proyecto está cancelado: no se puede autorizar (recházala o devuélvela).</span>' : '');
     $('rcRenglones').innerHTML = v.renglones.map(x => '<tr><td>' + esc(x.renglon) + '</td><td>' + esc(x.descripcion) + '</td><td class="num">' +
       esc(x.cantidad) + '</td><td>' + esc(x.unidad) + '</td><td>' + esc(x.notas) + '</td></tr>').join('');
     $('rcEventos').innerHTML = '<div class="sat-titulo">Historial</div><div class="nota">' + v.eventos.map(e => esc(fechaMx(e.fecha)) +
@@ -1814,13 +1995,16 @@
   }
 
   // Órdenes por proyecto (consulta)
+  // Proyectos Activos y Cerrados, con o sin contrato (sin contrato, las órdenes van en MXN)
+  function recibirProyectosCom(lista) {
+    COM_PROYECTOS = lista || []; CARGADO.comProy = true;
+    $('comProyectosList').innerHTML = COM_PROYECTOS.map(p =>
+      '<option value="' + esc(etiquetaCob(p)) + '" label="' + esc(p.moneda + ' · ' + (p.sinContrato ? 'sin contrato' : (MARCA_TXT[p.marca] || '')) +
+      (p.estado !== 'Activo' ? ' · ' + p.estado : '')) + '">').join('');
+    if (!COM_PROYECTOS.length && !COM) $('comInfo').textContent = 'No hay proyectos activos ni cerrados.';
+  }
   function cargarProyectosCom() {
-    google.script.run.withSuccessHandler(lista => {
-      COM_PROYECTOS = lista || [];
-      $('comProyectosList').innerHTML = COM_PROYECTOS.map(p =>
-        '<option value="' + esc(etiquetaCob(p)) + '" label="' + esc(p.moneda + ' · ' + (MARCA_TXT[p.marca] || '')) + '">').join('');
-      if (!COM_PROYECTOS.length && !COM) $('comInfo').textContent = 'No hay proyectos activos con contrato firmado.';
-    }).withFailureHandler(mostrarError).listarProyectosCompras('');
+    google.script.run.withSuccessHandler(recibirProyectosCom).withFailureHandler(mostrarError).listarProyectosCompras('');
   }
 
   function proyectoComElegido() {
@@ -1838,8 +2022,8 @@
   function pintarCompras(v) {
     COM = v;
     $('comProyecto').value = etiquetaCob(v.proyecto);
-    $('comInfo').innerHTML = '<b>' + esc(v.proyecto.folio) + '</b> · ' + esc(v.proyecto.cliente) + ' · ' + esc(v.proyecto.nombre) +
-      (v.moneda ? ' · Moneda del proyecto: <b>' + esc(v.moneda) + '</b> · ' + esc(MARCA_TXT[v.marca] || '') : '') +
+    $('comInfo').innerHTML = '<b>' + esc(folioVis(v.proyecto)) + '</b> · ' + esc(v.proyecto.cliente) + ' · ' + esc(v.proyecto.nombre) +
+      (v.moneda ? ' · Moneda del proyecto: <b>' + esc(v.moneda) + '</b> · ' + (v.sinContrato ? 'sin contrato' : esc(MARCA_TXT[v.marca] || '')) : '') +
       (v.proyecto.estado !== 'Activo' ? ' · <span class="chip cancelado">' + esc(v.proyecto.estado) + '</span>' : '');
     $('ocLista').innerHTML = (v.ordenes || []).length ? v.ordenes.map(o => '<tr' + (o.estado === 'Cancelada' ? ' class="fila-cancelada" title="' +
       esc('Cancelada por ' + o.canceladoPor + ': ' + o.motivoCancelacion) + '"' : '') + '><td style="white-space:nowrap"><b>' + esc(o.folio) + '</b></td><td>' + esc(fechaMx(o.fecha)) +
@@ -1861,7 +2045,8 @@
   }
 
   // ---- UI ----
-  function verTab(t) {
+  function verTab(t, recienCargado) {
+    TAB = t;
     $('vistaNueva').classList.toggle('oculto', t !== 'nueva');
     $('vistaHist').classList.toggle('oculto', t !== 'hist');
     $('vistaCat').classList.toggle('oculto', t !== 'cat');
@@ -1876,9 +2061,16 @@
     $('tabHist').classList.toggle('activo', t === 'hist');
     if (t === 'hist') cargarHistorial();
     if (t === 'cat') cargarCatalogo();
-    if (t === 'cob') { cargarProyectosCob(); verResumenCob(); }
-    if (t === 'com') { cargarProyectosCom(); verListaCom(); }
-    if (t === 'req') { cargarProyectosReq(); cargarMisReq(); if (!$('reqFilas').querySelectorAll('tr').length) limpiarReq(); }
+    if (t === 'cob') verResumenCob();
+    if (t === 'com') verListaCom();
+    if (t === 'req' && !$('reqFilas').querySelectorAll('tr').length) limpiarReq();
+    // Lo que trajo el bootstrap ya está; si una lista no llegó, se pide. Lo demás lo pone al día la sincronización
+    if (BOOT) {
+      if (t === 'req') { if (!CARGADO.reqProy) cargarProyectosReq(); if (!CARGADO.misReq) cargarMisReq(); }
+      if (t === 'cob' && !CARGADO.cobProy) cargarProyectosCob();
+      if (t === 'com' && !CARGADO.comProy) cargarProyectosCom();
+      if (!recienCargado) sincronizarAhora(); // justo después del bootstrap no hace falta
+    }
     $('aviso').className = 'aviso';
   }
   function aviso(tipo, html) { const a = $('aviso'); a.className = 'aviso ' + tipo; a.innerHTML = html; window.scrollTo(0, 0); }

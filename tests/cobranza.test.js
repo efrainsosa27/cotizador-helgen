@@ -72,14 +72,14 @@ const fmt=(d,tz,f)=>f.replace('yyyy',d.getFullYear()).replace('MM',pad(d.getMont
   .replace('HH',pad(d.getHours())).replace('mm',pad(d.getMinutes())).replace('ss',pad(d.getSeconds()));
 const firmados=b=>[...b].map(x=>x>127?x-256:x); // Apps Script entrega bytes con signo
 const ctx={console:{...console,warn(){}},Date,JSON,
- PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperty:(k,v)=>props[k]=v})},
- CacheService:{getScriptCache:()=>({get:k=>cache[k]??null,put:(k,v)=>cache[k]=v})},
+ PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperty:(k,v)=>props[k]=v,getProperties:()=>Object.assign({},props),setProperties:o=>Object.assign(props,o)})},
+ CacheService:{getScriptCache:()=>({get:k=>cache[k]??null,put:(k,v)=>cache[k]=v,getAll:ks=>Object.fromEntries(ks.filter(k=>k in cache).map(k=>[k,cache[k]])),putAll:o=>Object.assign(cache,o)})},
  LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},
  Session:{getActiveUser:()=>({getEmail:()=>''})},
  Logger:{log(){}},
  Utilities:{formatDate:fmt,newBlob:(a,b,c)=>typeof a==='string'?{getAs:()=>({setName:n=>({name:n,html:a})})}:{bytes:a,mime:b,name:c},
   base64Encode:b=>Buffer.from(b).toString('base64'),base64Decode:s=>firmados(Buffer.from(s,'base64')),
-  DigestAlgorithm:{SHA_256:'sha256'},computeDigest:(a,s)=>[...require('crypto').createHash('sha256').update(s).digest()]},
+  DigestAlgorithm:{SHA_256:'sha256',MD5:'md5'},base64EncodeWebSafe:b=>Buffer.from(b).toString('base64url'),computeDigest:(a,s)=>[...require('crypto').createHash(a||'sha256').update(s).digest()]},
  ScriptApp:{getOAuthToken:()=>'TOKEN-SCRIPT'},
  UrlFetchApp:{fetch:(url,op)=>{if(/googleapis\.com\/drive\//.test(url))return apiDrive(url,op);const t=decodeURIComponent(url.split('id_token=')[1]);const c=tokens[t];
   return{getResponseCode:()=>c?200:400,getContentText:()=>JSON.stringify(c||{error:'invalid_token'})}}},
@@ -165,7 +165,7 @@ const sinProy=cot('',50);
 // --- Usuario sin rol (vendedora): no ve la pestaña ni recibe datos; el servidor rechaza todo con PERMISO ---
 const dAna=ok('ana','getDatosIniciales');
 assert.deepEqual({...dAna.permisos},{cobranza:false,desbloqueo:false,compras:false,requisicion:false});
-assert(!/contrato|pagos|saldo/i.test(JSON.stringify(dAna)),'datos iniciales sin cobranza');
+{ const {versiones, ...resto} = dAna; assert(!/contrato|pagos|saldo/i.test(JSON.stringify(resto)),'datos iniciales sin cobranza'); } // versiones solo trae nombres de colecciones y números
 const COB=[['listarProyectosCobranza',['']],['getCobranzaProyecto',[p1]],['marcarAceptada',[p1,cH]],['guardarEsquema',[p1,P.esquemaPorOmision()]],
   ['firmarContrato',[p1,HOY_ISO]],['desbloquearContrato',[p1,'motivo largo']],['registrarPago',[{proyectoFolio:p1}]],['cancelarPago',['PAG-'+ANIO+'-0001','motivo']]];
 for(const [f,args] of COB) falla('ana',f,args,/No tienes permiso de cobranza/,'PERMISO');
@@ -371,7 +371,9 @@ assert.deepEqual([tMXN.proyectos,tMXN.conSaldo,tMXN.contratado,tMXN.cobrado,tMXN
 assert.deepEqual([tUSD.proyectos,tUSD.conSaldo,tUSD.contratado,tUSD.cobrado,tUSD.porCobrar,tUSD.avance],[1,0,1000,1000,0,100],'USD aparte: nunca se suma con MXN');
 assert.deepEqual(rs.totales.map(t=>t.moneda),['MXN','USD']);
 // Proyecto cancelado: no aparece ni suma
-db.pest.Proyectos.m[filaP3][6]='Cancelado';
+db.pest.Proyectos.m[filaP3][6]='Cancelado'; // editado a mano en la hoja (la app no sube la versión)
+// A los 5 min vence el caché de Proyectos: al releerla, la huella cambia, sube la versión y el resumen se recalcula
+for (const k of Object.keys(cache)) if (k.startsWith('F_proyectos')) delete cache[k];
 rs=ok('tania','resumenCobranzaGeneral');
 assert(!rs.proyectos.some(x=>x.folio===p3)); assert.equal(rs.totales.find(t=>t.moneda==='MXN').porFirmar,0);
 db.pest.Proyectos.m[filaP3][6]='Activo';

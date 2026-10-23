@@ -19,25 +19,33 @@ const CAT=[{clave:'PAN-550',descripcion:'Panel solar 550 W',unidad:'PZA',precio:
 const TC={valor:18.45,fuente:'Google Finance'};
 
 /** App cargada con un DOM y un servidor simulados nuevos. */
-function montar(datosIniciales){
+function montar(datosIniciales,opts){
+  opts=opts||{};
   function elemento(tag){const e={tag,value:'',textContent:'',className:'',title:'',src:'',placeholder:'',disabled:false,hijos:[],oyentes:{},
    _clases:new Set(),porClase:{},
    classList:{add:c=>e._clases.add(c),remove:c=>e._clases.delete(c),contains:c=>e._clases.has(c),toggle:(c,f)=>f?e._clases.add(c):e._clases.delete(c)},
    addEventListener:(t,f)=>(e.oyentes[t]=e.oyentes[t]||[]).push(f),
    disparar:t=>(e.oyentes[t]||[]).forEach(f=>f({target:e})),
-   focus(){},remove(){},appendChild:h=>e.hijos.push(h),
+   focus(){},remove(){},appendChild:h=>e.hijos.push(h),prepend:h=>e.hijos.unshift(h),contains:()=>false,
    querySelector:sel=>e.porClase[sel]||(e.porClase[sel]=elemento('input')),
    querySelectorAll:sel=>sel==='tr'?e.hijos:sel==='input'?Object.values(e.porClase):[]};
    // Como el DOM: innerHTML = '' quita los renglones agregados con appendChild
    let h='';Object.defineProperty(e,'innerHTML',{get:()=>h,set:v=>{h=v;if(v==='')e.hijos.length=0}});return e}
   const porId={};
+  const oyentesDoc={};
   const document={getElementById:id=>porId[id]||(porId[id]=elemento('div')),
-   querySelector:()=>({src:'data:logo'}),createElement:t=>elemento(t)};
+   querySelector:()=>({src:'data:logo'}),createElement:t=>elemento(t),visibilityState:'visible',activeElement:null,
+   addEventListener:(t,f)=>(oyentesDoc[t]=oyentesDoc[t]||[]).push(f),dispatchEvent:ev=>(oyentesDoc[ev.type]||[]).forEach(f=>f(ev))};
   document.getElementById('login').classList.add('oculto');
   document.getElementById('tabCob').classList.add('oculto'); // como en el HTML
   document.getElementById('tabCom').classList.add('oculto');
   const almacen={cotizadorHelgenSesion:token};
-  const llamadas=[], respuestas={getDatosIniciales:{ok:true,datos:datosIniciales}};
+  // bootstrap = la carga inicial; sincronizar sin cambios (mismos permisos) salvo que la prueba ponga otra respuesta
+  const llamadas=[], respuestas={bootstrap:{ok:true,datos:datosIniciales},
+   sincronizar:()=>({ok:true,datos:{versiones:{},permisos:datosIniciales.permisos,soloRequisicion:!!datosIniciales.soloRequisicion,cambios:[]}})};
+  const local={...(opts.local||{})}, intervalos=[];
+  // bootstrapPendiente: la respuesta llega cuando la prueba llama la función que recibe (para ver la página antes)
+  if (opts.bootstrapPendiente) respuestas.bootstrap=()=>new Promise(res=>opts.bootstrapPendiente(()=>res({ok:true,datos:datosIniciales})));
   async function fetch(url,opts){const c=JSON.parse(opts.body);llamadas.push(c);
    const r=respuestas[c.funcion];const datos=typeof r==='function'?r(c):r;
    return{ok:true,json:async()=>datos||{ok:false,error:'sin respuesta simulada: '+c.funcion}}}
@@ -47,11 +55,13 @@ function montar(datosIniciales){
    atob:s=>Buffer.from(s,'base64').toString('binary'),crypto:{randomUUID:()=>'id-'+Math.random()},
    sessionStorage:{getItem:k=>almacen[k]??null,setItem:(k,v)=>almacen[k]=v,removeItem:k=>delete almacen[k]},
    confirm:m=>{dialogos.vistos.push(m);return dialogos.confirmar},prompt:m=>{dialogos.vistos.push(m);return dialogos.prompt},
-   setTimeout,clearTimeout,scrollTo(){}};
+   localStorage:{getItem:k=>local[k]??null,setItem:(k,v)=>local[k]=String(v),removeItem:k=>delete local[k]},
+   CustomEvent:class{constructor(type,o){this.type=type;this.detail=o&&o.detail}},
+   setTimeout,clearTimeout,setInterval:(f,ms)=>intervalos.push(f),scrollTo(){}};
   ctx.window=ctx;
   vm.createContext(ctx);
   vm.runInContext(apiWeb,ctx); vm.runInContext(app,ctx);
-  return {ctx,$:id=>document.getElementById(id),llamadas,respuestas,dialogos,run:c=>vm.runInContext(c,ctx)};
+  return {ctx,$:id=>document.getElementById(id),llamadas,respuestas,dialogos,local,intervalos,document,run:c=>vm.runInContext(c,ctx)};
 }
 const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmediate(r))};
 
@@ -188,7 +198,18 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   const nRes=B.llamadas.filter(c=>c.funcion==='resumenCobranzaGeneral').length;
   B.run('verResumenCob()'); await esperar();
   assert(!B.$('cobVistaResumen').classList.contains('oculto')&&B.$('cobVistaProyecto').classList.contains('oculto'));
-  assert.equal(B.llamadas.filter(c=>c.funcion==='resumenCobranzaGeneral').length,nRes+1,'al regresar se actualiza el resumen');
+  assert.equal(B.llamadas.filter(c=>c.funcion==='resumenCobranzaGeneral').length,nRes,'al regresar no se vuelve a pedir: lo mantiene al día la sincronización');
+  // Sincronización: manda el contexto (resumen y proyecto abiertos) y pinta lo que cambió sin recargar
+  B.respuestas.sincronizar={ok:true,datos:{versiones:{pagosCobranza:7},permisos:{cobranza:true,desbloqueo:false},cambios:['pagosCobranza'],
+    resumen:{...RES,proyectos:RES.proyectos.slice(0,1)}}};
+  B.run('sincronizarAhora()'); await esperar();
+  const sy=B.llamadas.filter(c=>c.funcion==='sincronizar').pop();
+  assert.equal(sy.args[1].cobResumen,true); assert.equal(sy.args[1].cobProyecto,'PRY-2026-0001');
+  assert.deepEqual(B.$('resLista').innerHTML.match(/data-folio="([^"]+)"/g),['data-folio="PRY-2026-0003"'],'el resumen se actualizó solo');
+  assert.equal(B.run('VERS.pagosCobranza'),7,'guarda las versiones nuevas');
+  B.respuestas.sincronizar=()=>({ok:true,datos:{versiones:{pagosCobranza:7},permisos:{cobranza:true,desbloqueo:false},cambios:[]}});
+  B.run("RESUMEN=null"); B.run('verResumenCob()'); await esperar();
+  assert.equal(B.llamadas.filter(c=>c.funcion==='resumenCobranzaGeneral').length,nRes+1,'sin resumen cargado sí se pide');
   assert(/PRY-2026-0001 — Luis — Solar MX — Techo/.test(B.$('cobProyectosList').innerHTML)&&/Sin aceptada/.test(B.$('cobProyectosList').innerHTML));
   const cots=[{folio:'HLG-2026-0010',fecha:'20/10/2026',marca:'helgen',moneda:'MXN',subtotal:1000,total:1160,pdf:'p'},
               {folio:'HLG-2026-0011',fecha:'20/10/2026',marca:'energy',moneda:'MXN',subtotal:2000,total:2320,pdf:'p'}];
@@ -469,5 +490,67 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   assert(!S.$('tabReq').classList.contains('oculto')&&!S.$('vistaReq').classList.contains('oculto')&&S.$('vistaNueva').classList.contains('oculto'));
   assert(S.llamadas.some(c=>c.funcion==='misRequisiciones')&&/Todavía no tienes requisiciones/.test(S.$('reqLista').innerHTML));
   assert(!S.llamadas.some(c=>['listarCotizaciones','getCatalogo','listarProyectos'].includes(c.funcion)),'no llama nada más');
+
+  // ===== Carga rápida: pestañas al instante con los roles de la última sesión (localStorage); el bootstrap las corrige =====
+  let liberar;
+  const PRYC={...PRY,clave:'TEC',folioVisible:'PRY-2026-0001-TEC'};
+  const T=montar({ivaTasa:0.16,catalogo:CAT,tipoCambio:TC,clientes:[],proyectos:[PRYC],marcas:{},versiones:{proyectos:1},
+    permisos:{cobranza:false,desbloqueo:false,compras:true,requisicion:false},
+    com:{proyectos:[{...PRYC,moneda:'MXN',marca:'',sinContrato:true}],requisiciones:[]}},
+    {local:{'cotizadorHelgenRoles:ana@helgen.tech':JSON.stringify({permisos:{cobranza:true,compras:false,requisicion:true},soloRequisicion:false})},
+     bootstrapPendiente:f=>liberar=f});
+  await new Promise(r=>setTimeout(r,5)); // los roles guardados se aplican con setTimeout al terminar de cargar el script
+  assert(!T.$('tabCob').classList.contains('oculto')&&!T.$('tabReq').classList.contains('oculto')&&T.$('tabCom').classList.contains('oculto'),
+    'antes de responder el servidor: las pestañas de la última sesión');
+  liberar(); await esperar(10);
+  assert(T.$('tabCob').classList.contains('oculto')&&T.$('tabReq').classList.contains('oculto')&&!T.$('tabCom').classList.contains('oculto'),'el bootstrap corrige');
+  assert.deepEqual(JSON.parse(T.local['cotizadorHelgenRoles:ana@helgen.tech']).permisos,{cobranza:false,desbloqueo:false,compras:true,requisicion:false});
+  assert.deepEqual(T.llamadas.map(c=>c.funcion),['bootstrap'],'al entrar: una sola llamada');
+  assert(/PRY-2026-0001-TEC — Luis — Solar MX — Techo/.test(T.$('proyectosList').innerHTML),'folio con clave al cotizar');
+  assert(/PRY-2026-0001-TEC — Luis — Solar MX — Techo/.test(T.$('comProyectosList').innerHTML)&&/MXN · sin contrato/.test(T.$('comProyectosList').innerHTML));
+  T.$('proyecto').value='PRY-2026-0001-TEC — Luis — Solar MX — Techo'; T.$('proyecto').disparar('change');
+  assert.equal(T.run('proyectoElegido().folio'),'PRY-2026-0001','se elige por la llave interna');
+  assert.equal(T.intervalos.length,1,'consulta cada 20 s');
+  // Cambio de rol sin recargar: aparece la pestaña Requisiciones (proyectos activos y cerrados)
+  T.respuestas.sincronizar={ok:true,datos:{versiones:{proyectos:2},permisos:{cobranza:false,desbloqueo:false,compras:true,requisicion:true},cambios:['proyectos'],
+    reqProyectos:[{folio:'PRY-2026-0002',clave:'DRO',folioVisible:'PRY-2026-0002-DRO',nombre:'DROGHEDA',estado:'Cerrado'}]}};
+  T.respuestas.misRequisiciones={ok:true,datos:[]}; T.respuestas.listarProyectosRequisicion={ok:true,datos:[]};
+  T.intervalos[0](); await esperar(10);
+  assert(!T.$('tabReq').classList.contains('oculto'),'pestaña nueva sin recargar');
+  assert(/PRY-2026-0002-DRO — DROGHEDA" label="Cerrado"/.test(T.$('reqProyectosList').innerHTML),T.$('reqProyectosList').innerHTML);
+  assert.equal(T.run('VERS.proyectos'),2);
+  assert.deepEqual(T.llamadas.filter(c=>c.funcion==='sincronizar').pop().args[0],{proyectos:1},'manda las versiones que tiene');
+  // Con la pestaña del navegador oculta no consulta; al volver, sí
+  const nSync=()=>T.llamadas.filter(c=>c.funcion==='sincronizar').length, n0=nSync();
+  T.document.visibilityState='hidden'; T.intervalos[0](); await esperar();
+  assert.equal(nSync(),n0,'pestaña oculta: no consulta');
+  T.document.visibilityState='visible'; T.respuestas.sincronizar=()=>({ok:true,datos:{versiones:{proyectos:2},permisos:{cobranza:false,desbloqueo:false,compras:true,requisicion:true},cambios:[]}});
+  T.document.dispatchEvent({type:'visibilitychange'}); await esperar();
+  assert.equal(nSync(),n0+1,'al volver a la pestaña consulta');
+  T.$('comProyecto').disparar('focus'); await esperar();
+  assert.equal(nSync(),n0+2,'al abrir un buscador de proyectos consulta');
+  // Alguien está capturando en la vista abierta: no se repinta sola; se avisa y se actualiza con un clic
+  const vistaCob={proyecto:PRYC,cotizaciones:[],contrato:null,esquema:[],resumen:null,pagos:[],puedeAceptar:true,puedeFirmar:false,metodos:[],hoy:'2026-10-20',
+    margen:{sinContrato:true,costos:[{concepto:'Órdenes de compra',moneda:'MXN',monto:1000,cantidad:1}]}};
+  T.run("COB={proyecto:{folio:'PRY-2026-0001'}}"); T.$('cobVistaProyecto').disparar('input');
+  T.respuestas.sincronizar={ok:true,datos:{versiones:{proyectos:2,oc:3},permisos:{cobranza:false,desbloqueo:false,compras:true,requisicion:true},cambios:['oc'],cobranzaProyecto:vistaCob}};
+  T.run('sincronizarAhora()'); await esperar();
+  assert.equal(T.run('COB.proyecto.clave'),undefined,'no se repintó mientras capturaba');
+  const avisoSync=T.$('cobVistaProyecto').querySelector('.aviso-sync');
+  assert(/Otra persona cambió esta información/.test(avisoSync.innerHTML));
+  avisoSync.querySelector('a').onclick({preventDefault(){}});
+  assert(/PRY-2026-0001-TEC/.test(T.$('cobInfo').innerHTML),'con el clic se actualiza');
+  assert(/Costo de órdenes de compra/.test(T.$('cobMargen').innerHTML)&&/\$1,000\.00 MXN/.test(T.$('cobMargen').innerHTML)&&/Sin contrato/.test(T.$('cobMargen').innerHTML),
+    'sin contrato: costo de las órdenes y "Sin contrato"');
+  // Clave del proyecto: se sugiere con el nombre y se puede editar (3 letras A–Z)
+  T.$('npNombre').value='Casa del Lago'; T.$('npNombre').disparar('input');
+  assert.equal(T.$('npClave').value,'CAL'); assert(/PRY-\d{4}-NNNN-CAL/.test(T.$('npFolio').textContent));
+  T.$('npClave').value='xy1z'; T.$('npClave').disparar('input'); assert.equal(T.$('npClave').value,'XYZ');
+  T.$('npNombre').value='Otra cosa'; T.$('npNombre').disparar('input'); assert.equal(T.$('npClave').value,'XYZ','la editada a mano no se reemplaza');
+  assert.equal(T.run("claveSugerida('DROGHEDA')+claveSugerida('Planta de Agua Norte')+claveSugerida('Ñandú')"),'DROPANNAN');
+  T.respuestas.crearProyecto={ok:true,datos:{folio:'PRY-2026-0009',clave:'XYZ',folioVisible:'PRY-2026-0009-XYZ',nombre:'Otra cosa',cliente:'Luis',estado:'Activo',url:'u'}};
+  T.$('cNombre').value='Luis'; T.run('crearProyecto()'); await esperar();
+  assert.equal(T.llamadas.find(c=>c.funcion==='crearProyecto').args[0].clave,'XYZ');
+  assert(/PRY-2026-0009-XYZ/.test(T.$('aviso').innerHTML)&&/^PRY-2026-0009-XYZ — /.test(T.$('proyecto').value));
   console.log('OK interfaz');
 })().catch(e=>{console.error(e);process.exit(1)});
