@@ -17,7 +17,7 @@ function hoja(m){return{m,getLastRow:()=>m.length,getMaxRows:()=>1000,setFrozenR
 // Drive simulado: árbol de carpetas con Papelera
 let nId=0; const carpetas={};
 function carpeta(nombre,padre){const f={id:'F'+(++nId),nombre,padre,hijos:[],archivos:[],trashed:false,
- getId:()=>f.id,getName:()=>f.nombre,getUrl:()=>'https://drive/'+f.id,isTrashed:()=>f.trashed,
+ getId:()=>f.id,getName:()=>f.nombre,setName:n=>{f.nombre=n;return f},getUrl:()=>'https://drive/'+f.id,isTrashed:()=>f.trashed,
  getFoldersByName:n=>{const l=f.hijos.filter(h=>h.nombre===n);let i=0;return{hasNext:()=>i<l.length,next:()=>l[i++]}},
  createFolder:n=>{const h=carpeta(n,f);f.hijos.push(h);return h},
  createFile:b=>{f.archivos.push(b);return{getUrl:()=>'https://drive/pdf/'+b.name}}};
@@ -36,7 +36,8 @@ const db={getSheetByName:n=>n==='Config'?cfg:n==='Cotizaciones'?cot:n==='Proyect
  insertSheet:n=>{if(pry)throw new Error('ya existe');return pry=hoja([])},getId:()=>'DB'};
 const props={SPREADSHEET_ID:'DB',FOLDER_ID:pdfRaiz.id,CATALOGO_ID:'CAT'},cache={};
 const dv=()=>{const b={requireValueInList:(l)=>{b.lista=l;return b},setAllowInvalid:()=>b,setHelpText:()=>b,build:()=>({})};return b};
-const ctx={console:{...console,warn(){}},Date,JSON,
+const registro=[];
+const ctx={console:{...console,warn(){}},Date,JSON,Logger:{log:m=>registro.push(String(m))},
  PropertiesService:{getScriptProperties:()=>({getProperty:k=>props[k]??null,setProperty:(k,v)=>props[k]=v,getProperties:()=>Object.assign({},props),setProperties:o=>Object.assign(props,o)})},
  CacheService:{getScriptCache:()=>({get:k=>cache[k]??null,put:(k,v)=>cache[k]=v,getAll:ks=>Object.fromEntries(ks.filter(k=>k in cache).map(k=>[k,cache[k]])),putAll:o=>Object.assign(cache,o)})},
  LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},
@@ -145,6 +146,24 @@ ctx.guardarCotizacion({...base,proyectoFolio:'PRY-2026-0001',idSolicitud:'c7'});
 const c1b=carpetas[pry.m[1][7]];
 assert(c1b!==c1&&!c1b.trashed&&c1b.hijos.find(h=>h.nombre==='Cotizaciones').archivos.length===1);
 assert.deepEqual(c1b.hijos.map(h=>h.nombre),['Cotizaciones']);
+
+// --- Claves para proyectos que ya existían (editor): vista previa y aplicar ---
+const pr=pry.m;
+const cv1=carpeta('PRY-2026-0101 — Helgen — DROGHEDA',pdfRaiz), cv2=carpeta('Nombre puesto a mano',pdfRaiz);
+pr.push(['PRY-2026-0101','','DROGHEDA','Helgen','id','','Activo',cv1.id,'a@helgen.tech','A','B']);
+pr.push(['PRY-2026-0102','','Planta de Agua Norte','Helgen','id','','Cerrado',cv2.id,'a@helgen.tech','A','B']);
+pr.push(['PRY-2026-0103','','Sin carpeta','Helgen','id','','Cancelado','NO-EXISTE','a@helgen.tech','A','B']);
+const clavePrevia=pr[1][11];
+let prev=ctx.asignarClavesProyectos();
+assert.deepEqual(prev.map(x=>x.folio+':'+x.clave),['PRY-2026-0101:DRO','PRY-2026-0102:PAN','PRY-2026-0103:SIC'],'solo los que no tienen clave');
+assert.equal(cv1.nombre,'PRY-2026-0101 — Helgen — DROGHEDA','la vista previa no cambia nada'); assert.equal(pr[pr.length-3][11],undefined);
+assert(registro.some(l=>/VISTA PREVIA/.test(l))&&registro.some(l=>/DROGHEDA" → PRY-2026-0101-DRO/.test(l)));
+ctx.asignarClavesProyectosAplicar();
+assert.deepEqual(pr.slice(-3).map(r=>r[11]),['DRO','PAN','SIC']);
+assert.equal(cv1.nombre,'PRY-2026-0101-DRO — Helgen — DROGHEDA','carpeta renombrada (por carpeta_id)');
+assert.equal(cv2.nombre,'Nombre puesto a mano','renombrada a mano: no se toca');
+assert.equal(pr[1][11],clavePrevia,'la clave de un proyecto que ya tenía no cambia');
+assert.deepEqual(ctx.asignarClavesProyectos(),[],'una segunda vez ya no hay nada que asignar');
 
 // --- Fuera de doPost (sin vendedor) no se crean proyectos ---
 vm.runInContext('VENDEDOR_ = null',ctx);
