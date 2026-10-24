@@ -395,7 +395,7 @@ dentro de la celda).
 **Pestaña `Proyectos`** (1 fila por proyecto): Folio (`PRY-AAAA-NNNN`: la llave interna), Fecha, Nombre, Cliente ("nombre — empresa"),
 `cliente_id` (ver `idCliente`), Ubicación, Estado (Activo/Cerrado/Cancelado; **se cambia con la lista desplegable en la hoja**,
 no hay pantalla), `carpeta_id`, `vendedor_email`, `vendedor_nombre`, `vendedor_apellido`, `clave` (L, desde el 23/10/2026: 3 letras;
-se muestra como `PRY-AAAA-NNNN-XXX`; vacía en proyectos anteriores hasta correr `asignarClavesProyectosAplicar()`; no cambia).
+se muestra como `PRY-AAAA-NNNN-XXX`; ya asignada a todos los proyectos el 23/10/2026; no cambia).
 
 **"Catálogo Helgen" / pestaña `Catalogo`**: Clave (única, mayúsculas), Descripción, Unidad, Precio unitario (sin IVA, MXN),
 Actualizado, Actualizó, Clave SAT, Unidad SAT, Precio USD (sin IVA, automático; columna I con fórmula, no escribir ahí).
@@ -812,10 +812,10 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
   una sola llamada al entrar (9.2 s la primera, en frío; 2.0 s al recargar), 6 pestañas, roles guardados, DROGHEDA en Requisiciones y
   en Compras ("MXN · sin contrato"), resumen de cobranza y vista de DROGHEDA sin margen (no tiene órdenes). La columna L de la hoja
   real se crea sola la primera vez que se lee Proyectos.
-  - **Pendiente (lo hace el usuario):** en el editor real, recargar y correr `asignarClavesProyectos` (vista previa en el registro:
-    debe decir `PRY-2026-0001 → PPO` y `PRY-2026-0002 "DROGHEDA" → PRY-2026-0002-DRO`) y después `asignarClavesProyectosAplicar`.
-    En PRUEBAS ya se corrió bien el 23/10/2026 (la primera vez no escribió nada: el editor no estaba recargado): 0001 TSP, 0002 PNP,
-    0003 PCA, 0004 PCB en la columna L y sus carpetas renombradas (comprobado con los conectores); 0005 y 0006 no cambiaron.
+  - **Claves asignadas el 23/10/2026** (el usuario corrió `asignarClavesProyectos` y `asignarClavesProyectosAplicar`, primero en
+    PRUEBAS y luego en el real; comprobado con los conectores): `PRY-2026-0001-PPO` (carpeta "PRY-2026-0001-PPO — Angel Sosa — Helgen —
+    Proyecto de Prueba oficial") y `PRY-2026-0002-DRO` (carpeta "PRY-2026-0002-DRO — Helgen — DROGHEDA"). En PRUEBAS: 0001 TSP,
+    0002 PNP, 0003 PCA, 0004 PCB (la primera vez no escribió nada porque el editor no estaba recargado).
   - No probado con cuentas reales de otras personas (Tania, Leo, `SOLO_REQUISICION`): lo cubren las pruebas en Node.
   - Idea: activador diario para llenar el caché temprano (§6.14).
 - **Renombrar en Drive / Apps Script (lo hace el usuario):** proyecto `1GsH8Dja…` → "Cotizador Helgen (código de la app)";
