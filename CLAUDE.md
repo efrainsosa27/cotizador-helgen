@@ -814,9 +814,8 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
   real se crea sola la primera vez que se lee Proyectos.
   - **Pendiente (lo hace el usuario):** en el editor real, recargar y correr `asignarClavesProyectos` (vista previa en el registro:
     debe decir `PRY-2026-0001 → PPO` y `PRY-2026-0002 "DROGHEDA" → PRY-2026-0002-DRO`) y después `asignarClavesProyectosAplicar`.
-    Antes, repetirlo en PRUEBAS: el 23/10/2026 el usuario lo corrió ahí pero no se escribió nada (columna L vacía en 0001–0004 y
-    carpetas sin renombrar; el editor de PRUEBAS sí tenía la función, comprobado con `clasp clone`; probablemente el editor no se
-    había recargado). La función está probada en Node (`proyectos.test.js`).
+    En PRUEBAS ya se corrió bien el 23/10/2026 (la primera vez no escribió nada: el editor no estaba recargado): 0001 TSP, 0002 PNP,
+    0003 PCA, 0004 PCB en la columna L y sus carpetas renombradas (comprobado con los conectores); 0005 y 0006 no cambiaron.
   - No probado con cuentas reales de otras personas (Tania, Leo, `SOLO_REQUISICION`): lo cubren las pruebas en Node.
   - Idea: activador diario para llenar el caché temprano (§6.14).
 - **Renombrar en Drive / Apps Script (lo hace el usuario):** proyecto `1GsH8Dja…` → "Cotizador Helgen (código de la app)";
