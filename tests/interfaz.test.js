@@ -2,7 +2,8 @@
 // Cubre: si el servidor rechaza el proyecto (codigo PROYECTO), se limpia el campo, se refresca la lista y se avisa;
 // moneda USD (el catálogo no pone precio); pestaña Cobranza solo con permiso; aceptar con confirmación; pago con comprobante;
 // margen en Cobranza; pestaña Compras solo con permiso: requisición → orden precargada (renglones sin costo, tipo de cambio),
-// pago con comprobante, cancelar el pago, cerrar con motivo; pestaña Requisiciones (nueva, corregir, recibí el material) y
+// pago con comprobante, cancelar el pago, cerrar con motivo; días de crédito; facturas del proveedor (CFDI con vista previa y
+// extranjera); cuentas por pagar (resumen, filtros, CSV, sincronización); pestaña Requisiciones (nueva, corregir, recibí el material) y
 // SOLO_REQUISICION (solo esa pestaña).
 // Uso: node tests/interfaz.test.js .   (carpeta del proyecto)
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
@@ -54,7 +55,8 @@ function montar(datosIniciales,opts){
   const ctx={document,fetch,console,JSON,Date,Math,Number,String,Array,Object,Promise,Proxy,Error,Uint8Array,TextDecoder,FileReader,
    atob:s=>Buffer.from(s,'base64').toString('binary'),crypto:{randomUUID:()=>'id-'+Math.random()},
    sessionStorage:{getItem:k=>almacen[k]??null,setItem:(k,v)=>almacen[k]=v,removeItem:k=>delete almacen[k]},
-   confirm:m=>{dialogos.vistos.push(m);return dialogos.confirmar},prompt:m=>{dialogos.vistos.push(m);return dialogos.prompt},
+   confirm:m=>{dialogos.vistos.push(m);return dialogos.confirmar},
+   prompt:m=>{dialogos.vistos.push(m);return Array.isArray(dialogos.prompt)?dialogos.prompt.shift():dialogos.prompt}, // arreglo = varias respuestas seguidas
    localStorage:{getItem:k=>local[k]??null,setItem:(k,v)=>local[k]=String(v),removeItem:k=>delete local[k]},
    CustomEvent:class{constructor(type,o){this.type=type;this.detail=o&&o.detail}},
    setTimeout,clearTimeout,setInterval:(f,ms)=>intervalos.push(f),scrollTo(){}};
@@ -318,11 +320,56 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
     estado:'Solicitada',ocFolio:'',renglones:2};
   C.respuestas.listarProyectosCompras={ok:true,datos:[{...PRY,moneda:'MXN',marca:'helgen'}]};
   C.respuestas.listarRequisiciones={ok:true,datos:[RQ]};
+  // Cuentas por pagar: se pide al abrir Compras (si no vino en la carga inicial)
+  const RANGOS=[{clave:'porVencer',etiqueta:'Por vencer'},{clave:'d1a30',etiqueta:'Vencido 1–30'},{clave:'d31a60',etiqueta:'Vencido 31–60'},
+    {clave:'d61a90',etiqueta:'Vencido 61–90'},{clave:'d90mas',etiqueta:'Vencido +90'}];
+  const CXPD={hoy:'2026-10-20',rangos:RANGOS,
+    totales:[{moneda:'MXN',facturas:1,porVencer:0,d1a30:1740,d31a60:0,d61a90:0,d90mas:0,vencido:1740,total:1740},
+      {moneda:'USD',facturas:1,porVencer:500,d1a30:0,d31a60:0,d61a90:0,d90mas:0,vencido:0,total:500}],
+    abiertas:[{folio:'FPR-2026-0001',tipo:'CFDI',serieFolio:'A-1',ocFolio:'OC-2026-0001',reqFolio:'REQ-2026-0001',proyectoFolio:'PRY-2026-0001',
+        proyectoVisible:'PRY-2026-0001-TEC',proyectoNombre:'Techo',proveedor:'Paneles del Bajío',fechaEmision:'2026-09-10',fechaVencimiento:'2026-10-10',dias:10,rango:'d1a30',moneda:'MXN',total:1740},
+      {folio:'FPR-2026-0002',tipo:'Extranjera',serieFolio:'=INV-1',ocFolio:'OC-2026-0006',reqFolio:'REQ-2026-0008',proyectoFolio:'PRY-2026-0002',
+        proyectoVisible:'PRY-2026-0002-DRO',proyectoNombre:'DROGHEDA',proveedor:'Ardusimple SL',fechaEmision:'2026-10-20',fechaVencimiento:'2026-10-25',dias:-5,rango:'porVencer',moneda:'USD',total:500}],
+    faltantes:[{folio:'OC-2026-0005',fecha:'2026-10-01',proyectoFolio:'PRY-2026-0003',proyectoVisible:'PRY-2026-0003-BON',proyectoNombre:'Bodega',proveedor:'Cementos SA',
+      estado:'Pagada',pagada:true,moneda:'MXN',subtotal:1000,facturado:0,faltante:1000,reqFolio:'REQ-2026-0009'}],
+    repPendientes:{n:1,folios:['FPR-2026-0003']}};
+  C.respuestas.cuentasPorPagar={ok:true,datos:CXPD};
   C.$('rcEstado').value='Solicitada'; C.run("verTab('com')"); await esperar();
   assert.deepEqual(C.llamadas.find(c=>c.funcion==='listarRequisiciones').args,['','Solicitada']);
   assert(/REQ-2026-0001/.test(C.$('rcLista').innerHTML)&&/Juan Obrero/.test(C.$('rcLista').innerHTML)&&/abrirReqCom/.test(C.$('rcLista').innerHTML));
   assert(/PRY-2026-0001 — Luis — Solar MX — Techo/.test(C.$('comProyectosList').innerHTML)&&/MXN · Helgen/.test(C.$('comProyectosList').innerHTML));
-  const PROV={id:'PDB200101AB1',razonSocial:'Paneles del Bajío',rfc:'PDB200101AB1',contacto:'Luis Pérez',correo:'v@pdb.mx',telefono:'442',etiqueta:'Paneles del Bajío'};
+  assert.equal(C.llamadas.filter(c=>c.funcion==='cuentasPorPagar').length,1);
+  const cr=C.$('cxpResumen').innerHTML;
+  assert(/Por pagar MXN/.test(cr)&&/\$1,740\.00 MXN/.test(cr)&&/Vencido MXN/.test(cr)&&/Por pagar USD/.test(cr)&&/\$500\.00 USD/.test(cr)&&
+    /1 orden sin factura completa/.test(cr)&&/1 complemento de pago \(REP\) pendiente/.test(cr),cr);
+  assert(!/2,240/.test(cr),'nunca se suman MXN y USD');
+  // Vista completa: sin volver a pedirla; vencidas primero, filtros, CSV
+  C.run('verCxp()');
+  assert(!C.$('comVistaCxp').classList.contains('oculto')&&C.$('comVistaLista').classList.contains('oculto'));
+  assert.equal(C.llamadas.filter(c=>c.funcion==='cuentasPorPagar').length,1,'ya cargada');
+  assert(/Vencido 1–30/.test(C.$('cxpTotales').innerHTML)&&/1 factura por pagar/.test(C.$('cxpTotales').innerHTML));
+  let cl=C.$('cxpLista').innerHTML;
+  assert(/FPR-2026-0001/.test(cl)&&/Vencida hace 10 días/.test(cl)&&/PRY-2026-0001-TEC/.test(cl)&&/data-req="REQ-2026-0001"/.test(cl)&&/Vence en 5 días/.test(cl));
+  assert(/Pagada sin factura/.test(C.$('cxpFaltantes').innerHTML)&&/data-req="REQ-2026-0009"/.test(C.$('cxpFaltantes').innerHTML)&&/FPR-2026-0003/.test(C.$('cxpRep').innerHTML));
+  C.$('cxpVencidas').checked=true; C.run('pintarCxp()');
+  assert(/FPR-2026-0001/.test(C.$('cxpLista').innerHTML)&&!/FPR-2026-0002/.test(C.$('cxpLista').innerHTML),'solo vencidas');
+  C.$('cxpVencidas').checked=false; C.$('cxpBuscar').value='ardu'; C.run('pintarCxp()');
+  assert(!/FPR-2026-0001/.test(C.$('cxpLista').innerHTML)&&/FPR-2026-0002/.test(C.$('cxpLista').innerHTML),'por proveedor');
+  C.$('cxpBuscar').value=''; C.$('cxpMoneda').value='MXN'; C.run('pintarCxp()');
+  assert(!/FPR-2026-0002/.test(C.$('cxpLista').innerHTML),'por moneda');
+  C.$('cxpMoneda').value='';
+  const csvC=C.run('csvCxp(filtrarCxp())');
+  assert(csvC.startsWith('﻿"Vencimiento","Días vencida"')&&/"FPR-2026-0001"/.test(csvC)&&/,1740\.00/.test(csvC)&&csvC.includes(`"'=INV-1"`)&&/"Vencido 1–30"/.test(csvC),csvC);
+  // Sincronización: pide cuentas por pagar y las repinta
+  C.respuestas.sincronizar={ok:true,datos:{versiones:{facturasProveedor:3},permisos:{cobranza:false,desbloqueo:false,compras:true,requisicion:false},
+    cambios:['facturasProveedor'],cxp:{...CXPD,totales:[],abiertas:[],faltantes:[],repPendientes:{n:0,folios:[]}}}};
+  C.run('sincronizarAhora()'); await esperar();
+  assert.equal(C.llamadas.filter(c=>c.funcion==='sincronizar').pop().args[1].cxp,true);
+  assert(/No hay facturas por pagar/.test(C.$('cxpResumen').innerHTML)&&/No hay facturas por pagar/.test(C.$('cxpLista').innerHTML));
+  C.respuestas.sincronizar=()=>({ok:true,datos:{versiones:{facturasProveedor:3},permisos:{cobranza:false,desbloqueo:false,compras:true,requisicion:false},cambios:[]}});
+  C.run('verListaCom()');
+  assert(C.$('comVistaCxp').classList.contains('oculto')&&!C.$('comVistaLista').classList.contains('oculto'));
+  const PROV={id:'PDB200101AB1',razonSocial:'Paneles del Bajío',rfc:'PDB200101AB1',contacto:'Luis Pérez',correo:'v@pdb.mx',telefono:'442',etiqueta:'Paneles del Bajío',diasCredito:30};
   const vistaReq=(extra={},req={})=>({requisicion:{folio:'REQ-2026-0001',fecha:'2026-10-20',proyectoFolio:'PRY-2026-0001',solicitante:'Juan Obrero',
       solicitanteEmail:'juan@helgen.tech',estado:'Solicitada',motivo:'',cotizacionId:'COT1',cotizacionUrl:'https://drive/cot',ocFolio:'',...req},
     renglones:[{renglon:1,descripcion:'Cable THW 10',cantidad:100,unidad:'M',notas:'rojo'},{renglon:2,descripcion:'Tubo',cantidad:12,unidad:'PZA',notas:''}],
@@ -340,9 +387,13 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   assert.deepEqual(filasOc.map(t=>[t.querySelector('.desc').value,t.querySelector('.cant').value,t.querySelector('.uni').value,t.querySelector('.costo').value]),
     [['Cable THW 10 — rojo',100,'M',''],['Tubo',12,'PZA','']]);
   assert.deepEqual([C.$('ocLugar').value,C.$('ocMoneda').value,C.$('ocIva').value,C.$('ocEntrega').min],['Qro','MXN','0.16','2026-10-20'],'por omisión: ubicación, moneda del proyecto, IVA');
-  // Proveedor registrado: se autorrellena
+  // Días de crédito: vacíos al precargar; las condiciones se llenan solas
+  assert.deepEqual([C.$('ocDias').value,C.$('ocCondiciones').value],['','']);
+  C.$('ocDias').value='0'; C.$('ocDias').disparar('input'); assert.equal(C.$('ocCondiciones').value,'Contado');
+  // Proveedor registrado: se autorrellena (también sus días de crédito de la orden anterior)
   C.$('prvRazon').value='Paneles del Bajío'; C.$('prvRazon').disparar('change');
-  assert.deepEqual([C.$('prvRfc').value,C.$('prvContacto').value,C.$('prvCorreo').value],['PDB200101AB1','Luis Pérez','v@pdb.mx']);
+  assert.deepEqual([C.$('prvRfc').value,C.$('prvContacto').value,C.$('prvCorreo').value,C.$('ocDias').value,C.$('ocCondiciones').value],
+    ['PDB200101AB1','Luis Pérez','v@pdb.mx',30,'Crédito 30 días']);
   // Renglón del catálogo: clave, descripción y unidad; el costo queda vacío
   C.run('agregarRenglonOc()');
   const ren=filasOc[filasOc.length-1];
@@ -356,7 +407,8 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   assert(C.$('ocTcCaja').classList.contains('oculto'));
   C.$('ocMoneda').value='USD'; C.run('pintarTcOc()');
   assert(!C.$('ocTcCaja').classList.contains('oculto')); assert.equal(C.$('ocLblTot').textContent,'TOTAL USD');
-  C.$('ocTc').value='18.5'; C.$('ocEntrega').value='2026-10-25'; C.$('ocCondiciones').value='Contado';
+  C.$('ocTc').value='18.5'; C.$('ocEntrega').value='2026-10-25'; C.$('ocCondiciones').value='Contado'; C.$('ocCondiciones').disparar('input');
+  C.$('ocDias').value='45'; C.$('ocDias').disparar('input'); assert.equal(C.$('ocCondiciones').value,'Contado','escritas a mano: ya no cambian solas');
   const ORD={folio:'OC-2026-0001',fecha:'2026-10-20',proveedor:'Paneles del Bajío',moneda:'USD',total:3200,tipoCambio:18.5,fechaEntrega:'2026-10-25',
     lugarEntrega:'Qro',condicionesPago:'Contado',estado:'Emitida',pdfUrl:'https://drive/oc',reqFolio:'REQ-2026-0001'};
   const autorizada=vistaReq({orden:ORD,puedeAutorizar:false,puedeRevisar:false,puedePagar:true},{estado:'Autorizada',ocFolio:'OC-2026-0001'});
@@ -365,8 +417,8 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   const go=C.llamadas.find(c=>c.funcion==='autorizarRequisicion');
   assert.equal(go.args[0],'REQ-2026-0001');
   assert.deepEqual([go.args[1].proveedor.razonSocial,go.args[1].proveedor.rfc,go.args[1].moneda,go.args[1].tipoCambio,go.args[1].ivaTasa,go.args[1].fechaEntrega,
-    go.args[1].lugarEntrega,go.args[1].condicionesPago,go.args[1].idSolicitud,'proyectoFolio' in go.args[1]],
-    ['Paneles del Bajío','PDB200101AB1','USD','18.5','0','2026-10-25','Qro','Contado',idOc,false],'el proyecto sale de la requisición en el servidor');
+    go.args[1].lugarEntrega,go.args[1].diasCredito,go.args[1].condicionesPago,go.args[1].idSolicitud,'proyectoFolio' in go.args[1]],
+    ['Paneles del Bajío','PDB200101AB1','USD','18.5','0','2026-10-25','Qro','45','Contado',idOc,false],'el proyecto sale de la requisición en el servidor');
   const rr=go.args[1].renglones.find(x=>x.descripcion==='Panel solar 550 W');
   assert.deepEqual([rr.clave,rr.cantidad,rr.costo,'precio' in rr,'_tr' in rr],['PAN-550',2,'1000',false,false]);
   assert(/REQ-2026-0001/.test(C.$('aviso').innerHTML)&&/OC-2026-0001/.test(C.$('aviso').innerHTML));
@@ -421,6 +473,99 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   C.run("cancelarOc('OC-2026-0001')"); await esperar();
   assert.deepEqual(C.llamadas.find(c=>c.funcion==='cancelarOrdenCompra').args,['OC-2026-0001','Sin existencias']);
   assert(/fila-cancelada/.test(C.$('ocLista').innerHTML));
+
+  // ===== Facturas del proveedor (en la requisición, abierta desde Cuentas por pagar) =====
+  const ORDF={...ORD,moneda:'MXN',total:2320,subtotal:2000,tipoCambio:'',diasCredito:30,estado:'Emitida'};
+  const vFac=(extra={})=>vistaReq({orden:ORDF,puedeAutorizar:false,puedeRevisar:false,puedePagar:true,puedeFacturar:true,facturas:[],totalFacturado:0,
+    facturaCompleta:false,...extra},{estado:'Autorizada',ocFolio:'OC-2026-0001'});
+  C.run('verCxp()'); C.respuestas.getRequisicion={ok:true,datos:vFac()};
+  C.run("abrirReqCom('REQ-2026-0001')"); await esperar();
+  assert.equal(C.$('btnVolverCom').textContent,'← Cuentas por pagar');
+  assert(C.$('comVistaCxp').classList.contains('oculto')&&!C.$('rcFacturasCaja').classList.contains('oculto')&&!C.$('rcFormFactura').classList.contains('oculto'));
+  assert(/Sin facturas todavía/.test(C.$('rcFacturasResumen').innerHTML)&&/30 días de crédito/.test(C.$('rcOrden').innerHTML));
+  assert.deepEqual([C.$('fcTipo').value,C.$('fcXmlCaja').classList.contains('oculto'),C.$('fcExtCampos').classList.contains('oculto'),C.$('fcPdfLbl').textContent,
+    C.$('fcMoneda').value,C.$('ppMonto').value],['CFDI',false,true,'PDF de la factura (opcional)','MXN',2320]);
+  // Sin XML no se envía
+  C.run('registrarFacturaProv()'); await esperar();
+  assert(/Adjunta el XML/.test(C.$('aviso').innerHTML)&&!C.llamadas.some(c=>c.funcion==='registrarFacturaProveedor'));
+  // XML: vista previa (UTF-8; no lee el emisor falso del comentario) con avisos y el vencimiento según los días de la orden
+  const xmlCfdi=(o={})=>{const a={moneda:'MXN',version:'4.0',metodo:'PPD',...o};
+    return '<?xml version="1.0" encoding="UTF-8"?><cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="'+a.version+'" Serie="A" Folio="77" '+
+    'Fecha="2026-10-01T10:00:00" SubTotal="1500.00" Moneda="'+a.moneda+'" Total="1740.00" TipoDeComprobante="I" MetodoPago="'+a.metodo+'">'+
+    '<!-- <cfdi:Emisor Rfc="AAA010101AAA" Nombre="FALSO"/> --><cfdi:Emisor Rfc="PDB200101AB1" Nombre="PANELES DEL BAJÍO &amp; CIA"/>'+
+    '<cfdi:Receptor Rfc="HSE240304PC1"/><cfdi:Complemento><tfd:TimbreFiscalDigital UUID="6F1C5E2A-3B4D-4C5E-9F60-000000000001"/></cfdi:Complemento></cfdi:Comprobante>'};
+  const archivoXml=o=>[{name:'a77.xml',type:'text/xml',size:600,b64:Buffer.from(xmlCfdi(o),'utf8').toString('base64')}];
+  C.$('fcXml').files=archivoXml({moneda:'USD',version:'3.3'}); C.$('fcXml').disparar('change'); await esperar();
+  assert(/es en USD y la orden en MXN/.test(C.$('fcPrevia').innerHTML)&&/No es CFDI 4\.0/.test(C.$('fcPrevia').innerHTML));
+  // Un XML con una "moneda" hostil no mete HTML en la vista previa (dinero() escapa la moneda)
+  C.$('fcXml').files=archivoXml({moneda:'&lt;img src=x onerror=&amp;#97;lert(1)&gt;'}); C.$('fcXml').disparar('change'); await esperar();
+  assert(!/<img/i.test(C.$('fcPrevia').innerHTML)&&/&lt;IMG/.test(C.$('fcPrevia').innerHTML),C.$('fcPrevia').innerHTML);
+  assert.equal(C.run("dinero(1,'<b>')"),'$1.00 &lt;b&gt;');
+  C.$('fcXml').files=archivoXml(); C.$('fcXml').disparar('change'); await esperar();
+  const pv=C.$('fcPrevia').innerHTML;
+  assert(/PANELES DEL BAJÍO &amp; CIA/.test(pv)&&/PDB200101AB1/.test(pv)&&!/FALSO/.test(pv)&&/A-77/.test(pv)&&/Total \$1,740\.00 MXN/.test(pv)&&
+    /Vencería el 31\/10\/2026/.test(pv)&&/REP/.test(pv)&&!/aviso-moneda/.test(pv),pv);
+  // Registrar: el servidor lee todo del XML; la vista se repinta y el formulario queda listo para la siguiente
+  const F1={folio:'FPR-2026-0001',tipo:'CFDI',uuid:'6F1C5E2A-3B4D-4C5E-9F60-000000000001',serieFolio:'A-77',fechaEmision:'2026-10-01',fechaVencimiento:'2026-10-31',
+    diasCredito:30,ocFolio:'OC-2026-0001',moneda:'MXN',subtotal:1500,total:1740,retenidos:0,metodoPago:'PPD',xmlUrl:'https://drive/xml1',pdfUrl:'',estado:'Vigente',
+    nombreEmisor:'PANELES DEL BAJÍO & CIA',rfcEmisor:'PDB200101AB1'};
+  C.respuestas.registrarFacturaProveedor={ok:true,datos:{folio:'FPR-2026-0001',fechaVencimiento:'2026-10-31',ocFolio:'OC-2026-0001',desde:'requisicion',
+    vista:vFac({facturas:[F1],totalFacturado:1740})}};
+  const idF=C.run('ID_FPR'); C.$('fcNotas').value='Primera entrega'; C.run('registrarFacturaProv()'); await esperar(20);
+  const rf=C.llamadas.find(c=>c.funcion==='registrarFacturaProveedor').args[0];
+  assert.deepEqual([rf.ocFolio,rf.tipo,rf.xml.datos,rf.xml.nombre,rf.pdf,rf.notas,rf.desde,rf.idSolicitud,rf.numero],
+    ['OC-2026-0001','CFDI',archivoXml()[0].b64,'a77.xml',null,'Primera entrega','requisicion',idF,'']);
+  assert(/FPR-2026-0001/.test(C.$('aviso').innerHTML)&&/31\/10\/2026/.test(C.$('aviso').innerHTML));
+  const tf=C.$('rcFacturas').innerHTML;
+  assert(/FPR-2026-0001/.test(tf)&&/Vence en 11 días/.test(tf)&&/https:\/\/drive\/xml1/.test(tf)&&/cambiarDiasFactura\('FPR-2026-0001',30\)/.test(tf)&&/cancelarFacturaProv/.test(tf),tf);
+  assert(/Facturado: <b>\$1,740\.00 MXN/.test(C.$('rcFacturasResumen').innerHTML));
+  assert.deepEqual([C.run('ID_FPR')!==idF,C.run('FC_XML'),C.$('fcNotas').value],[true,null,''],'el formulario queda listo para la siguiente');
+  assert.equal(C.$('ppMonto').value,2320,'facturada a medias: el pago es el total de la orden');
+  assert(/todavía no cubren la orden/.test(C.$('ppNota').textContent));
+  // Extranjera: PDF obligatorio; número, fecha, moneda, subtotal e impuestos capturados
+  C.$('fcTipo').value='Extranjera'; C.run('pintarTipoFactura()');
+  assert.deepEqual([C.$('fcXmlCaja').classList.contains('oculto'),C.$('fcExtCampos').classList.contains('oculto'),C.$('fcPdfLbl').textContent],[true,false,'PDF de la factura *']);
+  C.$('fcNumero').value='INV-9'; C.$('fcFecha').value='2026-10-15'; C.$('fcSubtotal').value='500'; C.$('fcImpuestos').value='80'; C.run('pintarPreviaFactura()');
+  assert(/Total \$580\.00 MXN/.test(C.$('fcPrevia').innerHTML)&&/Vencería el 14\/11\/2026/.test(C.$('fcPrevia').innerHTML));
+  C.run('registrarFacturaProv()'); await esperar();
+  assert(/Adjunta el PDF de la factura del proveedor extranjero/.test(C.$('aviso').innerHTML)&&C.llamadas.filter(c=>c.funcion==='registrarFacturaProveedor').length===1);
+  C.$('fcPdf').files=[{name:'inv9.pdf',type:'application/pdf',size:900,b64:'JVBERi0='}];
+  const F2={...F1,folio:'FPR-2026-0002',tipo:'Extranjera',uuid:'',serieFolio:'INV-9',fechaEmision:'2026-10-15',fechaVencimiento:'2026-11-14',total:348,subtotal:500,
+    retenidos:232,metodoPago:'',xmlUrl:'',pdfUrl:'https://drive/pdf2',nombreEmisor:'Paneles del Bajío',rfcEmisor:''};
+  C.respuestas.registrarFacturaProveedor={ok:true,datos:{folio:'FPR-2026-0002',fechaVencimiento:'2026-11-14',ocFolio:'OC-2026-0001',desde:'requisicion',
+    vista:vFac({facturas:[F1,F2],totalFacturado:2088,facturaCompleta:true})}};
+  C.run('registrarFacturaProv()'); await esperar(20);
+  const rf2=C.llamadas.filter(c=>c.funcion==='registrarFacturaProveedor').pop().args[0];
+  assert.deepEqual([rf2.tipo,rf2.xml,rf2.pdf.datos,rf2.numero,rf2.fecha,rf2.moneda,rf2.subtotal,rf2.impuestos],['Extranjera',null,'JVBERi0=','INV-9','2026-10-15','MXN','500','80']);
+  assert.equal(C.$('fcTipo').value,'Extranjera','la siguiente, del mismo tipo que la última');
+  // Facturada completa con retenciones: el pago se precarga con el total de sus facturas
+  assert.equal(C.$('ppMonto').value,2088);
+  assert(/o el total de sus facturas \(\$2,088\.00 MXN\)/.test(C.$('ppNota').textContent)&&/Retenciones \$232\.00 MXN/.test(C.$('rcFacturas').innerHTML));
+  // Cancelar (motivo obligatorio) y cambiar días de crédito (número y motivo)
+  C.dialogos.prompt=['  ']; C.run("cancelarFacturaProv('FPR-2026-0002')"); await esperar();
+  assert(!C.llamadas.some(c=>c.funcion==='cancelarFacturaProveedor'));
+  C.respuestas.cancelarFacturaProveedor={ok:true,datos:{folio:'FPR-2026-0002',desde:'requisicion',
+    vista:vFac({facturas:[F1,{...F2,estado:'Cancelada',canceladoPor:'pedro@helgen.tech',motivoCancelacion:'Duplicada'}],totalFacturado:1740})}};
+  C.dialogos.prompt=['Duplicada']; C.run("cancelarFacturaProv('FPR-2026-0002')"); await esperar();
+  assert.deepEqual(C.llamadas.find(c=>c.funcion==='cancelarFacturaProveedor').args,['FPR-2026-0002','Duplicada','requisicion']);
+  assert(/fila-cancelada/.test(C.$('rcFacturas').innerHTML)&&C.$('ppMonto').value===2320,'cancelada: vuelve al total de la orden');
+  C.dialogos.prompt=['abc']; C.run("cambiarDiasFactura('FPR-2026-0001',30)"); await esperar();
+  assert(/número entero/.test(C.$('aviso').innerHTML));
+  C.dialogos.prompt=['45',' ']; C.run("cambiarDiasFactura('FPR-2026-0001',30)"); await esperar();
+  assert(/por qué cambian/.test(C.$('aviso').innerHTML)&&!C.llamadas.some(c=>c.funcion==='cambiarDiasCreditoFactura'));
+  C.respuestas.cambiarDiasCreditoFactura={ok:true,datos:{folio:'FPR-2026-0001',fechaVencimiento:'2026-11-15',desde:'requisicion',
+    vista:vFac({facturas:[{...F1,diasCredito:45,fechaVencimiento:'2026-11-15'}],totalFacturado:1740})}};
+  C.dialogos.prompt=['45','El proveedor amplió el crédito']; C.run("cambiarDiasFactura('FPR-2026-0001',30)"); await esperar();
+  assert.deepEqual(C.llamadas.find(c=>c.funcion==='cambiarDiasCreditoFactura').args,['FPR-2026-0001','45','El proveedor amplió el crédito','requisicion']);
+  assert(/15\/11\/2026/.test(C.$('aviso').innerHTML)&&/45 días de crédito/.test(C.$('rcFacturas').innerHTML));
+  // Regresar: a cuentas por pagar (de donde se abrió)
+  C.run('volverCom()');
+  assert(!C.$('comVistaCxp').classList.contains('oculto')&&C.$('comVistaReq').classList.contains('oculto'));
+  // Órdenes por proyecto: columna "Facturado"
+  C.respuestas.getComprasProyecto={ok:true,datos:{proyecto:PRY,moneda:'MXN',marca:'helgen',hoy:'2026-10-20',
+    ordenes:[{...ORDF,facturas:[F1],totalFacturado:1740},{...ORDF,folio:'OC-2026-0003',facturas:[],totalFacturado:0}]}};
+  C.run("abrirProyectoCom('PRY-2026-0001')"); await esperar();
+  assert(/\$1,740\.00 MXN<div class="nota">1 factura/.test(C.$('ocLista').innerHTML)&&/Sin factura/.test(C.$('ocLista').innerHTML));
 
   // ===== Requisiciones: quien pide materiales (ROL_REQUISICION, sin otros roles) =====
   const RQS=[{folio:'REQ-2026-0002',fecha:'2026-10-20',proyectoFolio:'PRY-2026-0001',proyectoNombre:'Techo',estado:'Devuelta',motivo:'Falta el calibre',notasRecepcion:'',
