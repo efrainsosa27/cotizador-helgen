@@ -447,9 +447,12 @@ Cobranza: `ROL_COBRANZA` (correos separados por coma: efrain@, tania@, leo@), `A
 Compras: `ROL_COMPRAS` (correos separados por coma: efrain@, tania@, leo@; creada el 21/10/2026), `COMPRAS_FOLDER_ID` y
 `COMPRAS_DB_ID` (se crean solos), `CONSECUTIVO_OC_AAAA`. **Sin `ROL_COMPRAS` nadie tiene compras.**
 Requisiciones (23/10/2026): `ROL_REQUISICION` (efrain@, tania@, leo@: piden materiales y usan el resto del cotizador),
-`SOLO_REQUISICION` (adriana@, miguel@, paola@, jesus@: **solo** la pestaña Requisiciones; ya incluye el permiso de pedir y manda
+`SOLO_REQUISICION` (adriana@, miguel@, paola@, jesus@ y, desde el 28/10/2026, alan@ (Alan Basurto) y daniel@ (Daniel Martinez): **solo** la pestaña Requisiciones; ya incluye el permiso de pedir y manda
 sobre cualquier otro rol), `CONSECUTIVO_REQ_AAAA`, `CONSECUTIVO_PGP_AAAA`. Las cuentas de `SOLO_REQUISICION` también deben estar
-en los usuarios de prueba de OAuth (§10.1; agregadas por el usuario el 23/10/2026).
+en los usuarios de prueba de OAuth (§10.1; agregadas por el usuario el 23/10/2026; alan@ y daniel@ el 28/10/2026).
+**Dar de alta a alguien en un rol no requiere correr código ni publicar:** basta con agregar el correo a la propiedad (separados
+por coma, nombre exacto sin acento: `SOLO_REQUISICION`, no `SOLO_REQUISICIÓN`) y a los usuarios de prueba de OAuth. El servidor
+relee las propiedades en cada llamada (comprobado el 28/10/2026 al agregar a alan@ y daniel@).
 Versiones (23/10/2026, §6.14): `VER_proyectos`, `VER_contratos`, `VER_cotizaciones`, `VER_catalogo`, `VER_requisiciones`, `VER_oc`,
 `VER_pagosCobranza`, `VER_pagosProveedores` (se crean y suben solas; no editarlas: si se borran, solo se recalcula el caché).
 **Un cambio de rol (`ROL_*`, `SOLO_REQUISICION`) se aplica sin recargar la página** en la siguiente consulta (≤ 20 s).
@@ -839,8 +842,8 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
   servidor local apagado.
   - Carpeta de respaldo de compras `17Yn700v…`: nació con "helgen.tech: lector"; el usuario la dejó en Restringido el 23/10/2026
     (comprobado con `get_file_permissions`: carpeta efrain@, tania@, leo@; copia solo efrain@).
-  - No probado con cuentas reales de otras personas: tania@/leo@ (requisiciones y compras) y adriana@, miguel@, paola@, jesus@
-    (`SOLO_REQUISICION`). La primera requisición real será también la primera prueba de archivos en la carpeta real.
+  - No probado con cuentas reales de otras personas: tania@/leo@ (requisiciones y compras) y adriana@, miguel@, paola@, jesus@,
+    alan@, daniel@ (`SOLO_REQUISICION`). La primera requisición real será también la primera prueba de archivos en la carpeta real.
   - Para ver la cotización lado a lado, la persona de compras necesita acceso a la carpeta de compras en Drive (tania@ y leo@ lo tienen).
   - Ideas no hechas: notificar por correo, varios pagos o pagos parciales por orden.
 - **Compras (fase 3): publicada el 21/10/2026** (API @8 + interfaz en Cloudflare). Hechos, en orden: respaldos (§2; la carpeta de
