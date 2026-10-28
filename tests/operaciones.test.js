@@ -64,15 +64,16 @@ const db=libro('DB','Base de datos',{Config:hoja([['Clave','Valor'],['PREFIJO_FO
 libro('CAT','Catálogo',{Catalogo:hoja([['Clave','Descripción','Unidad','Precio unitario (sin IVA)','Actualizado','Actualizó','Clave SAT','Unidad SAT'],['PAN-550','Panel solar 550 W','PZA',4100,'','','','']])});
 const props={SPREADSHEET_ID:'DB',FOLDER_ID:pdfRaiz.id,CATALOGO_ID:'CAT',
   ROL_COBRANZA:'efrain@helgen.tech, tania@helgen.tech',ADMIN_DESBLOQUEO:'efrain@helgen.tech',
-  ROL_COMPRAS:'efrain@helgen.tech, pedro@helgen.tech, leo@helgen.tech',
+  ROL_COMPRAS:'efrain@helgen.tech, pedro@helgen.tech, leo@helgen.tech, mixta@helgen.tech',
   ROL_REQUISICION:'obrero@helgen.tech, rosa@helgen.tech, pedro@helgen.tech, leo@helgen.tech',
-  SOLO_REQUISICION:'luis@helgen.tech, rosa@helgen.tech, adri@helgen.tech',ROL_OPERACIONES:''},cache={};
+  SOLO_REQUISICION:'luis@helgen.tech, rosa@helgen.tech, adri@helgen.tech, mixta@helgen.tech',ROL_OPERACIONES:''},cache={};
 
 // ---- Tokens: efrain (cobranza + compras + admin), tania (cobranza), pedro (compras + requisiciones), ana (vendedora sin rol),
 // obrero (ROL_REQUISICION), rosa y luis (SOLO_REQUISICION: solo la pestaña Requisiciones; luis no está en ROL_REQUISICION) ----
 const ahora=Math.floor(Date.now()/1000);
 const claims=(email,n,a)=>({aud:CID,iss:'https://accounts.google.com',exp:String(ahora+3000),email,email_verified:'true',hd:'helgen.tech',given_name:n,family_name:a});
 const tokens={adri:claims('adri@helgen.tech','Adriana','Del Ángel'),leo:claims('leo@helgen.tech','Leo','Rodríguez'),
+  mixta:claims('mixta@helgen.tech','Mixta','SoloYCompras'),
   efrain:claims('efrain@helgen.tech','Efrain','Sosa'),tania:claims('tania@helgen.tech','Tania','R'),
   ana:claims('ana@helgen.tech','Ana','López'),obrero:claims('obrero@helgen.tech','Juan','Obrero'),rosa:claims('rosa@helgen.tech','Rosa','Mena'),luis:claims('luis@helgen.tech','Luis','Campo'),pedro:claims('pedro@helgen.tech','Pedro','Ruiz'),intruso:{...claims('intruso@gmail.com','X','Y'),hd:undefined}};
 
@@ -200,7 +201,7 @@ for(const [acc,de,a] of [['aprobar','Solicitada','Aprobada'],['cotizar','Aprobad
   ['pagarRecibida','Recibida','Cerrada'],['cancelarOcAprobada','Autorizada','Aprobada'],['cancelarRecepcion','Recibida','Autorizada'],
   ['rechazar','Cotizada','Rechazada'],['rechazar','Aprobada','Rechazada'],['devolver','Aprobada','Devuelta']]) assert.equal(P.transicionReq(de,acc),a,acc+' desde '+de);
 for(const [acc,de] of [['aprobar','Aprobada'],['visto','Aprobada'],['cotizar','Solicitada'],['recibir','Pagada'],['pagar','Recibida'],
-  ['devolver','Cotizada'],['cancelar','Aprobada'],['cerrar','Recibida']]) assert.throws(()=>P.transicionReq(de,acc),/no se puede/,acc+' desde '+de);
+  ['cancelar','Aprobada'],['cerrar','Recibida']]) assert.throws(()=>P.transicionReq(de,acc),/no se puede/,acc+' desde '+de);
 
 // ================= Servidor (doPost) =================
 const p1=ok('ana','crearProyecto',{nombre:'HBOX Manzanillo',ubicacion:'Manzanillo, Col.',cliente:{nombre:'Cliente Secreto',empresa:'Empresa Oculta SA'},idSolicitud:'p1'}).folio;
@@ -253,9 +254,10 @@ assert.deepEqual([vo.puedeAprobar,vo.puedeDevolver,vo.puedeRechazar,vo.puedeVist
 assert(!/Cliente Secreto|Empresa Oculta|98765/.test(JSON.stringify(vo)),'operaciones no ve cliente ni montos del contrato');
 
 // Aprobar renglón por renglón
-falla('adri','aprobarRequisicion',[r1,{renglones:[{renglon:1,aprobado:true}]}],/Aprueba o rechaza el renglón 2/);
+falla('adri','aprobarRequisicion',[r1,{version:1,renglones:[{renglon:1,aprobado:true}]}],/Aprueba o rechaza el renglón 2/);
+assert.equal(vo.version,1,'la vista trae la versión de los renglones');
 falla('pedro','aprobarRequisicion',[r1,{}],/permiso de operaciones/,'PERMISO');
-vo=ok('adri','aprobarRequisicion',r1,{prioridad:'Urgente',renglones:[{renglon:1,aprobado:true,cantidad:80},{renglon:2,aprobado:false,comentario:'Ya hay en almacén'},{renglon:3,aprobado:true}]});
+vo=ok('adri','aprobarRequisicion',r1,{version:1,prioridad:'Urgente',renglones:[{renglon:1,aprobado:true,cantidad:80},{renglon:2,aprobado:false,comentario:'Ya hay en almacén'},{renglon:3,aprobado:true}]});
 assert.deepEqual([vo.requisicion.estado,vo.requisicion.prioridad,vo.requisicion.aproboEmail,vo.puedeAprobar,vo.puedeRechazar],['Aprobada','Urgente','adri@helgen.tech',false,true]);
 let mo=ok('obrero','misRequisiciones').find(x=>x.folio===r1);
 assert.deepEqual(mo.renglones.map(x=>x.decision+':'+x.cantidadAprobada+':'+(x.comentario||'')),['Aprobado:80:','Rechazado:0:Ya hay en almacén','Aprobado:12:']);
@@ -263,7 +265,7 @@ assert(/2 de 3 renglón\(es\) aprobado\(s\) · prioridad Urgente · cantidad aju
 falla('adri','aprobarRequisicion',[r1,{}],/está aprobada: no se puede aprobar/);
 
 // Nadie aprueba lo que pidió (adri pide; leo aprueba)
-const todo=n=>({renglones:Array.from({length:n},(_,i)=>({renglon:i+1,aprobado:true}))});
+const todo=(n,version)=>({version:version||1,renglones:Array.from({length:n},(_,i)=>({renglon:i+1,aprobado:true}))});
 const rA=ok('adri','guardarRequisicion',nuevaReq({renglones:[{descripcion:'Brida',cantidad:4},{descripcion:'Tornillo',cantidad:10}]})).folio;
 falla('adri','aprobarRequisicion',[rA,todo(2)],/tu propia requisición/,'PERMISO');
 assert.deepEqual([ok('adri','getRequisicionOperaciones',rA).puedeAprobar,ok('adri','getRequisicionOperaciones',rA).esPropia],[false,true]);
@@ -318,8 +320,11 @@ assert.equal(voA.requisicion.estado,'Rechazada','operaciones rechaza también en
 
 // Visto bueno → orden de compra (Elaboró = compras; Autorizó = operaciones)
 const nOC=H('OrdenesCompra').length;
-const vb=ok('adri','autorizarPropuesta',r1,3,'vb1');
-assert.equal(ok('adri','autorizarPropuesta',r1,3,'vb1').ocFolio,vb.ocFolio,'idempotencia');
+const huella=f=>ok('adri','getRequisicionOperaciones',f).propuesta.huella;
+falla('adri','autorizarPropuesta',[r1,3,'vb0'],/cambió la propuesta/,null);
+const h1=huella(r1);
+const vb=ok('adri','autorizarPropuesta',r1,3,'vb1',h1);
+assert.equal(ok('adri','autorizarPropuesta',r1,3,'vb1',h1).ocFolio,vb.ocFolio,'idempotencia');
 assert.equal(H('OrdenesCompra').length,nOC+1);
 const ocF=vb.ocFolio, filaOc=H('OrdenesCompra').find(x=>x[0]===ocF);
 assert.deepEqual([vb.vista.requisicion.estado,vb.vista.requisicion.voboEmail,filaOc[17],filaOc[25],filaOc[34],filaOc[28]],
@@ -377,10 +382,13 @@ falla('pedro','cancelarRecepcion',[REC('0001'),'Cantidad equivocada'],/ya está 
 const r2=ok('obrero','guardarRequisicion',nuevaReq({sitio:'Querétaro',fechaRequerida:'',renglones:[{descripcion:'Antena GNSS',cantidad:2,unidad:'pza'},
   {descripcion:'Cable coaxial',cantidad:10,unidad:'m'},{descripcion:'Conector TNC',cantidad:4,unidad:'pza'}]})).folio;
 ok('adri','aprobarRequisicion',r2,todo(3));
-falla('pedro','separarRequisicion',[r2,[1,2,3],'Otro proveedor para todo'],/Deja al menos un renglón aprobado/);
-falla('pedro','separarRequisicion',[r2,[],'Otro proveedor'],/Elige los renglones/);
-falla('pedro','separarRequisicion',[r2,[3],'no'],/por qué separas/);
-const sp=ok('pedro','separarRequisicion',r2,[3],'El conector lo vende otro proveedor');
+falla('pedro','separarRequisicion',[r2,[1,2,3],'Otro proveedor para todo',{version:1}],/Deja al menos un renglón aprobado/);
+falla('pedro','separarRequisicion',[r2,[],'Otro proveedor',{version:1}],/Elige los renglones/);
+falla('pedro','separarRequisicion',[r2,[3],'no',{version:1}],/por qué separas/);
+falla('pedro','separarRequisicion',[r2,[3],'Otro proveedor',{version:2}],/cambió después de que la abriste/);
+const sp=ok('pedro','separarRequisicion',r2,[3],'El conector lo vende otro proveedor',{version:1,idSolicitud:'sep1'});
+assert.equal(ok('pedro','separarRequisicion',r2,[3],'El conector lo vende otro proveedor',{version:1,idSolicitud:'sep1'}).folio,sp.folio,'idempotencia: no separa otro renglón');
+falla('pedro','separarRequisicion',[r2,[2],'Otro proveedor',{version:1,idSolicitud:'sep2'}],/cambió después de que la abriste/);
 const r3=sp.folio;
 assert.deepEqual([sp.vista.renglones.map(x=>x.renglon+':'+x.descripcion+':'+x.decision).join(),sp.vista.requisicion.estado,sp.vista.puedeSeparar],
   ['1:Antena GNSS:Aprobado,2:Cable coaxial:Aprobado','Aprobada',true]);
@@ -400,7 +408,7 @@ falla('pedro','cotizarRequisicion',[r3,PROP()],/está solicitada: no se puede ma
 const prop2={proveedor:{razonSocial:'GNSS Store'},fechaEntrega:MANANA,condicionesPago:'Contado',diasCredito:0,
   renglones:[{renglon:1,disponibilidad:'Exacto',costo:1000},{renglon:2,disponibilidad:'Exacto',costo:10}],idSolicitud:'p2x'};
 ok('pedro','cotizarRequisicion',r2,prop2);
-const oc2=ok('adri','autorizarPropuesta',r2,1,'vb2').ocFolio;
+const oc2=ok('adri','autorizarPropuesta',r2,1,'vb2',huella(r2)).ocFolio;
 pg=pagar(r2,2436);
 assert.equal(pg.vista.requisicion.estado,'Pagada');
 rr=ok('obrero','registrarRecepcion',{reqFolio:r2,sitio:'Querétaro',renglones:[{renglon:1,cantidad:2}],idSolicitud:'r2a'});
@@ -421,13 +429,37 @@ assert(/última, con faltante/.test(ok('obrero','misRequisiciones').find(x=>x.fo
 const r4=ok('obrero','guardarRequisicion',nuevaReq({renglones:[{descripcion:'Batería 12V',cantidad:1}]})).folio;
 ok('adri','aprobarRequisicion',r4,todo(1));
 ok('pedro','cotizarRequisicion',r4,{...prop2,renglones:[{renglon:1,disponibilidad:'Exacto',costo:500}],idSolicitud:'p4'});
-const oc4=ok('adri','autorizarPropuesta',r4,1,'vb4').ocFolio;
+const oc4=ok('adri','autorizarPropuesta',r4,1,'vb4',huella(r4)).ocFolio;
 ok('pedro','cancelarOrdenCompra',oc4,'Proveedor sin existencias');
 vc=ok('pedro','getRequisicion',r4);
 assert.deepEqual([vc.requisicion.estado,vc.requisicion.ocFolio,vc.requisicion.voboEmail,vc.puedeCotizar,vc.requisicion.propuesta.version],['Aprobada','','',true,1]);
 assert.equal(ok('pedro','cotizarRequisicion',r4,{...prop2,renglones:[{renglon:1,disponibilidad:'Exacto',costo:550}],idSolicitud:'p4b'}).version,2);
 const fr4=H('Requisiciones').find(x=>x[0]===r4), pj=JSON.parse(fr4[20]); pj.fechaEntrega=AYER; fr4[20]=JSON.stringify(pj);
-falla('adri','autorizarPropuesta',[r4,2,'vb4b'],/ya pasó: regrésala a compras/);
+falla('adri','autorizarPropuesta',[r4,2,'vb4b',huella(r4)],/ya pasó: regrésala a compras/);
+
+// Revisión independiente: SOLO_REQUISICION manda sobre ROL_COMPRAS (mixta está en los dos)
+assert.equal(ok('mixta','getDatosIniciales').permisos.compras,false);
+falla('mixta','devolverRequisicion',[r3,'Quiero ver los montos'],/permiso de operaciones/,'PERMISO');
+const r6=ok('obrero','guardarRequisicion',nuevaReq({renglones:[{descripcion:'GPS',cantidad:1},{descripcion:'Radio',cantidad:1}]})).folio;
+ok('adri','aprobarRequisicion',r6,todo(2));
+falla('mixta','devolverRequisicion',[r6,'Quiero ver los montos'],/No tienes permiso de compras/,'PERMISO');
+falla('mixta','registrarRecepcion',[{reqFolio:r1,sitio:'Querétaro',renglones:[{renglon:1,cantidad:1}],notas:'En su lugar'}],/Solo quien pidió/,'PERMISO');
+falla('mixta','archivoRequisicion',[r1,archProp.id],/No tienes acceso a ese archivo/,'PERMISO');
+// La versión de la propuesta sigue al retirarla (separar): el visto bueno de una propuesta vieja no pasa aunque coincida el número
+ok('pedro','cotizarRequisicion',r6,{...prop2,proveedor:{razonSocial:'Proveedor Barato'},renglones:[{renglon:1,disponibilidad:'Exacto',costo:1},{renglon:2,disponibilidad:'Exacto',costo:1}],idSolicitud:'p6'});
+const hViejo=huella(r6);
+ok('pedro','separarRequisicion',r6,[2],'El radio va con otro proveedor',{version:1});
+const v6=ok('pedro','cotizarRequisicion',r6,{...prop2,proveedor:{razonSocial:'Proveedor Caro'},renglones:[{renglon:1,disponibilidad:'Exacto',costo:99999}],idSolicitud:'p6b'});
+assert.equal(v6.version,2,'la versión no vuelve a 1');
+falla('adri','autorizarPropuesta',[r6,1,'vb6',hViejo],/cambió la propuesta/);
+falla('adri','autorizarPropuesta',[r6,2,'vb6b',hViejo],/cambió la propuesta/,null);
+// La aprobación es sobre la versión de los renglones que se vio
+const r7=ok('obrero','guardarRequisicion',nuevaReq({renglones:[{descripcion:'Tornillo',cantidad:10}]})).folio;
+assert.equal(ok('adri','getRequisicionOperaciones',r7).version,1);
+ok('adri','devolverRequisicion',r7,'¿De qué medida?');
+ok('obrero','guardarRequisicion',{folio:r7,sitio:'Querétaro',renglones:[{descripcion:'Generador diésel 50 kVA',cantidad:1}],idSolicitud:'re7'});
+falla('adri','aprobarRequisicion',[r7,todo(1,1)],/cambió después de que la abriste \(versión 2\)/);
+assert.equal(ok('adri','aprobarRequisicion',r7,todo(1,2)).requisicion.estado,'Aprobada');
 
 // "Recibí el material" ya no; archivos sin acceso a Drive
 falla('obrero','cerrarRequisicion',[r1,''],/Registrar recepción/);
@@ -445,6 +477,7 @@ assert.deepEqual([sv2.cambios,sv2.opsRequisiciones],[[],undefined]);
 dA=ok('adri','getDatosIniciales');
 assert(Array.isArray(dA.ops.requisiciones)&&dA.ops.requisiciones.length>=5,'ya en caché');
 assert(dA.ops.requisiciones.find(x=>x.folio===r4).total===638,'el total solo de las que esperan el visto bueno');
+assert.deepEqual(plain(sv.sitios),SIT,'los sitios viajan en la sincronización');
 assert.equal(dA.ops.requisiciones.find(x=>x.folio===r2).total,null);
 
 // Sin ROL_OPERACIONES otra vez: el flujo de siempre; una que se quedó a medias se puede rechazar o devolver

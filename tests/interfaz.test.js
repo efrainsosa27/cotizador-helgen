@@ -730,13 +730,17 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
     renglones:[{renglon:1,descripcion:'Cable THW 10',cantidad:100,unidad:'M',notas:''},{renglon:2,descripcion:'Pintura',cantidad:2,unidad:'CUBETA',notas:''},
       {renglon:3,descripcion:'Tubo conduit 3/4',cantidad:12,unidad:'PZA',notas:''}],
     aprobacion:null,propuesta:null,eventos:[{fecha:'2026-10-28 09:00',estado:'Solicitada',nombre:'Jesús',nota:'Manzanillo (TIMSA)'}],orden:null,avance:null,recepciones:[],hoy:'2026-10-28',
-    esPropia:false,preparoPropuesta:false,puedeAprobar:true,puedeDevolver:true,puedeRechazar:true,puedeVisto:false,puedeRegresar:false};
+    esPropia:false,preparoPropuesta:false,puedeAprobar:true,puedeDevolver:true,puedeRechazar:true,puedeVisto:false,puedeRegresar:false,version:1};
   O.respuestas.getRequisicionOperaciones={ok:true,datos:VOPS};
   O.run("abrirOps('REQ-2026-0010')"); await esperar();
   assert(!O.$('opsVistaReq').classList.contains('oculto')&&O.$('opsVistaLista').classList.contains('oculto'));
   assert(/Manzanillo \(TIMSA\)/.test(O.$('opsInfo').innerHTML)&&/Para el 30\/10\/2026/.test(O.$('opsInfo').innerHTML));
   assert(/id="opsAp1"/.test(O.$('opsRenglones').innerHTML)&&/id="opsCant3"/.test(O.$('opsRenglones').innerHTML)&&/value="100"/.test(O.$('opsRenglones').innerHTML));
   assert(!O.$('opsAprobar').classList.contains('oculto')&&!O.$('btnOpsAprobar').classList.contains('oculto'));
+  // Si quien pidió la corrige mientras está abierta (otra versión de renglones), la tabla se vuelve a pintar
+  O.run('pintarOps('+JSON.stringify({...VOPS,version:2,renglones:[{renglon:1,descripcion:'Generador diésel 50 kVA',cantidad:1,unidad:'PZA',notas:''}]})+')');
+  assert(/Generador diésel/.test(O.$('opsRenglones').innerHTML)&&!/Cable THW 10/.test(O.$('opsRenglones').innerHTML));
+  O.run('pintarOps('+JSON.stringify(VOPS)+')');
   for(const n of [1,2,3]){O.$('opsAp'+n).value='si';O.$('opsCant'+n).value=String(VOPS.renglones[n-1].cantidad);O.$('opsCom'+n).value='';}
   O.$('opsAp2').value='no'; O.$('opsCant1').value='80'; O.$('opsPrioridad').value='Urgente';
   O.run('aprobarOps()'); await esperar();
@@ -746,12 +750,12 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
     renglones:VOPS.renglones.map((x,i)=>({...x,decision:i===1?'Rechazado':'Aprobado',cantidadAprobada:i===0?80:i===1?0:12,comentario:i===1?'Ya hay en almacén':''}))}};
   O.run('aprobarOps()'); await esperar();
   const apr=O.llamadas.find(c=>c.funcion==='aprobarRequisicion').args;
-  assert.deepEqual(apr,['REQ-2026-0010',{prioridad:'Urgente',nota:'',renglones:[{renglon:1,aprobado:true,cantidad:'80',comentario:''},
+  assert.deepEqual(apr,['REQ-2026-0010',{version:1,prioridad:'Urgente',nota:'',renglones:[{renglon:1,aprobado:true,cantidad:'80',comentario:''},
     {renglon:2,aprobado:false,cantidad:'2',comentario:'Ya hay en almacén'},{renglon:3,aprobado:true,cantidad:'12',comentario:''}]}]);
   assert(/aprobada: pasa a compras/.test(O.$('aviso').innerHTML)&&/No se compra/.test(O.$('opsRenglones').innerHTML)&&/Aprobado: 80/.test(O.$('opsRenglones').innerHTML));
   assert(O.$('opsAprobar').classList.contains('oculto')===false&&O.$('btnOpsAprobar').classList.contains('oculto'),'ya no aprueba; aún puede rechazar');
   // Visto bueno sobre la propuesta (sustituto en negritas, no disponible sin costo, adicional que no se recibe)
-  const PROPV={version:2,fecha:'2026-10-28 12:00:00',elaboroEmail:'tania@helgen.tech',elaboroNombre:'Tania Ibarra',recibe:'rosa@helgen.tech',
+  const PROPV={version:2,huella:'h2',fecha:'2026-10-28 12:00:00',elaboroEmail:'tania@helgen.tech',elaboroNombre:'Tania Ibarra',recibe:'rosa@helgen.tech',
     proveedor:{razonSocial:'Ferretera del Puerto',rfc:'FPU010101AB1'},moneda:'MXN',ivaTasa:0.16,tipoCambio:'',fechaEntrega:'2026-10-30',lugarEntrega:'Manzanillo',
     condicionesPago:'Contado',diasCredito:0,notas:'',subtotal:1440,iva:230.4,total:1670.4,archivos:[{id:'ARCH1',nombre:'REQ-2026-0009 — Cotización de compras.pdf'}],
     renglones:[{renglon:1,disponibilidad:'Exacto',nota:'',recibir:true,clave:'',descripcion:'Cable THW 10',unidad:'M',cantidad:80,costo:8,importe:640},
@@ -774,7 +778,7 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
     orden:{folio:'OC-2026-0012',fecha:'2026-10-28',estado:'Emitida',proveedor:'Ferretera del Puerto',total:1670.4,moneda:'MXN',fechaEntrega:'2026-10-30',lugarEntrega:'Manzanillo'},
     avance:[{renglon:1,descripcion:'Cable THW 10',unidad:'M',pedido:80,recibido:0,pendiente:80}]}}};
   const idVobo=O.run('ID_VOBO'); O.run('vistoBuenoOps()'); await esperar();
-  assert.deepEqual(O.llamadas.find(c=>c.funcion==='autorizarPropuesta').args,['REQ-2026-0009',2,idVobo],'con la versión que vio');
+  assert.deepEqual(O.llamadas.find(c=>c.funcion==='autorizarPropuesta').args,['REQ-2026-0009',2,idVobo,'h2'],'con la versión y la huella que vio');
   assert(/OC-2026-0012/.test(O.$('aviso').innerHTML)&&!O.$('opsModOrden').classList.contains('oculto')&&/Cable THW 10/.test(O.$('opsAvance').innerHTML));
   O.run('pintarOps('+JSON.stringify({...VCOT,preparoPropuesta:true,puedeVisto:false})+')');
   assert(/Tú preparaste la propuesta/.test(O.$('opsAviso').textContent)&&O.$('btnOpsVisto').classList.contains('oculto'));
@@ -833,6 +837,15 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   assert.deepEqual([rq5.reqFolio,rq5.sitio,rq5.final,rq5.renglones,rq5.evidencia.datos],['REQ-2026-0005','Manzanillo (TIMSA)',false,[{renglon:1,cantidad:'50'}],'/9j/']);
   assert(/REC-2026-0002<\/b> registrada: todo recibido; falta el pago/.test(Q.$('aviso').innerHTML)&&!/abrirRecepcion/.test(Q.$('reqLista').innerHTML));
   assert.equal(Q.run('REC_ABIERTA'),null);
+  Q.respuestas.misRequisiciones={ok:true,datos:MISQ}; Q.run('pintarMisReq('+JSON.stringify(MISQ)+')');
+  Q.run("abrirRecepcion('REQ-2026-0005')"); assert.equal(Q.run('REC_ABIERTA'),'REQ-2026-0005');
+  Q.run('pintarMisReq('+JSON.stringify(MISQ)+')');
+  assert.equal(Q.run('REC_ABIERTA'),null,'al repintar la lista se olvida el formulario que vivía en ella');
+  Q.respuestas.sincronizar={ok:true,datos:{versiones:{requisiciones:10},permisos:{cobranza:false,desbloqueo:false,compras:false,requisicion:true,operaciones:false,flujoOperaciones:true},
+    cambios:['requisiciones'],misReq:[{...MISQ[0],estado:'Recibida',puedeRecibir:false}],sitios:SIT.concat(['Tuxpan'])}};
+  Q.run('sincronizarAhora()'); await esperar();
+  assert(/Recibida/.test(Q.$('reqLista').innerHTML),'la sincronización sigue pintando');
+  assert(/Tuxpan/.test(Q.$('reqSitio').innerHTML),'sitios nuevos sin recargar');
 
   // Compras, con operaciones: propuesta (no autoriza), separar renglones, recepción en su lugar y cancelar una recepción
   const K=montar({ivaTasa:0.16,catalogo:CAT,tipoCambio:TC,clientes:[],proyectos:[],marcas:{},sitios:SIT,
@@ -840,7 +853,7 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   await esperar(5);
   const VK={requisicion:{folio:'REQ-2026-0010',fecha:'2026-10-28',proyectoFolio:'PRY-2026-0002',solicitanteEmail:'jesus@helgen.tech',solicitante:'Jesús',estado:'Aprobada',
       motivo:'',cotizacionId:'',cotizacionUrl:'',ocFolio:'',sitio:'Manzanillo (TIMSA)',fechaRequerida:'',prioridad:'Urgente',aprobacion:{nota:'Urge para el viernes'},propuesta:null,recibeEmail:''},
-    flujoOperaciones:true,renglones:[{renglon:1,descripcion:'Cable THW 10',cantidad:100,unidad:'M',notas:'',decision:'Aprobado',cantidadAprobada:80},
+    flujoOperaciones:true,version:1,renglones:[{renglon:1,descripcion:'Cable THW 10',cantidad:100,unidad:'M',notas:'',decision:'Aprobado',cantidadAprobada:80},
       {renglon:2,descripcion:'Pintura',cantidad:2,unidad:'CUBETA',notas:'',decision:'Rechazado',cantidadAprobada:0,comentario:'Ya hay'},
       {renglon:3,descripcion:'Tubo conduit 3/4',cantidad:12,unidad:'PZA',notas:'',decision:'Aprobado',cantidadAprobada:12}],
     aprobados:[{renglon:1,descripcion:'Cable THW 10',unidad:'M',notas:'',cantidad:80,pedida:100},{renglon:3,descripcion:'Tubo conduit 3/4',unidad:'PZA',notas:'',cantidad:12,pedida:12}],
@@ -882,7 +895,8 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   K.dialogos.prompt=['3','Lo vende otro proveedor'];
   K.respuestas.separarRequisicion={ok:true,datos:{folio:'REQ-2026-0012',vista:VK}};
   K.run('separarReqCom()'); await esperar();
-  assert.deepEqual(K.llamadas.find(c=>c.funcion==='separarRequisicion').args,['REQ-2026-0010',[3],'Lo vende otro proveedor']);
+  const sep=K.llamadas.find(c=>c.funcion==='separarRequisicion').args;
+  assert.deepEqual([sep[0],sep[1],sep[2],sep[3].version,!!sep[3].idSolicitud],['REQ-2026-0010',[3],'Lo vende otro proveedor',1,true]);
   assert(/REQ-2026-0012/.test(K.$('aviso').innerHTML));
   // Recepción: avance, registrar en su lugar (con notas) y cancelar una equivocada
   const VKA={...VK,requisicion:{...VK.requisicion,estado:'Pagada',ocFolio:'OC-2026-0012',recibeEmail:'rosa@helgen.tech'},puedeCotizar:false,puedeDevolver:false,puedeSeparar:false,
@@ -898,6 +912,16 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   K.run('abrirRecepcionCom()');
   assert(/en lugar de quien la recibe/.test(K.$('rcRecibirForm').innerHTML)&&/id="rcpComC1"/.test(K.$('rcRecibirForm').innerHTML)&&!/id="rcpComC2"/.test(K.$('rcRecibirForm').innerHTML));
   assert(!/abrirRecepcionCom\(\)/.test(K.$('rcAvance').innerHTML),'con el formulario abierto no se repite el botón');
+  K.run('pintarReqCom('+JSON.stringify({...VKA,requisicion:{...VKA.requisicion,folio:'REQ-2026-0011'}})+')');
+  assert.equal(K.$('rcRecibirForm').innerHTML,'','al abrir otra requisición se cierra el formulario de la anterior');
+  assert.equal(K.run("FORMS_REC.rcpCom"),undefined);
+  K.run('pintarReqCom('+JSON.stringify(VKA)+')'); K.run('abrirRecepcionCom()');
+  K.$('rcpComC1').value='30'; K.$('rcpComSitio').value='Querétaro'; K.$('rcpComNotas').value='Rosa no está en el sitio'; K.$('rcpComFoto').files=[];
+  K.respuestas.registrarRecepcion={ok:true,datos:{folio:'REC-2026-0004',completo:true,estado:'Cerrada',requisiciones:null,vista:{...VKA,requisicion:{...VKA.requisicion,estado:'Cerrada'},puedeRecibir:false}}};
+  K.run("enviarRecepcion('rcpCom')"); await esperar(20);
+  assert.equal(K.llamadas.find(c=>c.funcion==='registrarRecepcion').args[0].reqFolio,'REQ-2026-0010');
+  assert.equal(K.$('rcRecibirForm').innerHTML,'','al registrar se quita el formulario');
+  K.run('pintarReqCom('+JSON.stringify(VKA)+')');
   K.dialogos.prompt='Se registró en el sitio equivocado';
   K.respuestas.cancelarRecepcion={ok:true,datos:{...VKA,recepciones:[{...VKA.recepciones[0],estado:'Cancelado',motivoCancelacion:'Se registró en el sitio equivocado'}]}};
   K.run("cancelarRecepcionCom('REC-2026-0003')"); await esperar();

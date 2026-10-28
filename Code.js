@@ -388,7 +388,7 @@ function clientesCache_(revisar) {
 
 /** IVA y vigencia para la interfaz (la Config completa se sigue leyendo fresca al guardar). */
 function configLigera_() {
-  return enCache_('config2', [], TTL_CACHE, () => {
+  return enCache_('config2', [], 600, () => { // 10 min: la lista de sitios se edita a mano en Config
     const cfg = getConfig_();
     return { ivaTasa: cfg.IVA_TASA, vigenciaDias: cfg.VIGENCIA_DIAS, sitios: String(cfg.SITIOS == null ? '' : cfg.SITIOS) };
   });
@@ -478,6 +478,7 @@ function sincronizar(vc, ctx) {
   const v = versiones_(true);
   const cambio = c => String(vc[c] == null ? '' : vc[c]) !== String(v[c]);
   const r = { versiones: v, permisos: permisos, soloRequisicion: solo, cambios: COLECCIONES.filter(cambio), errores: errores };
+  if (permisos.requisicion || permisos.compras || permisos.operaciones) r.sitios = intentar_(errores, 'Sitios', sitios_) || undefined;
   // Cuentas por pagar dependen también del día (días vencidos y rangos): se vuelven a mandar al cambiar la fecha
   const otroDiaCxp = !!(permisos.compras && ctx.cxp && ctx.cxpHoy && ctx.cxpHoy !== hoyIso_());
   if (!r.cambios.length && !otroDiaCxp) return r;
@@ -2141,7 +2142,8 @@ function hojaCompras_(libro, nombre) { return hojaDeArea_(libro, HOJAS_COMPRAS, 
 
 /** ¿El usuario del token está en ROL_COMPRAS? */
 function esCompras_() {
-  return enRol_('ROL_COMPRAS');
+  // SOLO_REQUISICION manda sobre cualquier otro rol (algunas funciones de requisiciones las pueden llamar también)
+  return enRol_('ROL_COMPRAS') && !esSoloRequisicion_();
 }
 
 function exigirCompras_() {
@@ -2439,6 +2441,15 @@ function receptores_() {
   return correosDeLista([p.ROL_REQUISICION, p.SOLO_REQUISICION].join(','), DOMINIO_HELGEN);
 }
 
+/** La propuesta de compras vigente (null si no hay o si se retiró al separar renglones o al reenviar la requisición). */
+const propuestaVigente_ = req => req.propuesta && !req.propuesta.retirada ? req.propuesta : null;
+/** Al retirar una propuesta se conservan su versión (el visto bueno siempre es sobre un número nuevo) y sus archivos. */
+const propuestaRetirada_ = prop => prop ? { version: Number(prop.version) || 0, retirada: true, archivos: prop.archivos || [] } : null;
+/** Huella del contenido de la propuesta: el visto bueno es sobre exactamente lo que operaciones vio. */
+function huellaPropuesta_(prop) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(prop || null))
+    .map(b => ((b + 256) % 256).toString(16).padStart(2, '0')).join('');
+}
 const yo_ = () => String(VENDEDOR_.email).toLowerCase();
 const nombreYo_ = () => [VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ') || VENDEDOR_.email;
 const ahoraTexto_ = () => Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
@@ -2652,7 +2663,7 @@ function reqParaSolicitante_(req, ren, eventos, proyectos, x) {
   const o = x || {}, flujo = !!o.flujo, yo = o.yo || '';
   const orden = o.orden && o.orden.estado !== OC_CANCELADA &&
     [REQ_AUTORIZADA, REQ_PAGADA, REQ_RECIBIDA, REQ_CERRADA].indexOf(req.estado) !== -1 ? o.orden : null;
-  const avance = orden ? avanceRecepcion(orden.renglones, o.movimientos, renglonesSinRecepcion(req.propuesta)) : null;
+  const avance = orden ? avanceRecepcion(orden.renglones, o.movimientos, renglonesSinRecepcion(propuestaVigente_(req))) : null;
   const recibe = req.recibeEmail || req.solicitanteEmail;
   return {
     folio: req.folio, fecha: req.fecha, proyectoFolio: req.proyectoFolio, proyectoNombre: p ? p.nombre : '',
@@ -2661,9 +2672,9 @@ function reqParaSolicitante_(req, ren, eventos, proyectos, x) {
     motivo: [REQ_DEVUELTA, REQ_RECHAZADA, REQ_CANCELADA, REQ_CERRADA].indexOf(req.estado) !== -1 ? req.motivo : '',
     solicitante: req.solicitante, sitio: req.sitio, fechaRequerida: req.fechaRequerida, prioridad: req.prioridad,
     renglones: renglonesConDecision_((ren && ren.renglones) || [], req.aprobacion), eventos: eventos || [],
-    compra: orden ? compraSinCostos_(req.propuesta) : null,
+    compra: orden ? compraSinCostos_(propuestaVigente_(req)) : null,
     avance: avance ? avance.lineas : null, recepciones: orden ? recepcionesDe_(o.movimientos, false) : [],
-    recibe: recibe, esReceptor: yo !== req.solicitanteEmail && yo === recibe,
+    recibe: recibe, esReceptor: !!orden && yo !== req.solicitanteEmail && yo === recibe,
     puedeEditar: req.estado === REQ_DEVUELTA && yo === req.solicitanteEmail,
     puedeCancelar: (req.estado === REQ_SOLICITADA || req.estado === REQ_DEVUELTA) && yo === req.solicitanteEmail,
     puedeCerrar: !flujo && req.estado === REQ_PAGADA && yo === req.solicitanteEmail,
@@ -2706,7 +2717,8 @@ function misRequisicionesDeHojas_(yo, flujo) {
   let ordenes = null, movs = null;
   filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
     const req = reqDesdeFila_(r, i + 2);
-    if (!req.folio || (req.solicitanteEmail !== yo && req.recibeEmail !== yo)) return;
+    // Quien recibe la ve desde que hay orden de compra
+    if (!req.folio || (req.solicitanteEmail !== yo && !(req.recibeEmail === yo && req.ocFolio))) return;
     const f = req.folio.toUpperCase();
     let orden = null, m = [];
     if (req.ocFolio) {
@@ -2764,7 +2776,8 @@ function guardarRequisicion(p) {
       }
       escribirRenglonesReq_(libro, folio, version, renglones);
       cambiarReq_(hoja, req, nuevo, { motivo: '' });
-      const campos = { aprobacion: null, aproboEmail: '', fechaAprobacion: '', propuesta: null };
+      const campos = { aprobacion: null, aproboEmail: '', fechaAprobacion: '', propuesta: propuestaRetirada_(req.propuesta),
+        recibeEmail: '', voboEmail: '', fechaVobo: '' };
       if (sitio) campos.sitio = sitio;
       if ('fechaRequerida' in d0) campos.fechaRequerida = fechaRequerida;
       camposReq_(hoja, req, campos);
@@ -2916,16 +2929,18 @@ function vistaRequisicion_(libro, folioReq) {
   if (req.ocFolio) { orden = buscarOrden_(libro, req.ocFolio).orden; delete orden.fila; }
   const pagos = req.ocFolio ? pagosDeOrden_(libro, req.ocFolio).map(x => { delete x.fila; return x; }) : [];
   const proyectoVigente = !!proyecto && proyecto.estado !== 'Cancelado'; // Activo o Cerrado, con o sin contrato
-  const r = Object.assign({}, req); delete r.fila;
+  const r = Object.assign({}, req, { propuesta: propuestaVigente_(req) }); delete r.fila;
   const todas = orden ? facturasDelLibro_(libro) : [];
-  const renglones = (renglonesDeReqs_(libro)[f] || {}).renglones || [];
+  const vigente = renglonesDeReqs_(libro)[f] || { version: 1, renglones: [] };
+  const renglones = vigente.renglones;
   const movs = orden ? (movimientosPorOc_(libro)[orden.folio.toUpperCase()] || []) : [];
-  const avance = orden && orden.estado !== OC_CANCELADA ? avanceRecepcion(orden.renglones, movs, renglonesSinRecepcion(req.propuesta)) : null;
+  const avance = orden && orden.estado !== OC_CANCELADA ? avanceRecepcion(orden.renglones, movs, renglonesSinRecepcion(propuestaVigente_(req))) : null;
   const aprobados = renglonesAprobados(renglones, req.aprobacion);
   const porCotizar = req.estado === REQ_APROBADA || req.estado === REQ_COTIZADA;
   return {
     requisicion: r,
     flujoOperaciones: flujo,
+    version: vigente.version, // versión de los renglones (separar la exige)
     renglones: renglonesConDecision_(renglones, req.aprobacion),
     aprobados: aprobados,
     eventos: eventosDeReqs_(libro)[f] || [],
@@ -3137,7 +3152,16 @@ function cerrarRequisicionCompras(folioReq, motivo, notas) {
 // en otra requisición; quien recibe confirma renglón por renglón, antes o después del pago, y cada renglón recibido es una
 // entrada de inventario en su sitio (MovimientosInventario). Nadie aprueba lo que pidió ni da el visto bueno a lo que preparó.
 
-/** Lista para operaciones: todas las requisiciones, más recientes primero (montos solo de la propuesta por revisar). */
+/** Guarda la respuesta para un reenvío con el mismo idSolicitud (6 h); si no cabe en el caché, no falla (la escritura ya se hizo). */
+function guardarIdempotencia_(cache, clave, resultado) {
+  if (!clave) return;
+  try { cache.put(clave, JSON.stringify(resultado), 21600); } catch (e) { console.warn('Sin idempotencia para ' + clave + ': ' + e.message); }
+}
+
+/**
+ * Lista para operaciones, más recientes primero (montos solo de la propuesta por revisar): todas las que esperan algo de
+ * operaciones (Solicitada, Cotizada) y las 300 más recientes de las demás.
+ */
 function listarOperaciones(soloSiHay) {
   exigirOperaciones_();
   return enCache_('ops', ['requisiciones', 'oc', 'proyectos'], TTL_CACHE, soloSiHay ? null : listarOperacionesDeHojas_) || null;
@@ -3152,7 +3176,7 @@ function listarOperacionesDeHojas_() {
     const req = reqDesdeFila_(r, i + 2);
     if (!req.folio) return;
     const p = proyectos[req.proyectoFolio.toUpperCase()];
-    const prop = req.estado === REQ_COTIZADA ? req.propuesta : null;
+    const prop = req.estado === REQ_COTIZADA ? propuestaVigente_(req) : null;
     lista.push({ folio: req.folio, fecha: req.fecha, proyectoFolio: req.proyectoFolio, proyectoNombre: p ? p.nombre : '',
       proyectoVisible: p ? p.folioVisible : req.proyectoFolio, solicitante: req.solicitante, solicitanteEmail: req.solicitanteEmail,
       estado: req.estado, sitio: req.sitio, fechaRequerida: req.fechaRequerida, prioridad: req.prioridad, actualizado: req.actualizado,
@@ -3160,7 +3184,8 @@ function listarOperacionesDeHojas_() {
       elaboroPropuesta: prop ? String(prop.elaboroEmail || '').toLowerCase() : '',
       proveedor: prop && prop.proveedor ? prop.proveedor.razonSocial : '', total: prop ? prop.total : null, moneda: prop ? prop.moneda : '' });
   });
-  return lista.reverse().slice(0, 300);
+  let otras = 0;
+  return lista.reverse().filter(x => x.estado === REQ_SOLICITADA || x.estado === REQ_COTIZADA || ++otras <= 300);
 }
 
 /**
@@ -3171,17 +3196,18 @@ function vistaOperaciones_(libro, folioReq) {
   const { req } = buscarReq_(libro, folioReq);
   const f = req.folio.toUpperCase(), yo = yo_();
   const proyecto = buscarProyecto_(hojaProyectos_(), req.proyectoFolio);
-  const renglones = (renglonesDeReqs_(libro)[f] || {}).renglones || [];
+  const vigente = renglonesDeReqs_(libro)[f] || { version: 1, renglones: [] };
+  const renglones = vigente.renglones, actual = propuestaVigente_(req);
   let orden = null, avance = null, movs = [];
   if (req.ocFolio) {
     const o = buscarOrden_(libro, req.ocFolio).orden;
     orden = { folio: o.folio, fecha: o.fecha, estado: o.estado, proveedor: o.proveedor, total: o.total, moneda: o.moneda,
       fechaEntrega: o.fechaEntrega, lugarEntrega: o.lugarEntrega };
     movs = movimientosPorOc_(libro)[o.folio.toUpperCase()] || [];
-    if (o.estado !== OC_CANCELADA) avance = avanceRecepcion(o.renglones, movs, renglonesSinRecepcion(req.propuesta));
+    if (o.estado !== OC_CANCELADA) avance = avanceRecepcion(o.renglones, movs, renglonesSinRecepcion(actual));
   }
-  const prop = req.propuesta ? Object.assign({}, req.propuesta, {
-    archivos: (req.propuesta.archivos || []).map(a => ({ id: a.id, nombre: a.nombre || '' })) }) : null;
+  const prop = actual ? Object.assign({}, actual, { huella: huellaPropuesta_(actual),
+    archivos: (actual.archivos || []).map(a => ({ id: a.id, nombre: a.nombre || '' })) }) : null;
   const esPropia = req.solicitanteEmail === yo;
   const preparo = !!prop && String(prop.elaboroEmail || '').toLowerCase() === yo;
   return {
@@ -3192,6 +3218,7 @@ function vistaOperaciones_(libro, folioReq) {
       cotizacionId: req.cotizacionId, actualizado: req.actualizado },
     proyecto: proyecto ? { folio: proyecto.folio, folioVisible: proyecto.folioVisible || proyecto.folio, nombre: proyecto.nombre,
       estado: proyecto.estado, ubicacion: proyecto.ubicacion } : { folio: req.proyectoFolio, folioVisible: req.proyectoFolio, nombre: '', estado: '', ubicacion: '' },
+    version: vigente.version, // versión de los renglones: aprobar exige la que se vio
     renglones: renglonesConDecision_(renglones, req.aprobacion), aprobacion: req.aprobacion, propuesta: prop,
     eventos: eventosDeReqs_(libro)[f] || [], orden: orden, avance: avance ? avance.lineas : null,
     recepciones: recepcionesDe_(movs, false), hoy: hoyIso_(),
@@ -3211,7 +3238,8 @@ function getRequisicionOperaciones(folioReq) {
 
 /**
  * Operaciones aprueba una requisición Solicitada renglón por renglón (ver normalizarAprobacion): puede bajar cantidades y
- * rechazar renglones con comentario; pone la prioridad. Queda Aprobada y pasa a compras. Nadie aprueba lo que pidió.
+ * rechazar renglones con comentario; pone la prioridad. d.version = la versión de los renglones que vio (si quien pidió la
+ * corrigió después, se rechaza). Queda Aprobada y pasa a compras. Nadie aprueba lo que pidió.
  */
 function aprobarRequisicion(folioReq, d) {
   exigirOperaciones_();
@@ -3223,6 +3251,9 @@ function aprobarRequisicion(folioReq, d) {
     }
     const nuevo = transicionReq(req.estado, 'aprobar');
     const vigente = renglonesDeReqs_(libro)[req.folio.toUpperCase()] || { version: 1, renglones: [] };
+    if (Number((d || {}).version) !== Number(vigente.version)) {
+      throw new Error('La requisición ' + req.folio + ' cambió después de que la abriste (versión ' + vigente.version + '): vuelve a abrirla.');
+    }
     const a = normalizarAprobacion(d, vigente.renglones);
     const ahora = ahoraTexto_();
     cambiarReq_(hoja, req, nuevo, { motivo: '', revisar: true });
@@ -3288,8 +3319,11 @@ function cotizarRequisicion(folioReq, p) {
       fechaEntrega: prop.fechaEntrega, lugarEntrega: prop.lugarEntrega, condicionesPago: prop.condicionesPago,
       diasCredito: prop.diasCredito, notas: prop.notas, renglones: prop.renglones, subtotal: prop.subtotal, iva: prop.iva,
       total: prop.total, monedaProyecto: prop.monedaProyecto, subtotalProyecto: prop.subtotalProyecto, archivos: archivos };
+    if (JSON.stringify(guardada).length > 45000) {
+      throw new Error('La propuesta es demasiado grande para guardarse: acorta descripciones y notas, o separa renglones.');
+    }
+    camposReq_(hoja, req, { propuesta: guardada, recibeEmail: prop.recibe }); // primero la propuesta, después el estado
     cambiarReq_(hoja, req, nuevo, { motivo: '' });
-    camposReq_(hoja, req, { propuesta: guardada, recibeEmail: prop.recibe });
     const cuenta = d => prop.renglones.filter(r => r.disponibilidad === d).length;
     const resumen = [[DISP_EXACTO, 'exacto(s)'], [DISP_SUSTITUTO, 'sustituto(s)'], [DISP_NO, 'no disponible(s)'], [DISP_ADICIONAL, 'adicional(es)']]
       .filter(([d]) => cuenta(d)).map(([d, t]) => cuenta(d) + ' ' + t).join(', ');
@@ -3300,7 +3334,7 @@ function cotizarRequisicion(folioReq, p) {
       formatoMoneda(prop.total) + ' ' + prop.moneda + ' · ' + resumen + ' · recibe ' + prop.recibe, '', HOJAS_COMPRAS);
     SpreadsheetApp.flush();
     const resultado = { folio: req.folio, version: version, vista: vistaRequisicion_(libro, req.folio) };
-    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
+    guardarIdempotencia_(cache, claveCache, resultado);
     return resultado;
   });
 }
@@ -3308,9 +3342,10 @@ function cotizarRequisicion(folioReq, p) {
 /**
  * Visto bueno de operaciones a la propuesta (versión que vio: si compras la cambió después, se rechaza): emite la orden con
  * el PDF ("Elaboró" = quien preparó la propuesta; "Autorizó" = quien da el visto bueno) y la requisición queda Autorizada.
+ * huella = la de la propuesta que vio (vistaOperaciones_): ata el visto bueno al contenido, no solo al número de versión.
  * No sobre una requisición propia ni sobre una propuesta que uno mismo preparó.
  */
-function autorizarPropuesta(folioReq, version, idSolicitud) {
+function autorizarPropuesta(folioReq, version, idSolicitud, huella) {
   exigirOperaciones_();
   const libro = libroCompras_();
   const id = String(idSolicitud || '').slice(0, 64);
@@ -3323,15 +3358,15 @@ function autorizarPropuesta(folioReq, version, idSolicitud) {
     }
     const { hoja, req } = buscarReq_(libro, folioReq);
     const nuevo = transicionReq(req.estado, 'visto');
-    const prop = req.propuesta;
+    const prop = propuestaVigente_(req);
     if (!prop) throw new Error('La requisición ' + req.folio + ' no tiene propuesta de compra.');
-    if (Number(version) !== Number(prop.version)) {
-      throw new Error('Compras cambió la propuesta (ahora es la versión ' + prop.version + ') después de que la abriste: revísala otra vez.');
-    }
     const yo = yo_();
     if (req.solicitanteEmail === yo) throw errorPermiso_('No puedes dar el visto bueno a tu propia requisición.');
     if (String(prop.elaboroEmail || '').toLowerCase() === yo) {
       throw errorPermiso_('No puedes dar el visto bueno a una propuesta que tú preparaste: lo da otra persona de operaciones.');
+    }
+    if (Number(version) !== Number(prop.version) || String(huella || '') !== huellaPropuesta_(prop)) {
+      throw new Error('Compras cambió la propuesta (ahora es la versión ' + prop.version + ') después de que la abriste: revísala otra vez.');
     }
     if (prop.fechaEntrega < hoyIso_()) {
       throw new Error('La fecha de entrega de la propuesta (' + prop.fechaEntrega + ') ya pasó: regrésala a compras para actualizarla.');
@@ -3345,7 +3380,7 @@ function autorizarPropuesta(folioReq, version, idSolicitud) {
     bitacora_(libro, 'Visto bueno de operaciones', req.proyectoFolio, req.folio + ' · propuesta v' + prop.version + ' · ' + r.folio, '', HOJAS_COMPRAS);
     SpreadsheetApp.flush();
     const resultado = { folio: req.folio, ocFolio: r.folio, vista: vistaOperaciones_(libro, req.folio) };
-    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
+    guardarIdempotencia_(cache, claveCache, resultado);
     return resultado;
   });
 }
@@ -3369,18 +3404,29 @@ function regresarACompras(folioReq, motivo) {
  * Compras separa renglones aprobados en una requisición nueva (p. ej. otro proveedor): la nueva nace Aprobada con la misma
  * aprobación, solicitante, sitio y prioridad (origen_folio = la original); la original se queda con los demás renglones (versión
  * nueva) y, si ya tenía propuesta, vuelve a Aprobada. Debe quedar al menos un renglón aprobado en cada una.
+ * opciones = {version (la de los renglones que vio quien separa), idSolicitud}: los renglones se identifican por número.
  */
-function separarRequisicion(folioReq, renglonesSep, motivo) {
+function separarRequisicion(folioReq, renglonesSep, motivo, opciones) {
   exigirCompras_();
   if (!flujoOperaciones_()) throw new Error('Separar renglones es parte del flujo con operaciones.');
   const m = motivoObligatorio_(motivo, 'Escribe por qué separas los renglones (p. ej. otro proveedor).');
+  const o = opciones || {};
   const libro = libroCompras_();
+  const cache = CacheService.getScriptCache();
+  const claveCache = o.idSolicitud ? 'SEP_' + String(o.idSolicitud).slice(0, 64) : '';
   return conCandado_(() => {
+    if (claveCache) {
+      const previo = cache.get(claveCache);
+      if (previo) return JSON.parse(previo);
+    }
     const { hoja, req } = buscarReq_(libro, folioReq);
     if (req.estado !== REQ_APROBADA && req.estado !== REQ_COTIZADA) {
       throw new Error('Solo se separan renglones de una requisición aprobada que todavía no tiene orden de compra.');
     }
     const actual = renglonesDeReqs_(libro)[req.folio.toUpperCase()] || { version: 1, renglones: [] };
+    if (Number(o.version) !== Number(actual.version)) {
+      throw new Error('La requisición ' + req.folio + ' cambió después de que la abriste (versión ' + actual.version + '): vuelve a abrirla.');
+    }
     const dec = {};
     ((req.aprobacion && req.aprobacion.renglones) || []).forEach(a => { dec[a.renglon] = a; });
     const quitar = (Array.isArray(renglonesSep) ? renglonesSep : []).map(Number).filter((n, i, a) => n > 0 && a.indexOf(n) === i);
@@ -3404,13 +3450,15 @@ function separarRequisicion(folioReq, renglonesSep, motivo) {
     const estado = req.estado === REQ_COTIZADA ? transicionReq(req.estado, 'regresarACompras') : req.estado;
     cambiarReq_(hoja, req, estado, {});
     camposReq_(hoja, req, { aprobacion: Object.assign({}, req.aprobacion, { version: actual.version + 1, renglones: renumerar(quedan) }),
-      propuesta: null });
+      propuesta: propuestaRetirada_(req.propuesta) });
     const lista = mover.map(r => r.descripcion.slice(0, 40)).join('; ');
     eventoReq_(libro, req.folio, estado, 'Compras separó ' + mover.length + ' renglón(es) en ' + nuevaFolio + ' para comprarlos aparte: ' + lista + '.');
     eventoReq_(libro, nuevaFolio, REQ_APROBADA, 'Separada de ' + req.folio + ' por compras; conserva la aprobación de operaciones.');
     bitacora_(libro, 'Separar requisición', req.proyectoFolio, req.folio + ' → ' + nuevaFolio + ' · ' + lista, m, HOJAS_COMPRAS);
     SpreadsheetApp.flush();
-    return { folio: nuevaFolio, vista: vistaRequisicion_(libro, req.folio) };
+    const resultado = { folio: nuevaFolio, vista: vistaRequisicion_(libro, req.folio) };
+    guardarIdempotencia_(cache, claveCache, resultado);
+    return resultado;
   });
 }
 
@@ -3453,7 +3501,7 @@ function registrarRecepcion(p) {
     const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
     if (orden.estado === OC_CANCELADA) throw new Error('La orden ' + orden.folio + ' está cancelada.');
     const avance = avanceRecepcion(orden.renglones, movimientosPorOc_(libro)[orden.folio.toUpperCase()] || [],
-      renglonesSinRecepcion(req.propuesta));
+      renglonesSinRecepcion(propuestaVigente_(req)));
     if (avance.completo) throw new Error('Todo lo de la orden ya se recibió.');
     const rec = normalizarRecepcion(d0, avance.lineas, sitios);
     if (!propio && rec.notas.length < 5) throw new Error('Registras la recepción en lugar de quien la recibe: escribe en las notas por qué.');
@@ -3491,7 +3539,7 @@ function registrarRecepcion(p) {
     SpreadsheetApp.flush();
     const resultado = { folio: folio, completo: rec.completo, estado: nuevo,
       requisiciones: requisicion ? misRequisiciones() : null, vista: compras ? vistaRequisicion_(libro, req.folio) : null };
-    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
+    guardarIdempotencia_(cache, claveCache, resultado);
     return resultado;
   });
 }
@@ -4547,7 +4595,7 @@ const MAX_RENGLONES_REQ = 100;
 const TRANSICIONES_REQ = {
   autorizar: { de: [REQ_SOLICITADA], a: REQ_AUTORIZADA },
   rechazar: { de: [REQ_SOLICITADA, REQ_APROBADA, REQ_COTIZADA], a: REQ_RECHAZADA },
-  devolver: { de: [REQ_SOLICITADA, REQ_APROBADA], a: REQ_DEVUELTA },
+  devolver: { de: [REQ_SOLICITADA, REQ_APROBADA, REQ_COTIZADA], a: REQ_DEVUELTA },
   reenviar: { de: [REQ_DEVUELTA], a: REQ_SOLICITADA },
   cancelar: { de: [REQ_SOLICITADA, REQ_DEVUELTA], a: REQ_CANCELADA },
   pagar: { de: [REQ_AUTORIZADA], a: REQ_PAGADA },

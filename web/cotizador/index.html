@@ -1016,12 +1016,14 @@
   function aplicarSync(r) {
     if (!r) return;
     const cambioRol = JSON.stringify(r.permisos) !== JSON.stringify(PERMISOS) || !!r.soloRequisicion !== SOLO_REQ;
+    const cambioFlujo = !!(r.permisos || {}).flujoOperaciones !== !!PERMISOS.flujoOperaciones;
     if (cambioRol) {
       // Cambió un rol (Script Properties): las pestañas se ajustan sin recargar la página
       aplicarPermisos(r.permisos, r.soloRequisicion);
       guardarRoles(r.permisos, r.soloRequisicion);
     }
     VERS = r.versiones || VERS;
+    if (r.sitios && JSON.stringify(r.sitios) !== JSON.stringify(SITIOS)) { SITIOS = r.sitios; pintarSitios(); }
     if (r.catalogo) {
       CATALOGO = r.catalogo; if (r.tipoCambio) TC = r.tipoCambio;
       pintarCatalogoReq(); if (!SOLO_REQ) pintarDatalists();
@@ -1053,6 +1055,11 @@
       if (PERMISOS.requisicion && !CARGADO.reqProy) cargarProyectosReq();
       if (PERMISOS.requisicion && !CARGADO.misReq) cargarMisReq();
       if (PERMISOS.operaciones && !CARGADO.ops) cargarOps();
+      if (cambioFlujo) {
+        // Se encendió o apagó el flujo con operaciones: lo abierto se pide otra vez (cambian los botones)
+        if (PERMISOS.requisicion && CARGADO.misReq && !REC_ABIERTA) cargarMisReq();
+        if (REQC && PERMISOS.compras && !SOLO_REQ) abrirReqCom(REQC.requisicion.folio);
+      }
       if (PERMISOS.compras && !SOLO_REQ && !CARGADO.comProy) cargarProyectosCom();
       if (PERMISOS.compras && !SOLO_REQ && !CARGADO.comReqs) cargarRequisicionesCom();
       if (PERMISOS.cobranza && !SOLO_REQ && !CARGADO.cobProy) cargarProyectosCob();
@@ -1907,6 +1914,9 @@
 
   function pintarMisReq(lista) {
     MIS_REQ = lista || []; CARGADO.misReq = true; MISREQ_PENDIENTE = null;
+    // Los formularios de recepción viven dentro de la lista: al repintarla se pierden (y la sincronización vuelve a pintar)
+    REC_ABIERTA = null;
+    Object.keys(FORMS_REC).filter(k => k.indexOf('rcp-') === 0).forEach(k => { delete FORMS_REC[k]; });
     $('reqLista').innerHTML = !MIS_REQ.length ? '<div class="nota">Todavía no tienes requisiciones.</div>' : MIS_REQ.map(r =>
       '<div class="sat" style="margin-top:10px">' +
       '<div class="sat-titulo">' + esc(r.folio) + ' · ' + chipReq(r.estado) + (r.prioridad ? ' ' + chipPrio(r.prioridad) : '') + ' · ' +
@@ -1994,6 +2004,7 @@
     const listo = () => { b.disabled = false; b.textContent = 'Registrar recepción'; };
     const enviar = foto => google.script.run.withSuccessHandler(r => {
       delete FORMS_REC[p];
+      $(f.caja).innerHTML = '';
       if (p.indexOf('rcp-') === 0) REC_ABIERTA = null;
       f.alExito(r);
       aviso('ok', 'Recepción <b>' + esc(r.folio) + '</b> registrada' + (!r.completo ? ' (parcial: falta material).' :
@@ -2101,8 +2112,8 @@
   /** Detalle para operaciones: renglones (con los controles para aprobar), propuesta de compras, orden y recepción. */
   function pintarOps(v) {
     const rq = v.requisicion, pr = v.propuesta;
-    const cambio = !OPSV || OPSV.requisicion.folio !== rq.folio || OPSV.requisicion.estado !== rq.estado ||
-      (OPSV.propuesta || {}).version !== (pr || {}).version;
+    const cambio = !OPSV || OPSV.requisicion.folio !== rq.folio || OPSV.requisicion.estado !== rq.estado || OPSV.version !== v.version ||
+      (OPSV.propuesta || {}).huella !== (pr || {}).huella; // renglones corregidos o propuesta nueva: se vuelve a pintar todo
     OPSV = v;
     listoVista('opsVistaReq');
     $('opsVistaLista').classList.add('oculto'); $('opsVistaReq').classList.remove('oculto');
@@ -2187,7 +2198,8 @@
       mostrarError('Escribe por qué no se compra cada renglón que marcaste con "No" (lo verá quien lo pidió).'); return;
     }
     if (!renglones.some(x => x.aprobado)) { mostrarError('No aprobaste ningún renglón: si no se compra nada, usa "Rechazar todo".'); return; }
-    accionCob('btnOpsAprobar', 'aprobarRequisicion', [v.requisicion.folio, { prioridad: $('opsPrioridad').value, nota: $('opsNota').value, renglones: renglones }],
+    accionCob('btnOpsAprobar', 'aprobarRequisicion', [v.requisicion.folio, { version: v.version, prioridad: $('opsPrioridad').value,
+      nota: $('opsNota').value, renglones: renglones }],
       x => { pintarOps(x); aviso('ok', 'Requisición <b>' + esc(x.requisicion.folio) + '</b> aprobada: pasa a compras.'); });
   }
   function revisarOps(funcion) {
@@ -2205,7 +2217,7 @@
     const pr = v.propuesta;
     if (!window.confirm('¿Visto bueno a la propuesta de ' + pr.proveedor.razonSocial + ' por ' + dinero(pr.total, pr.moneda).replace(/&amp;/g, '&') +
       '? Se emite la orden de compra.')) return;
-    accionCob('btnOpsVisto', 'autorizarPropuesta', [v.requisicion.folio, pr.version, ID_VOBO], r => {
+    accionCob('btnOpsVisto', 'autorizarPropuesta', [v.requisicion.folio, pr.version, ID_VOBO, pr.huella], r => {
       pintarOps(r.vista); aviso('ok', 'Visto bueno: se emitió la orden <b>' + esc(r.ocFolio) + '</b> de ' + esc(r.folio) + '.');
     });
   }
@@ -2226,6 +2238,7 @@
 
   function verListaCom() {
     REQC = null; VOLVER_COM = 'lista';
+    cerrarFormRecepcion('rcpCom');
     $('comVistaReq').classList.add('oculto'); $('comVistaCxp').classList.add('oculto'); $('comVistaLista').classList.remove('oculto');
     $('rcCotVisor').src = 'about:blank';
     if (BOOT && !CARGADO.comReqs) cargarRequisicionesCom(); // ya cargada: la sincronización la mantiene al día
@@ -2263,6 +2276,7 @@
   /** Detalle de una requisición (vistaRequisicion_): renglones y cotización lado a lado; orden, pago y cierre según su estado. */
   function pintarReqCom(v) {
     const rq = v.requisicion;
+    if (FORMS_REC.rcpCom && FORMS_REC.rcpCom.folio !== rq.folio) cerrarFormRecepcion('rcpCom'); // era de otra requisición
     const cambio = !REQC || REQC.requisicion.folio !== rq.folio || REQC.requisicion.estado !== rq.estado;
     const cambioFacturas = cambio || REQC.totalFacturado !== v.totalFacturado || REQC.facturaCompleta !== v.facturaCompleta;
     REQC = v;
@@ -2397,7 +2411,7 @@
           '<input type="checkbox" class="recibir" style="width:auto"> se recibe en sitio</label>') + '</td>' : '') +
       '<td><input class="clave" list="ocClaves"></td>' +
       '<td><input class="desc" list="ocCatalogo" placeholder="Escribe o elige del catálogo">' +
-        (PROP_MODO ? '<input class="nota-r" maxlength="300" placeholder="Nota (opcional)" style="margin-top:4px">' : '') + '</td>' +
+        (PROP_MODO ? '<input class="nota-r" maxlength="300" placeholder="Nota (la ve quien pidió: sin precios ni proveedor)" style="margin-top:4px">' : '') + '</td>' +
       '<td><input class="uni" value="PZA"></td>' +
       '<td><input class="cant" type="number" min="0" step="any" value="1" style="text-align:right"></td>' +
       '<td><input class="costo" type="number" min="0" step="0.01" placeholder="Costo" style="text-align:right"></td>' +
@@ -2647,7 +2661,8 @@
     if (!lista.length) { mostrarError('Escribe los números de renglón.'); return; }
     const motivo = window.prompt('¿Por qué los separas? (p. ej. los vende otro proveedor)');
     if (motivo == null) return;
-    accionCob(null, 'separarRequisicion', [folio, lista, motivo], r => { pintarReqCom(r.vista); aviso('ok', 'Renglones separados en <b>' + esc(r.folio) + '</b>.'); });
+    accionCob(null, 'separarRequisicion', [folio, lista, motivo, { version: REQC.version, idSolicitud: nuevoId() }],
+      r => { pintarReqCom(r.vista); aviso('ok', 'Renglones separados en <b>' + esc(r.folio) + '</b>.'); });
   }
   function abrirRecepcionCom() {
     if (!REQC || !REQC.puedeRecibir) return;
@@ -2849,6 +2864,7 @@
   }
   function verCxp() {
     REQC = null; VOLVER_COM = 'cxp';
+    cerrarFormRecepcion('rcpCom');
     $('comVistaLista').classList.add('oculto'); $('comVistaReq').classList.add('oculto'); $('comVistaCxp').classList.remove('oculto');
     $('rcCotVisor').src = 'about:blank';
     if (CXP) pintarCxp(); else cargarCxp();
