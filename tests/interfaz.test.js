@@ -4,7 +4,9 @@
 // margen en Cobranza; pestaña Compras solo con permiso: requisición → orden precargada (renglones sin costo, tipo de cambio),
 // pago con comprobante, cancelar el pago, cerrar con motivo; días de crédito; facturas del proveedor (CFDI con vista previa y
 // extranjera); cuentas por pagar (resumen, filtros, CSV, sincronización); pestaña Requisiciones (nueva, corregir, recibí el material) y
-// SOLO_REQUISICION (solo esa pestaña).
+// SOLO_REQUISICION (solo esa pestaña); con operaciones (incremento 3): pestaña Operaciones (pendientes, aprobar por renglón, visto
+// bueno con la versión vista, regresar a compras), sitio y cotización opcional, recepción por renglón, propuesta de compras,
+// separar renglones, recepción en su lugar y cancelar una recepción.
 // Uso: node tests/interfaz.test.js .   (carpeta del proyecto)
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
 const html=fs.readFileSync(path.join(process.argv[2],'web/cotizador/index.html'),'utf8');
@@ -697,5 +699,209 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   T.$('cNombre').value='Luis'; T.run('crearProyecto()'); await esperar();
   assert.equal(T.llamadas.find(c=>c.funcion==='crearProyecto').args[0].clave,'XYZ');
   assert(/PRY-2026-0009-XYZ/.test(T.$('aviso').innerHTML)&&/^PRY-2026-0009-XYZ — /.test(T.$('proyecto').value));
+  // ===== Con operaciones (ROL_OPERACIONES): pestaña Operaciones, sitio, propuesta de compras y recepción por renglón =====
+  const SIT=['Querétaro','Manzanillo (TIMSA)','Ensenada (EIT)'];
+  const OPSL=[{folio:'REQ-2026-0010',fecha:'2026-10-28',proyectoFolio:'PRY-2026-0002',proyectoVisible:'PRY-2026-0002-DRO',proyectoNombre:'DROGHEDA',solicitante:'Jesús',
+      solicitanteEmail:'jesus@helgen.tech',estado:'Solicitada',sitio:'Manzanillo (TIMSA)',fechaRequerida:'2026-10-30',prioridad:'',renglones:3,elaboroPropuesta:'',proveedor:'',total:null,moneda:''},
+    {folio:'REQ-2026-0009',fecha:'2026-10-27',proyectoFolio:'PRY-2026-0002',proyectoVisible:'PRY-2026-0002-DRO',proyectoNombre:'DROGHEDA',solicitante:'Miguel',
+      solicitanteEmail:'miguel@helgen.tech',estado:'Cotizada',sitio:'Querétaro',fechaRequerida:'',prioridad:'Urgente',renglones:2,elaboroPropuesta:'tania@helgen.tech',
+      proveedor:'Ferretera del Puerto',total:1670.4,moneda:'MXN'},
+    {folio:'REQ-2026-0008',fecha:'2026-10-27',proyectoFolio:'PRY-2026-0002',proyectoVisible:'PRY-2026-0002-DRO',proyectoNombre:'DROGHEDA',solicitante:'Ana',
+      solicitanteEmail:'ana@helgen.tech',estado:'Solicitada',sitio:'Querétaro',fechaRequerida:'',prioridad:'',renglones:1,elaboroPropuesta:'',proveedor:'',total:null,moneda:''},
+    {folio:'REQ-2026-0007',fecha:'2026-10-26',proyectoFolio:'PRY-2026-0002',proyectoVisible:'PRY-2026-0002-DRO',proyectoNombre:'DROGHEDA',solicitante:'Daniel',
+      solicitanteEmail:'daniel@helgen.tech',estado:'Cerrada',sitio:'Ensenada (EIT)',fechaRequerida:'',prioridad:'Normal',renglones:1,elaboroPropuesta:'',proveedor:'',total:null,moneda:''}];
+  const O=montar({soloRequisicion:true,ivaTasa:0.16,catalogo:[],tipoCambio:null,clientes:[],proyectos:[],marcas:{},sitios:SIT,ops:{requisiciones:OPSL},
+    permisos:{cobranza:false,desbloqueo:false,compras:false,requisicion:true,operaciones:true,flujoOperaciones:true}});
+  O.respuestas.listarProyectosRequisicion={ok:true,datos:[]}; O.respuestas.misRequisiciones={ok:true,datos:[]};
+  await esperar(10);
+  for(const t of ['tabNueva','tabHist','tabCat','tabCob','tabCom']) assert(O.$(t).classList.contains('oculto'),'oculta '+t);
+  assert(!O.$('tabOps').classList.contains('oculto')&&!O.$('tabReq').classList.contains('oculto'),'operaciones con SOLO_REQUISICION: Requisiciones y Operaciones');
+  assert.equal(O.$('tabOps').textContent,'Operaciones (2)','pendientes: aprobar la de otro y el visto bueno; no la propia ni la cerrada');
+  O.$('opsFiltro').value='pendientes'; O.run("verTab('ops')"); await esperar();
+  assert(!O.llamadas.some(c=>c.funcion==='listarOperaciones'),'la lista vino en la carga inicial');
+  let ol=O.$('opsLista').innerHTML;
+  assert(/REQ-2026-0010/.test(ol)&&/REQ-2026-0009/.test(ol)&&!/REQ-2026-0008/.test(ol)&&!/REQ-2026-0007/.test(ol)&&/\$1,670\.40 MXN/.test(ol)&&/Ferretera del Puerto/.test(ol));
+  O.$('opsFiltro').value=''; O.$('opsBuscar').value='ensenada'; O.run('pintarListaOps()');
+  assert(/REQ-2026-0007/.test(O.$('opsLista').innerHTML)&&!/REQ-2026-0010/.test(O.$('opsLista').innerHTML),'busca por sitio sin acentos');
+  // Aprobar renglón por renglón
+  const VOPS={requisicion:{folio:'REQ-2026-0010',fecha:'2026-10-28',proyectoFolio:'PRY-2026-0002',solicitante:'Jesús',solicitanteEmail:'jesus@helgen.tech',estado:'Solicitada',
+      motivo:'',sitio:'Manzanillo (TIMSA)',fechaRequerida:'2026-10-30',prioridad:'',recibe:'jesus@helgen.tech',origenFolio:'',cotizacionId:'',actualizado:''},
+    proyecto:{folio:'PRY-2026-0002',folioVisible:'PRY-2026-0002-DRO',nombre:'DROGHEDA',estado:'Activo',ubicacion:''},
+    renglones:[{renglon:1,descripcion:'Cable THW 10',cantidad:100,unidad:'M',notas:''},{renglon:2,descripcion:'Pintura',cantidad:2,unidad:'CUBETA',notas:''},
+      {renglon:3,descripcion:'Tubo conduit 3/4',cantidad:12,unidad:'PZA',notas:''}],
+    aprobacion:null,propuesta:null,eventos:[{fecha:'2026-10-28 09:00',estado:'Solicitada',nombre:'Jesús',nota:'Manzanillo (TIMSA)'}],orden:null,avance:null,recepciones:[],hoy:'2026-10-28',
+    esPropia:false,preparoPropuesta:false,puedeAprobar:true,puedeDevolver:true,puedeRechazar:true,puedeVisto:false,puedeRegresar:false};
+  O.respuestas.getRequisicionOperaciones={ok:true,datos:VOPS};
+  O.run("abrirOps('REQ-2026-0010')"); await esperar();
+  assert(!O.$('opsVistaReq').classList.contains('oculto')&&O.$('opsVistaLista').classList.contains('oculto'));
+  assert(/Manzanillo \(TIMSA\)/.test(O.$('opsInfo').innerHTML)&&/Para el 30\/10\/2026/.test(O.$('opsInfo').innerHTML));
+  assert(/id="opsAp1"/.test(O.$('opsRenglones').innerHTML)&&/id="opsCant3"/.test(O.$('opsRenglones').innerHTML)&&/value="100"/.test(O.$('opsRenglones').innerHTML));
+  assert(!O.$('opsAprobar').classList.contains('oculto')&&!O.$('btnOpsAprobar').classList.contains('oculto'));
+  for(const n of [1,2,3]){O.$('opsAp'+n).value='si';O.$('opsCant'+n).value=String(VOPS.renglones[n-1].cantidad);O.$('opsCom'+n).value='';}
+  O.$('opsAp2').value='no'; O.$('opsCant1').value='80'; O.$('opsPrioridad').value='Urgente';
+  O.run('aprobarOps()'); await esperar();
+  assert(/Escribe por qué no se compra/.test(O.$('aviso').innerHTML)&&!O.llamadas.some(c=>c.funcion==='aprobarRequisicion'));
+  O.$('opsCom2').value='Ya hay en almacén';
+  O.respuestas.aprobarRequisicion={ok:true,datos:{...VOPS,requisicion:{...VOPS.requisicion,estado:'Aprobada',prioridad:'Urgente'},puedeAprobar:false,puedeDevolver:false,
+    renglones:VOPS.renglones.map((x,i)=>({...x,decision:i===1?'Rechazado':'Aprobado',cantidadAprobada:i===0?80:i===1?0:12,comentario:i===1?'Ya hay en almacén':''}))}};
+  O.run('aprobarOps()'); await esperar();
+  const apr=O.llamadas.find(c=>c.funcion==='aprobarRequisicion').args;
+  assert.deepEqual(apr,['REQ-2026-0010',{prioridad:'Urgente',nota:'',renglones:[{renglon:1,aprobado:true,cantidad:'80',comentario:''},
+    {renglon:2,aprobado:false,cantidad:'2',comentario:'Ya hay en almacén'},{renglon:3,aprobado:true,cantidad:'12',comentario:''}]}]);
+  assert(/aprobada: pasa a compras/.test(O.$('aviso').innerHTML)&&/No se compra/.test(O.$('opsRenglones').innerHTML)&&/Aprobado: 80/.test(O.$('opsRenglones').innerHTML));
+  assert(O.$('opsAprobar').classList.contains('oculto')===false&&O.$('btnOpsAprobar').classList.contains('oculto'),'ya no aprueba; aún puede rechazar');
+  // Visto bueno sobre la propuesta (sustituto en negritas, no disponible sin costo, adicional que no se recibe)
+  const PROPV={version:2,fecha:'2026-10-28 12:00:00',elaboroEmail:'tania@helgen.tech',elaboroNombre:'Tania Ibarra',recibe:'rosa@helgen.tech',
+    proveedor:{razonSocial:'Ferretera del Puerto',rfc:'FPU010101AB1'},moneda:'MXN',ivaTasa:0.16,tipoCambio:'',fechaEntrega:'2026-10-30',lugarEntrega:'Manzanillo',
+    condicionesPago:'Contado',diasCredito:0,notas:'',subtotal:1440,iva:230.4,total:1670.4,archivos:[{id:'ARCH1',nombre:'REQ-2026-0009 — Cotización de compras.pdf'}],
+    renglones:[{renglon:1,disponibilidad:'Exacto',nota:'',recibir:true,clave:'',descripcion:'Cable THW 10',unidad:'M',cantidad:80,costo:8,importe:640},
+      {renglon:3,disponibilidad:'Sustituto',nota:'No hay de 3/4',recibir:true,clave:'',descripcion:'Tubo conduit 1"',unidad:'PZA',cantidad:12,costo:50,importe:600},
+      {renglon:0,disponibilidad:'Adicional',nota:'',recibir:false,clave:'',descripcion:'Flete',unidad:'SERV',cantidad:1,costo:200,importe:200}]};
+  const VCOT={...VOPS,requisicion:{...VOPS.requisicion,folio:'REQ-2026-0009',estado:'Cotizada',prioridad:'Urgente'},propuesta:PROPV,
+    renglones:VOPS.renglones.map((x,i)=>({...x,decision:i===1?'Rechazado':'Aprobado',cantidadAprobada:i===0?80:i===1?0:12})),
+    puedeAprobar:false,puedeDevolver:false,puedeRechazar:true,puedeVisto:true,puedeRegresar:true};
+  O.run('pintarOps('+JSON.stringify(VCOT)+')');
+  assert(!O.$('opsModProp').classList.contains('oculto')&&!O.$('opsVisto').classList.contains('oculto')&&!O.$('btnOpsVisto').classList.contains('oculto'));
+  assert(O.$('opsAprobar').classList.contains('oculto'),'en Cotizada rechazar va junto a la propuesta');
+  const pvo=O.$('opsPropRenglones').innerHTML;
+  assert(/Sustituto/.test(pvo)&&/<b>Tubo conduit 1&quot;<\/b>/.test(pvo)&&/No hay de 3\/4/.test(pvo)&&/Agregado por compras/.test(pvo)&&/No se recibe en sitio/.test(pvo)&&/\$640\.00 MXN/.test(pvo),pvo);
+  assert(/versión 2/.test(O.$('opsPropTitulo').textContent)&&/\$1,670\.40 MXN/.test(O.$('opsPropTotales').innerHTML)&&/Ferretera del Puerto/.test(O.$('opsPropInfo').innerHTML));
+  assert(/verArchivoReq\('REQ-2026-0009','ARCH1'\)/.test(O.$('opsPropArchivos').innerHTML),'cotización sin acceso a Drive');
+  O.dialogos.confirmar=false; O.run('vistoBuenoOps()'); await esperar();
+  assert(!O.llamadas.some(c=>c.funcion==='autorizarPropuesta')&&/Ferretera del Puerto por \$1,670\.40 MXN/.test(O.dialogos.vistos.at(-1)));
+  O.dialogos.confirmar=true;
+  O.respuestas.autorizarPropuesta={ok:true,datos:{folio:'REQ-2026-0009',ocFolio:'OC-2026-0012',vista:{...VCOT,requisicion:{...VCOT.requisicion,estado:'Autorizada'},puedeVisto:false,puedeRegresar:false,puedeRechazar:false,
+    orden:{folio:'OC-2026-0012',fecha:'2026-10-28',estado:'Emitida',proveedor:'Ferretera del Puerto',total:1670.4,moneda:'MXN',fechaEntrega:'2026-10-30',lugarEntrega:'Manzanillo'},
+    avance:[{renglon:1,descripcion:'Cable THW 10',unidad:'M',pedido:80,recibido:0,pendiente:80}]}}};
+  const idVobo=O.run('ID_VOBO'); O.run('vistoBuenoOps()'); await esperar();
+  assert.deepEqual(O.llamadas.find(c=>c.funcion==='autorizarPropuesta').args,['REQ-2026-0009',2,idVobo],'con la versión que vio');
+  assert(/OC-2026-0012/.test(O.$('aviso').innerHTML)&&!O.$('opsModOrden').classList.contains('oculto')&&/Cable THW 10/.test(O.$('opsAvance').innerHTML));
+  O.run('pintarOps('+JSON.stringify({...VCOT,preparoPropuesta:true,puedeVisto:false})+')');
+  assert(/Tú preparaste la propuesta/.test(O.$('opsAviso').textContent)&&O.$('btnOpsVisto').classList.contains('oculto'));
+  O.dialogos.prompt='El cable cuesta menos en otro lado';
+  O.respuestas.regresarACompras={ok:true,datos:{...VCOT,requisicion:{...VCOT.requisicion,estado:'Aprobada',motivo:'El cable cuesta menos en otro lado'},puedeVisto:false,puedeRegresar:false}};
+  O.run('regresarOps()'); await esperar();
+  assert.deepEqual(O.llamadas.find(c=>c.funcion==='regresarACompras').args,['REQ-2026-0009','El cable cuesta menos en otro lado']);
+  assert(/Regresada a compras:<\/b> El cable cuesta menos/.test(O.$('opsInfo').innerHTML));
+
+  // Quien pide, con operaciones: sitio obligatorio, cotización opcional; ve lo que se compra y registra lo que llegó
+  const MISQ=[{folio:'REQ-2026-0005',fecha:'2026-10-28',proyectoFolio:'PRY-2026-0002',proyectoVisible:'PRY-2026-0002-DRO',proyectoNombre:'DROGHEDA',estado:'Autorizada',
+    motivo:'',notasRecepcion:'',solicitante:'Ana',sitio:'Manzanillo (TIMSA)',fechaRequerida:'2026-10-30',prioridad:'Urgente',
+    renglones:[{renglon:1,descripcion:'Cable THW 10',cantidad:100,unidad:'M',notas:'',decision:'Aprobado',cantidadAprobada:80,comentario:''},
+      {renglon:2,descripcion:'Pintura',cantidad:2,unidad:'CUBETA',notas:'',decision:'Rechazado',cantidadAprobada:0,comentario:'Ya hay en almacén'}],
+    eventos:[],compra:[{renglon:1,disponibilidad:'Exacto',descripcion:'Cable THW 10',unidad:'M',cantidad:80,nota:'',recibir:true},
+      {renglon:0,disponibilidad:'Adicional',descripcion:'Flete',unidad:'SERV',cantidad:1,nota:'',recibir:false}],
+    avance:[{renglon:1,clave:'',descripcion:'Cable THW 10',unidad:'M',pedido:80,recibido:30,pendiente:50}],
+    recepciones:[{folio:'REC-2026-0001',fecha:'2026-10-28',nombre:'Rosa',correo:'rosa@helgen.tech',sitio:'Manzanillo (TIMSA)',notas:'',estado:'Vigente',renglones:[{renglon:1,descripcion:'Cable THW 10',unidad:'M',cantidad:30}]}],
+    recibe:'ana@helgen.tech',esReceptor:false,puedeEditar:false,puedeCancelar:false,puedeCerrar:false,puedeRecibir:true}];
+  const Q=montar({ivaTasa:0.16,catalogo:CAT,tipoCambio:TC,clientes:[],proyectos:[],marcas:{},sitios:SIT,
+    permisos:{cobranza:false,desbloqueo:false,compras:false,requisicion:true,operaciones:false,flujoOperaciones:true}});
+  Q.respuestas.listarProyectosRequisicion={ok:true,datos:[{folio:'PRY-2026-0002',folioVisible:'PRY-2026-0002-DRO',nombre:'DROGHEDA'}]};
+  Q.respuestas.misRequisiciones={ok:true,datos:MISQ};
+  await esperar(5);
+  assert(Q.$('tabOps').classList.contains('oculto'),'sin rol de operaciones no ve la pestaña');
+  Q.run("verTab('req')"); await esperar();
+  assert(/Manzanillo \(TIMSA\)/.test(Q.$('reqSitio').innerHTML)&&/Elige el sitio/.test(Q.$('reqSitio').innerHTML)&&/\*$/.test(Q.$('reqLblSitio').textContent));
+  assert(/\(opcional\)/.test(Q.$('reqLblArchivo').textContent)&&/Operaciones la revisa/.test(Q.$('reqNotaEnvio').textContent));
+  assert.equal(Q.$('tabReq').textContent,'Requisiciones (1)','una por recibir');
+  let ql=Q.$('reqLista').innerHTML;
+  assert(/No se compra/.test(ql)&&/Ya hay en almacén/.test(ql)&&/Aprobado: 80/.test(ql)&&/Lo que se compra/.test(ql)&&/no se recibe en sitio/.test(ql)&&
+    /REC-2026-0001/.test(ql)&&/<b>50<\/b>/.test(ql)&&/abrirRecepcion\('REQ-2026-0005'\)/.test(ql)&&!/recibiMaterial/.test(ql),ql);
+  Q.$('reqFilas').hijos[0].querySelector('.desc').value='Antena GNSS'; Q.$('reqFilas').hijos[0].querySelector('.cant').value='2';
+  Q.$('reqProyecto').value='PRY-2026-0002-DRO — DROGHEDA'; Q.$('reqArchivo').files=[];
+  Q.$('reqSitio').value=''; Q.run('enviarRequisicion()'); await esperar();
+  assert(/Elige el sitio/.test(Q.$('aviso').innerHTML)&&!Q.llamadas.some(c=>c.funcion==='guardarRequisicion'));
+  Q.$('reqSitio').value='Querétaro'; Q.$('reqFecha').value='2026-11-02';
+  Q.respuestas.guardarRequisicion={ok:true,datos:{folio:'REQ-2026-0011',requisiciones:MISQ}};
+  Q.run('enviarRequisicion()'); await esperar(20);
+  const gq=Q.llamadas.find(c=>c.funcion==='guardarRequisicion').args[0];
+  assert.deepEqual([gq.proyectoFolio,gq.sitio,gq.fechaRequerida,gq.cotizacion],['PRY-2026-0002','Querétaro','2026-11-02',null],'sin cotización: la busca compras');
+  assert(/Operaciones la revisará/.test(Q.$('aviso').innerHTML));
+  // Registrar lo que llegó: por omisión lo que falta; la sincronización no borra el formulario abierto
+  Q.run("abrirRecepcion('REQ-2026-0005')");
+  const fq=Q.$('rcpCaja-REQ-2026-0005').innerHTML;
+  assert(/id="rcp-REQ20260005C1"/.test(fq)&&/value="50"/.test(fq)&&/Manzanillo \(TIMSA\)/.test(fq)&&/capture="environment"/.test(fq),fq);
+  Q.respuestas.sincronizar={ok:true,datos:{versiones:{requisiciones:9},permisos:{cobranza:false,desbloqueo:false,compras:false,requisicion:true,operaciones:false,flujoOperaciones:true},
+    cambios:['requisiciones'],misReq:[]}};
+  Q.run('sincronizarAhora()'); await esperar();
+  assert(/REQ-2026-0005/.test(Q.$('reqLista').innerHTML),'con una recepción abierta no se repinta la lista');
+  Q.$('rcp-REQ20260005C1').value='50'; Q.$('rcp-REQ20260005Sitio').value='Manzanillo (TIMSA)'; Q.$('rcp-REQ20260005Notas').value='';
+  Q.$('rcp-REQ20260005Final').checked=false; Q.$('rcp-REQ20260005Foto').files=[{name:'remision.jpg',type:'image/jpeg',size:3000,b64:'/9j/'}];
+  Q.respuestas.registrarRecepcion={ok:true,datos:{folio:'REC-2026-0002',completo:true,estado:'Recibida',requisiciones:[{...MISQ[0],estado:'Recibida',puedeRecibir:false}],vista:null}};
+  Q.run("enviarRecepcion('rcp-REQ20260005')"); await esperar(20);
+  const rq5=Q.llamadas.find(c=>c.funcion==='registrarRecepcion').args[0];
+  assert.deepEqual([rq5.reqFolio,rq5.sitio,rq5.final,rq5.renglones,rq5.evidencia.datos],['REQ-2026-0005','Manzanillo (TIMSA)',false,[{renglon:1,cantidad:'50'}],'/9j/']);
+  assert(/REC-2026-0002<\/b> registrada: todo recibido; falta el pago/.test(Q.$('aviso').innerHTML)&&!/abrirRecepcion/.test(Q.$('reqLista').innerHTML));
+  assert.equal(Q.run('REC_ABIERTA'),null);
+
+  // Compras, con operaciones: propuesta (no autoriza), separar renglones, recepción en su lugar y cancelar una recepción
+  const K=montar({ivaTasa:0.16,catalogo:CAT,tipoCambio:TC,clientes:[],proyectos:[],marcas:{},sitios:SIT,
+    permisos:{cobranza:false,desbloqueo:false,compras:true,requisicion:false,operaciones:false,flujoOperaciones:true}});
+  await esperar(5);
+  const VK={requisicion:{folio:'REQ-2026-0010',fecha:'2026-10-28',proyectoFolio:'PRY-2026-0002',solicitanteEmail:'jesus@helgen.tech',solicitante:'Jesús',estado:'Aprobada',
+      motivo:'',cotizacionId:'',cotizacionUrl:'',ocFolio:'',sitio:'Manzanillo (TIMSA)',fechaRequerida:'',prioridad:'Urgente',aprobacion:{nota:'Urge para el viernes'},propuesta:null,recibeEmail:''},
+    flujoOperaciones:true,renglones:[{renglon:1,descripcion:'Cable THW 10',cantidad:100,unidad:'M',notas:'',decision:'Aprobado',cantidadAprobada:80},
+      {renglon:2,descripcion:'Pintura',cantidad:2,unidad:'CUBETA',notas:'',decision:'Rechazado',cantidadAprobada:0,comentario:'Ya hay'},
+      {renglon:3,descripcion:'Tubo conduit 3/4',cantidad:12,unidad:'PZA',notas:'',decision:'Aprobado',cantidadAprobada:12}],
+    aprobados:[{renglon:1,descripcion:'Cable THW 10',unidad:'M',notas:'',cantidad:80,pedida:100},{renglon:3,descripcion:'Tubo conduit 3/4',unidad:'PZA',notas:'',cantidad:12,pedida:12}],
+    eventos:[],proyecto:{folio:'PRY-2026-0002',folioVisible:'PRY-2026-0002-DRO',nombre:'DROGHEDA',cliente:'Helgen',estado:'Activo',ubicacion:'Querétaro'},
+    moneda:'MXN',marca:'',sinContrato:true,orden:null,pagos:[],facturas:[],totalFacturado:0,facturaCompleta:false,puedeFacturar:false,proveedores:[],ivaTasas:[0.16,0.08,0],
+    metodos:['Transferencia'],hoy:'2026-10-28',sitios:SIT,receptores:['jesus@helgen.tech','rosa@helgen.tech'],avance:null,recepcionCompleta:false,recepciones:[],
+    puedeAutorizar:false,puedeRevisar:false,puedeCotizar:true,puedeDevolver:true,puedeSeparar:true,puedePagar:false,puedeCancelarPago:false,puedeCerrar:false,
+    puedeRecibir:false,puedeCancelarRecepcion:false};
+  K.run('pintarReqCom('+JSON.stringify(VK)+')');
+  assert(!K.$('comModOc').classList.contains('oculto')&&/Propuesta de compra/.test(K.$('ocTitulo').textContent)&&!K.$('propExtra').classList.contains('oculto'));
+  assert(K.$('rcRevision').classList.contains('oculto')&&!K.$('rcFlujo').classList.contains('oculto'),'no autoriza ni rechaza; pide aclarar y separa');
+  assert(/<th>Operaciones<\/th>/.test(K.$('rcRenglonesEnc').innerHTML)&&/No se compra/.test(K.$('rcRenglones').innerHTML)&&/Urge para el viernes/.test(K.$('rcInfo').innerHTML));
+  assert(/Sin cotización de quien pidió/.test(K.$('rcCotLink').textContent));
+  assert(/jesus@helgen.tech \(pidió\)/.test(K.$('propRecibe').innerHTML)&&K.$('propRecibe').value==='jesus@helgen.tech');
+  assert.equal(K.$('btnOc').textContent,'Mandar la propuesta a operaciones');
+  const fk=K.$('ocFilas').hijos;
+  assert.equal(fk.length,2,'un renglón por renglón aprobado');
+  assert.deepEqual([fk[0]._renglon,fk[0].querySelector('.disp').value,fk[0].querySelector('.cant').value,fk[1].querySelector('.desc').value],[1,'Exacto',80,'Tubo conduit 3/4']);
+  fk[0].querySelector('.costo').value='8';
+  fk[1].querySelector('.disp').value='Sustituto'; fk[1].querySelector('.disp').disparar('change'); fk[1].querySelector('.desc').value='Tubo conduit 1"'; fk[1].querySelector('.costo').value='50';
+  fk[1].querySelector('.nota-r').value='No hay de 3/4';
+  K.run('agregarRenglonOc()');
+  const fa=K.$('ocFilas').hijos[2];
+  assert.equal(fa._renglon,0); assert.equal(fa.querySelector('.recibir').checked,true,'un adicional se recibe por omisión');
+  fa.querySelector('.desc').value='Flete'; fa.querySelector('.uni').value='SERV'; fa.querySelector('.cant').value='1'; fa.querySelector('.costo').value='200'; fa.querySelector('.recibir').checked=false;
+  K.$('prvRazon').value='Ferretera del Puerto'; K.$('ocEntrega').value='2026-10-30'; K.$('ocDias').value='0'; K.$('ocCondiciones').value='Contado'; K.$('propRecibe').value='rosa@helgen.tech';
+  K.$('propArchivo').files=[];
+  K.respuestas.cotizarRequisicion=c=>({ok:true,datos:{folio:'REQ-2026-0010',version:1,vista:{...VK,requisicion:{...VK.requisicion,estado:'Cotizada',
+    propuesta:{...PROPV,version:1,elaboroNombre:'Pedro Ruiz',archivos:[{id:'A9',url:'https://drive/file/A9',nombre:'Cotización de compras.pdf'}]}}}}});
+  K.run('guardarOc()'); await esperar(20);
+  const ck=K.llamadas.find(c=>c.funcion==='cotizarRequisicion').args;
+  assert.equal(ck[0],'REQ-2026-0010');
+  assert.deepEqual(ck[1].renglones.map(r=>[r.renglon,r.disponibilidad,r.descripcion,r.cantidad,r.costo,r.recibir,r.nota]),
+    [[1,'Exacto','Cable THW 10',80,'8',true,''],[3,'Sustituto','Tubo conduit 1"',12,'50',true,'No hay de 3/4'],[0,'Adicional','Flete',1,'200',false,'']]);
+  assert.deepEqual([ck[1].recibe,ck[1].proveedor.razonSocial,ck[1].cotizacion],['rosa@helgen.tech','Ferretera del Puerto',null]);
+  assert(/enviada a operaciones/.test(K.$('aviso').innerHTML)&&/espera el visto bueno/.test(K.$('propEstado').innerHTML)&&/Cotización de compras\.pdf/.test(K.$('propEstado').innerHTML));
+  assert.equal(K.$('btnOc').textContent,'Corregir la propuesta (versión 2)');
+  // Separar renglones
+  K.dialogos.prompt=['3','Lo vende otro proveedor'];
+  K.respuestas.separarRequisicion={ok:true,datos:{folio:'REQ-2026-0012',vista:VK}};
+  K.run('separarReqCom()'); await esperar();
+  assert.deepEqual(K.llamadas.find(c=>c.funcion==='separarRequisicion').args,['REQ-2026-0010',[3],'Lo vende otro proveedor']);
+  assert(/REQ-2026-0012/.test(K.$('aviso').innerHTML));
+  // Recepción: avance, registrar en su lugar (con notas) y cancelar una equivocada
+  const VKA={...VK,requisicion:{...VK.requisicion,estado:'Pagada',ocFolio:'OC-2026-0012',recibeEmail:'rosa@helgen.tech'},puedeCotizar:false,puedeDevolver:false,puedeSeparar:false,
+    orden:{folio:'OC-2026-0012',fecha:'2026-10-28',estado:'Pagada',proveedor:'Ferretera del Puerto',total:1670.4,moneda:'MXN',condicionesPago:'Contado',diasCredito:0,fechaEntrega:'2026-10-30',lugarEntrega:'Manzanillo'},
+    avance:[{renglon:1,clave:'',descripcion:'Cable THW 10',unidad:'M',pedido:80,recibido:50,pendiente:30},{renglon:2,clave:'',descripcion:'Tubo conduit 1"',unidad:'PZA',pedido:12,recibido:12,pendiente:0}],
+    recepciones:[{folio:'REC-2026-0003',fecha:'2026-10-28',nombre:'Rosa',sitio:'Manzanillo (TIMSA)',notas:'',estado:'Vigente',evidenciaUrl:'https://drive/file/F1',
+      renglones:[{renglon:1,descripcion:'Cable THW 10',unidad:'M',cantidad:50}]}],puedeRecibir:true,puedeCancelarRecepcion:true,puedeCerrar:true};
+  K.run('pintarReqCom('+JSON.stringify(VKA)+')');
+  assert(K.$('comModOc').classList.contains('oculto')&&!K.$('rcRecepcion').classList.contains('oculto'));
+  let av=K.$('rcAvance').innerHTML;
+  assert(/REC-2026-0003/.test(av)&&/Foto/.test(av)&&/cancelarRecepcionCom\('REC-2026-0003'\)/.test(av)&&/abrirRecepcionCom\(\)/.test(av)&&/Recibe: rosa@helgen.tech/.test(av),av);
+  assert(!/cancelarOcDesdeReq/.test(K.$('rcOrden').innerHTML),'con material recibido no se ofrece cancelar la orden');
+  K.run('abrirRecepcionCom()');
+  assert(/en lugar de quien la recibe/.test(K.$('rcRecibirForm').innerHTML)&&/id="rcpComC1"/.test(K.$('rcRecibirForm').innerHTML)&&!/id="rcpComC2"/.test(K.$('rcRecibirForm').innerHTML));
+  assert(!/abrirRecepcionCom\(\)/.test(K.$('rcAvance').innerHTML),'con el formulario abierto no se repite el botón');
+  K.dialogos.prompt='Se registró en el sitio equivocado';
+  K.respuestas.cancelarRecepcion={ok:true,datos:{...VKA,recepciones:[{...VKA.recepciones[0],estado:'Cancelado',motivoCancelacion:'Se registró en el sitio equivocado'}]}};
+  K.run("cancelarRecepcionCom('REC-2026-0003')"); await esperar();
+  assert.deepEqual(K.llamadas.find(c=>c.funcion==='cancelarRecepcion').args,['REC-2026-0003','Se registró en el sitio equivocado']);
+  assert(/<s>/.test(K.$('rcAvance').innerHTML)&&/cancelada: Se registró en el sitio equivocado/.test(K.$('rcAvance').innerHTML));
   console.log('OK interfaz');
 })().catch(e=>{console.error(e);process.exit(1)});
