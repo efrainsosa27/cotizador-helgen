@@ -819,7 +819,7 @@
   const mxn = n => r2(n).toLocaleString('es-MX', { style:'currency', currency:'MXN' });
   // Importe con su moneda ("$1,160.00 MXN" / "$1,000.00 USD"); nunca se suman monedas distintas
   const dinero = (n, moneda) => r2(n).toLocaleString('es-MX', { minimumFractionDigits:2, maximumFractionDigits:2 })
-    .replace(/^(-?)/, '$1$') + ' ' + (moneda || 'MXN');
+    .replace(/^(-?)/, '$1$') + ' ' + esc(moneda || 'MXN'); // la moneda puede venir de un archivo (XML del proveedor): siempre escapada
   const monedaActual = () => $('moneda').value === 'USD' ? 'USD' : 'MXN';
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -898,7 +898,8 @@
   let SYNC_EN_CURSO = false, SYNC_OTRA = false, SYNC_INICIADA = false;
   function contextoSync() {
     return { cobResumen: !!RESUMEN, cobProyecto: COB ? COB.proyecto.folio : '', comProyecto: COM ? COM.proyecto.folio : '',
-      req: REQC ? REQC.requisicion.folio : '', rcBuscar: COM_FILTRO.buscar, rcEstado: COM_FILTRO.estado, cxp: !!CXP };
+      req: REQC ? REQC.requisicion.folio : '', rcBuscar: COM_FILTRO.buscar, rcEstado: COM_FILTRO.estado,
+      cxp: !!CXP, cxpHoy: CXP ? CXP.hoy : '' }; // otro día: el servidor recalcula días vencidos y rangos
   }
   function sincronizarAhora() {
     if (!BOOT || !(window.sesionVigente && sesionVigente())) return; // sin sesión no se forman consultas en cola
@@ -2242,7 +2243,7 @@
     const listo = () => { $('btnFactura').disabled = false; $('btnFactura').textContent = 'Registrar factura'; };
     (pdf ? leerArchivo(pdf) : Promise.resolve('')).then(pdfDatos => {
       google.script.run.withSuccessHandler(r => {
-        listo(); aplicarVistaFactura(r);
+        listo(); aplicarVistaFactura(r); sincronizarAhora(); // cuentas por pagar al día sin esperar 20 s
         if (REQC && REQC.orden) limpiarFormFactura(REQC);
         aviso('ok', 'Factura <b>' + esc(r.folio) + '</b> registrada en la orden ' + esc(r.ocFolio) + ' · vence el ' + esc(fechaMx(r.fechaVencimiento)) + '.');
       }).withFailureHandler(err => { listo(); mostrarError(err); }).registrarFacturaProveedor({
@@ -2258,7 +2259,9 @@
     const motivo = window.prompt('Motivo para cancelar la factura ' + folio + ' (no se borra; deja de contar como por pagar):');
     if (motivo == null) return;
     if (!motivo.trim()) { mostrarError('Escribe el motivo de la cancelación.'); return; }
-    accionCob(null, 'cancelarFacturaProveedor', [folio, motivo, 'requisicion'], r => { aplicarVistaFactura(r); aviso('ok', 'Factura <b>' + esc(folio) + '</b> cancelada.'); });
+    accionCob(null, 'cancelarFacturaProveedor', [folio, motivo, 'requisicion'], r => {
+      aplicarVistaFactura(r); sincronizarAhora(); aviso('ok', 'Factura <b>' + esc(folio) + '</b> cancelada.');
+    });
   }
   function cambiarDiasFactura(folio, actual) {
     const dias = window.prompt('Días de crédito de la factura ' + folio + ' (ahora: ' + actual + '; 0 = contado):', String(actual));
@@ -2268,7 +2271,8 @@
     if (motivo == null) return;
     if (!motivo.trim()) { mostrarError('Escribe por qué cambian los días de crédito.'); return; }
     accionCob(null, 'cambiarDiasCreditoFactura', [folio, String(dias).trim(), motivo, 'requisicion'], r => {
-      aplicarVistaFactura(r); aviso('ok', 'Factura <b>' + esc(folio) + '</b>: ahora vence el ' + esc(fechaMx(r.fechaVencimiento)) + '.');
+      aplicarVistaFactura(r); sincronizarAhora();
+      aviso('ok', 'Factura <b>' + esc(folio) + '</b>: ahora vence el ' + esc(fechaMx(r.fechaVencimiento)) + '.');
     });
   }
 

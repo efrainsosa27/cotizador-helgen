@@ -458,7 +458,9 @@ function sincronizar(vc, ctx) {
   const v = versiones_(true);
   const cambio = c => String(vc[c] == null ? '' : vc[c]) !== String(v[c]);
   const r = { versiones: v, permisos: permisos, soloRequisicion: solo, cambios: COLECCIONES.filter(cambio), errores: errores };
-  if (!r.cambios.length) return r;
+  // Cuentas por pagar dependen también del día (días vencidos y rangos): se vuelven a mandar al cambiar la fecha
+  const otroDiaCxp = !!(permisos.compras && ctx.cxp && ctx.cxpHoy && ctx.cxpHoy !== hoyIso_());
+  if (!r.cambios.length && !otroDiaCxp) return r;
   const algo = (...cs) => cs.some(cambio);
 
   if (algo('catalogo')) {
@@ -485,7 +487,7 @@ function sincronizar(vc, ctx) {
     if (ctx.comProyecto && algo('oc', 'contratos', 'proyectos', 'facturasProveedor', 'pagosProveedores')) {
       r.comprasProyecto = intentar_(errores, 'Órdenes del proyecto', () => getComprasProyecto(ctx.comProyecto));
     }
-    if (ctx.cxp && algo('facturasProveedor', 'oc', 'pagosProveedores', 'proyectos')) {
+    if (ctx.cxp && (otroDiaCxp || algo('facturasProveedor', 'oc', 'pagosProveedores', 'proyectos'))) {
       r.cxp = intentar_(errores, 'Cuentas por pagar', () => cuentasPorPagar());
     }
   }
@@ -2117,7 +2119,8 @@ function ordenDesdeFila_(r, fila) {
     notas: String(r[22] || ''), pdfUrl: String(r[24] || ''), elaboro: String(r[26] || r[25] || ''),
     estado: String(r[28] || OC_EMITIDA), fechaRecepcion: fechaIso_(r[29]), recibio: String(r[30] || ''),
     canceladoPor: String(r[31] || ''), motivoCancelacion: String(r[33] || ''), reqFolio: String(r[34] || ''),
-    diasCredito: r[35] === '' || r[35] == null ? '' : diasCreditoGuardados(r[35]), fila: fila, // '' = orden anterior (contado)
+    // Orden anterior a los días de crédito (AJ vacía): los de sus condiciones de pago ("Crédito 30 días"); si no dicen, contado
+    diasCredito: r[35] === '' || r[35] == null ? diasCreditoDeCondiciones(r[12]) : diasCreditoGuardados(r[35]), fila: fila,
   };
 }
 
@@ -2987,7 +2990,10 @@ function registrarFacturaProveedor(p) {
   return conCandado_(() => {
     if (claveCache) {
       const previo = cache.get(claveCache);
-      if (previo) return JSON.parse(previo);
+      if (previo) { // mismo envío: el mismo folio, con la vista de ahora
+        const r = JSON.parse(previo);
+        return Object.assign(r, vistaDeOrden_(libro, buscarOrden_(libro, r.ocFolio).orden, d0.desde));
+      }
     }
     const { orden } = buscarOrden_(libro, d0.ocFolio);
     const hoy = hoyIso_();
@@ -3009,7 +3015,7 @@ function registrarFacturaProveedor(p) {
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoFecha_(vence), dias,
       orden.folio, orden.reqFolio, orden.proyectoFolio, t(orden.proveedorId), t(factura.emisor.rfc || orden.rfc),
       t(factura.emisor.nombre || orden.proveedor), factura.moneda, factura.subtotal, factura.descuento, factura.trasladados,
-      factura.retenidos, factura.total, factura.metodoPago, t(factura.formaPago), t(factura.usoCfdi),
+      factura.retenidos, factura.total, t(factura.metodoPago), t(factura.formaPago), t(factura.usoCfdi),
       xml ? xml.getId() : '', xml ? xml.getUrl() : '', pdf ? pdf.getId() : '', pdf ? pdf.getUrl() : '', t(VENDEDOR_.email),
       t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), FPR_VIGENTE, '', '', '', t(notas),
     ]);
@@ -3018,9 +3024,11 @@ function registrarFacturaProveedor(p) {
       (factura.tipo === FPR_CFDI ? 'CFDI ' + factura.uuid : 'extranjera ' + factura.serieFolio) + ' · ' +
       formatoMoneda(factura.total) + ' ' + factura.moneda + ' · vence ' + vence, '', HOJAS_COMPRAS);
     SpreadsheetApp.flush();
-    const resultado = Object.assign({ folio: folio, fechaVencimiento: vence, ocFolio: orden.folio }, vistaDeOrden_(libro, orden, d0.desde));
-    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
-    return resultado;
+    const base = { folio: folio, fechaVencimiento: vence, ocFolio: orden.folio };
+    if (claveCache) {
+      try { cache.put(claveCache, JSON.stringify(base), 21600); } catch (e) { console.warn('Caché de idempotencia: ' + e.message); } // 6 h
+    }
+    return Object.assign(base, vistaDeOrden_(libro, orden, d0.desde));
   });
 }
 
@@ -3909,7 +3917,8 @@ function normalizarPagoProveedor(p, orden) {
     throw new Error(String(e.message).replace('El proyecto es en', 'La orden es en')); // aquí la moneda de referencia es la de la orden
   }
   const cuadra = t => Math.abs(aCentavos(pago.montoAplicado) - aCentavos(t)) <= aCentavos(TOLERANCIA_PAGO);
-  const facturado = Number(orden.totalFacturado) || 0;
+  const tope = aCentavos(orden.total) + aCentavos(TOLERANCIA_PAGO);
+  const facturado = Number(orden.totalFacturado) > 0 && aCentavos(orden.totalFacturado) <= tope ? Number(orden.totalFacturado) : 0;
   if (!cuadra(orden.total) && !(facturado > 0 && cuadra(facturado))) {
     throw new Error('El pago (' + formatoMoneda(pago.montoAplicado) + ' ' + orden.moneda + ') debe ser igual al total de la orden (' +
       formatoMoneda(orden.total) + ' ' + orden.moneda + ')' + (facturado > 0 ? ' o al total de sus facturas (' +
@@ -3939,6 +3948,8 @@ const TOLERANCIA_FACTURA = 1.00;            // en la moneda de la orden (redonde
 const MAX_XML_CFDI = 2 * 1024 * 1024;       // un CFDI pesa unos KB; 2 MB sobra
 const UUID_CFDI = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/;
 const NS_CFDI_40 = 'http://www.sat.gob.mx/cfd/4', NS_CFDI_33 = 'http://www.sat.gob.mx/cfd/3';
+const TOLERANCIA_CFDI = 0.02; // redondeo aceptado entre el total del CFDI y la suma de sus partes
+const METODOS_CFDI = ['PUE', 'PPD'];
 
 /** Rangos de antigüedad de cuentas por pagar, por días vencidos (0 o menos = por vencer). */
 const RANGOS_CXP = [
@@ -3963,6 +3974,12 @@ function normalizarDiasCredito(v) {
 function diasCreditoGuardados(v) {
   const n = Number(v);
   return v === '' || v == null || !isFinite(n) || n < 0 ? 0 : Math.floor(n);
+}
+
+/** Días de crédito escritos en las condiciones de pago de una orden anterior ("Crédito 30 días" → 30); si no los dicen, 0. */
+function diasCreditoDeCondiciones(texto) {
+  const m = String(texto || '').match(/(\d{1,3})\s*d[ií]as/i);
+  return m && Number(m[1]) <= MAX_DIAS_CREDITO ? Number(m[1]) : 0;
 }
 
 /** "AAAA-MM-DD" + días naturales → "AAAA-MM-DD". En UTC, así no depende de la zona horaria. */
@@ -4019,6 +4036,7 @@ function leerCfdi(texto) {
     if (!raiz) raiz = { nombre: nombre, attrs: attrs };
     if (padre === 'Comprobante' && ['Emisor', 'Receptor', 'Impuestos'].indexOf(nombre) !== -1 && !nodos[nombre]) nodos[nombre] = attrs;
     if (nombre === 'TimbreFiscalDigital' && !nodos.Timbre) nodos.Timbre = attrs;
+    if (nombre === 'ImpuestosLocales' && !nodos.Locales) nodos.Locales = attrs; // complemento implocal (p. ej. ISH, 5 al millar)
     if (!m[4]) pila.push(nombre);
   }
   if (!raiz || raiz.nombre !== 'Comprobante') throw new Error('El archivo no es un CFDI (factura electrónica del SAT).');
@@ -4027,7 +4045,7 @@ function leerCfdi(texto) {
     if (ns.indexOf(NS_CFDI_33) !== -1) throw new Error('Es un CFDI 3.3, que ya no es vigente: pide al proveedor la versión 4.0.');
     throw new Error('El archivo no es un CFDI 4.0.');
   }
-  const c = raiz.attrs, em = nodos.Emisor, rc = nodos.Receptor, imp = nodos.Impuestos || {}, tfd = nodos.Timbre;
+  const c = raiz.attrs, em = nodos.Emisor, rc = nodos.Receptor, imp = nodos.Impuestos || {}, tfd = nodos.Timbre, loc = nodos.Locales || {};
   if (!em || !rc) throw new Error('El CFDI está incompleto: le falta el emisor o el receptor.');
   if (!tfd || !tfd.UUID) throw new Error('El CFDI no está timbrado por el SAT (no trae folio fiscal UUID).');
   const importe = (v, campo, obligatorio) => {
@@ -4042,17 +4060,28 @@ function leerCfdi(texto) {
   const fecha = String(c.Fecha || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) throw new Error('El CFDI no trae una fecha de emisión válida.');
   const serie = String(c.Serie || '').trim(), folio = String(c.Folio || '').trim();
+  // Impuestos del comprobante más los locales (complemento implocal), que el SAT suma al total aparte
+  const trasladados = redondear(importe(imp.TotalImpuestosTrasladados, 'total de impuestos trasladados', false) +
+    importe(loc.TotaldeTraslados, 'total de impuestos locales trasladados', false));
+  const retenidos = redondear(importe(imp.TotalImpuestosRetenidos, 'total de impuestos retenidos', false) +
+    importe(loc.TotaldeRetenciones, 'total de impuestos locales retenidos', false));
+  const subtotal = importe(c.SubTotal, 'subtotal', true), descuento = importe(c.Descuento, 'descuento', false);
+  const total = importe(c.Total, 'total', true);
+  if (descuento > subtotal) throw new Error('El CFDI no es válido: el descuento es mayor que el subtotal.');
+  const esperado = redondear(subtotal - descuento + trasladados - retenidos);
+  if (Math.abs(aCentavos(total) - aCentavos(esperado)) > aCentavos(TOLERANCIA_CFDI)) {
+    throw new Error('El CFDI no cuadra: su total (' + formatoMoneda(total) + ') no es subtotal − descuento + impuestos trasladados − ' +
+      'retenidos (' + formatoMoneda(esperado) + '). Pide al proveedor el XML correcto.');
+  }
   return {
     tipo: FPR_CFDI, version: String(c.Version || ''), tipoComprobante: String(c.TipoDeComprobante || '').toUpperCase(),
     fecha: fecha, serie: serie, folio: folio, serieFolio: [serie, folio].filter(Boolean).join('-'),
-    moneda: String(c.Moneda || '').toUpperCase(), subtotal: importe(c.SubTotal, 'subtotal', true),
-    descuento: importe(c.Descuento, 'descuento', false), total: importe(c.Total, 'total', true),
+    moneda: String(c.Moneda || '').toUpperCase(), subtotal: subtotal, descuento: descuento, total: total,
     metodoPago: String(c.MetodoPago || '').toUpperCase(), formaPago: String(c.FormaPago || ''),
     usoCfdi: String(rc.UsoCFDI || ''),
     emisor: { rfc: String(em.Rfc || '').toUpperCase().trim(), nombre: String(em.Nombre || '').trim() },
     receptor: { rfc: String(rc.Rfc || '').toUpperCase().trim(), nombre: String(rc.Nombre || '').trim() },
-    trasladados: importe(imp.TotalImpuestosTrasladados, 'total de impuestos trasladados', false),
-    retenidos: importe(imp.TotalImpuestosRetenidos, 'total de impuestos retenidos', false),
+    trasladados: trasladados, retenidos: retenidos,
     uuid: String(tfd.UUID).toUpperCase().trim(), fechaTimbrado: String(tfd.FechaTimbrado || ''),
   };
 }
@@ -4083,6 +4112,7 @@ function textoUtf8(bytes) {
       cp = ((c & 0x0F) << 12) | ((b(i + 1) & 0x3F) << 6) | (b(i + 2) & 0x3F); largo = 3;
     } else if (c >= 0xF0 && c < 0xF5 && i + 3 < n && sigue(i + 1) && sigue(i + 2) && sigue(i + 3)) {
       cp = ((c & 0x07) << 18) | ((b(i + 1) & 0x3F) << 12) | ((b(i + 2) & 0x3F) << 6) | (b(i + 3) & 0x3F); largo = 4;
+      if (cp > 0x10FFFF || cp < 0x10000) { cp = 0xFFFD; largo = 1; }
     }
     trozo.push(String.fromCodePoint(cp));
     if (trozo.length >= 8192) { partes.push(trozo.join('')); trozo = []; }
@@ -4151,13 +4181,14 @@ function normalizarFacturaExtranjera(p, hoy) {
 
 /** Subtotal neto de una factura (sin IVA, menos descuento): lo que se compara contra el subtotal de la orden. */
 function netoFactura(f) {
-  return redondear((Number(f && f.subtotal) || 0) - (Number(f && f.descuento) || 0));
+  return Math.max(0, redondear((Number(f && f.subtotal) || 0) - (Number(f && f.descuento) || 0)));
 }
 
 /**
  * Revisa una factura (de leerCfdi o normalizarFacturaExtranjera) contra su orden antes de registrarla.
- * orden = {folio, estado, moneda, subtotal, rfc, proveedorId}; ctx = {rfcHelgen, hoy, facturas: todas las ya registradas
- * [{folio, tipo, uuid, serieFolio, proveedorId, ocFolio, estado, subtotal, descuento}]}.
+ * orden = {folio, estado, moneda, subtotal, total, rfc, proveedorId}; ctx = {rfcHelgen, hoy, facturas: todas las ya registradas
+ * [{folio, tipo, uuid, serieFolio, rfcEmisor, proveedorId, ocFolio, estado, subtotal, descuento, total}]}. Lo facturado no
+ * pasa ni el subtotal de la orden (sin IVA) ni su total (con impuestos), con tolerancia de TOLERANCIA_FACTURA.
  * Devuelve {neto, facturado (incluida esta), actualizarRfc (la orden no tenía RFC y el CFDI sí lo trae)}.
  */
 function validarFacturaProveedor(f, orden, ctx) {
@@ -4181,6 +4212,7 @@ function validarFacturaProveedor(f, orden, ctx) {
     if (f.tipoComprobante === 'E') throw new Error('Es una nota de crédito (CFDI tipo E): las notas de crédito llegan en una fase posterior.');
     if (f.tipoComprobante === 'P') throw new Error('Es un complemento de pago (REP, CFDI tipo P): se registrará en una fase posterior.');
     if (f.tipoComprobante !== 'I') throw new Error('El CFDI no es una factura de ingreso (tipo I).');
+    if (METODOS_CFDI.indexOf(f.metodoPago) === -1) throw new Error('El método de pago del CFDI debe ser PUE o PPD.');
     if (!UUID_CFDI.test(f.uuid)) throw new Error('El folio fiscal (UUID) del CFDI no es válido.');
     const rfcHelgen = String(x.rfcHelgen || '').toUpperCase().trim();
     if (f.receptor.rfc !== rfcHelgen) {
@@ -4218,6 +4250,14 @@ function validarFacturaProveedor(f, orden, ctx) {
   if (despues > aCentavos(o.subtotal) + aCentavos(TOLERANCIA_FACTURA)) {
     throw new Error('Con esta factura, lo facturado de la orden ' + o.folio + ' (' + formatoMoneda(despues / 100) + ' ' + o.moneda +
       ' sin IVA) supera su subtotal (' + formatoMoneda(o.subtotal) + ' ' + o.moneda + ').');
+  }
+  // Con impuestos: el total facturado tampoco puede pasar el total de la orden (IVA distinto al de la orden, impuestos mal
+  // capturados). Con retenciones queda abajo, que sí se acepta.
+  const totalDespues = deLaOrden.reduce((s, v) => s + aCentavos(Number(v.total) || 0), 0) + aCentavos(f.total);
+  if (totalDespues > aCentavos(Number(o.total) || 0) + aCentavos(TOLERANCIA_FACTURA)) {
+    throw new Error('Con esta factura, el total facturado de la orden ' + o.folio + ' (' + formatoMoneda(totalDespues / 100) + ' ' +
+      o.moneda + ') supera el total de la orden (' + formatoMoneda(o.total) + ' ' + o.moneda + '): revisa el IVA y los impuestos ' +
+      'de la factura contra los de la orden.');
   }
   return { neto: neto, facturado: redondear(despues / 100), actualizarRfc: actualizarRfc };
 }

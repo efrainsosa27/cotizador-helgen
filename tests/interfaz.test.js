@@ -497,6 +497,10 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   const archivoXml=o=>[{name:'a77.xml',type:'text/xml',size:600,b64:Buffer.from(xmlCfdi(o),'utf8').toString('base64')}];
   C.$('fcXml').files=archivoXml({moneda:'USD',version:'3.3'}); C.$('fcXml').disparar('change'); await esperar();
   assert(/es en USD y la orden en MXN/.test(C.$('fcPrevia').innerHTML)&&/No es CFDI 4\.0/.test(C.$('fcPrevia').innerHTML));
+  // Un XML con una "moneda" hostil no mete HTML en la vista previa (dinero() escapa la moneda)
+  C.$('fcXml').files=archivoXml({moneda:'&lt;img src=x onerror=&amp;#97;lert(1)&gt;'}); C.$('fcXml').disparar('change'); await esperar();
+  assert(!/<img/i.test(C.$('fcPrevia').innerHTML)&&/&lt;IMG/.test(C.$('fcPrevia').innerHTML),C.$('fcPrevia').innerHTML);
+  assert.equal(C.run("dinero(1,'<b>')"),'$1.00 &lt;b&gt;');
   C.$('fcXml').files=archivoXml(); C.$('fcXml').disparar('change'); await esperar();
   const pv=C.$('fcPrevia').innerHTML;
   assert(/PANELES DEL BAJÍO &amp; CIA/.test(pv)&&/PDB200101AB1/.test(pv)&&!/FALSO/.test(pv)&&/A-77/.test(pv)&&/Total \$1,740\.00 MXN/.test(pv)&&
