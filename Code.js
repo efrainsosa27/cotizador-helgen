@@ -119,6 +119,11 @@ const API_FUNCIONES = {
   registrarPagoProveedor: registrarPagoProveedor,
   cancelarPagoProveedor: cancelarPagoProveedor,
   cerrarRequisicionCompras: cerrarRequisicionCompras,
+  // Facturas de proveedor y cuentas por pagar (solo ROL_COMPRAS; 4.5)
+  registrarFacturaProveedor: registrarFacturaProveedor,
+  cancelarFacturaProveedor: cancelarFacturaProveedor,
+  cambiarDiasCreditoFactura: cambiarDiasCreditoFactura,
+  cuentasPorPagar: cuentasPorPagar,
   // Requisiciones del solicitante (ROL_REQUISICION o SOLO_REQUISICION; solo las suyas)
   listarProyectosRequisicion: listarProyectosRequisicion,
   misRequisiciones: misRequisiciones,
@@ -176,7 +181,7 @@ function doPost(e) {
 // consulta cada 20 s con la pestaña visible, sin recargar. Los permisos se siguen revisando en cada función.
 
 const COLECCIONES = ['proyectos', 'contratos', 'cotizaciones', 'catalogo', 'requisiciones', 'oc', 'pagosCobranza',
-  'pagosProveedores'];
+  'pagosProveedores', 'facturasProveedor'];
 
 /** Colecciones que cambia cada función de la API: doPost sube su versión cuando termina bien. */
 const CAMBIOS_API = {
@@ -188,6 +193,8 @@ const CAMBIOS_API = {
   autorizarRequisicion: ['requisiciones', 'oc'], rechazarRequisicion: ['requisiciones'],
   devolverRequisicion: ['requisiciones'], registrarPagoProveedor: ['pagosProveedores', 'requisiciones', 'oc'],
   cancelarPagoProveedor: ['pagosProveedores', 'requisiciones', 'oc'], cerrarRequisicionCompras: ['requisiciones', 'oc'],
+  registrarFacturaProveedor: ['facturasProveedor'], cancelarFacturaProveedor: ['facturasProveedor'],
+  cambiarDiasCreditoFactura: ['facturasProveedor'],
 };
 
 let VERSIONES_ = null;   // versiones leídas en esta petición (doPost las limpia)
@@ -435,7 +442,7 @@ function getDatosIniciales() {
 /**
  * Consulta ligera de la interfaz (cada 20 s con la pestaña visible, al cambiar de pestaña y al abrir un buscador de
  * proyectos). vc = versiones que tiene el navegador; ctx = lo que está viendo {cobProyecto, cobResumen, comProyecto, req,
- * rcBuscar, rcEstado}. Devuelve las versiones, los permisos y solo las listas o vistas que cambiaron y que su rol puede ver.
+ * rcBuscar, rcEstado, cxp}. Devuelve las versiones, los permisos y solo las listas o vistas que cambiaron y que su rol puede ver.
  */
 function sincronizar(vc, ctx) {
   if (!VENDEDOR_) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + '.');
@@ -469,10 +476,15 @@ function sincronizar(vc, ctx) {
     if (algo('proyectos', 'contratos')) r.comProyectos = intentar_(errores, 'Proyectos de compras', () => listarProyectosCompras(''));
     if (algo('requisiciones', 'oc', 'pagosProveedores', 'proyectos')) {
       r.comRequisiciones = intentar_(errores, 'Requisiciones', () => listarRequisiciones(ctx.rcBuscar || '', ctx.rcEstado || ''));
-      if (ctx.req) r.requisicion = intentar_(errores, 'Requisición', () => getRequisicion(ctx.req));
     }
-    if (ctx.comProyecto && algo('oc', 'contratos', 'proyectos')) {
+    if (ctx.req && algo('requisiciones', 'oc', 'pagosProveedores', 'proyectos', 'facturasProveedor')) {
+      r.requisicion = intentar_(errores, 'Requisición', () => getRequisicion(ctx.req));
+    }
+    if (ctx.comProyecto && algo('oc', 'contratos', 'proyectos', 'facturasProveedor', 'pagosProveedores')) {
       r.comprasProyecto = intentar_(errores, 'Órdenes del proyecto', () => getComprasProyecto(ctx.comProyecto));
+    }
+    if (ctx.cxp && algo('facturasProveedor', 'oc', 'pagosProveedores', 'proyectos')) {
+      r.cxp = intentar_(errores, 'Cuentas por pagar', () => cuentasPorPagar());
     }
   }
   if (permisos.cobranza) {
@@ -2102,7 +2114,8 @@ function ordenDesdeFila_(r, fila) {
     tipoCambio: r[19] === '' ? '' : Number(r[19]), subtotalProyecto: Number(r[20]) || 0, renglones: renglones,
     notas: String(r[22] || ''), pdfUrl: String(r[24] || ''), elaboro: String(r[26] || r[25] || ''),
     estado: String(r[28] || OC_EMITIDA), fechaRecepcion: fechaIso_(r[29]), recibio: String(r[30] || ''),
-    canceladoPor: String(r[31] || ''), motivoCancelacion: String(r[33] || ''), reqFolio: String(r[34] || ''), fila: fila,
+    canceladoPor: String(r[31] || ''), motivoCancelacion: String(r[33] || ''), reqFolio: String(r[34] || ''),
+    diasCredito: r[35] === '' || r[35] == null ? '' : diasCreditoGuardados(r[35]), fila: fila, // '' = orden anterior (contado)
   };
 }
 
@@ -2135,7 +2148,8 @@ function guardarProveedor_(libro, prov) {
   const t = textoCelda;
   const datos = fusionarProveedor(existente, prov);
   const fila = [t(id), t(datos.razonSocial), t(datos.rfc), t(datos.contacto), t(datos.correo), t(datos.telefono),
-    Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm')];
+    Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm'),
+    datos.diasCredito === '' ? '' : diasCreditoGuardados(datos.diasCredito)];
   if (existente) hoja.getRange(existente.fila, 1, 1, fila.length).setValues([fila]);
   else hoja.appendRow(fila);
   return Object.assign(datos, { id: id });
@@ -2163,15 +2177,22 @@ function datosProyectoCompras_(p) {
     estado: p.estado, ubicacion: p.ubicacion };
 }
 
-/** Respuesta para "Órdenes por proyecto" en la pestaña Compras: proyecto, moneda y órdenes. Sin montos del contrato ni margen. */
+/**
+ * Respuesta para "Órdenes por proyecto" en la pestaña Compras: proyecto, moneda y órdenes (cada una con sus facturas y
+ * puedeFacturar). Sin montos del contrato ni margen.
+ */
 function vistaCompras_(libro, proyecto) {
   const m = monedaDeProyecto_(contratosDelLibro_()[proyecto.folio.toUpperCase()] || null);
+  const facturas = facturasDelLibro_(libro);
   return {
     proyecto: datosProyectoCompras_(proyecto),
     moneda: m.moneda,
     marca: m.marca,
     sinContrato: m.sinContrato,
-    ordenes: ordenesDeProyecto_(libro, proyecto.folio).map(o => { const x = Object.assign({}, o); delete x.fila; return x; }).reverse(),
+    ordenes: ordenesDeProyecto_(libro, proyecto.folio).map(o => Object.assign(sinFila_(o), {
+      facturas: facturasDeOrden_(facturas, o.folio), puedeFacturar: o.estado !== OC_CANCELADA,
+      totalFacturado: totalFacturadoDeOrden(facturas, o.folio),
+    })).reverse(),
     hoy: hoyIso_(),
   };
 }
@@ -2207,7 +2228,7 @@ function emitirOrdenCompra_(libro, d0, proyecto, reqFolio) {
 
   const hoja = hojaCompras_(libro, 'OrdenesCompra');
   const folio = siguienteFolio_(PREFIJO_OC, hoja, 'CONSECUTIVO_OC_');
-  const proveedor = guardarProveedor_(libro, oc.proveedor);
+  const proveedor = guardarProveedor_(libro, Object.assign({}, oc.proveedor, { diasCredito: oc.diasCredito }));
   const ahora = new Date();
   const elaboro = [VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ') || VENDEDOR_.email;
 
@@ -2228,10 +2249,11 @@ function emitirOrdenCompra_(libro, d0, proyecto, reqFolio) {
     t(oc.condicionesPago), oc.moneda, oc.ivaTasa, oc.subtotal, oc.iva, oc.total, oc.monedaProyecto, oc.tipoCambio,
     oc.subtotalProyecto, JSON.stringify(oc.renglones), t(oc.notas), archivo.getId(), archivo.getUrl(), t(VENDEDOR_.email),
     t(elaboro), Utilities.formatDate(ahora, 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), OC_EMITIDA, '', '', '', '', '',
-    reqFolio || '',
+    reqFolio || '', oc.diasCredito,
   ]);
   bitacora_(libro, 'Emitir orden de compra', proyecto.folio, folio + (reqFolio ? ' · ' + reqFolio : '') + ' · ' +
-    proveedor.razonSocial + ' · ' + formatoMoneda(oc.total) + ' ' + oc.moneda + (oc.tipoCambio ? ' · TC ' + oc.tipoCambio + ' = ' +
+    proveedor.razonSocial + ' · ' + formatoMoneda(oc.total) + ' ' + oc.moneda + ' · ' +
+    (oc.diasCredito ? 'crédito ' + oc.diasCredito + ' días' : 'contado') + (oc.tipoCambio ? ' · TC ' + oc.tipoCambio + ' = ' +
     formatoMoneda(oc.subtotalProyecto) + ' ' + oc.monedaProyecto + ' sin IVA' : '') + ' · ' + (MARCAS[c.marca] || 'sin contrato'), '', HOJAS_COMPRAS);
   return { folio: folio, url: archivo.getUrl(), total: oc.total, moneda: oc.moneda };
 }
@@ -2267,6 +2289,11 @@ function cancelarOrdenCompra(folioOc, motivo) {
     if (orden.estado === OC_CANCELADA) throw new Error('La orden ' + orden.folio + ' ya está cancelada.');
     if (orden.estado === OC_PAGADA) throw new Error('La orden ' + orden.folio + ' ya está pagada: no se puede cancelar.');
     if (orden.estado !== OC_EMITIDA) throw new Error('La orden ' + orden.folio + ' ya se recibió: no se puede cancelar.');
+    const conFactura = facturasDelLibro_(libro).filter(f => f.estado === FPR_VIGENTE &&
+      f.ocFolio.toUpperCase() === orden.folio.toUpperCase()).map(f => f.folio);
+    if (conFactura.length) {
+      throw new Error('La orden ' + orden.folio + ' tiene facturas vigentes (' + conFactura.join(', ') + '): cancélalas primero.');
+    }
     hoja.getRange(orden.fila, COL_ESTADO_OC).setValue(OC_CANCELADA);
     hoja.getRange(orden.fila, COL_ESTADO_OC + 3, 1, 3).setValues([[textoCelda(VENDEDOR_.email),
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
@@ -2656,6 +2683,7 @@ function vistaRequisicion_(libro, folioReq) {
   const pagos = req.ocFolio ? pagosDeOrden_(libro, req.ocFolio).map(x => { delete x.fila; return x; }) : [];
   const proyectoVigente = !!proyecto && proyecto.estado !== 'Cancelado'; // Activo o Cerrado, con o sin contrato
   const r = Object.assign({}, req); delete r.fila;
+  const todas = orden ? facturasDelLibro_(libro) : [];
   return {
     requisicion: r,
     renglones: (renglonesDeReqs_(libro)[f] || {}).renglones || [],
@@ -2664,6 +2692,10 @@ function vistaRequisicion_(libro, folioReq) {
       : { folio: req.proyectoFolio, clave: '', folioVisible: req.proyectoFolio, nombre: '', cliente: '', estado: '', ubicacion: '' },
     moneda: c.moneda, marca: c.marca, sinContrato: c.sinContrato,
     orden: orden, pagos: pagos,
+    // Facturas de la orden (4.5): se registran desde que la orden existe hasta que se cancela
+    facturas: orden ? facturasDeOrden_(todas, orden.folio) : [],
+    totalFacturado: orden ? totalFacturadoDeOrden(todas, orden.folio) : 0,
+    puedeFacturar: !!orden && orden.estado !== OC_CANCELADA,
     proveedores: proveedoresDelLibro_(libro).map(p => { const x = Object.assign({}, p); delete x.fila; return x; }),
     ivaTasas: IVA_OC, metodos: METODOS_PAGO, hoy: hoyIso_(),
     puedeAutorizar: req.estado === REQ_SOLICITADA && proyectoVigente,
@@ -2761,7 +2793,8 @@ function registrarPagoProveedor(p) {
     }
     if (orden.estado !== OC_EMITIDA) throw new Error('La orden ' + orden.folio + ' está ' + orden.estado.toLowerCase() + ': no se puede pagar.');
     if (pagosDeOrden_(libro, orden.folio).some(x => x.estado === 'Vigente')) throw new Error('La orden ' + orden.folio + ' ya tiene un pago.');
-    const pago = normalizarPagoProveedor(d0, { moneda: orden.moneda, total: orden.total, fechaOrden: orden.fecha, hoy: hoyIso_() });
+    const pago = normalizarPagoProveedor(d0, { moneda: orden.moneda, total: orden.total, fechaOrden: orden.fecha, hoy: hoyIso_(),
+      totalFacturado: totalFacturadoDeOrden(facturasDelLibro_(libro), orden.folio) });
 
     const hP = hojaCompras_(libro, 'PagosProveedores');
     const folio = siguienteFolio_(PREFIJO_PGP, hP, 'CONSECUTIVO_PGP_');
@@ -2846,6 +2879,220 @@ function prepararCompras() {
   Logger.log('ROL_COMPRAS: ' + (props.getProperty('ROL_COMPRAS') || '(vacío: nadie tiene acceso)'));
   Logger.log('ROL_REQUISICION: ' + (props.getProperty('ROL_REQUISICION') || '(vacío)'));
   Logger.log('SOLO_REQUISICION: ' + (props.getProperty('SOLO_REQUISICION') || '(vacío)'));
+}
+
+// ====== 4.5 FACTURAS DE PROVEEDOR Y CUENTAS POR PAGAR ======
+// Compras (ROL_COMPRAS) registra las facturas de cada orden: CFDI 4.0 con su XML (el servidor lee todo de ahí; el PDF es
+// opcional) o, para proveedores extranjeros sin CFDI, el PDF y los datos capturados. Vencimiento = emisión + días de crédito
+// de la orden. Todo en el libro de compras (pestaña FacturasProveedor); archivos en Compras/AAAA/<folio del proyecto>/
+// Facturas/ (restringida). Lógica pura en la sección 5: leerCfdi, validarFacturaProveedor, antiguedadCxp.
+
+const SUBCARPETA_FACTURAS = 'Facturas';
+const COL_VENCIMIENTO_FPR = 7; // G: fecha_vencimiento; H: dias_credito
+const COL_ESTADO_FPR = 30;     // AD: estado; AE:AG cancelado_por, fecha_cancelacion, motivo_cancelacion
+
+/** Copia de un registro sin su número de fila (lo que se manda a la interfaz). */
+function sinFila_(o) {
+  const x = Object.assign({}, o);
+  delete x.fila;
+  return x;
+}
+
+function facturaProvDesdeFila_(r, fila) {
+  return {
+    folio: String(r[0]), tipo: String(r[1] || FPR_CFDI), uuid: String(r[2] || ''), serieFolio: String(r[3] || ''),
+    fechaEmision: fechaIso_(r[4]), fechaRegistro: fechaTexto_(r[5]), fechaVencimiento: fechaIso_(r[6]),
+    diasCredito: diasCreditoGuardados(r[7]), ocFolio: String(r[8] || ''), reqFolio: String(r[9] || ''),
+    proyectoFolio: String(r[10] || ''), proveedorId: String(r[11] || ''), rfcEmisor: String(r[12] || ''),
+    nombreEmisor: String(r[13] || ''), moneda: String(r[14] || ''), subtotal: Number(r[15]) || 0, descuento: Number(r[16]) || 0,
+    trasladados: Number(r[17]) || 0, retenidos: Number(r[18]) || 0, total: Number(r[19]) || 0,
+    metodoPago: String(r[20] || ''), formaPago: String(r[21] || ''), usoCfdi: String(r[22] || ''),
+    xmlUrl: String(r[24] || ''), pdfUrl: String(r[26] || ''), registro: String(r[28] || r[27] || ''),
+    estado: String(r[29] || FPR_VIGENTE), canceladoPor: String(r[30] || ''), fechaCancelacion: fechaTexto_(r[31]),
+    motivoCancelacion: String(r[32] || ''), notas: String(r[33] || ''), fila: fila,
+  };
+}
+
+/** Todas las facturas del libro de compras (con su fila). Sin libro: ninguna. */
+function facturasDelLibro_(libro) {
+  if (!libro) return [];
+  const lista = [];
+  filasDeArea_(hojaCompras_(libro, 'FacturasProveedor'), HOJAS_COMPRAS, 'FacturasProveedor').forEach((r, i) => {
+    if (String(r[0] || '').trim()) lista.push(facturaProvDesdeFila_(r, i + 2));
+  });
+  return lista;
+}
+
+/** Facturas de una orden para la interfaz (sin fila), en orden de registro. */
+function facturasDeOrden_(facturas, ocFolio) {
+  const f = String(ocFolio || '').toUpperCase();
+  return facturas.filter(x => x.ocFolio.toUpperCase() === f).map(sinFila_);
+}
+
+function buscarFactura_(libro, folioFpr) {
+  const folio = String(folioFpr || '').trim().toUpperCase();
+  const factura = facturasDelLibro_(libro).find(x => x.folio.toUpperCase() === folio);
+  if (!factura) throw new Error('No existe la factura ' + folio + '.');
+  return { hoja: hojaCompras_(libro, 'FacturasProveedor'), factura: factura };
+}
+
+/** Compras/AAAA/<folio del proyecto>/Facturas/ (restringida). */
+function carpetaFacturas_(proyectoFolio) {
+  return privado_(subcarpeta_(carpetaProyectoCompras_(proyectoFolio), SUBCARPETA_FACTURAS));
+}
+
+/** Vista que la interfaz repinta tras un cambio: la requisición de la orden o, si se pidió o no tiene, las órdenes del proyecto. */
+function vistaDeOrden_(libro, orden, desde) {
+  if (orden.reqFolio && desde !== 'proyecto') return { desde: 'requisicion', vista: vistaRequisicion_(libro, orden.reqFolio) };
+  return { desde: 'proyecto', vista: vistaCompras_(libro, proyectoParaCompras_(orden.proyectoFolio)) };
+}
+
+/**
+ * Registra una factura de una orden. p = {ocFolio, tipo: 'CFDI' | 'Extranjera', xml: {datos (base64)} (CFDI),
+ * pdf: {datos} (opcional en CFDI, obligatorio en extranjera), numero, fecha, moneda, subtotal, impuestos (extranjera),
+ * notas, desde ('requisicion' | 'proyecto'), idSolicitud}. Idempotente por idSolicitud (FPR_<id>, 6 h).
+ */
+function registrarFacturaProveedor(p) {
+  exigirCompras_();
+  const d0 = p || {};
+  const tipo = d0.tipo === FPR_EXTRANJERA ? FPR_EXTRANJERA : FPR_CFDI;
+  // Leer y validar los archivos antes del candado (no dependen de nada guardado)
+  let factura, xmlBytes = null, pdfBytes = null, pdfTipo = null;
+  if (tipo === FPR_CFDI) {
+    xmlBytes = bytesDeAdjunto_(d0.xml, 'No se pudo leer el XML. Vuelve a adjuntarlo.');
+    validarXml(xmlBytes);
+    factura = leerCfdi(textoUtf8(xmlBytes));
+  } else {
+    factura = normalizarFacturaExtranjera(d0, hoyIso_());
+  }
+  if (d0.pdf && d0.pdf.datos) {
+    pdfBytes = bytesDeAdjunto_(d0.pdf, 'No se pudo leer el PDF de la factura. Vuelve a adjuntarlo.');
+    pdfTipo = validarArchivo(pdfBytes, 'el PDF de la factura', 'El PDF de la factura');
+  } else if (tipo === FPR_EXTRANJERA) {
+    throw new Error('Adjunta el PDF de la factura del proveedor extranjero.');
+  }
+  const notas = String(d0.notas || '').trim();
+  if (notas.length > 500) throw new Error('Las notas deben tener máximo 500 caracteres.');
+  const libro = libroCompras_();
+  const cfg = getConfig_();
+
+  const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
+  const cache = CacheService.getScriptCache();
+  const claveCache = idSolicitud ? 'FPR_' + idSolicitud : '';
+
+  return conCandado_(() => {
+    if (claveCache) {
+      const previo = cache.get(claveCache);
+      if (previo) return JSON.parse(previo);
+    }
+    const { orden } = buscarOrden_(libro, d0.ocFolio);
+    const hoy = hoyIso_();
+    const v = validarFacturaProveedor(factura, orden, { rfcHelgen: cfg.EMPRESA_RFC, hoy: hoy, facturas: facturasDelLibro_(libro) });
+    const hoja = hojaCompras_(libro, 'FacturasProveedor');
+    const folio = siguienteFolio_(PREFIJO_FPR, hoja, 'CONSECUTIVO_FPR_');
+    const dias = diasCreditoGuardados(orden.diasCredito);
+    const vence = fechaVencimiento(factura.fecha, dias);
+    const proveedor = orden.proveedor || factura.emisor.nombre;
+    const carpeta = carpetaFacturas_(orden.proyectoFolio);
+    const guardar = (bytes, mime, ext) => privado_(carpeta.createFile(Utilities.newBlob(bytes, mime,
+      nombreArchivoFactura(folio, proveedor, factura.serieFolio, ext))));
+    const xml = xmlBytes ? guardar(xmlBytes, 'application/xml', 'xml') : null;
+    const pdf = pdfBytes ? guardar(pdfBytes, pdfTipo.mime, pdfTipo.ext) : null;
+
+    const t = textoCelda;
+    hoja.appendRow([
+      folio, factura.tipo, factura.uuid, t(factura.serieFolio), textoFecha_(factura.fecha),
+      Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoFecha_(vence), dias,
+      orden.folio, orden.reqFolio, orden.proyectoFolio, t(orden.proveedorId), t(factura.emisor.rfc || orden.rfc),
+      t(factura.emisor.nombre || orden.proveedor), factura.moneda, factura.subtotal, factura.descuento, factura.trasladados,
+      factura.retenidos, factura.total, factura.metodoPago, t(factura.formaPago), t(factura.usoCfdi),
+      xml ? xml.getId() : '', xml ? xml.getUrl() : '', pdf ? pdf.getId() : '', pdf ? pdf.getUrl() : '', t(VENDEDOR_.email),
+      t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), FPR_VIGENTE, '', '', '', t(notas),
+    ]);
+    if (v.actualizarRfc) guardarProveedor_(libro, { razonSocial: orden.proveedor, rfc: factura.emisor.rfc });
+    bitacora_(libro, 'Registrar factura de proveedor', orden.proyectoFolio, folio + ' · ' + orden.folio + ' · ' +
+      (factura.tipo === FPR_CFDI ? 'CFDI ' + factura.uuid : 'extranjera ' + factura.serieFolio) + ' · ' +
+      formatoMoneda(factura.total) + ' ' + factura.moneda + ' · vence ' + vence, '', HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    const resultado = Object.assign({ folio: folio, fechaVencimiento: vence, ocFolio: orden.folio }, vistaDeOrden_(libro, orden, d0.desde));
+    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
+    return resultado;
+  });
+}
+
+/** Cancela una factura Vigente (no se borra; sus archivos se quedan en Drive), con motivo. Deja de contar como por pagar. */
+function cancelarFacturaProveedor(folioFpr, motivo, desde) {
+  exigirCompras_();
+  const m = motivoObligatorio_(motivo, 'Escribe el motivo de la cancelación.');
+  const libro = libroCompras_();
+  return conCandado_(() => {
+    const { hoja, factura } = buscarFactura_(libro, folioFpr);
+    if (factura.estado !== FPR_VIGENTE) throw new Error('La factura ' + factura.folio + ' ya está cancelada.');
+    hoja.getRange(factura.fila, COL_ESTADO_FPR, 1, 4).setValues([[FPR_CANCELADA, textoCelda(VENDEDOR_.email),
+      Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
+    bitacora_(libro, 'Cancelar factura de proveedor', factura.proyectoFolio, factura.folio + ' · ' + factura.ocFolio + ' · ' +
+      (factura.uuid || factura.serieFolio) + ' · ' + formatoMoneda(factura.total) + ' ' + factura.moneda, m, HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    return Object.assign({ folio: factura.folio }, vistaDeOrden_(libro, buscarOrden_(libro, factura.ocFolio).orden, desde));
+  });
+}
+
+/** Cambia los días de crédito de una factura Vigente (condiciones renegociadas), con motivo; recalcula su vencimiento. */
+function cambiarDiasCreditoFactura(folioFpr, dias, motivo, desde) {
+  exigirCompras_();
+  const n = normalizarDiasCredito(dias);
+  const m = motivoObligatorio_(motivo, 'Escribe por qué cambian los días de crédito.');
+  const libro = libroCompras_();
+  return conCandado_(() => {
+    const { hoja, factura } = buscarFactura_(libro, folioFpr);
+    if (factura.estado !== FPR_VIGENTE) throw new Error('La factura ' + factura.folio + ' está cancelada.');
+    const vence = fechaVencimiento(factura.fechaEmision, n);
+    hoja.getRange(factura.fila, COL_VENCIMIENTO_FPR, 1, 2).setValues([[textoFecha_(vence), n]]);
+    bitacora_(libro, 'Cambiar días de crédito de factura', factura.proyectoFolio, factura.folio + ' · ' + factura.diasCredito +
+      ' → ' + n + ' días · vence ' + factura.fechaVencimiento + ' → ' + vence, m, HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    return Object.assign({ folio: factura.folio, fechaVencimiento: vence },
+      vistaDeOrden_(libro, buscarOrden_(libro, factura.ocFolio).orden, desde));
+  });
+}
+
+/**
+ * Cuentas por pagar (solo lectura): totales por moneda y antigüedad, facturas abiertas, órdenes con factura faltante y PPD
+ * pagadas sin REP (antiguedadCxp), con el folio visible y el nombre del proyecto y los enlaces de cada factura. En caché por
+ * día y por versión de facturas, órdenes, pagos y proyectos. soloCache: devuelve null si no está en caché.
+ */
+function cuentasPorPagar(soloCache) {
+  exigirCompras_();
+  const hoy = hoyIso_();
+  const calcular = () => {
+    const libro = libroComprasSiExiste_();
+    const ordenes = [], pagos = [];
+    if (libro) {
+      filasDeArea_(hojaCompras_(libro, 'OrdenesCompra'), HOJAS_COMPRAS, 'OrdenesCompra').forEach((r, i) => {
+        if (String(r[0] || '').trim()) ordenes.push(ordenDesdeFila_(r, i + 2));
+      });
+      filasDeArea_(hojaCompras_(libro, 'PagosProveedores'), HOJAS_COMPRAS, 'PagosProveedores').forEach((r, i) => {
+        if (String(r[0] || '').trim()) pagos.push(pagoProvDesdeFila_(r, i + 2));
+      });
+    }
+    const facturas = facturasDelLibro_(libro);
+    const r = antiguedadCxp({ hoy: hoy, facturas: facturas, ordenes: ordenes, pagos: pagos });
+    const proyectos = mapaProyectos_(), porFolio = {};
+    facturas.forEach(f => { porFolio[f.folio] = f; });
+    const proyecto = folio => {
+      const p = proyectos[String(folio || '').toUpperCase()];
+      return { proyectoVisible: p ? p.folioVisible : folio, proyectoNombre: p ? p.nombre : '' };
+    };
+    r.abiertas.forEach(a => {
+      const f = porFolio[a.folio] || {};
+      Object.assign(a, proyecto(a.proyectoFolio), { reqFolio: f.reqFolio || '', xmlUrl: f.xmlUrl || '', pdfUrl: f.pdfUrl || '' });
+    });
+    r.faltantes.forEach(x => Object.assign(x, proyecto(x.proyectoFolio)));
+    return r;
+  };
+  const colecciones = ['facturasProveedor', 'oc', 'pagosProveedores', 'proyectos'];
+  if (soloCache) return enCache_('CXP_' + hoy, colecciones, TTL_CACHE) || null;
+  return enCache_('CXP_' + hoy, colecciones, TTL_CACHE, calcular);
 }
 
 // ====== 5. LÓGICA PURA (sin servicios de Google; se puede probar fuera) ======
@@ -3355,11 +3602,15 @@ function proveedorId(p) {
   return 'SIN-RFC:' + textoNormal(p && p.razonSocial);
 }
 
-/** Datos de un proveedor ya registrado + los nuevos: lo nuevo manda, pero un dato vacío no borra uno anterior. */
+/**
+ * Datos de un proveedor ya registrado + los nuevos: lo nuevo manda, pero un dato vacío no borra uno anterior.
+ * diasCredito (texto; '' = sin dato) es el crédito habitual: lo actualiza la última orden emitida (0 = contado sí cuenta).
+ */
 function fusionarProveedor(anterior, nuevo) {
   const r = {};
-  ['razonSocial', 'rfc', 'contacto', 'correo', 'telefono'].forEach(k => {
-    r[k] = String((nuevo && nuevo[k]) || '').trim() || String((anterior && anterior[k]) || '').trim();
+  ['razonSocial', 'rfc', 'contacto', 'correo', 'telefono', 'diasCredito'].forEach(k => {
+    const txt = o => (o && o[k] != null ? String(o[k]).trim() : '');
+    r[k] = txt(nuevo) || txt(anterior);
   });
   return r;
 }
@@ -3372,7 +3623,8 @@ function proveedoresDesdeFilas(filas) {
   const lista = (filas || []).map((r, i) => ({
     id: String(r[0] || '').trim(), razonSocial: String(r[1] || '').trim(), rfc: String(r[2] || '').trim(),
     contacto: String(r[3] || '').trim(), correo: String(r[4] || '').trim(), telefono: String(r[5] || '').trim(),
-    actualizado: r[6] instanceof Date ? r[6].toISOString().slice(0, 10) : String(r[6] || ''), fila: i + 2,
+    actualizado: r[6] instanceof Date ? r[6].toISOString().slice(0, 10) : String(r[6] || ''),
+    diasCredito: r[7] === '' || r[7] == null ? '' : diasCreditoGuardados(r[7]), fila: i + 2,
   })).filter(p => p.razonSocial);
   const veces = {};
   lista.forEach(p => { const n = textoNormal(p.razonSocial); veces[n] = (veces[n] || 0) + 1; });
@@ -3398,6 +3650,7 @@ function normalizarOrdenCompra(p, proyecto) {
   const condicionesPago = limpio(d.condicionesPago).replace(/\s+/g, ' ');
   if (!condicionesPago) throw new Error('Escribe las condiciones de pago (p. ej. contado, crédito 30 días).');
   if (condicionesPago.length > 200) throw new Error('Las condiciones de pago deben tener máximo 200 caracteres.');
+  const diasCredito = normalizarDiasCredito(d.diasCredito); // fija el vencimiento de las facturas de la orden (4.5)
   const notas = limpio(d.notas);
   if (notas.length > 1000) throw new Error('Las notas deben tener máximo 1000 caracteres.');
 
@@ -3437,7 +3690,7 @@ function normalizarOrdenCompra(p, proyecto) {
   }
   return {
     proveedor: proveedor, fechaEntrega: fechaEntrega, lugarEntrega: lugarEntrega, condicionesPago: condicionesPago,
-    moneda: moneda, ivaTasa: ivaTasa, renglones: renglones, subtotal: subtotal, iva: iva, total: redondear(subtotal + iva),
+    diasCredito: diasCredito, moneda: moneda, ivaTasa: ivaTasa, renglones: renglones, subtotal: subtotal, iva: iva, total: redondear(subtotal + iva),
     monedaProyecto: proyecto.moneda, tipoCambio: tipoCambio,
     subtotalProyecto: convertirMoneda(subtotal, moneda, proyecto.moneda, tipoCambio), notas: notas,
   };
@@ -3634,9 +3887,10 @@ function normalizarRequisicion(p) {
 }
 
 /**
- * Valida un pago a proveedor. orden = {moneda, total, fechaOrden, hoy}. Fecha no futura ni anterior a la orden; método y
- * referencia como en cobranza; si la moneda del pago es otra, tipo de cambio obligatorio (pesos por dólar). El monto en la
- * moneda de la orden debe ser su total, con tolerancia de TOLERANCIA_PAGO (1.00).
+ * Valida un pago a proveedor. orden = {moneda, total, totalFacturado?, fechaOrden, hoy}. Fecha no futura ni anterior a la
+ * orden; método y referencia como en cobranza; si la moneda del pago es otra, tipo de cambio obligatorio (pesos por dólar).
+ * El monto en la moneda de la orden debe ser su total o, si tiene facturas vigentes, el total de ellas (un proveedor que
+ * retiene impuestos factura menos que el total de la orden; decisión 7), con tolerancia de TOLERANCIA_PAGO (1.00).
  */
 function normalizarPagoProveedor(p, orden) {
   const d = p || {};
@@ -3648,9 +3902,12 @@ function normalizarPagoProveedor(p, orden) {
   } catch (e) {
     throw new Error(String(e.message).replace('El proyecto es en', 'La orden es en')); // aquí la moneda de referencia es la de la orden
   }
-  if (Math.abs(aCentavos(pago.montoAplicado) - aCentavos(orden.total)) > aCentavos(TOLERANCIA_PAGO)) {
+  const cuadra = t => Math.abs(aCentavos(pago.montoAplicado) - aCentavos(t)) <= aCentavos(TOLERANCIA_PAGO);
+  const facturado = Number(orden.totalFacturado) || 0;
+  if (!cuadra(orden.total) && !(facturado > 0 && cuadra(facturado))) {
     throw new Error('El pago (' + formatoMoneda(pago.montoAplicado) + ' ' + orden.moneda + ') debe ser igual al total de la orden (' +
-      formatoMoneda(orden.total) + ' ' + orden.moneda + ').');
+      formatoMoneda(orden.total) + ' ' + orden.moneda + ')' + (facturado > 0 ? ' o al total de sus facturas (' +
+      formatoMoneda(facturado) + ' ' + orden.moneda + ')' : '') + '.');
   }
   return { fecha: pago.fecha, monto: pago.monto, monedaPago: pago.monedaPago, tipoCambio: pago.tipoCambio,
     montoAplicado: pago.montoAplicado, metodo: pago.metodo, referencia: pago.referencia };
@@ -3805,6 +4062,42 @@ function validarXml(bytes) {
   return true;
 }
 
+/** Bytes (con o sin signo, como los da Apps Script) → texto UTF-8. Un byte inválido queda como "�". */
+function textoUtf8(bytes) {
+  const n = bytes ? bytes.length : 0, b = k => (bytes[k] || 0) & 0xFF, sigue = k => (b(k) & 0xC0) === 0x80;
+  const partes = [];
+  let trozo = [], i = 0;
+  while (i < n) {
+    const c = b(i);
+    let cp = 0xFFFD, largo = 1;
+    if (c < 0x80) { cp = c; }
+    else if (c >= 0xC2 && c < 0xE0 && i + 1 < n && sigue(i + 1)) { cp = ((c & 0x1F) << 6) | (b(i + 1) & 0x3F); largo = 2; }
+    else if (c >= 0xE0 && c < 0xF0 && i + 2 < n && sigue(i + 1) && sigue(i + 2)) {
+      cp = ((c & 0x0F) << 12) | ((b(i + 1) & 0x3F) << 6) | (b(i + 2) & 0x3F); largo = 3;
+    } else if (c >= 0xF0 && c < 0xF5 && i + 3 < n && sigue(i + 1) && sigue(i + 2) && sigue(i + 3)) {
+      cp = ((c & 0x07) << 18) | ((b(i + 1) & 0x3F) << 12) | ((b(i + 2) & 0x3F) << 6) | (b(i + 3) & 0x3F); largo = 4;
+    }
+    trozo.push(String.fromCodePoint(cp));
+    if (trozo.length >= 8192) { partes.push(trozo.join('')); trozo = []; }
+    i += largo;
+  }
+  partes.push(trozo.join(''));
+  return partes.join('');
+}
+
+/** "FPR-2026-0001 — Proveedor — A-1234.xml", sin caracteres que Drive o los sistemas de archivos rechazan. */
+function nombreArchivoFactura(folio, proveedor, serieFolio, ext) {
+  const limpio = s => String(s || '').replace(/[\/\\:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return [folio, limpio(proveedor).slice(0, 60), limpio(serieFolio).slice(0, 40)].filter(Boolean).join(' — ') + '.' + ext;
+}
+
+/** Suma (en la moneda de la orden) de los totales de las facturas Vigentes de una orden. */
+function totalFacturadoDeOrden(facturas, ocFolio) {
+  const f = String(ocFolio || '').toUpperCase();
+  return (facturas || []).filter(x => x.estado === FPR_VIGENTE && String(x.ocFolio).toUpperCase() === f)
+    .reduce((s, x) => s + aCentavos(x.total), 0) / 100;
+}
+
 /**
  * Factura de un proveedor extranjero (sin CFDI), capturada a mano: {numero, fecha, moneda, subtotal, impuestos}. El total
  * lo calcula el servidor (subtotal + impuestos). Devuelve la misma forma que leerCfdi, con tipo 'Extranjera' y sin UUID.
@@ -3852,6 +4145,9 @@ function validarFacturaProveedor(f, orden, ctx) {
   const vigentes = (x.facturas || []).filter(v => v.estado === FPR_VIGENTE);
   const rfcOrden = String(o.rfc || '').replace(/[\s-]/g, '').toUpperCase();
   const ordenConRfc = RFC_VALIDO.test(rfcOrden) && RFC_GENERICOS.indexOf(rfcOrden) === -1;
+  // Sin RFC en la orden, el primer CFDI vigente de la orden fija el emisor: las siguientes facturas deben ser del mismo RFC
+  const deLaOrden = vigentes.filter(v => String(v.ocFolio).toUpperCase() === String(o.folio).toUpperCase());
+  const cfdiPrevio = ordenConRfc ? null : deLaOrden.find(v => v.tipo === FPR_CFDI && v.rfcEmisor);
   if (o.estado === OC_CANCELADA) throw new Error('La orden ' + o.folio + ' está cancelada: no admite facturas.');
   validarFechaIso(f.fecha, x.hoy, 'La fecha de emisión de la factura');
   if (!(f.subtotal > 0) || !(f.total > 0)) throw new Error('La factura debe tener subtotal y total mayores a 0.');
@@ -3874,12 +4170,20 @@ function validarFacturaProveedor(f, orden, ctx) {
       throw new Error('La factura la emitió ' + (f.emisor.nombre || 'otro proveedor') + ' (' + f.emisor.rfc + '), pero la orden ' +
         o.folio + ' es de RFC ' + rfcOrden + '.');
     }
-    actualizarRfc = !ordenConRfc && RFC_VALIDO.test(f.emisor.rfc);
+    if (cfdiPrevio && f.emisor.rfc !== String(cfdiPrevio.rfcEmisor).toUpperCase()) {
+      throw new Error('La factura la emitió ' + (f.emisor.nombre || 'otro proveedor') + ' (' + f.emisor.rfc + '), pero la orden ' +
+        o.folio + ' ya tiene facturas de RFC ' + String(cfdiPrevio.rfcEmisor).toUpperCase() + ' (' + cfdiPrevio.folio + ').');
+    }
+    actualizarRfc = !ordenConRfc && !cfdiPrevio && RFC_VALIDO.test(f.emisor.rfc);
     const repetida = vigentes.find(v => String(v.uuid).toUpperCase() === f.uuid);
     if (repetida) throw new Error('La factura con folio fiscal ' + f.uuid + ' ya está registrada (' + repetida.folio + ').');
   } else if (f.tipo === FPR_EXTRANJERA) {
     if (ordenConRfc) {
       throw new Error('El proveedor de la orden ' + o.folio + ' tiene RFC mexicano (' + rfcOrden + '): registra su factura con el XML (CFDI).');
+    }
+    if (cfdiPrevio) {
+      throw new Error('La orden ' + o.folio + ' ya tiene facturas CFDI de RFC ' + String(cfdiPrevio.rfcEmisor).toUpperCase() + ' (' +
+        cfdiPrevio.folio + '): registra esta también con el XML.');
     }
     const num = textoNormal(f.serieFolio);
     const repetida = vigentes.find(v => v.tipo === FPR_EXTRANJERA && v.proveedorId === o.proveedorId && textoNormal(v.serieFolio) === num);
@@ -3888,7 +4192,7 @@ function validarFacturaProveedor(f, orden, ctx) {
     throw new Error('Tipo de factura no válido.');
   }
   const neto = netoFactura(f);
-  const antes = vigentes.filter(v => String(v.ocFolio).toUpperCase() === String(o.folio).toUpperCase())
+  const antes = deLaOrden
     .reduce((s, v) => s + aCentavos(netoFactura(v)), 0);
   const despues = antes + aCentavos(neto);
   if (despues > aCentavos(o.subtotal) + aCentavos(TOLERANCIA_FACTURA)) {

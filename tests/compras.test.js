@@ -117,12 +117,12 @@ for(const [mal,re] of [[{},/razón social/],[{razonSocial:'X',rfc:'ABC'},/RFC de
 assert.equal(P.proveedorId({razonSocial:'X',rfc:'PDB200101AB1'}),'PDB200101AB1');
 assert.equal(P.proveedorId({razonSocial:'Pánéles  del Bajío',rfc:'XEXX010101000'}),'SIN-RFC:paneles del bajio','RFC genérico no identifica');
 assert.deepEqual({...P.fusionarProveedor({razonSocial:'A',contacto:'Luis',correo:'a@a.mx'},{razonSocial:'A SA',contacto:'',correo:'b@b.mx'})},
-  {razonSocial:'A SA',rfc:'',contacto:'Luis',correo:'b@b.mx',telefono:''},'un dato vacío no borra uno anterior');
+  {razonSocial:'A SA',rfc:'',contacto:'Luis',correo:'b@b.mx',telefono:'',diasCredito:''},'un dato vacío no borra uno anterior');
 const pl=P.proveedoresDesdeFilas([['X1','Zeta','','','','',''],['R1','Acme','AAA010101AA1','','','',''],['R2','acme','BBB010101BB1','','','',''],['','','','','','','']]);
 assert.deepEqual(pl.map(p=>p.etiqueta+'@'+p.fila),['Acme — AAA010101AA1@3','acme — BBB010101BB1@4','Zeta@2']);
 // Orden de compra
 const PRO={moneda:'MXN',ubicacion:'Querétaro, Qro.',hoy:'2026-10-20',ivaTasa:0.16};
-const base={proveedor:{razonSocial:'Paneles del Bajío'},fechaEntrega:'2026-10-25',condicionesPago:' Crédito  30 días ',
+const base={proveedor:{razonSocial:'Paneles del Bajío'},fechaEntrega:'2026-10-25',condicionesPago:' Crédito  30 días ',diasCredito:'30',
   renglones:[{clave:'pan-550',descripcion:'Panel solar 550 W',unidad:'pza',cantidad:'10',costo:'2500.5'},{descripcion:'',cantidad:1,costo:''}]};
 let o=P.normalizarOrdenCompra(base,PRO);
 assert.deepEqual([o.lugarEntrega,o.condicionesPago,o.moneda,o.ivaTasa,o.subtotal,o.iva,o.total,o.tipoCambio,o.subtotalProyecto],
@@ -353,4 +353,158 @@ falla('efrain','registrarPago',[{proyectoFolio:p5,fecha:HOY_ISO,monto:100,moneda
 // Con órdenes en MXN no se puede aceptar una cotización en USD (nunca se mezclan monedas)
 const c5usd=cot(p5,100,{moneda:'USD'});
 falla('efrain','marcarAceptada',[p5,c5usd],/órdenes de compra en MXN/);
+
+// ================= Facturas de proveedor y cuentas por pagar (4.5) =================
+// Órdenes hasta aquí: 0001 (p1, MXN, sin RFC, 2,000 + IVA, Emitida, 30 días), 0002 (p1, USD, RFC PDB…, 100, Recibida y pagada),
+// 0003 (p2, MXN, Cables SA sin RFC, 1,850 + IVA, Emitida), 0004 (Cancelada), 0005 (p5, MXN, 1,000 + IVA, Pagada, sin facturas)
+const FPR=n=>'FPR-'+ANIO+'-'+n, U=n=>'6F1C5E2A-3B4D-4C5E-9F60-'+String(n).padStart(12,'0');
+const diasAtras=n=>{const d=new Date(HOY.getFullYear(),HOY.getMonth(),HOY.getDate()-n);return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())};
+// CFDI 4.0 mínimo con datos inventados (sin sellos reales); o = cambios
+const cfdi=o=>{const a={ns:'http://www.sat.gob.mx/cfd/4',version:'4.0',tipo:'I',fecha:diasAtras(40)+'T10:00:00',serie:'A',folio:'1',moneda:'MXN',
+  subtotal:'1000.00',total:'1160.00',metodo:'PUE',emisor:'PDB200101AB1',nombre:'PANELES DEL BAJÍO',receptor:'HSE240304PC1',tras:'160.00',ret:null,uuid:U(1),...o};
+  return '﻿<?xml version="1.0" encoding="UTF-8"?>\n<cfdi:Comprobante xmlns:cfdi="'+a.ns+'" Version="'+a.version+'" Serie="'+a.serie+'" Folio="'+a.folio+
+  '" Fecha="'+a.fecha+'" SubTotal="'+a.subtotal+'" Moneda="'+a.moneda+'" Total="'+a.total+'" TipoDeComprobante="'+a.tipo+'" MetodoPago="'+a.metodo+
+  '" FormaPago="03"><cfdi:Emisor Rfc="'+a.emisor+'" Nombre="'+a.nombre+'" RegimenFiscal="601"/><cfdi:Receptor Rfc="'+a.receptor+
+  '" Nombre="HELGEN" UsoCFDI="G03"/><cfdi:Impuestos TotalImpuestosTrasladados="'+a.tras+'"'+(a.ret?' TotalImpuestosRetenidos="'+a.ret+'"':'')+
+  '/><cfdi:Complemento><tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" UUID="'+a.uuid+'"/></cfdi:Complemento></cfdi:Comprobante>'};
+const xml=o=>({nombre:'f.xml',datos:Buffer.from(cfdi(o),'utf8').toString('base64')});
+const FP=()=>H('FacturasProveedor'), filaFpr=folio=>FP().find(x=>x[0]===folio);
+const fact=(ocFolio,o,extra)=>ok('pedro','registrarFacturaProveedor',{ocFolio,xml:xml(o),idSolicitud:'f'+(++nId),...extra});
+
+// --- Permisos: solo ROL_COMPRAS; sin rol no se crea nada ---
+const FACT=[['registrarFacturaProveedor',[{ocFolio:OC('0001'),xml:xml()}]],['cancelarFacturaProveedor',[FPR('0001'),'motivo largo']],
+  ['cambiarDiasCreditoFactura',[FPR('0001'),'30','motivo largo']],['cuentasPorPagar',[]]];
+for(const quien of ['ana','tania','obrero']) for(const [fn,args] of FACT) falla(quien,fn,args,/No tienes permiso de compras/,'PERMISO');
+for(const [fn,args] of FACT) falla('intruso',fn,args,/@helgen.tech/,'SESION');
+assert.equal(FP().length,1,'solo encabezados: los rechazos no escriben');
+// Días de crédito: obligatorios al autorizar; se guardan en la orden (AJ) y en el proveedor (H)
+falla('pedro','autorizarRequisicion',[rPend,oc({diasCredito:''})],/Captura los días de crédito/);
+falla('pedro','autorizarRequisicion',[rPend,oc({diasCredito:'181'})],/de 0 a 180/);
+assert.equal(H('OrdenesCompra')[1][35],30);
+
+// --- CFDI en una orden sin RFC: lee todo del XML (UTF-8), vence = emisión + 30 días; XML en Compras/AAAA/<proyecto>/Facturas ---
+let fr=fact(OC('0001'),{subtotal:'1500.00',tras:'240.00',total:'1740.00'},{idSolicitud:'fa1'});
+assert.deepEqual([fr.folio,fr.ocFolio,fr.fechaVencimiento,fr.desde],[FPR('0001'),OC('0001'),diasAtras(10),'requisicion']);
+assert.deepEqual([fr.vista.facturas.length,fr.vista.totalFacturado,fr.vista.puedeFacturar,fr.vista.facturas[0].folio],[1,1740,true,FPR('0001')]);
+let ff=filaFpr(FPR('0001'));
+assert.deepEqual([ff[1],ff[2],ff[3],ff[4],ff[6],ff[7],ff[8],ff[9],ff[10],ff[11],ff[12],ff[13],ff[14],ff[15],ff[17],ff[18],ff[19],ff[20],ff[22],ff[27],ff[29]],
+  ['CFDI',U(1),'A-1',diasAtras(40),diasAtras(10),30,OC('0001'),REQ('0002'),p1,'SIN-RFC:paneles del bajio','PDB200101AB1','PANELES DEL BAJÍO',
+   'MXN',1500,240,0,1740,'PUE','G03','pedro@helgen.tech','Vigente']);
+const xmlF=archivos[ff[23]];
+assert.equal(ruta(xmlF.padre),'Mi unidad/Cotizador Helgen — Compras/'+ANIO+'/'+p1+'/Facturas');
+assert.deepEqual([xmlF.blob.name,xmlF.blob.mime,xmlF.acceso,xmlF.padre.acceso],[FPR('0001')+' — Paneles del Bajío — A-1.xml','application/xml','PRIVATE','PRIVATE']);
+assert.equal(ff[25],'','sin PDF (opcional en CFDI)');
+// Idempotencia: el mismo envío devuelve el mismo folio y no agrega fila
+assert.equal(ok('pedro','registrarFacturaProveedor',{ocFolio:OC('0001'),xml:xml({subtotal:'1500.00',tras:'240.00',total:'1740.00'}),idSolicitud:'fa1'}).folio,FPR('0001'));
+assert.equal(FP().length,2);
+// Rechazos (no gastan folio)
+const fx=(ocFolio,o,re,extra)=>falla('pedro','registrarFacturaProveedor',[{ocFolio,xml:xml(o),idSolicitud:'fx'+(++nId),...extra}],re);
+fx(OC('0001'),{},/folio fiscal .* ya está registrada \(FPR-\d{4}-0001\)/);
+fx(OC('0001'),{uuid:U(2),subtotal:'600.00',tras:'96.00',total:'696.00'},/\(\$2,100\.00 MXN sin IVA\) supera su subtotal \(\$2,000\.00 MXN\)/);
+fx(OC('0001'),{uuid:U(2),receptor:'AAA010101AAA'},/a nombre del RFC AAA010101AAA, no de Helgen/);
+fx(OC('0001'),{uuid:U(2),moneda:'USD'},/es en USD y la orden .* en MXN/);
+fx(OC('0001'),{uuid:U(2),ns:'http://www.sat.gob.mx/cfd/3',version:'3.3'},/CFDI 3\.3/);
+fx(OC('0001'),{uuid:U(2),tipo:'P'},/complemento de pago/);
+fx(OC('0001'),{uuid:U(2),fecha:MANANA+'T09:00:00'},/no puede ser futura/);
+fx(OC('0001'),{uuid:U(2),emisor:'EKU9003173C9'},/ya tiene facturas de RFC PDB200101AB1 \(FPR-\d{4}-0001\)/);
+falla('pedro','registrarFacturaProveedor',[{ocFolio:OC('0001'),xml:{datos:PDF}}],/no es un XML/);
+falla('pedro','registrarFacturaProveedor',[{ocFolio:OC('0001')}],/Adjunta el XML/);
+fx(r3.folio,{uuid:U(2)},/está cancelada: no admite facturas/);
+fx('OC-2000-0001',{uuid:U(2)},/No existe la orden/);
+assert.deepEqual([FP().length,props['CONSECUTIVO_FPR_'+ANIO]],[2,'1'],'los rechazos no gastan folio');
+// Segunda factura de la misma orden (entrega parcial), con PDF opcional: cubre el subtotal
+fr=fact(OC('0001'),{uuid:U(2),folio:'2',fecha:diasAtras(100)+'T08:00:00',subtotal:'500.00',tras:'80.00',total:'580.00'},{pdf:{nombre:'f.pdf',datos:PDF}});
+ff=filaFpr(fr.folio);
+assert.deepEqual([fr.folio,ff[6],archivos[ff[25]].blob.name,archivos[ff[25]].acceso],[FPR('0002'),diasAtras(70),FPR('0002')+' — Paneles del Bajío — A-2.pdf','PRIVATE']);
+assert.equal(ok('pedro','getRequisicion',REQ('0002')).totalFacturado,2320);
+falla('pedro','cancelarOrdenCompra',[OC('0001'),'Ya no se necesita'],/tiene facturas vigentes \(FPR-\d{4}-0001, FPR-\d{4}-0002\): cancélalas primero/);
+
+// --- Orden sin RFC: el proveedor toma el RFC del CFDI; con retenciones el total baja (el neto no) ---
+fr=fact(OC('0003'),{uuid:U(3),emisor:'EKU9003173C9',nombre:'CABLES SA',subtotal:'1850.00',tras:'296.00',ret:'185.00',total:'1961.00'},{desde:'proyecto'});
+assert.deepEqual([fr.folio,fr.desde,fr.vista.proyecto.folio],[FPR('0003'),'proyecto',p2]);
+const vo3=fr.vista.ordenes.find(x=>x.folio===OC('0003'));
+assert.deepEqual([vo3.facturas.length,vo3.totalFacturado,vo3.puedeFacturar,'fila' in vo3],[1,1961,true,false]);
+assert.equal(fr.vista.ordenes.find(x=>x.folio===r3.folio)===undefined||!fr.vista.ordenes.find(x=>x.folio===r3.folio).puedeFacturar,true);
+const provCables=H('Proveedores').find(x=>x[1]==='Cables SA');
+assert.deepEqual([provCables[0],provCables[2]],['EKU9003173C9','EKU9003173C9'],'el proveedor sin RFC toma el del CFDI (misma fila)');
+assert.equal(H('Proveedores').filter(x=>x[1]==='Cables SA').length,1);
+assert.deepEqual([filaFpr(FPR('0003'))[18],filaFpr(FPR('0003'))[19]],[185,1961]);
+
+// --- Orden con RFC: solo CFDI de ese RFC (ni de otro ni factura extranjera); PPD en orden pagada = falta su REP ---
+fx(OC('0002'),{uuid:U(4),emisor:'EKU9003173C9',moneda:'USD',subtotal:'100.00',tras:'0.00',total:'100.00'},/la orden .* es de RFC PDB200101AB1/);
+falla('pedro','registrarFacturaProveedor',[{ocFolio:OC('0002'),tipo:'Extranjera',numero:'X1',fecha:HOY_ISO,moneda:'USD',subtotal:100,pdf:{datos:PDF}}],
+  /tiene RFC mexicano \(PDB200101AB1\)/);
+fr=fact(OC('0002'),{uuid:U(4),moneda:'USD',subtotal:'100.00',tras:'0.00',total:'100.00',metodo:'PPD',fecha:diasAtras(3)+'T10:00:00'});
+assert.equal(fr.folio,FPR('0004'));
+
+// --- Proveedor extranjero sin CFDI (p. ej. Ardusimple, JLCPCB): PDF obligatorio, de contado ---
+const oAr=emitir('pedro',p2,oc({moneda:'USD',ivaTasa:0,diasCredito:'0',condicionesPago:'Contado',proveedor:{razonSocial:'Ardusimple SL'},
+  renglones:[{descripcion:'simpleRTK2B Pro',cantidad:2,costo:250}]}));
+assert.deepEqual([oAr.folio,oAr.total,H('OrdenesCompra').find(x=>x[0]===oAr.folio)[35],H('Proveedores').find(x=>x[1]==='Ardusimple SL')[7]],
+  [OC('0006'),500,0,0],'contado: 0 días en la orden y en el proveedor');
+assert.equal(ok('pedro','getRequisicion',rPend).proveedores.find(p=>p.razonSocial==='Ardusimple SL').diasCredito,0,'para precargar la orden siguiente');
+const ext=extra=>({ocFolio:oAr.folio,tipo:'Extranjera',numero:'INV-2026-001',fecha:diasAtras(5),moneda:'USD',subtotal:500,impuestos:'',
+  pdf:{nombre:'inv.pdf',datos:PDF},idSolicitud:'e'+(++nId),...extra});
+falla('pedro','registrarFacturaProveedor',[ext({pdf:null})],/Adjunta el PDF de la factura del proveedor extranjero/);
+falla('pedro','registrarFacturaProveedor',[ext({moneda:'EUR'})],/es en EUR y la orden .* en USD/);
+falla('pedro','registrarFacturaProveedor',[ext({fecha:MANANA})],/no puede ser futura/);
+falla('pedro','registrarFacturaProveedor',[ext({pdf:{datos:Buffer.from('hola').toString('base64')}})],/PDF de la factura/);
+fr=ok('pedro','registrarFacturaProveedor',ext());
+ff=filaFpr(fr.folio);
+assert.deepEqual([fr.folio,fr.fechaVencimiento,ff[1],ff[2],ff[3],ff[11],ff[12],ff[13],ff[19],ff[23],archivos[ff[25]].blob.name],
+  [FPR('0005'),diasAtras(5),'Extranjera','','INV-2026-001','SIN-RFC:ardusimple sl','','Ardusimple SL',500,'',FPR('0005')+' — Ardusimple SL — INV-2026-001.pdf']);
+falla('pedro','registrarFacturaProveedor',[ext({numero:' inv-2026-001 '})],/INV-2026-001|inv-2026-001.*ya está registrada/);
+
+// --- Cuentas por pagar: por moneda (nunca se suman) y antigüedad; sin las órdenes pagadas; faltantes y REP pendientes ---
+let cx=ok('pedro','cuentasPorPagar');
+const tot=m=>{const t=cx.totales.find(x=>x.moneda===m);return t&&[t.facturas,t.porVencer,t.d1a30,t.d31a60,t.d61a90,t.d90mas,t.vencido,t.total]};
+assert.deepEqual(cx.totales.map(t=>t.moneda),['MXN','USD']);
+assert.deepEqual(tot('MXN'),[3,0,3701,0,580,0,4281,4281]);
+assert.deepEqual(tot('USD'),[1,0,500,0,0,0,500,500],'la PPD de la orden pagada no cuenta');
+assert.deepEqual(cx.abiertas.map(a=>a.folio+':'+a.dias+':'+a.rango),[FPR('0002')+':70:d61a90',FPR('0001')+':10:d1a30',FPR('0003')+':10:d1a30',FPR('0005')+':5:d1a30']);
+const a3=cx.abiertas.find(a=>a.folio===FPR('0003'));
+assert.deepEqual([a3.proyectoVisible,a3.proyectoNombre,a3.proveedor,a3.ocFolio,!!a3.reqFolio,/^https:\/\/drive\/file\//.test(a3.xmlUrl)],
+  [p2+'-PLT','Planta Texas','Cables SA',OC('0003'),true,true]);
+assert.deepEqual(cx.faltantes.map(x=>x.folio+':'+x.pagada+':'+x.faltante+':'+x.proyectoVisible),[OC('0005')+':true:1000:'+p5+'-BON'],'pagada sin factura');
+assert.deepEqual([cx.repPendientes.n,...cx.repPendientes.folios],[1,FPR('0004')]);
+assert(Object.keys(cache).some(k=>k.indexOf('CXP_')!==-1),'en caché');
+// Días de crédito renegociados (con motivo): cambia el vencimiento y la vista se actualiza (la escritura sube la versión)
+falla('pedro','cambiarDiasCreditoFactura',[FPR('0001'),'60',''],/por qué cambian los días de crédito/);
+falla('pedro','cambiarDiasCreditoFactura',[FPR('0001'),'200','Renegociado'],/de 0 a 180/);
+const vSync=ok('pedro','sincronizar',{},{}).versiones;
+fr=ok('pedro','cambiarDiasCreditoFactura',FPR('0001'),'60','El proveedor amplió el crédito');
+assert.deepEqual([fr.fechaVencimiento,filaFpr(FPR('0001'))[6],filaFpr(FPR('0001'))[7]],[diasAtras(-20),diasAtras(-20),60]);
+cx=ok('pedro','cuentasPorPagar');
+assert.deepEqual(tot('MXN'),[3,1740,1961,0,580,0,2541,4281]);
+let sx=ok('pedro','sincronizar',vSync,{cxp:true});
+assert.deepEqual([[...sx.cambios].includes('facturasProveedor'),sx.cxp.totales[0].porVencer],[true,1740],'sincronizar manda cuentas por pagar');
+assert(!('cxp' in ok('tania','sincronizar',vSync,{cxp:true})),'sin compras no recibe cuentas por pagar');
+
+// --- Pago igual al total facturado (con retenciones): se acepta; la factura sale de cuentas por pagar ---
+const pago3=extra=>({ocFolio:OC('0003'),fecha:HOY_ISO,monedaPago:'MXN',metodo:'Transferencia',referencia:'SPEI 3',comprobante:{nombre:'p.pdf',datos:PDF},
+  idSolicitud:'pf'+(++nId),...extra});
+falla('pedro','registrarPagoProveedor',[pago3({monto:1900})],/total de la orden \(\$2,146\.00 MXN\) o al total de sus facturas \(\$1,961\.00 MXN\)/);
+v=ok('pedro','registrarPagoProveedor',pago3({monto:1961})).vista;
+assert.deepEqual([v.orden.estado,v.requisicion.estado],['Pagada','Pagada']);
+cx=ok('pedro','cuentasPorPagar');
+assert.deepEqual([tot('MXN'),cx.abiertas.some(a=>a.folio===FPR('0003'))],[[2,1740,0,0,580,0,580,2320],false]);
+
+// --- Cancelar factura (con motivo; nunca se borra): deja de contar y su UUID se puede volver a registrar ---
+falla('pedro','cancelarFacturaProveedor',[FPR('0002'),''],/motivo/);
+fr=ok('pedro','cancelarFacturaProveedor',FPR('0002'),'Se registró en la orden equivocada');
+ff=filaFpr(FPR('0002'));
+assert.deepEqual([ff[29],ff[30],ff[32],fr.vista.totalFacturado],['Cancelada','pedro@helgen.tech','Se registró en la orden equivocada',1740]);
+falla('pedro','cancelarFacturaProveedor',[FPR('0002'),'otra vez'],/ya está cancelada/);
+falla('pedro','cambiarDiasCreditoFactura',[FPR('0002'),'10','motivo largo'],/está cancelada/);
+falla('pedro','cancelarFacturaProveedor',['FPR-2000-0001','motivo largo'],/No existe la factura/);
+assert.equal(fact(OC('0001'),{uuid:U(2),folio:'2',fecha:diasAtras(100)+'T08:00:00',subtotal:'500.00',tras:'80.00',total:'580.00'}).folio,FPR('0006'));
+assert.equal(FP().length,7,'la cancelada sigue en la hoja');
+
+// --- Quien pide material no ve facturas ni montos; bitácora; nada fuera del libro y la carpeta de compras ---
+assert(!/FPR-|1740|1961/.test(JSON.stringify(ok('obrero','misRequisiciones'))),'el solicitante no ve facturas');
+const accF=bit().map(b=>b[2]);
+for(const a of ['Registrar factura de proveedor','Cancelar factura de proveedor','Cambiar días de crédito de factura']) assert(accF.includes(a),'bitácora: '+a);
+assert.equal(bit().find(b=>b[2]==='Cambiar días de crédito de factura')[5],'El proveedor amplió el crédito');
+assert.deepEqual(Object.keys(db.pest).sort(),['Config','Cotizaciones','Proyectos'],'nada de facturas en la Base de datos');
+assert(!JSON.stringify(libros[props.COBRANZA_DB_ID].pest).includes('FPR-'),'nada de facturas en cobranza');
 console.log('OK compras');

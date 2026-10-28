@@ -179,7 +179,8 @@ assert.deepEqual([dl.soloRequisicion,dl.permisos.requisicion,dl.permisos.compras
 assert.deepEqual(dl.catalogo.map(p=>({...p})),[{clave:'PAN-550',descripcion:'Panel solar 550 W',unidad:'PZA'}],'catálogo sin precios');
 assert(!/Cliente Secreto|Empresa Oculta|4100|98765/.test(JSON.stringify(dl)),'sin clientes, precios ni montos');
 for(const [f,args] of [['getClientes',[]],['listarCotizaciones',['']],['getCatalogo',[]],['guardarProducto',[{}]],['guardarCotizacion',[{}]],
-  ['sugerirClavesSat',['panel']],['listarProyectos',['']],['crearProyecto',[{}]],['listarProyectosCompras',['']],['getCobranzaProyecto',[p1]]]){
+  ['sugerirClavesSat',['panel']],['listarProyectos',['']],['crearProyecto',[{}]],['listarProyectosCompras',['']],['getCobranzaProyecto',[p1]],
+  ['registrarFacturaProveedor',[{}]],['cancelarFacturaProveedor',['FPR-2026-0001','motivo largo']],['cambiarDiasCreditoFactura',['FPR-2026-0001','30','motivo largo']],['cuentasPorPagar',[]]]){
   falla('luis',f,args,/solo tiene acceso a Requisiciones/,'PERMISO');
   falla('rosa',f,args,/solo tiene acceso a Requisiciones/,'PERMISO');
 }
@@ -280,7 +281,7 @@ falla('pedro','devolverRequisicion',[rLuis,'Revisa cantidades'],/está cancelada
 assert.equal(H('Requisiciones').length,4,'nada se borra');
 
 // --- Autorizar: genera la OC con los datos de compras ---
-const oc=(extra)=>({proveedor:{razonSocial:'Eléctrica del Centro',rfc:'EDC200101AB1'},fechaEntrega:MANANA,condicionesPago:'Contado',
+const oc=(extra)=>({proveedor:{razonSocial:'Eléctrica del Centro',rfc:'EDC200101AB1'},fechaEntrega:MANANA,condicionesPago:'Contado',diasCredito:0,
   ivaTasa:0.16,renglones:[{descripcion:'Tubo conduit 3/4 cédula 40',unidad:'PZA',cantidad:12,costo:100}],idSolicitud:'o'+(++nId),...extra});
 r=ok('pedro','autorizarRequisicion',REQ('0001'),oc({idSolicitud:'au1'}));
 assert.deepEqual([r.folio,r.ocFolio,r.total,r.moneda,r.vista.requisicion.estado,r.vista.orden.folio,r.vista.orden.reqFolio,r.vista.puedePagar],
@@ -398,7 +399,7 @@ assert.deepEqual([!!bP.cob,!!bP.com,!!bP.req],[false,true,true],'pedro: compras 
 assert.deepEqual([!!bA.cob,!!bA.com,!!bA.req,bA.proyectos.length>0,bA.catalogo[0].precio],[false,false,false,true,4100],'ana: solo cotizar');
 assert.deepEqual([bL.soloRequisicion,!!bL.req,!!bL.com,!!bL.cob,bL.clientes.length,bL.proyectos.length,bL.tipoCambio],[true,true,false,false,0,0,null]);
 assert(!/Cliente Secreto|Empresa Oculta|4100|98765/.test(JSON.stringify(bL)),'SOLO_REQUISICION: sin clientes, precios ni montos');
-assert.deepEqual(Object.keys(bE.versiones).sort(),['catalogo','contratos','cotizaciones','oc','pagosCobranza','pagosProveedores','proyectos','requisiciones']);
+assert.deepEqual(Object.keys(bE.versiones).sort(),['catalogo','contratos','cotizaciones','facturasProveedor','oc','pagosCobranza','pagosProveedores','proyectos','requisiciones']);
 // Sin cambios: solo versiones y permisos (ninguna lista)
 let sP=ok('pedro','sincronizar',bP.versiones,{});
 assert.deepEqual([sP.cambios.length,'comRequisiciones' in sP,'reqProyectos' in sP,sP.permisos.compras],[0,false,false,true]);

@@ -111,6 +111,17 @@ const leer=o=>ctx.leerCfdi(cfdi(o));
   assert.strictEqual(ctx.validarFacturaProveedor(leer({subtotal:'1100.00',descuento:'100.00',total:'1160.00'}),OC,CTX()).neto,1000,'descuento');
   // Retenciones (persona física): el total baja, el neto (sin IVA) no
   assert.strictEqual(ctx.validarFacturaProveedor(leer({ret:'106.67',total:'1053.33'}),OC,CTX()).neto,1000);
+  // Orden sin RFC: el primer CFDI vigente fija el emisor; otro RFC (o una factura extranjera) ya no entra en esa orden
+  const OCS=Object.assign({},OC,{rfc:'',proveedorId:'SIN-RFC:kemper'});
+  const primera={folio:'FPR-2026-0007',tipo:'CFDI',uuid:UUID2,serieFolio:'A-1',rfcEmisor:PROV,proveedorId:'SIN-RFC:kemper',ocFolio:'OC-2026-0001',estado:'Vigente',subtotal:300,descuento:0};
+  const r2=ctx.validarFacturaProveedor(leer({subtotal:'500.00',total:'580.00'}),OCS,CTX({facturas:[primera]}));
+  assert.deepStrictEqual([r2.facturado,r2.actualizarRfc],[800,false],'mismo emisor: entra; el RFC ya se tomó con la primera');
+  falla(()=>ctx.validarFacturaProveedor(leer({emisor:'AAA010101AAA',subtotal:'500.00',total:'580.00'}),OCS,CTX({facturas:[primera]})),
+    /ya tiene facturas de RFC EKU9003173C9 \(FPR-2026-0007\)/);
+  falla(()=>ctx.validarFacturaProveedor(ctx.normalizarFacturaExtranjera({numero:'X1',fecha:'2026-10-10',moneda:'MXN',subtotal:'5'},HOY),OCS,
+    CTX({facturas:[primera]})),/ya tiene facturas CFDI de RFC EKU9003173C9/);
+  assert.strictEqual(ctx.validarFacturaProveedor(leer({emisor:'AAA010101AAA',subtotal:'500.00',total:'580.00'}),OCS,
+    CTX({facturas:[Object.assign({},primera,{estado:'Cancelada'})]})).actualizarRfc,true,'la cancelada no fija el emisor');
 }
 
 // ---- Factura extranjera (sin CFDI) ----
