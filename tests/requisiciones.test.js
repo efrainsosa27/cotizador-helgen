@@ -171,8 +171,8 @@ for(const [p,c] of [[p1,c1],[p2,c2]]){ok('efrain','marcarAceptada',p,c,true);ok(
 ok('efrain','marcarAceptada',p3,c3);
 
 // --- Permisos de la pestaña ---
-assert.deepEqual({...ok('obrero','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:false,requisicion:true});
-assert.deepEqual({...ok('pedro','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:true,requisicion:true});
+assert.deepEqual({...ok('obrero','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:false,requisicion:true,operaciones:false,flujoOperaciones:false});
+assert.deepEqual({...ok('pedro','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:true,requisicion:true,operaciones:false,flujoOperaciones:false});
 assert.equal(ok('ana','getDatosIniciales').permisos.requisicion,false);
 const TRAB=[['listarProyectosRequisicion',['']],['misRequisiciones',[]],['guardarRequisicion',[{}]],['cancelarRequisicion',[REQ('0001'),'motivo largo']],
   ['cerrarRequisicion',[REQ('0001'),'']]];

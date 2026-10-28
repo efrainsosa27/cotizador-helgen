@@ -165,11 +165,11 @@ const carpP1=carpetas[db.pest.Proyectos.m.find(r=>r[0]===p1)[7]];
 assert.deepEqual(carpP1.hijos.map(h=>h.nombre),['Cotizaciones']);
 
 // --- Sin rol de compras: no ve la pestaña ni recibe datos; el servidor rechaza todo con PERMISO ---
-assert.deepEqual({...ok('ana','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:false,requisicion:false});
-assert.deepEqual({...ok('tania','getDatosIniciales').permisos},{cobranza:true,desbloqueo:false,compras:false,requisicion:false});
-assert.deepEqual({...ok('pedro','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:true,requisicion:false});
-assert.deepEqual({...ok('efrain','getDatosIniciales').permisos},{cobranza:true,desbloqueo:true,compras:true,requisicion:false});
-assert.deepEqual({...ok('obrero','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:false,requisicion:true});
+assert.deepEqual({...ok('ana','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:false,requisicion:false,operaciones:false,flujoOperaciones:false});
+assert.deepEqual({...ok('tania','getDatosIniciales').permisos},{cobranza:true,desbloqueo:false,compras:false,requisicion:false,operaciones:false,flujoOperaciones:false});
+assert.deepEqual({...ok('pedro','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:true,requisicion:false,operaciones:false,flujoOperaciones:false});
+assert.deepEqual({...ok('efrain','getDatosIniciales').permisos},{cobranza:true,desbloqueo:true,compras:true,requisicion:false,operaciones:false,flujoOperaciones:false});
+assert.deepEqual({...ok('obrero','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:false,requisicion:true,operaciones:false,flujoOperaciones:false});
 const OC=f=>'OC-'+ANIO+'-'+f, REQ=f=>'REQ-'+ANIO+'-'+f;
 const COMPRAS=[['listarProyectosCompras',['']],['getComprasProyecto',[p1]],['cancelarOrdenCompra',[OC('0001'),'motivo largo']],
   ['listarRequisiciones',['']],['getRequisicion',[REQ('0001')]],['autorizarRequisicion',[REQ('0001'),{}]],
@@ -207,7 +207,7 @@ assert(!('margen' in v)&&!('contrato' in v)&&!/11600|10000/.test(JSON.stringify(
 const carpCom=carpetas[props.COMPRAS_FOLDER_ID], LC=libros[props.COMPRAS_DB_ID];
 assert.equal(ruta(carpCom),'Mi unidad/Cotizador Helgen — Compras');
 assert.equal(LC.nombre,'Cotizador Helgen — Compras (datos)'); assert.equal(archivos[LC.id].padre,carpCom);
-assert.deepEqual(Object.keys(LC.pest).sort(),['Bitacora','FacturasProveedor','OrdenesCompra','PagosProveedores','Proveedores','Requisiciones','RequisicionesEventos','RequisicionesRenglones']);
+assert.deepEqual(Object.keys(LC.pest).sort(),['Bitacora','FacturasProveedor','MovimientosInventario','OrdenesCompra','PagosProveedores','Proveedores','Requisiciones','RequisicionesEventos','RequisicionesRenglones']);
 assert.deepEqual([carpCom.acceso,archivos[LC.id].acceso],['PRIVATE','PRIVATE'],'carpeta y libro de compras restringidos');
 const H=n=>LC.pest[n].m, bit=()=>H('Bitacora').slice(1);
 

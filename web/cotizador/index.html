@@ -110,6 +110,7 @@
     <button id="tabHist" onclick="verTab('hist')">Historial</button>
     <button id="tabCat" onclick="verTab('cat')">Catálogo</button>
     <button id="tabReq" class="oculto" onclick="verTab('req')">Requisiciones</button>
+    <button id="tabOps" class="oculto" onclick="verTab('ops')">Operaciones</button>
     <button id="tabCob" class="oculto" onclick="verTab('cob')">Cobranza</button>
     <button id="tabCom" class="oculto" onclick="verTab('com')">Compras</button>
   </nav>
@@ -387,6 +388,10 @@
           <datalist id="reqProyectosList"></datalist></div>
         <button type="button" class="btn btn-sec" onclick="cargarProyectosReq()">Actualizar lista</button>
       </div>
+      <div class="grid" style="margin-top:12px">
+        <div><label id="reqLblSitio">Sitio donde se necesita (opcional)</label><select id="reqSitio"></select></div>
+        <div><label>¿Para cuándo se necesita? (opcional)</label><input id="reqFecha" type="date"></div>
+      </div>
       <datalist id="reqCatalogo"></datalist>
       <table style="margin-top:14px">
         <thead><tr>
@@ -401,13 +406,81 @@
       <div class="acciones">
         <button type="button" id="btnReq" class="btn" onclick="enviarRequisicion()">Enviar requisición</button>
         <button type="button" id="btnReqCancelarEdicion" class="btn btn-sec oculto" onclick="limpiarReq()">Cancelar corrección</button>
-        <span class="nota">No lleva precios: compras los toma de la cotización.</span>
+        <span id="reqNotaEnvio" class="nota">No lleva precios: compras los toma de la cotización.</span>
       </div>
     </div>
     <div class="modulo">
       <h2>2 · Mis requisiciones</h2>
       <div class="acciones" style="margin-top:0"><button type="button" class="btn btn-sec" onclick="cargarMisReq()">Actualizar</button></div>
       <div id="reqLista" style="margin-top:10px"><div class="nota">Cargando…</div></div>
+    </div>
+  </section>
+
+  <!-- ===== OPERACIONES (ROL_OPERACIONES): aprobar por renglón y visto bueno a la propuesta de compras ===== -->
+  <section id="vistaOps" class="oculto">
+    <div id="opsVistaLista">
+      <div class="modulo">
+        <h2>1 · Requisiciones</h2>
+        <div class="proy-fila">
+          <div><label>Buscar (folio, proyecto, sitio o quien pidió)</label><input id="opsBuscar" autocomplete="off" oninput="pintarListaOps()"></div>
+          <div style="max-width:240px;min-width:180px"><label>Mostrar</label>
+            <select id="opsFiltro" onchange="pintarListaOps()">
+              <option value="pendientes">Pendientes para mí</option><option value="Solicitada">Por aprobar</option>
+              <option value="Cotizada">Por visto bueno</option><option value="">Todas</option>
+            </select></div>
+          <button type="button" class="btn btn-sec" onclick="cargarOps()">Actualizar</button>
+        </div>
+        <table style="margin-top:14px">
+          <thead><tr><th>Folio</th><th>Fecha</th><th>Proyecto</th><th>Pidió</th><th>Sitio</th><th>Prioridad</th><th class="num">Renglones</th><th>Estado</th><th class="num">Propuesta</th></tr></thead>
+          <tbody id="opsLista"><tr><td colspan="9" class="nota">Cargando…</td></tr></tbody>
+        </table>
+        <div class="nota" style="margin-top:8px">Apruebas lo que se pide renglón por renglón y das el visto bueno a lo que propone compras: con tu visto bueno se emite la orden de compra.</div>
+      </div>
+    </div>
+    <div id="opsVistaReq" class="oculto">
+      <div class="modulo">
+        <div class="acciones" style="margin:0 0 10px"><button type="button" class="btn btn-sec" onclick="verListaOps()">← Requisiciones</button></div>
+        <h2 id="opsTitulo">1 · Requisición</h2>
+        <div id="opsInfo" class="nota"></div>
+        <div id="opsAviso" class="nota aviso-moneda" style="margin-top:6px"></div>
+        <div style="overflow-x:auto;margin-top:12px">
+          <table><thead id="opsRenglonesEnc"></thead><tbody id="opsRenglones"></tbody></table>
+        </div>
+        <div id="opsAprobar" class="sat oculto">
+          <div id="opsAprobarCampos" class="grid">
+            <div><label>Prioridad *</label><select id="opsPrioridad"><option>Urgente</option><option>Normal</option><option>Baja</option></select></div>
+            <div style="grid-column:span 2"><label>Nota para compras (opcional)</label><input id="opsNota" maxlength="500"></div>
+          </div>
+          <div class="acciones">
+            <button type="button" id="btnOpsAprobar" class="btn" onclick="aprobarOps()">Aprobar lo marcado</button>
+            <button type="button" id="btnOpsDevolver" class="btn btn-sec" onclick="revisarOps('devolverRequisicion')">Devolver para aclarar</button>
+            <button type="button" id="btnOpsRechazar" class="btn btn-sec" onclick="revisarOps('rechazarRequisicion')">Rechazar todo</button>
+          </div>
+        </div>
+        <div id="opsEventos" class="sat"></div>
+      </div>
+      <div id="opsModProp" class="modulo oculto">
+        <h2 id="opsPropTitulo">2 · Propuesta de compra</h2>
+        <div id="opsPropInfo" class="tiles"></div>
+        <div style="overflow-x:auto">
+          <table style="font-size:12px">
+            <thead><tr><th>#</th><th>Se pidió</th><th class="num">Aprobado</th><th>Propuesta</th><th>Se compra</th><th class="num">Cant.</th><th class="num">Costo</th><th class="num">Importe</th></tr></thead>
+            <tbody id="opsPropRenglones"></tbody>
+          </table>
+        </div>
+        <div id="opsPropTotales" class="totales" style="margin-top:12px"></div>
+        <div id="opsPropArchivos" class="nota" style="margin-top:8px"></div>
+        <div id="opsVisto" class="acciones oculto">
+          <button type="button" id="btnOpsVisto" class="btn" onclick="vistoBuenoOps()">Visto bueno: emitir la orden de compra</button>
+          <button type="button" class="btn btn-sec" onclick="regresarOps()">Regresar a compras</button>
+          <button type="button" class="btn btn-sec" onclick="revisarOps('rechazarRequisicion')">Rechazar</button>
+        </div>
+      </div>
+      <div id="opsModOrden" class="modulo oculto">
+        <h2>3 · Orden y recepción</h2>
+        <div id="opsOrden" class="tiles"></div>
+        <div id="opsAvance"></div>
+      </div>
     </div>
   </section>
 
@@ -420,7 +493,9 @@
           <div style="max-width:220px;min-width:180px"><label>Estado</label>
             <select id="rcEstado" onchange="cargarRequisicionesCom()">
               <option value="">Todas</option><option value="Solicitada">Solicitada (por revisar)</option>
+              <option value="Aprobada">Aprobada (por cotizar)</option><option value="Cotizada">Cotizada (espera visto bueno)</option>
               <option value="Autorizada">Autorizada (por pagar)</option><option value="Pagada">Pagada (por recibir)</option>
+              <option value="Recibida">Recibida (por pagar)</option>
               <option value="Devuelta">Devuelta</option><option value="Cerrada">Cerrada</option>
               <option value="Rechazada">Rechazada</option><option value="Cancelada">Cancelada</option>
             </select></div>
@@ -501,13 +576,17 @@
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));margin-top:12px;align-items:start">
           <div>
             <table>
-              <thead><tr><th>#</th><th>Descripción</th><th class="num">Cant.</th><th>Unidad</th><th>Notas</th></tr></thead>
+              <thead id="rcRenglonesEnc"><tr><th>#</th><th>Descripción</th><th class="num">Cant.</th><th>Unidad</th><th>Notas</th></tr></thead>
               <tbody id="rcRenglones"></tbody>
             </table>
             <div id="rcEventos" class="sat"></div>
             <div id="rcRevision" class="acciones oculto">
               <button type="button" class="btn btn-sec" onclick="revisarReqCom('devolverRequisicion')">Devolver para corregir</button>
               <button type="button" class="btn btn-sec" onclick="revisarReqCom('rechazarRequisicion')">Rechazar</button>
+            </div>
+            <div id="rcFlujo" class="acciones oculto">
+              <button type="button" id="btnRcAclarar" class="btn btn-sec" onclick="revisarReqCom('devolverRequisicion')">Pedir aclaración a quien pidió</button>
+              <button type="button" id="btnRcSeparar" class="btn btn-sec" onclick="separarReqCom()">Separar renglones (otro proveedor)</button>
             </div>
           </div>
           <div>
@@ -518,7 +597,8 @@
       </div>
 
       <div id="comModOc" class="modulo oculto">
-        <h2>2 · Orden de compra</h2>
+        <h2 id="ocTitulo">2 · Orden de compra</h2>
+        <div id="propEstado" class="nota aviso-moneda oculto" style="margin-bottom:10px"></div>
         <div id="comProveedor" class="grid">
           <div><label>Proveedor (razón social) *</label>
             <input id="prvRazon" list="proveedoresList" autocomplete="off" maxlength="150" placeholder="Escribe o elige un proveedor">
@@ -545,16 +625,14 @@
               <option value="0">0% (extranjero o exento)</option>
             </select></div>
         </div>
+        <div style="overflow-x:auto">
         <table>
-          <thead><tr>
-            <th style="width:100px">Clave</th><th>Descripción</th><th style="width:80px">Unidad</th>
-            <th class="num" style="width:90px">Cant.</th><th class="num" style="width:130px">Costo unitario</th>
-            <th class="num" style="width:130px">Importe</th><th style="width:30px"></th>
-          </tr></thead>
+          <thead id="ocEnc"></thead>
           <tbody id="ocFilas"></tbody>
         </table>
-        <button class="btn btn-sec" style="margin-top:10px" onclick="agregarRenglonOc()">+ Agregar renglón</button>
-        <div class="nota" style="margin-top:8px">Los renglones vienen de la requisición (las notas van en la descripción). Captura el costo de la cotización: nunca es el precio de venta.</div>
+        </div>
+        <button id="btnAgregarOc" class="btn btn-sec" style="margin-top:10px" onclick="agregarRenglonOc()">+ Agregar renglón</button>
+        <div id="ocNotaRenglones" class="nota" style="margin-top:8px">Los renglones vienen de la requisición (las notas van en la descripción). Captura el costo de la cotización: nunca es el precio de venta.</div>
         <div class="totales" style="margin-top:12px">
           <div><span>Subtotal</span><span id="ocSub">$0.00</span></div>
           <div><span id="ocLblIva">IVA (16%)</span><span id="ocIvaMonto">$0.00</span></div>
@@ -568,15 +646,25 @@
         </div>
         <div class="nota" style="margin-top:6px">Los días de crédito fijan cuándo vence cada factura de esta orden (fecha de la factura + días).</div>
         <div style="margin-top:12px"><label>Notas para el proveedor (opcional)</label><textarea id="ocNotas" rows="3" maxlength="1000"></textarea></div>
+        <div id="propExtra" class="grid oculto" style="margin-top:12px">
+          <div><label>Quién recibe en sitio *</label><select id="propRecibe"></select></div>
+          <div><label>Cotización del proveedor (PDF o foto, opcional)</label>
+            <input id="propArchivo" type="file" accept="application/pdf,image/jpeg,image/png,image/heic,.heic"></div>
+        </div>
         <div class="acciones">
           <button type="button" id="btnOc" class="btn" onclick="guardarOc()">Autorizar y emitir orden (PDF)</button>
-          <span class="nota">El PDF se guarda en la carpeta privada de compras; no se envía por correo.</span>
+          <span id="ocNotaBoton" class="nota">El PDF se guarda en la carpeta privada de compras; no se envía por correo.</span>
         </div>
       </div>
 
       <div id="comModPago" class="modulo oculto">
         <h2>3 · Orden, facturas, pago y cierre</h2>
         <div id="rcOrden" class="tiles"></div>
+        <div id="rcRecepcion" class="sat oculto">
+          <div class="sat-titulo">Recepción en sitio</div>
+          <div id="rcAvance"></div>
+          <div id="rcRecibirForm"></div>
+        </div>
         <div id="rcFacturasCaja" class="sat">
           <div class="sat-titulo">Facturas del proveedor</div>
           <div id="rcFacturasResumen" class="nota" style="margin-bottom:8px"></div>
@@ -827,7 +915,10 @@
   // Las pestañas se dibujan al instante con los roles de la última sesión de este correo (localStorage) y se corrigen al
   // llegar el bootstrap. Es solo interfaz: el servidor vuelve a revisar los permisos en cada llamada.
   let VERS = {}, BOOT = false, TAB = 'nueva';
-  const CARGADO = { reqProy: false, misReq: false, comProy: false, comReqs: false, cobProy: false };
+  const CARGADO = { reqProy: false, misReq: false, comProy: false, comReqs: false, cobProy: false, ops: false };
+  let SITIOS = []; // sitios donde se recibe material (Config → SITIOS)
+  const flujoOps = () => !!PERMISOS.flujoOperaciones; // con ROL_OPERACIONES: aprobación, propuesta y recepción por renglón
+  const correoActual = () => (window.correoSesion ? correoSesion() : '') || '';
   const CLAVE_ROLES = 'cotizadorHelgenRoles:';
   function leerRolesGuardados(correo) {
     try { return correo ? JSON.parse(localStorage.getItem(CLAVE_ROLES + correo) || 'null') : null; } catch (e) { return null; }
@@ -842,9 +933,11 @@
     PERMISOS = permisos || {}; SOLO_REQ = !!solo;
     ['tabNueva', 'tabHist', 'tabCat'].forEach(id => $(id).classList.toggle('oculto', SOLO_REQ));
     $('tabReq').classList.toggle('oculto', !PERMISOS.requisicion);
+    $('tabOps').classList.toggle('oculto', !PERMISOS.operaciones); // también con SOLO_REQUISICION
     $('tabCob').classList.toggle('oculto', SOLO_REQ || !PERMISOS.cobranza);
     $('tabCom').classList.toggle('oculto', SOLO_REQ || !PERMISOS.compras);
-    const boton = { nueva: 'tabNueva', hist: 'tabHist', cat: 'tabCat', req: 'tabReq', cob: 'tabCob', com: 'tabCom' }[TAB];
+    pintarSitios();
+    const boton = { nueva: 'tabNueva', hist: 'tabHist', cat: 'tabCat', req: 'tabReq', ops: 'tabOps', cob: 'tabCob', com: 'tabCom' }[TAB];
     if ($(boton).classList.contains('oculto')) verTab(SOLO_REQ ? 'req' : 'nueva');
   }
   function rolesDeUltimaSesion(correo) {
@@ -861,7 +954,7 @@
   function recibirBootstrap(d) {
     BOOT = true;
     VERS = d.versiones || {};
-    IVA = d.ivaTasa; CATALOGO = d.catalogo || []; TC = d.tipoCambio || TC;
+    IVA = d.ivaTasa; CATALOGO = d.catalogo || []; TC = d.tipoCambio || TC; SITIOS = d.sitios || [];
     aplicarPermisos(d.permisos, d.soloRequisicion);
     guardarRoles(d.permisos, d.soloRequisicion);
     pintarCatalogoReq();
@@ -869,6 +962,7 @@
       if (d.req.proyectos) recibirProyectosReq(d.req.proyectos);
       if (d.req.mias) pintarMisReq(d.req.mias);
     }
+    if (d.ops && d.ops.requisiciones) recibirOps(d.ops.requisiciones);
     if (d.com) {
       if (d.com.proyectos) recibirProyectosCom(d.com.proyectos);
       if (d.com.requisiciones) { CARGADO.comReqs = true; pintarListaReqCom(d.com.requisiciones); }
@@ -899,7 +993,8 @@
   function contextoSync() {
     return { cobResumen: !!RESUMEN, cobProyecto: COB ? COB.proyecto.folio : '', comProyecto: COM ? COM.proyecto.folio : '',
       req: REQC ? REQC.requisicion.folio : '', rcBuscar: COM_FILTRO.buscar, rcEstado: COM_FILTRO.estado,
-      cxp: !!CXP, cxpHoy: CXP ? CXP.hoy : '' }; // otro día: el servidor recalcula días vencidos y rangos
+      cxp: !!CXP, cxpHoy: CXP ? CXP.hoy : '', // otro día: el servidor recalcula días vencidos y rangos
+      opsReq: OPSV ? OPSV.requisicion.folio : '' };
   }
   function sincronizarAhora() {
     if (!BOOT || !(window.sesionVigente && sesionVigente())) return; // sin sesión no se forman consultas en cola
@@ -921,12 +1016,14 @@
   function aplicarSync(r) {
     if (!r) return;
     const cambioRol = JSON.stringify(r.permisos) !== JSON.stringify(PERMISOS) || !!r.soloRequisicion !== SOLO_REQ;
+    const cambioFlujo = !!(r.permisos || {}).flujoOperaciones !== !!PERMISOS.flujoOperaciones;
     if (cambioRol) {
       // Cambió un rol (Script Properties): las pestañas se ajustan sin recargar la página
       aplicarPermisos(r.permisos, r.soloRequisicion);
       guardarRoles(r.permisos, r.soloRequisicion);
     }
     VERS = r.versiones || VERS;
+    if (r.sitios && JSON.stringify(r.sitios) !== JSON.stringify(SITIOS)) { SITIOS = r.sitios; pintarSitios(); }
     if (r.catalogo) {
       CATALOGO = r.catalogo; if (r.tipoCambio) TC = r.tipoCambio;
       pintarCatalogoReq(); if (!SOLO_REQ) pintarDatalists();
@@ -934,7 +1031,11 @@
     if (r.clientes) recibirClientes(r.clientes);
     if (r.proyectos) recibirProyectos(r.proyectos);
     if (r.reqProyectos) recibirProyectosReq(r.reqProyectos);
-    if (r.misReq) pintarMisReq(r.misReq);
+    if (r.misReq) { if (REC_ABIERTA) MISREQ_PENDIENTE = r.misReq; else pintarMisReq(r.misReq); } // no borra una recepción a medias
+    if (r.opsRequisiciones) recibirOps(r.opsRequisiciones);
+    if (r.opsRequisicion && OPSV && OPSV.requisicion.folio === r.opsRequisicion.requisicion.folio) {
+      sinInterrumpir('opsVistaReq', () => pintarOps(r.opsRequisicion));
+    }
     if (r.comProyectos) recibirProyectosCom(r.comProyectos);
     if (r.comRequisiciones) pintarListaReqCom(r.comRequisiciones);
     if (r.requisicion && REQC && REQC.requisicion.folio === r.requisicion.requisicion.folio) {
@@ -953,6 +1054,12 @@
       // Pestaña recién permitida: se pide lo que la sincronización no trajo
       if (PERMISOS.requisicion && !CARGADO.reqProy) cargarProyectosReq();
       if (PERMISOS.requisicion && !CARGADO.misReq) cargarMisReq();
+      if (PERMISOS.operaciones && !CARGADO.ops) cargarOps();
+      if (cambioFlujo) {
+        // Se encendió o apagó el flujo con operaciones: lo abierto se pide otra vez (cambian los botones)
+        if (PERMISOS.requisicion && CARGADO.misReq && !REC_ABIERTA) cargarMisReq();
+        if (REQC && PERMISOS.compras && !SOLO_REQ) abrirReqCom(REQC.requisicion.folio);
+      }
       if (PERMISOS.compras && !SOLO_REQ && !CARGADO.comProy) cargarProyectosCom();
       if (PERMISOS.compras && !SOLO_REQ && !CARGADO.comReqs) cargarRequisicionesCom();
       if (PERMISOS.cobranza && !SOLO_REQ && !CARGADO.cobProy) cargarProyectosCob();
@@ -977,7 +1084,7 @@
     const a = $(id) && $(id).querySelector('.aviso-sync');
     if (a) a.remove();
   }
-  ['comVistaReq', 'cobVistaProyecto'].forEach(id => $(id).addEventListener('input', () => { SUCIO[id] = true; }));
+  ['comVistaReq', 'cobVistaProyecto', 'opsVistaReq'].forEach(id => $(id).addEventListener('input', () => { SUCIO[id] = true; }));
 
   // ---- Conceptos ----
   function agregarFila() {
@@ -1681,8 +1788,23 @@
 
   // ---- Requisiciones (quien pide materiales: el servidor solo le manda las suyas, sin montos) ----
   let REQ_PROYECTOS = [], MIS_REQ = [], REQ_EDITANDO = null, ID_REQ = nuevoId();
-  const CHIP_REQ = { Solicitada: 'aceptada', Devuelta: 'aceptada', Autorizada: 'firmado', Pagada: 'firmado', Cerrada: 'firmado',
-    Rechazada: 'cancelado', Cancelada: 'cancelado' };
+  const CHIP_REQ = { Solicitada: 'aceptada', Devuelta: 'aceptada', Aprobada: 'aceptada', Cotizada: 'aceptada', Autorizada: 'firmado',
+    Pagada: 'firmado', Recibida: 'firmado', Cerrada: 'firmado', Rechazada: 'cancelado', Cancelada: 'cancelado' };
+  const CHIP_DISP = { Exacto: 'firmado', Sustituto: 'aceptada', 'No disponible': 'cancelado', Adicional: '' };
+  const chipDisp = d => '<span class="chip ' + (CHIP_DISP[d] || '') + '">' + esc(d) + '</span>';
+  const chipPrio = p => p ? '<span class="chip ' + (p === 'Urgente' ? 'cancelado' : p === 'Normal' ? 'aceptada' : '') + '">' + esc(p) + '</span>' : '';
+  const sinAcentos = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  /** Decisión de operaciones de un renglón (para quien pidió, compras y operaciones). */
+  function decisionHtml(x) {
+    if (x.decision === 'Rechazado') return '<span class="chip cancelado">No se compra</span>' + (x.comentario ? ' <span class="nota">' + esc(x.comentario) + '</span>' : '');
+    if (x.decision !== 'Aprobado') return '';
+    const menos = Number(x.cantidadAprobada) < Number(x.cantidad);
+    return '<span class="chip ' + (menos ? 'aceptada' : 'firmado') + '">' + (menos ? 'Aprobado: ' + esc(x.cantidadAprobada) : 'Aprobado') + '</span>' +
+      (x.comentario ? ' <span class="nota">' + esc(x.comentario) + '</span>' : '');
+  }
+  /** Historial (estado, quién y cuándo) de una requisición. */
+  const historial = eventos => '<div class="sat-titulo">Historial</div><div class="nota">' + (eventos || []).map(e => esc(fechaMx(e.fecha)) +
+    ' · <b>' + esc(e.estado) + '</b> · ' + esc(e.nombre) + (e.nota ? ': ' + esc(e.nota) : '')).join('<br>') + '</div>';
   const chipReq = e => '<span class="chip ' + (CHIP_REQ[e] || '') + '">' + esc(e) + '</span>';
   const fechaMx = iso => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})(.*)$/); return m ? m[3] + '/' + m[2] + '/' + m[1] + m[4].slice(0, 6) : String(iso || ''); };
   const botonChico = (texto, accion, sec) => '<button type="button" class="btn' + (sec === false ? '' : ' btn-sec') +
@@ -1739,16 +1861,28 @@
     })).filter(r => r.descripcion.trim());
   }
 
+  /** Lista de sitios y textos del formulario según el flujo (con operaciones el sitio es obligatorio y la cotización opcional). */
+  function pintarSitios() {
+    const actual = $('reqSitio').value;
+    $('reqSitio').innerHTML = '<option value="">' + (flujoOps() ? 'Elige el sitio' : 'Sin sitio') + '</option>' +
+      SITIOS.map(x => '<option value="' + esc(x) + '">' + esc(x) + '</option>').join('');
+    $('reqSitio').value = actual;
+    $('reqLblSitio').textContent = 'Sitio donde se necesita' + (flujoOps() ? ' *' : ' (opcional)');
+    if (!REQ_EDITANDO) $('reqLblArchivo').textContent = 'Cotización del proveedor (PDF o foto, máx. 10 MB)' + (flujoOps() ? ' (opcional)' : ' *');
+    $('reqNotaEnvio').textContent = flujoOps() ? 'No lleva precios. Operaciones la revisa y compras la cotiza.' : 'No lleva precios: compras los toma de la cotización.';
+  }
+
   function limpiarReq() {
     REQ_EDITANDO = null; ID_REQ = nuevoId();
     $('reqProyecto').value = ''; $('reqProyecto').disabled = false;
+    $('reqSitio').value = ''; $('reqFecha').value = '';
     $('reqFilas').innerHTML = ''; agregarRenglonReq();
     $('reqArchivo').value = '';
     $('reqTitulo').textContent = '1 · Nueva requisición';
     $('reqEditando').classList.add('oculto');
-    $('reqLblArchivo').textContent = 'Cotización del proveedor (PDF o foto, máx. 10 MB) *';
     $('btnReq').disabled = false; $('btnReq').textContent = 'Enviar requisición';
     $('btnReqCancelarEdicion').classList.add('oculto');
+    pintarSitios();
   }
 
   function enviarRequisicion() {
@@ -1758,7 +1892,8 @@
     if (!REQ_EDITANDO && !proyecto) { mostrarError('Elige un proyecto de la lista.'); return; }
     const renglones = leerRenglonesReq();
     if (!renglones.length) { mostrarError('Agrega al menos un renglón con descripción y cantidad.'); return; }
-    if (!REQ_EDITANDO && !archivo) { mostrarError('Adjunta la cotización del proveedor (PDF o imagen).'); return; }
+    if (!REQ_EDITANDO && !archivo && !flujoOps()) { mostrarError('Adjunta la cotización del proveedor (PDF o imagen).'); return; }
+    if (flujoOps() && !$('reqSitio').value) { mostrarError('Elige el sitio donde se necesita el material.'); return; }
     if (archivo && archivo.size > 10 * 1024 * 1024) { mostrarError('La cotización pesa más de 10 MB. Reduce la imagen o el PDF.'); return; }
     const texto = $('btnReq').textContent;
     $('btnReq').disabled = true; $('btnReq').textContent = 'Enviando…';
@@ -1766,9 +1901,11 @@
     const enviar = datos => google.script.run.withSuccessHandler(r => {
       const corregida = !!REQ_EDITANDO;
       limpiarReq(); pintarMisReq(r.requisiciones);
-      aviso('ok', 'Requisición <b>' + esc(r.folio) + '</b> ' + (corregida ? 'corregida y reenviada' : 'enviada') + '. Compras la revisará.');
+      aviso('ok', 'Requisición <b>' + esc(r.folio) + '</b> ' + (corregida ? 'corregida y reenviada' : 'enviada') + '. ' +
+        (flujoOps() ? 'Operaciones la revisará.' : 'Compras la revisará.'));
     }).withFailureHandler(err => { listo(); mostrarError(err); }).guardarRequisicion({
       folio: REQ_EDITANDO || '', proyectoFolio: proyecto ? proyecto.folio : '', renglones: renglones,
+      sitio: $('reqSitio').value, fechaRequerida: $('reqFecha').value,
       cotizacion: datos ? { nombre: archivo.name, datos: datos } : null, idSolicitud: ID_REQ,
     });
     if (archivo) leerArchivo(archivo).then(enviar, err => { listo(); mostrarError(err); });
@@ -1776,20 +1913,123 @@
   }
 
   function pintarMisReq(lista) {
-    MIS_REQ = lista || []; CARGADO.misReq = true;
+    MIS_REQ = lista || []; CARGADO.misReq = true; MISREQ_PENDIENTE = null;
+    // Los formularios de recepción viven dentro de la lista: al repintarla se pierden (y la sincronización vuelve a pintar)
+    REC_ABIERTA = null;
+    Object.keys(FORMS_REC).filter(k => k.indexOf('rcp-') === 0).forEach(k => { delete FORMS_REC[k]; });
     $('reqLista').innerHTML = !MIS_REQ.length ? '<div class="nota">Todavía no tienes requisiciones.</div>' : MIS_REQ.map(r =>
       '<div class="sat" style="margin-top:10px">' +
-      '<div class="sat-titulo">' + esc(r.folio) + ' · ' + chipReq(r.estado) + ' · ' + esc(r.proyectoVisible || r.proyectoFolio) + ' — ' + esc(r.proyectoNombre) + '</div>' +
-      (r.motivo && ['Devuelta', 'Rechazada', 'Cancelada'].indexOf(r.estado) !== -1 ? '<div class="nota"><b>Motivo:</b> ' + esc(r.motivo) + '</div>' : '') +
+      '<div class="sat-titulo">' + esc(r.folio) + ' · ' + chipReq(r.estado) + (r.prioridad ? ' ' + chipPrio(r.prioridad) : '') + ' · ' +
+        esc(r.proyectoVisible || r.proyectoFolio) + ' — ' + esc(r.proyectoNombre) + '</div>' +
+      ((r.sitio || r.fechaRequerida || r.esReceptor || (r.recibe && r.recibe !== correoActual())) ? '<div class="nota">' + [
+        r.sitio ? 'Sitio: <b>' + esc(r.sitio) + '</b>' : '', r.fechaRequerida ? 'Para el ' + esc(fechaMx(r.fechaRequerida)) : '',
+        r.esReceptor ? '<b>Te toca recibirla</b> (la pidió ' + esc(r.solicitante) + ')' : (r.compra && r.recibe && r.recibe !== correoActual() ? 'Recibe: ' + esc(r.recibe) : '')
+      ].filter(Boolean).join(' · ') + '</div>' : '') +
+      (r.motivo ? '<div class="nota"><b>Motivo:</b> ' + esc(r.motivo) + '</div>' : '') +
       '<ul style="margin:6px 0;padding-left:18px">' + r.renglones.map(x => '<li>' + esc(x.cantidad) + ' ' + esc(x.unidad) + ' — ' +
-        esc(x.descripcion) + (x.notas ? ' <span class="nota">(' + esc(x.notas) + ')</span>' : '') + '</li>').join('') + '</ul>' +
-      '<div class="nota">' + r.eventos.map(e => esc(fechaMx(e.fecha)) + ' · <b>' + esc(e.estado) + '</b> · ' + esc(e.nombre) +
+        esc(x.descripcion) + (x.notas ? ' <span class="nota">(' + esc(x.notas) + ')</span>' : '') + (x.decision ? ' ' + decisionHtml(x) : '') + '</li>').join('') + '</ul>' +
+      (r.compra ? '<div class="nota" style="margin-top:6px"><b>Lo que se compra:</b></div><ul style="margin:4px 0;padding-left:18px">' +
+        r.compra.map(c => '<li>' + chipDisp(c.disponibilidad) + ' ' + (c.disponibilidad === 'No disponible' ? esc(c.descripcion) :
+          esc(c.cantidad) + ' ' + esc(c.unidad) + ' — ' + esc(c.descripcion)) + (c.nota ? ' <span class="nota">(' + esc(c.nota) + ')</span>' : '') +
+          (c.recibir === false ? ' <span class="nota">· no se recibe en sitio</span>' : '') + '</li>').join('') + '</ul>' : '') +
+      (r.avance ? htmlAvance(r.avance, r.recepciones, false) : '') +
+      '<div class="nota" style="margin-top:6px">' + r.eventos.map(e => esc(fechaMx(e.fecha)) + ' · <b>' + esc(e.estado) + '</b> · ' + esc(e.nombre) +
         (e.nota ? ': ' + esc(e.nota) : '')).join('<br>') + '</div>' +
       '<div class="acciones">' +
+      (r.puedeRecibir ? botonChico('Registrar lo que llegó', "abrirRecepcion('" + esc(r.folio) + "')", false) : '') +
       (r.puedeCerrar ? botonChico('Recibí el material', "recibiMaterial('" + esc(r.folio) + "')", false) : '') +
       (r.puedeEditar ? botonChico('Corregir y reenviar', "editarReq('" + esc(r.folio) + "')") : '') +
       (r.puedeCancelar ? botonChico('Cancelar requisición', "cancelarReq('" + esc(r.folio) + "')") : '') +
-      '</div></div>').join('');
+      '</div><div id="rcpCaja-' + esc(r.folio) + '"></div></div>').join('');
+    pintarConteos();
+  }
+
+  // ---- Recepción renglón por renglón (con operaciones): quien pidió o quien recibe; compras en su lugar ----
+  let REC_ABIERTA = null, MISREQ_PENDIENTE = null;
+  const FORMS_REC = {}; // prefijo de ids → {folio, lineas, id, caja, alExito}
+
+  /** Avance de la recepción: pedido, recibido y lo que falta; recepciones registradas (con su × para cancelar, en compras). */
+  function htmlAvance(avance, recepciones, cancelar) {
+    if (!avance) return '';
+    return '<table style="font-size:12px;margin-top:6px"><thead><tr><th>Material</th><th class="num">Pedido</th><th class="num">Llegó</th><th class="num">Falta</th></tr></thead><tbody>' +
+      avance.map(l => '<tr><td>' + esc(l.descripcion) + '</td><td class="num">' + esc(l.pedido) + ' ' + esc(l.unidad) + '</td><td class="num">' +
+        esc(l.recibido) + '</td><td class="num">' + (l.pendiente > 0 ? '<b>' + esc(l.pendiente) + '</b>' : '✓') + '</td></tr>').join('') + '</tbody></table>' +
+      ((recepciones || []).length ? '<div class="nota" style="margin-top:6px">' + recepciones.map(x => (x.estado === 'Cancelado' ? '<s>' : '') +
+        '<b>' + esc(x.folio) + '</b> · ' + esc(fechaMx(x.fecha)) + ' · ' + esc(x.nombre) + ' · ' + esc(x.sitio) + ': ' +
+        x.renglones.map(y => esc(y.cantidad) + ' ' + esc(y.unidad) + ' ' + esc(y.descripcion)).join(', ') + (x.notas ? ' · ' + esc(x.notas) : '') +
+        (x.estado === 'Cancelado' ? '</s> (cancelada' + (x.motivoCancelacion ? ': ' + esc(x.motivoCancelacion) : '') + ')' : '') +
+        (x.evidenciaUrl ? ' · <a href="' + esc(x.evidenciaUrl) + '" target="_blank">Foto</a>' : '') +
+        (cancelar && x.estado === 'Vigente' ? ' <button type="button" class="quitar" title="Cancelar esta recepción" onclick="cancelarRecepcionCom(\'' +
+          esc(x.folio) + '\')">×</button>' : '')).join('<br>') + '</div>' : '');
+  }
+
+  /** Formulario de recepción: cantidad que llegó de cada renglón pendiente (por omisión, lo que falta), sitio, notas y foto. */
+  function htmlFormRecepcion(p, lineas, sitio, enSuLugar) {
+    return '<div class="sat" style="margin-top:8px;background:#fff"><div class="sat-titulo">Registrar lo que llegó</div>' +
+      (enSuLugar ? '<div class="nota aviso-moneda" style="margin-bottom:6px">La registras en lugar de quien la recibe: escribe en las notas por qué.</div>' : '') +
+      '<table style="font-size:12px"><thead><tr><th>Material</th><th class="num">Falta</th><th class="num" style="width:110px">Llegó</th></tr></thead><tbody>' +
+      lineas.map(l => '<tr><td>' + esc(l.descripcion) + '</td><td class="num">' + esc(l.pendiente) + ' ' + esc(l.unidad) + '</td><td><input id="' + p + 'C' +
+        l.renglon + '" type="number" min="0" step="any" value="' + esc(l.pendiente) + '" style="text-align:right"></td></tr>').join('') +
+      '</tbody></table><div class="grid" style="margin-top:8px">' +
+      '<div><label>Sitio donde se recibió *</label><select id="' + p + 'Sitio">' + SITIOS.map(x => '<option value="' + esc(x) + '"' +
+        (x === sitio ? ' selected' : '') + '>' + esc(x) + '</option>').join('') + '</select></div>' +
+      '<div><label>Foto de la remisión (opcional)</label><input id="' + p + 'Foto" type="file" accept="image/*,application/pdf" capture="environment"></div>' +
+      '<div style="grid-column:1/-1"><label>Notas' + (enSuLugar ? ' *' : '') + '</label><input id="' + p + 'Notas" maxlength="500" placeholder="Ej. Llegó una caja golpeada"></div></div>' +
+      '<label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input id="' + p + 'Final" type="checkbox" style="width:auto"> ' +
+        'Ya no llegará lo que falta (cierra la recepción; explica en las notas qué faltó)</label>' +
+      '<div class="acciones"><button type="button" id="' + p + 'Btn" class="btn" onclick="enviarRecepcion(\'' + p + '\')">Registrar recepción</button>' +
+      '<button type="button" class="btn btn-sec" onclick="cerrarFormRecepcion(\'' + p + '\')">Cancelar</button></div></div>';
+  }
+  function abrirFormRecepcion(p, folio, avance, sitio, caja, enSuLugar, alExito) {
+    const lineas = (avance || []).filter(l => l.pendiente > 0);
+    FORMS_REC[p] = { folio: folio, lineas: lineas, id: nuevoId(), caja: caja, alExito: alExito };
+    $(caja).innerHTML = htmlFormRecepcion(p, lineas, sitio, enSuLugar);
+    if (SITIOS.indexOf(sitio) !== -1) $(p + 'Sitio').value = sitio;
+  }
+  function cerrarFormRecepcion(p) {
+    const f = FORMS_REC[p];
+    if (!f) return;
+    delete FORMS_REC[p];
+    $(f.caja).innerHTML = '';
+    if (p.indexOf('rcp-') === 0) { REC_ABIERTA = null; if (MISREQ_PENDIENTE) pintarMisReq(MISREQ_PENDIENTE); }
+  }
+  function enviarRecepcion(p) {
+    const f = FORMS_REC[p], b = $(p + 'Btn');
+    if (!f || b.disabled) return;
+    const archivo = $(p + 'Foto').files && $(p + 'Foto').files[0];
+    if (archivo && archivo.size > 10 * 1024 * 1024) { mostrarError('La foto pesa más de 10 MB. Reduce la imagen.'); return; }
+    const datos = { reqFolio: f.folio, sitio: $(p + 'Sitio').value, notas: $(p + 'Notas').value, final: !!$(p + 'Final').checked,
+      renglones: f.lineas.map(l => ({ renglon: l.renglon, cantidad: $(p + 'C' + l.renglon).value })), idSolicitud: f.id };
+    b.disabled = true; b.textContent = 'Registrando…';
+    const listo = () => { b.disabled = false; b.textContent = 'Registrar recepción'; };
+    const enviar = foto => google.script.run.withSuccessHandler(r => {
+      delete FORMS_REC[p];
+      $(f.caja).innerHTML = '';
+      if (p.indexOf('rcp-') === 0) REC_ABIERTA = null;
+      f.alExito(r);
+      aviso('ok', 'Recepción <b>' + esc(r.folio) + '</b> registrada' + (!r.completo ? ' (parcial: falta material).' :
+        r.estado === 'Cerrada' ? ': requisición cerrada.' : ': todo recibido; falta el pago al proveedor.'));
+    }).withFailureHandler(err => { listo(); mostrarError(err); })
+      .registrarRecepcion(Object.assign(datos, { evidencia: foto ? { nombre: archivo.name, datos: foto } : null }));
+    if (archivo) leerArchivo(archivo).then(enviar, err => { listo(); mostrarError(err); });
+    else enviar(null);
+  }
+  /** Quien pidió o quien recibe: abre el formulario bajo su requisición. */
+  function abrirRecepcion(folio) {
+    const r = MIS_REQ.find(x => x.folio === folio);
+    if (!r || !r.puedeRecibir) return;
+    Object.keys(FORMS_REC).filter(k => k.indexOf('rcp-') === 0).forEach(cerrarFormRecepcion);
+    REC_ABIERTA = folio;
+    abrirFormRecepcion('rcp-' + folio.replace(/[^A-Za-z0-9]/g, ''), folio, r.avance, r.sitio, 'rcpCaja-' + folio, false,
+      x => { MISREQ_PENDIENTE = null; pintarMisReq(x.requisiciones || MIS_REQ); });
+  }
+
+  /** Pendientes en las pestañas: operaciones (aprobar y visto bueno), quien pide (corregir y recibir), compras (por cotizar). */
+  function pintarConteos() {
+    const n = (t, k) => t + (k ? ' (' + k + ')' : '');
+    $('tabOps').textContent = n('Operaciones', OPS ? OPS.filter(pendienteOps).length : 0);
+    $('tabReq').textContent = n('Requisiciones', MIS_REQ.filter(r => r.puedeRecibir || (r.estado === 'Devuelta' && r.puedeEditar)).length);
+    if (COM_LISTA && !COM_FILTRO.buscar && !COM_FILTRO.estado) $('tabCom').textContent = n('Compras', COM_LISTA.filter(r => r.estado === 'Aprobada').length);
   }
 
   /** Devuelta: el solicitante corrige renglones (y si quiere, la cotización) y la reenvía con el mismo folio. */
@@ -1798,10 +2038,11 @@
     if (!r) return;
     REQ_EDITANDO = folio; ID_REQ = nuevoId();
     $('reqProyecto').value = (r.proyectoVisible || r.proyectoFolio) + ' — ' + r.proyectoNombre; $('reqProyecto').disabled = true;
+    $('reqSitio').value = r.sitio || ''; $('reqFecha').value = r.fechaRequerida || '';
     $('reqFilas').innerHTML = ''; r.renglones.forEach(agregarRenglonReq);
     $('reqArchivo').value = '';
     $('reqTitulo').textContent = '1 · Corregir ' + folio;
-    $('reqEditando').innerHTML = '<b>Compras la devolvió:</b> ' + esc(r.motivo);
+    $('reqEditando').innerHTML = '<b>' + (flujoOps() ? 'Te la devolvieron' : 'Compras la devolvió') + ':</b> ' + esc(r.motivo);
     $('reqEditando').classList.remove('oculto');
     $('reqLblArchivo').textContent = 'Cotización nueva (opcional: si no adjuntas otra, se queda la anterior)';
     $('btnReq').textContent = 'Reenviar requisición';
@@ -1820,14 +2061,184 @@
     accionCob(null, 'cerrarRequisicion', [folio, notas], l => { pintarMisReq(l); aviso('ok', 'Requisición <b>' + esc(folio) + '</b> cerrada: material recibido.'); });
   }
 
+  // ---- Operaciones (ROL_OPERACIONES): aprueba renglón por renglón y da el visto bueno a la propuesta de compras ----
+  let OPS = null, OPSV = null, ID_VOBO = nuevoId();
+  /** ¿Me toca? Aprobar una Solicitada que no pedí, o el visto bueno de una Cotizada que no pedí ni preparé. */
+  function pendienteOps(r) {
+    const yo = correoActual();
+    return (r.estado === 'Solicitada' && r.solicitanteEmail !== yo) ||
+      (r.estado === 'Cotizada' && r.solicitanteEmail !== yo && r.elaboroPropuesta !== yo);
+  }
+  function cargarOps() {
+    google.script.run.withSuccessHandler(recibirOps).withFailureHandler(mostrarError).listarOperaciones();
+  }
+  function recibirOps(lista) {
+    OPS = lista || []; CARGADO.ops = true;
+    pintarListaOps(); pintarConteos();
+  }
+  function pintarListaOps() {
+    if (!OPS) return;
+    const f = $('opsFiltro').value, q = sinAcentos($('opsBuscar').value);
+    const lista = OPS.filter(r => f === 'pendientes' ? pendienteOps(r) : !f || r.estado === f)
+      .filter(r => !q || sinAcentos([r.folio, r.proyectoVisible, r.proyectoNombre, r.sitio, r.solicitante, r.solicitanteEmail].join(' ')).includes(q));
+    $('opsLista').innerHTML = lista.length ? lista.map(r => '<tr class="fila-cat" onclick="abrirOps(\'' + esc(r.folio) + '\')">' +
+      '<td style="white-space:nowrap"><b>' + esc(r.folio) + '</b></td><td>' + esc(fechaMx(r.fecha)) +
+      (r.fechaRequerida ? '<div class="nota">Para el ' + esc(fechaMx(r.fechaRequerida)) + '</div>' : '') + '</td><td>' + esc(r.proyectoVisible) +
+      '<div class="nota">' + esc(r.proyectoNombre) + '</div></td><td>' + esc(r.solicitante) + '</td><td>' + esc(r.sitio) + '</td><td>' + chipPrio(r.prioridad) +
+      '</td><td class="num">' + esc(r.renglones) + '</td><td>' + chipReq(r.estado) + '</td><td class="num">' +
+      (r.total != null ? dinero(r.total, r.moneda) + '<div class="nota">' + esc(r.proveedor) + '</div>' : '') + '</td></tr>').join('')
+      : '<tr><td colspan="9" class="nota">' + (f === 'pendientes' ? 'No tienes nada pendiente.' : 'No hay requisiciones con ese filtro.') + '</td></tr>';
+  }
+  function verListaOps() {
+    OPSV = null;
+    $('opsVistaReq').classList.add('oculto'); $('opsVistaLista').classList.remove('oculto');
+    pintarListaOps();
+    if (BOOT && !CARGADO.ops) cargarOps();
+  }
+  function abrirOps(folio) {
+    google.script.run.withSuccessHandler(pintarOps).withFailureHandler(mostrarError).getRequisicionOperaciones(folio);
+  }
+  /** Archivo de la requisición (cotización) sin acceso a la carpeta de compras: el servidor lo manda y se abre en otra pestaña. */
+  function verArchivoReq(folio, id) {
+    const w = typeof window.open === 'function' ? window.open('', '_blank') : null; // antes de la llamada: si no, el navegador la bloquea
+    google.script.run.withSuccessHandler(a => {
+      const bytes = Uint8Array.from(atob(a.datos), c => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: a.mime }));
+      if (w) w.location = url; else window.location = url;
+    }).withFailureHandler(err => { if (w) w.close(); mostrarError(err); }).archivoRequisicion(folio, id);
+  }
+  const ligaArchivo = (folio, id, texto) => '<a href="#" onclick="verArchivoReq(\'' + esc(folio) + '\',\'' + esc(id) + '\');return false">' + esc(texto) + '</a>';
+
+  /** Detalle para operaciones: renglones (con los controles para aprobar), propuesta de compras, orden y recepción. */
+  function pintarOps(v) {
+    const rq = v.requisicion, pr = v.propuesta;
+    const cambio = !OPSV || OPSV.requisicion.folio !== rq.folio || OPSV.requisicion.estado !== rq.estado || OPSV.version !== v.version ||
+      (OPSV.propuesta || {}).huella !== (pr || {}).huella; // renglones corregidos o propuesta nueva: se vuelve a pintar todo
+    OPSV = v;
+    listoVista('opsVistaReq');
+    $('opsVistaLista').classList.add('oculto'); $('opsVistaReq').classList.remove('oculto');
+    $('opsTitulo').textContent = '1 · Requisición ' + rq.folio;
+    $('opsInfo').innerHTML = chipReq(rq.estado) + (rq.prioridad ? ' ' + chipPrio(rq.prioridad) : '') + ' · <b>' + esc(v.proyecto.folioVisible) + '</b> — ' +
+      esc(v.proyecto.nombre) + (v.proyecto.estado && v.proyecto.estado !== 'Activo' ? ' · ' + esc(v.proyecto.estado) : '') +
+      '<br>Pidió: ' + esc(rq.solicitante) + ' el ' + esc(fechaMx(rq.fecha)) + ' · Sitio: <b>' + esc(rq.sitio || 'sin sitio') + '</b>' +
+      (rq.fechaRequerida ? ' · Para el ' + esc(fechaMx(rq.fechaRequerida)) : '') + (rq.origenFolio ? ' · Separada de ' + esc(rq.origenFolio) : '') +
+      (rq.estado === 'Aprobada' && rq.motivo ? '<br><b>Regresada a compras:</b> ' + esc(rq.motivo) : '') +
+      (rq.cotizacionId ? '<br>' + ligaArchivo(rq.folio, rq.cotizacionId, 'Ver la cotización que adjuntó quien pidió') : '');
+    $('opsAviso').textContent = v.esPropia && ['Solicitada', 'Cotizada'].indexOf(rq.estado) !== -1 ? 'Es tu requisición: la aprueba otra persona de operaciones.'
+      : v.preparoPropuesta && rq.estado === 'Cotizada' ? 'Tú preparaste la propuesta: el visto bueno lo da otra persona de operaciones.' : '';
+    const ap = v.puedeAprobar;
+    $('opsRenglonesEnc').innerHTML = '<tr><th>#</th><th>Material</th><th class="num">Pidió</th><th>Notas</th>' +
+      (ap ? '<th>¿Se compra?</th><th class="num" style="width:110px">Cantidad</th><th>Comentario (obligatorio si no)</th>' : '<th>Decisión</th>') + '</tr>';
+    if (cambio || !ap) {
+      $('opsRenglones').innerHTML = v.renglones.map(x => '<tr><td>' + esc(x.renglon) + '</td><td>' + esc(x.descripcion) + '</td><td class="num">' +
+        esc(x.cantidad) + ' ' + esc(x.unidad) + '</td><td>' + esc(x.notas) + '</td>' + (ap
+        ? '<td><select id="opsAp' + x.renglon + '" style="width:auto"><option value="si">Sí</option><option value="no">No</option></select></td>' +
+          '<td><input id="opsCant' + x.renglon + '" type="number" min="0" step="any" value="' + esc(x.cantidad) + '" style="text-align:right"></td>' +
+          '<td><input id="opsCom' + x.renglon + '" maxlength="300"></td>'
+        : '<td>' + decisionHtml(x) + '</td>') + '</tr>').join('');
+    }
+    const rechazar = v.puedeRechazar && rq.estado !== 'Cotizada'; // en Cotizada el botón está junto a la propuesta
+    $('opsAprobar').classList.toggle('oculto', !(ap || v.puedeDevolver || rechazar));
+    $('opsAprobarCampos').classList.toggle('oculto', !ap);
+    $('btnOpsAprobar').classList.toggle('oculto', !ap);
+    $('btnOpsDevolver').classList.toggle('oculto', !v.puedeDevolver);
+    $('btnOpsRechazar').classList.toggle('oculto', !rechazar);
+    if (cambio) { $('opsPrioridad').value = rq.prioridad || 'Normal'; $('opsNota').value = ''; ID_VOBO = nuevoId(); }
+    $('opsEventos').innerHTML = historial(v.eventos);
+
+    $('opsModProp').classList.toggle('oculto', !pr || ['Cotizada', 'Autorizada', 'Pagada', 'Recibida', 'Cerrada'].indexOf(rq.estado) === -1);
+    if (pr) pintarPropuestaOps(v);
+    $('opsVisto').classList.toggle('oculto', !(v.puedeVisto || v.puedeRegresar));
+    $('btnOpsVisto').classList.toggle('oculto', !v.puedeVisto);
+
+    const o = v.orden;
+    $('opsModOrden').classList.toggle('oculto', !o);
+    if (o) {
+      const tile = (k, x, nota) => '<div class="tile"><span>' + esc(k) + '</span><b style="font-size:13px">' + x + '</b>' + (nota ? '<div class="nota">' + nota + '</div>' : '') + '</div>';
+      $('opsOrden').innerHTML = tile('Orden de compra', esc(o.folio) + ' <span class="chip ' + (CHIP_OC[o.estado] || '') + '">' + esc(o.estado) + '</span>') +
+        tile('Proveedor', esc(o.proveedor), dinero(o.total, o.moneda)) + tile('Entrega', esc(fechaMx(o.fechaEntrega)), esc(o.lugarEntrega)) +
+        tile('Recibe', esc(rq.recibe));
+      $('opsAvance').innerHTML = htmlAvance(v.avance, v.recepciones, false);
+    }
+  }
+  function pintarPropuestaOps(v) {
+    const pr = v.propuesta, dec = {};
+    v.renglones.forEach(x => { dec[x.renglon] = x; });
+    $('opsPropTitulo').textContent = '2 · Propuesta de compra (versión ' + pr.version + ')';
+    const tile = (k, x, nota) => '<div class="tile"><span>' + esc(k) + '</span><b style="font-size:13px">' + x + '</b>' + (nota ? '<div class="nota">' + nota + '</div>' : '') + '</div>';
+    $('opsPropInfo').innerHTML = tile('Proveedor', esc(pr.proveedor.razonSocial), esc([pr.proveedor.rfc, pr.proveedor.contacto].filter(Boolean).join(' · '))) +
+      tile('Total', dinero(pr.total, pr.moneda), 'IVA ' + Math.round(pr.ivaTasa * 100) + '%' + (pr.tipoCambio ? ' · TC ' + esc(pr.tipoCambio) : '')) +
+      tile('Entrega', esc(fechaMx(pr.fechaEntrega)), esc(pr.lugarEntrega)) +
+      tile('Pago', esc(pr.condicionesPago), Number(pr.diasCredito) ? esc(pr.diasCredito) + ' días de crédito' : 'contado') +
+      tile('Recibe', esc(pr.recibe), 'Preparó: ' + esc(pr.elaboroNombre) + ' · ' + esc(fechaMx(pr.fecha)));
+    $('opsPropRenglones').innerHTML = pr.renglones.map(r => {
+      const o = dec[r.renglon] || null, no = r.disponibilidad === 'No disponible';
+      const distinto = r.disponibilidad === 'Sustituto' || (o && Number(r.cantidad) !== Number(o.cantidadAprobada) && !no);
+      return '<tr' + (no ? ' style="color:var(--gris)"' : '') + '><td>' + (r.renglon ? esc(r.renglon) : '+') + '</td><td>' +
+        (o ? esc(o.descripcion) + ' <span class="nota">' + esc(o.cantidad) + ' ' + esc(o.unidad) + '</span>' : '<span class="nota">Agregado por compras</span>') +
+        '</td><td class="num">' + (o ? esc(o.cantidadAprobada) : '') + '</td><td>' + chipDisp(r.disponibilidad) + '</td><td>' +
+        (no ? '' : distinto ? '<b>' + esc(r.descripcion) + '</b>' : esc(r.descripcion)) + (r.nota ? '<div class="nota">' + esc(r.nota) + '</div>' : '') +
+        (r.recibir === false ? '<div class="nota">No se recibe en sitio</div>' : '') + '</td><td class="num">' +
+        (no ? '' : (distinto ? '<b>' : '') + esc(r.cantidad) + ' ' + esc(r.unidad) + (distinto ? '</b>' : '')) + '</td><td class="num">' +
+        (no ? '' : dinero(r.costo, pr.moneda)) + '</td><td class="num">' + (no ? '' : dinero(r.importe, pr.moneda)) + '</td></tr>';
+    }).join('');
+    $('opsPropTotales').innerHTML = '<div><span>Subtotal</span><span>' + dinero(pr.subtotal, pr.moneda) + '</span></div>' +
+      '<div><span>IVA (' + Math.round(pr.ivaTasa * 100) + '%)</span><span>' + dinero(pr.iva, pr.moneda) + '</span></div>' +
+      '<div class="total"><span>TOTAL ' + esc(pr.moneda) + '</span><span>' + dinero(pr.total, pr.moneda) + '</span></div>';
+    $('opsPropArchivos').innerHTML = (pr.archivos || []).length ? 'Cotizaciones del proveedor: ' +
+      pr.archivos.map(a => ligaArchivo(v.requisicion.folio, a.id, a.nombre || 'Cotización')).join(' · ') : 'Compras no adjuntó cotización.';
+  }
+
+  function aprobarOps() {
+    const v = OPSV;
+    if (!v || !v.puedeAprobar) return;
+    const renglones = v.renglones.map(x => ({ renglon: x.renglon, aprobado: $('opsAp' + x.renglon).value !== 'no',
+      cantidad: $('opsCant' + x.renglon).value, comentario: $('opsCom' + x.renglon).value }));
+    if (renglones.some(x => !x.aprobado && !String(x.comentario).trim())) {
+      mostrarError('Escribe por qué no se compra cada renglón que marcaste con "No" (lo verá quien lo pidió).'); return;
+    }
+    if (!renglones.some(x => x.aprobado)) { mostrarError('No aprobaste ningún renglón: si no se compra nada, usa "Rechazar todo".'); return; }
+    accionCob('btnOpsAprobar', 'aprobarRequisicion', [v.requisicion.folio, { version: v.version, prioridad: $('opsPrioridad').value,
+      nota: $('opsNota').value, renglones: renglones }],
+      x => { pintarOps(x); aviso('ok', 'Requisición <b>' + esc(x.requisicion.folio) + '</b> aprobada: pasa a compras.'); });
+  }
+  function revisarOps(funcion) {
+    const v = OPSV;
+    if (!v) return;
+    const folio = v.requisicion.folio, rechazo = funcion === 'rechazarRequisicion';
+    const motivo = window.prompt((rechazo ? 'Motivo para rechazar ' + folio + ' (es final)' : 'Qué debe aclarar quien pidió ' + folio) + '. Lo verá el solicitante:');
+    if (motivo == null) return;
+    if (!motivo.trim()) { mostrarError('Escribe el motivo.'); return; }
+    accionCob(null, funcion, [folio, motivo], x => { pintarOps(x); aviso('ok', 'Requisición <b>' + esc(folio) + '</b> ' + (rechazo ? 'rechazada.' : 'devuelta para aclarar.')); });
+  }
+  function vistoBuenoOps() {
+    const v = OPSV;
+    if (!v || !v.puedeVisto || $('btnOpsVisto').disabled) return;
+    const pr = v.propuesta;
+    if (!window.confirm('¿Visto bueno a la propuesta de ' + pr.proveedor.razonSocial + ' por ' + dinero(pr.total, pr.moneda).replace(/&amp;/g, '&') +
+      '? Se emite la orden de compra.')) return;
+    accionCob('btnOpsVisto', 'autorizarPropuesta', [v.requisicion.folio, pr.version, ID_VOBO, pr.huella], r => {
+      pintarOps(r.vista); aviso('ok', 'Visto bueno: se emitió la orden <b>' + esc(r.ocFolio) + '</b> de ' + esc(r.folio) + '.');
+    });
+  }
+  function regresarOps() {
+    const v = OPSV;
+    if (!v) return;
+    const motivo = window.prompt('Qué debe cambiar compras en la propuesta de ' + v.requisicion.folio + ':');
+    if (motivo == null) return;
+    if (!motivo.trim()) { mostrarError('Escribe qué debe cambiar.'); return; }
+    accionCob(null, 'regresarACompras', [v.requisicion.folio, motivo], x => { pintarOps(x); aviso('ok', 'Propuesta regresada a compras.'); });
+  }
+
   // ---- Compras (solo rol de compras): requisiciones → orden de compra → pago → cierre ----
   let COM_PROYECTOS = [], COM = null, REQC = null, PROVEEDORES = [], ID_OC = nuevoId(), ID_PGP = nuevoId(), ID_FPR = nuevoId();
-  let CXP = null, FC_XML = null, VOLVER_COM = 'lista', COND_A_MANO = false;
+  let CXP = null, FC_XML = null, VOLVER_COM = 'lista', COND_A_MANO = false, COM_LISTA = null, PROP_MODO = false;
   const CHIP_OC = { Emitida: 'aceptada', Pagada: 'firmado', Recibida: 'firmado', Cancelada: 'cancelado' };
   const CAMPOS_PROV = { prvRazon: 'razonSocial', prvRfc: 'rfc', prvContacto: 'contacto', prvCorreo: 'correo', prvTel: 'telefono' };
 
   function verListaCom() {
     REQC = null; VOLVER_COM = 'lista';
+    cerrarFormRecepcion('rcpCom');
     $('comVistaReq').classList.add('oculto'); $('comVistaCxp').classList.add('oculto'); $('comVistaLista').classList.remove('oculto');
     $('rcCotVisor').src = 'about:blank';
     if (BOOT && !CARGADO.comReqs) cargarRequisicionesCom(); // ya cargada: la sincronización la mantiene al día
@@ -1850,11 +2261,13 @@
   }
   $('rcBuscar').addEventListener('keydown', e => { if (e.key === 'Enter') cargarRequisicionesCom(); });
   function pintarListaReqCom(lista) {
-    $('rcLista').innerHTML = (lista || []).length ? lista.map(r => '<tr class="fila-cat" onclick="abrirReqCom(\'' + esc(r.folio) + '\')">' +
+    COM_LISTA = lista || [];
+    $('rcLista').innerHTML = COM_LISTA.length ? COM_LISTA.map(r => '<tr class="fila-cat" onclick="abrirReqCom(\'' + esc(r.folio) + '\')">' +
       '<td style="white-space:nowrap"><b>' + esc(r.folio) + '</b></td><td>' + esc(fechaMx(r.fecha)) + '</td><td>' + esc(r.proyectoVisible || r.proyectoFolio) +
-      '<div class="nota">' + esc(r.proyectoNombre) + '</div></td><td>' + esc(r.solicitante) + '</td><td class="num">' + esc(r.renglones) +
-      '</td><td>' + chipReq(r.estado) + '</td><td>' + esc(r.ocFolio) + '</td></tr>').join('')
+      '<div class="nota">' + esc(r.proyectoNombre) + (r.sitio ? ' · ' + esc(r.sitio) : '') + '</div></td><td>' + esc(r.solicitante) + '</td><td class="num">' + esc(r.renglones) +
+      '</td><td>' + chipReq(r.estado) + (r.prioridad ? ' ' + chipPrio(r.prioridad) : '') + '</td><td>' + esc(r.ocFolio) + '</td></tr>').join('')
       : '<tr><td colspan="7" class="nota">No hay requisiciones con ese filtro.</td></tr>';
+    pintarConteos();
   }
   function abrirReqCom(folio) {
     google.script.run.withSuccessHandler(pintarReqCom).withFailureHandler(mostrarError).getRequisicion(folio);
@@ -1863,6 +2276,7 @@
   /** Detalle de una requisición (vistaRequisicion_): renglones y cotización lado a lado; orden, pago y cierre según su estado. */
   function pintarReqCom(v) {
     const rq = v.requisicion;
+    if (FORMS_REC.rcpCom && FORMS_REC.rcpCom.folio !== rq.folio) cerrarFormRecepcion('rcpCom'); // era de otra requisición
     const cambio = !REQC || REQC.requisicion.folio !== rq.folio || REQC.requisicion.estado !== rq.estado;
     const cambioFacturas = cambio || REQC.totalFacturado !== v.totalFacturado || REQC.facturaCompleta !== v.facturaCompleta;
     REQC = v;
@@ -1870,22 +2284,37 @@
     $('comVistaLista').classList.add('oculto'); $('comVistaCxp').classList.add('oculto'); $('comVistaReq').classList.remove('oculto');
     $('btnVolverCom').textContent = VOLVER_COM === 'cxp' ? '← Cuentas por pagar' : '← Requisiciones';
     $('rcTitulo').textContent = '1 · Requisición ' + rq.folio;
-    $('rcInfo').innerHTML = chipReq(rq.estado) + ' · <b>' + esc(folioVis(v.proyecto)) + '</b> · ' + esc(v.proyecto.cliente) + ' · ' +
-      esc(v.proyecto.nombre) + (v.proyecto.estado && v.proyecto.estado !== 'Activo' ? ' · ' + esc(v.proyecto.estado) : '') +
+    $('rcInfo').innerHTML = chipReq(rq.estado) + (rq.prioridad ? ' ' + chipPrio(rq.prioridad) : '') + ' · <b>' + esc(folioVis(v.proyecto)) + '</b> · ' +
+      esc(v.proyecto.cliente) + ' · ' + esc(v.proyecto.nombre) + (v.proyecto.estado && v.proyecto.estado !== 'Activo' ? ' · ' + esc(v.proyecto.estado) : '') +
       (v.moneda ? ' · Moneda del proyecto: <b>' + esc(v.moneda) + '</b> · ' + (v.sinContrato ? 'sin contrato' : esc(MARCA_TXT[v.marca] || '')) : '') +
       '<br>Pidió: ' + esc(rq.solicitante) + ' (' + esc(rq.solicitanteEmail) + ') el ' + esc(fechaMx(rq.fecha)) +
-      (rq.estado === 'Solicitada' && !v.puedeAutorizar ? '<br><span class="aviso-moneda">El proyecto está cancelado: no se puede autorizar (recházala o devuélvela).</span>' : '');
+      (rq.sitio ? ' · Sitio: <b>' + esc(rq.sitio) + '</b>' : '') + (rq.fechaRequerida ? ' · Para el ' + esc(fechaMx(rq.fechaRequerida)) : '') +
+      (rq.origenFolio ? ' · Separada de ' + esc(rq.origenFolio) : '') +
+      (rq.aprobacion && rq.aprobacion.nota ? '<br><b>Nota de operaciones:</b> ' + esc(rq.aprobacion.nota) : '') +
+      (rq.estado === 'Aprobada' && rq.motivo ? '<br><span class="aviso-moneda">Operaciones regresó la propuesta: ' + esc(rq.motivo) + '</span>' : '') +
+      (rq.estado === 'Solicitada' && !v.puedeAutorizar && !v.flujoOperaciones ? '<br><span class="aviso-moneda">El proyecto está cancelado: no se puede autorizar (recházala o devuélvela).</span>' : '') +
+      (rq.estado === 'Solicitada' && v.flujoOperaciones ? '<br><span class="aviso-moneda">Espera la aprobación de operaciones.</span>' : '');
+    const conDecision = v.renglones.some(x => x.decision);
+    $('rcRenglonesEnc').innerHTML = '<tr><th>#</th><th>Descripción</th><th class="num">Cant.</th><th>Unidad</th><th>Notas</th>' +
+      (conDecision ? '<th>Operaciones</th>' : '') + '</tr>';
     $('rcRenglones').innerHTML = v.renglones.map(x => '<tr><td>' + esc(x.renglon) + '</td><td>' + esc(x.descripcion) + '</td><td class="num">' +
-      esc(x.cantidad) + '</td><td>' + esc(x.unidad) + '</td><td>' + esc(x.notas) + '</td></tr>').join('');
-    $('rcEventos').innerHTML = '<div class="sat-titulo">Historial</div><div class="nota">' + v.eventos.map(e => esc(fechaMx(e.fecha)) +
-      ' · <b>' + esc(e.estado) + '</b> · ' + esc(e.nombre) + (e.nota ? ': ' + esc(e.nota) : '')).join('<br>') + '</div>';
+      esc(x.cantidad) + '</td><td>' + esc(x.unidad) + '</td><td>' + esc(x.notas) + '</td>' + (conDecision ? '<td>' + decisionHtml(x) + '</td>' : '') + '</tr>').join('');
+    $('rcEventos').innerHTML = historial(v.eventos);
     $('rcRevision').classList.toggle('oculto', !v.puedeRevisar);
+    $('rcFlujo').classList.toggle('oculto', !(v.puedeDevolver || v.puedeSeparar));
+    $('btnRcAclarar').classList.toggle('oculto', !v.puedeDevolver);
+    $('btnRcSeparar').classList.toggle('oculto', !v.puedeSeparar);
     const visor = rq.cotizacionId ? 'https://drive.google.com/file/d/' + encodeURIComponent(rq.cotizacionId) + '/preview' : 'about:blank';
     if ($('rcCotVisor').src !== visor) $('rcCotVisor').src = visor;
+    $('rcCotVisor').classList.toggle('oculto', !rq.cotizacionId); // con operaciones la cotización es opcional
     $('rcCotLink').href = rq.cotizacionUrl || '#';
+    $('rcCotLink').textContent = rq.cotizacionId ? 'Abrir en Drive' : 'Sin cotización de quien pidió';
 
-    $('comModOc').classList.toggle('oculto', !v.puedeAutorizar);
-    if (v.puedeAutorizar && cambio) precargarOc(v);
+    // Orden directa (flujo de siempre) o propuesta para el visto bueno de operaciones (con operaciones)
+    const conForm = v.puedeAutorizar || v.puedeCotizar;
+    $('comModOc').classList.toggle('oculto', !conForm);
+    if (conForm && (cambio || PROP_MODO !== !!v.puedeCotizar)) precargarOc(v);
+    if (v.puedeCotizar) pintarEstadoPropuesta(v);
 
     const o = v.orden;
     $('comModPago').classList.toggle('oculto', !o);
@@ -1898,8 +2327,16 @@
         textoCredito(o) + '</div></div>' +
         '<div class="tile"><span>Entrega</span><b style="font-size:13px">' + esc(fechaMx(o.fechaEntrega)) + '</b><div class="nota">' + esc(o.lugarEntrega) + '</div>' +
         (o.estado === 'Recibida' ? '<div class="nota">Recibida el ' + esc(fechaMx(o.fechaRecepcion)) + ' · ' + esc(o.recibio) + '</div>' : '') + '</div>' +
-        (o.estado === 'Emitida' ? '<div class="tile"><span>¿Ya no va?</span>' + botonChico('Cancelar orden', "cancelarOcDesdeReq('" + esc(o.folio) + "')") + '</div>' : '');
+        (o.estado === 'Emitida' && !(v.recepciones || []).some(x => x.estado === 'Vigente') ? '<div class="tile"><span>¿Ya no va?</span>' +
+          botonChico('Cancelar orden', "cancelarOcDesdeReq('" + esc(o.folio) + "')") + '</div>' : '');
     }
+    // Recepción en sitio (con operaciones): avance, recepciones (cancelar una equivocada) y registrar en lugar de quien recibe
+    const conRecepcion = !!v.avance || (v.recepciones || []).length > 0;
+    $('rcRecepcion').classList.toggle('oculto', !conRecepcion);
+    $('rcAvance').innerHTML = conRecepcion ? htmlAvance(v.avance, v.recepciones, v.puedeCancelarRecepcion) +
+      (rq.recibeEmail ? '<div class="nota" style="margin-top:4px">Recibe: ' + esc(rq.recibeEmail) + '</div>' : '') +
+      (v.puedeRecibir && !FORMS_REC.rcpCom ? '<div class="acciones">' + botonChico('Registrar recepción en su lugar', 'abrirRecepcionCom()') + '</div>' : '') : '';
+    if (!v.puedeRecibir && FORMS_REC.rcpCom) cerrarFormRecepcion('rcpCom');
     $('rcFormPago').classList.toggle('oculto', !v.puedePagar);
     if (v.puedePagar && cambio) {
       $('ppFecha').value = v.hoy; $('ppFecha').max = v.hoy; $('ppFecha').min = o.fecha || '';
@@ -1958,21 +2395,43 @@
   $('prvRazon').addEventListener('change', autorrellenarProveedor);
   $('prvRazon').addEventListener('input', () => { if (PROVEEDORES.some(x => x.etiqueta === $('prvRazon').value)) autorrellenarProveedor(); });
 
-  // Renglones: vienen de la requisición; del catálogo se toman clave, descripción y unidad; el costo nunca es el precio de venta
+  // Renglones: vienen de la requisición; del catálogo se toman clave, descripción y unidad; el costo nunca es el precio de venta.
+  // En la propuesta (con operaciones) cada renglón aprobado dice si se compra exacto, un sustituto o no está disponible; los
+  // adicionales (renglon 0: flete, accesorios) se agregan aparte y pueden no recibirse en sitio.
   function agregarRenglonOc(r) {
     const d = r || {};
     const tr = document.createElement('tr');
+    const ren = PROP_MODO ? Number(d.renglon) || 0 : 0;
+    tr._renglon = ren;
     tr.innerHTML =
+      (PROP_MODO ? '<td style="min-width:150px">' + (ren
+        ? '<select class="disp"><option value="Exacto">Exacto</option><option value="Sustituto">Sustituto</option><option value="No disponible">No disponible</option></select>' +
+          '<div class="nota">#' + ren + (d.pedido ? ' · aprobado ' + esc(d.pedido.cantidad) + ' ' + esc(d.pedido.unidad) : '') + '</div>'
+        : '<span class="chip">Adicional</span><label class="nota" style="display:flex;gap:4px;align-items:center;margin-top:4px">' +
+          '<input type="checkbox" class="recibir" style="width:auto"> se recibe en sitio</label>') + '</td>' : '') +
       '<td><input class="clave" list="ocClaves"></td>' +
-      '<td><input class="desc" list="ocCatalogo" placeholder="Escribe o elige del catálogo"></td>' +
+      '<td><input class="desc" list="ocCatalogo" placeholder="Escribe o elige del catálogo">' +
+        (PROP_MODO ? '<input class="nota-r" maxlength="300" placeholder="Nota (la ve quien pidió: sin precios ni proveedor)" style="margin-top:4px">' : '') + '</td>' +
       '<td><input class="uni" value="PZA"></td>' +
       '<td><input class="cant" type="number" min="0" step="any" value="1" style="text-align:right"></td>' +
       '<td><input class="costo" type="number" min="0" step="0.01" placeholder="Costo" style="text-align:right"></td>' +
       '<td class="num imp">$0.00</td>' +
-      '<td><button class="quitar" title="Quitar">×</button></td>';
+      '<td>' + (ren ? '' : '<button class="quitar" title="Quitar">×</button>') + '</td>';
     if (d.descripcion) tr.querySelector('.desc').value = d.descripcion;
     if (d.unidad) tr.querySelector('.uni').value = d.unidad;
     if (d.cantidad != null) tr.querySelector('.cant').value = d.cantidad;
+    if (d.clave) tr.querySelector('.clave').value = d.clave;
+    if (d.costo != null && d.costo !== '' && d.disponibilidad !== 'No disponible') tr.querySelector('.costo').value = d.costo;
+    if (PROP_MODO) {
+      tr.querySelector('.nota-r').value = d.nota || '';
+      if (ren) {
+        tr.querySelector('.disp').value = d.disponibilidad || 'Exacto';
+        tr.querySelector('.disp').addEventListener('change', () => { pintarDisp(tr); recalcularOc(); });
+        pintarDisp(tr);
+      } else {
+        tr.querySelector('.recibir').checked = d.recibir !== false;
+      }
+    }
     const aplicar = p => {
       if (!p) return;
       tr.querySelector('.clave').value = p.clave; tr.querySelector('.desc').value = p.descripcion;
@@ -1982,19 +2441,34 @@
     tr.querySelector('.desc').addEventListener('change', e => { aplicar(CATALOGO.find(x => x.descripcion === e.target.value)); recalcularOc(); });
     tr.querySelector('.clave').addEventListener('change', e => { aplicar(buscarClave(e.target.value)); recalcularOc(); });
     tr.querySelectorAll('input').forEach(i => i.addEventListener('input', recalcularOc));
-    tr.querySelector('.quitar').onclick = () => { tr.remove(); recalcularOc(); };
+    if (!ren) tr.querySelector('.quitar').onclick = () => { tr.remove(); recalcularOc(); };
     $('ocFilas').appendChild(tr);
+  }
+  /** No disponible: sin descripción, cantidad ni costo (no va a la orden). */
+  function pintarDisp(tr) {
+    const no = tr.querySelector('.disp').value === 'No disponible';
+    ['.clave', '.desc', '.uni', '.cant', '.costo'].forEach(c => { tr.querySelector(c).disabled = no; });
+    if (no) tr.querySelector('.costo').value = '';
   }
 
   function leerRenglonesOc() {
-    return [...$('ocFilas').querySelectorAll('tr')].map(tr => ({
-      clave: tr.querySelector('.clave').value,
-      descripcion: tr.querySelector('.desc').value,
-      unidad: tr.querySelector('.uni').value,
-      cantidad: Number(tr.querySelector('.cant').value) || 0,
-      costo: tr.querySelector('.costo').value, // vacío = sin capturar (el servidor lo rechaza)
-      _tr: tr,
-    }));
+    return [...$('ocFilas').querySelectorAll('tr')].map(tr => {
+      const r = {
+        clave: tr.querySelector('.clave').value,
+        descripcion: tr.querySelector('.desc').value,
+        unidad: tr.querySelector('.uni').value,
+        cantidad: Number(tr.querySelector('.cant').value) || 0,
+        costo: tr.querySelector('.costo').value, // vacío = sin capturar (el servidor lo rechaza)
+        _tr: tr,
+      };
+      if (PROP_MODO) {
+        r.renglon = tr._renglon || 0;
+        r.disponibilidad = r.renglon ? tr.querySelector('.disp').value || 'Exacto' : 'Adicional';
+        r.recibir = r.renglon ? true : !!tr.querySelector('.recibir').checked;
+        r.nota = tr.querySelector('.nota-r').value;
+      }
+      return r;
+    });
   }
 
   /** Vista previa (el servidor recalcula). */
@@ -2002,7 +2476,7 @@
     const m = $('ocMoneda').value === 'USD' ? 'USD' : 'MXN', tasa = Number($('ocIva').value) || 0;
     let sub = 0;
     leerRenglonesOc().forEach(r => {
-      const imp = r2(r.cantidad * r2(Number(r.costo) || 0));
+      const imp = r.disponibilidad === 'No disponible' ? 0 : r2(r.cantidad * r2(Number(r.costo) || 0));
       r._tr.querySelector('.imp').textContent = dinero(imp, m);
       sub += imp;
     });
@@ -2020,25 +2494,74 @@
     recalcularOc();
   }
 
-  /** Formulario de la orden precargado con los renglones de la requisición (las notas van en la descripción). */
+  /**
+   * Formulario precargado. Flujo de siempre: la orden con los renglones de la requisición (las notas van en la descripción).
+   * Con operaciones: la propuesta sobre los renglones aprobados (o la propuesta anterior, si se corrige o se canceló la orden).
+   */
   function precargarOc(v) {
+    PROP_MODO = !!v.puedeCotizar;
+    const prev = PROP_MODO ? v.requisicion.propuesta : null;
     recibirProveedores(v.proveedores);
     Object.keys(CAMPOS_PROV).concat(['ocTc', 'ocEntrega', 'ocDias', 'ocCondiciones', 'ocNotas']).forEach(id => $(id).value = '');
     COND_A_MANO = false;
+    $('ocTitulo').textContent = PROP_MODO ? '2 · Propuesta de compra (para el visto bueno de operaciones)' : '2 · Orden de compra';
+    $('ocEnc').innerHTML = '<tr>' + (PROP_MODO ? '<th>Propuesta</th>' : '') + '<th style="width:100px">Clave</th><th>Descripción</th>' +
+      '<th style="width:80px">Unidad</th><th class="num" style="width:90px">Cant.</th><th class="num" style="width:130px">Costo unitario</th>' +
+      '<th class="num" style="width:130px">Importe</th><th style="width:30px"></th></tr>';
+    $('btnAgregarOc').textContent = PROP_MODO ? '+ Agregar adicional (p. ej. flete o accesorio)' : '+ Agregar renglón';
+    $('ocNotaRenglones').textContent = PROP_MODO
+      ? 'Un renglón por cada renglón aprobado: exacto, sustituto (escribe qué se compra) o no disponible. Captura el costo de la cotización: nunca es el precio de venta.'
+      : 'Los renglones vienen de la requisición (las notas van en la descripción). Captura el costo de la cotización: nunca es el precio de venta.';
+    $('propExtra').classList.toggle('oculto', !PROP_MODO);
+    $('ocNotaBoton').textContent = PROP_MODO ? 'Operaciones revisa la propuesta; con su visto bueno se emite la orden (PDF).'
+      : 'El PDF se guarda en la carpeta privada de compras; no se envía por correo.';
     $('ocFilas').innerHTML = '';
-    v.renglones.forEach(r => agregarRenglonOc({ descripcion: r.descripcion + (r.notas ? ' — ' + r.notas : ''), unidad: r.unidad, cantidad: r.cantidad }));
-    if (!v.renglones.length) agregarRenglonOc();
-    $('ocMoneda').value = v.moneda || 'MXN';
-    $('ocIva').value = [0.16, 0.08, 0].indexOf(IVA) !== -1 ? String(IVA) : '0.16';
-    $('ocLugar').value = v.proyecto.ubicacion || '';
+    if (PROP_MODO) {
+      const porRen = {};
+      ((prev && prev.renglones) || []).forEach(r => { if (r.renglon) porRen[r.renglon] = r; });
+      v.aprobados.forEach(a => agregarRenglonOc(Object.assign(porRen[a.renglon] ? Object.assign({}, porRen[a.renglon]) :
+        { renglon: a.renglon, disponibilidad: 'Exacto', descripcion: a.descripcion + (a.notas ? ' — ' + a.notas : ''), unidad: a.unidad,
+          cantidad: a.cantidad }, { pedido: a })));
+      ((prev && prev.renglones) || []).filter(r => !r.renglon).forEach(r => agregarRenglonOc(Object.assign({}, r)));
+      const receptores = v.receptores || [], recibe = (prev && prev.recibe) || v.requisicion.solicitanteEmail;
+      $('propRecibe').innerHTML = receptores.map(c => '<option value="' + esc(c) + '">' + esc(c) +
+        (c === v.requisicion.solicitanteEmail ? ' (pidió)' : '') + '</option>').join('');
+      $('propRecibe').value = receptores.indexOf(recibe) !== -1 ? recibe : v.requisicion.solicitanteEmail;
+      $('propArchivo').value = '';
+    } else {
+      v.renglones.forEach(r => agregarRenglonOc({ descripcion: r.descripcion + (r.notas ? ' — ' + r.notas : ''), unidad: r.unidad, cantidad: r.cantidad }));
+      if (!v.renglones.length) agregarRenglonOc();
+    }
+    $('ocMoneda').value = (prev && prev.moneda) || v.moneda || 'MXN';
+    $('ocIva').value = prev ? String(prev.ivaTasa) : [0.16, 0.08, 0].indexOf(IVA) !== -1 ? String(IVA) : '0.16';
+    $('ocLugar').value = (prev && prev.lugarEntrega) || v.proyecto.ubicacion || '';
     $('ocEntrega').min = v.hoy;
+    if (prev) {
+      Object.keys(CAMPOS_PROV).forEach(id => $(id).value = (prev.proveedor || {})[CAMPOS_PROV[id]] || '');
+      $('ocTc').value = prev.tipoCambio || ''; $('ocDias').value = prev.diasCredito;
+      $('ocCondiciones').value = prev.condicionesPago || ''; COND_A_MANO = !!prev.condicionesPago;
+      $('ocNotas').value = prev.notas || '';
+      $('ocEntrega').value = prev.fechaEntrega >= v.hoy ? prev.fechaEntrega : '';
+    }
     ID_OC = nuevoId();
-    $('btnOc').disabled = false; $('btnOc').textContent = 'Autorizar y emitir orden (PDF)';
+    $('btnOc').disabled = false; $('btnOc').textContent = textoBotonOc();
     pintarTcOc();
+  }
+  const textoBotonOc = () => !PROP_MODO ? 'Autorizar y emitir orden (PDF)' : REQC && REQC.requisicion.estado === 'Cotizada'
+    ? 'Corregir la propuesta (versión ' + ((REQC.requisicion.propuesta || {}).version + 1) + ')' : 'Mandar la propuesta a operaciones';
+  /** Estado de la propuesta (Cotizada: espera el visto bueno) y sus cotizaciones. */
+  function pintarEstadoPropuesta(v) {
+    const pr = v.requisicion.propuesta, cotizada = v.requisicion.estado === 'Cotizada';
+    $('propEstado').classList.toggle('oculto', !pr);
+    if (pr) $('propEstado').innerHTML = (cotizada ? 'Versión ' + esc(pr.version) + ' enviada el ' + esc(fechaMx(pr.fecha)) + ' por ' + esc(pr.elaboroNombre) +
+      ' · espera el visto bueno de operaciones (si la corriges, operaciones revisa la nueva).' : 'Propuesta anterior (versión ' + esc(pr.version) + '): corrígela y mándala otra vez.') +
+      ((pr.archivos || []).length ? '<br>Cotizaciones: ' + pr.archivos.map(a => '<a href="' + esc(a.url) + '" target="_blank">' + esc(a.nombre || 'Cotización') + '</a>').join(' · ') : '');
+    if (!$('btnOc').disabled) $('btnOc').textContent = textoBotonOc();
   }
 
   function guardarOc() {
     if (!REQC || $('btnOc').disabled) return;
+    if (PROP_MODO) { enviarPropuesta(); return; }
     const folio = REQC.requisicion.folio;
     const payload = {
       proveedor: { razonSocial: $('prvRazon').value, rfc: $('prvRfc').value, contacto: $('prvContacto').value,
@@ -2058,6 +2581,36 @@
       })
       .withFailureHandler(err => { listo(); mostrarError(err); })
       .autorizarRequisicion(folio, payload);
+  }
+
+  /** Con operaciones: la propuesta (disponibilidad por renglón, proveedor, costos, quién recibe y cotización opcional). */
+  function enviarPropuesta() {
+    const folio = REQC.requisicion.folio;
+    const archivo = $('propArchivo').files && $('propArchivo').files[0];
+    if (archivo && archivo.size > 10 * 1024 * 1024) { mostrarError('La cotización pesa más de 10 MB. Reduce la imagen o el PDF.'); return; }
+    const renglones = leerRenglonesOc().map(({_tr, ...r}) => r);
+    const sinSust = renglones.find(r => r.disponibilidad === 'Sustituto' && !String(r.descripcion).trim());
+    if (sinSust) { mostrarError('Escribe qué se comprará en lugar del renglón ' + sinSust.renglon + '.'); return; }
+    const payload = {
+      proveedor: { razonSocial: $('prvRazon').value, rfc: $('prvRfc').value, contacto: $('prvContacto').value,
+                   correo: $('prvCorreo').value, telefono: $('prvTel').value },
+      renglones: renglones, recibe: $('propRecibe').value,
+      moneda: $('ocMoneda').value, tipoCambio: $('ocTc').value, ivaTasa: $('ocIva').value,
+      fechaEntrega: $('ocEntrega').value, lugarEntrega: $('ocLugar').value, diasCredito: $('ocDias').value,
+      condicionesPago: $('ocCondiciones').value, notas: $('ocNotas').value, idSolicitud: ID_OC,
+    };
+    const texto = $('btnOc').textContent;
+    $('btnOc').disabled = true; $('btnOc').textContent = 'Mandando…';
+    const listo = () => { $('btnOc').disabled = false; $('btnOc').textContent = texto; };
+    const enviar = datos => google.script.run.withSuccessHandler(r => {
+      $('propArchivo').value = ''; ID_OC = nuevoId(); listo();
+      pintarReqCom(r.vista);
+      aviso('ok', 'Propuesta de <b>' + esc(r.folio) + '</b>' + (r.version > 1 ? ' (versión ' + esc(r.version) + ')' : '') +
+        ' enviada a operaciones para su visto bueno.');
+    }).withFailureHandler(err => { listo(); mostrarError(err); })
+      .cotizarRequisicion(folio, Object.assign(payload, { cotizacion: datos ? { nombre: archivo.name, datos: datos } : null }));
+    if (archivo) leerArchivo(archivo).then(enviar, err => { listo(); mostrarError(err); });
+    else enviar(null);
   }
 
   /** Pago en otra moneda que la orden: tipo de cambio obligatorio. */
@@ -2098,8 +2651,33 @@
     accionCob('btnCerrarCom', 'cerrarRequisicionCompras', [folio, $('rcMotivoCierre').value, $('rcNotasCierre').value],
       v => { pintarReqCom(v); aviso('ok', 'Requisición <b>' + esc(folio) + '</b> cerrada · orden recibida.'); });
   }
+  /** Compras separa renglones aprobados en otra requisición (p. ej. otro proveedor); conservan la aprobación de operaciones. */
+  function separarReqCom() {
+    if (!REQC) return;
+    const folio = REQC.requisicion.folio;
+    const nums = window.prompt('Números de los renglones que van a una requisición nueva (p. ej. 2, 3). Conservan la aprobación de operaciones:');
+    if (nums == null) return;
+    const lista = String(nums).split(/[^0-9]+/).filter(Boolean).map(Number);
+    if (!lista.length) { mostrarError('Escribe los números de renglón.'); return; }
+    const motivo = window.prompt('¿Por qué los separas? (p. ej. los vende otro proveedor)');
+    if (motivo == null) return;
+    accionCob(null, 'separarRequisicion', [folio, lista, motivo, { version: REQC.version, idSolicitud: nuevoId() }],
+      r => { pintarReqCom(r.vista); aviso('ok', 'Renglones separados en <b>' + esc(r.folio) + '</b>.'); });
+  }
+  function abrirRecepcionCom() {
+    if (!REQC || !REQC.puedeRecibir) return;
+    abrirFormRecepcion('rcpCom', REQC.requisicion.folio, REQC.avance, REQC.requisicion.sitio, 'rcRecibirForm', true, r => { if (r.vista) pintarReqCom(r.vista); });
+    pintarReqCom(REQC); // quita el botón mientras el formulario está abierto
+  }
+  function cancelarRecepcionCom(folioRec) {
+    const motivo = window.prompt('Motivo para cancelar la recepción ' + folioRec + ' (no se borra; hay que registrarla de nuevo):');
+    if (motivo == null) return;
+    if (!motivo.trim()) { mostrarError('Escribe el motivo de la cancelación.'); return; }
+    accionCob(null, 'cancelarRecepcion', [folioRec, motivo], v => { pintarReqCom(v); aviso('ok', 'Recepción <b>' + esc(folioRec) + '</b> cancelada.'); });
+  }
   function cancelarOcDesdeReq(folioOc) {
-    const motivo = window.prompt('Motivo para cancelar la orden ' + folioOc + ' (no se borra; la requisición vuelve a Solicitada para autorizarla de nuevo):');
+    const motivo = window.prompt('Motivo para cancelar la orden ' + folioOc + ' (no se borra; la requisición vuelve a ' +
+      (REQC && REQC.requisicion.aprobacion ? 'Aprobada para cotizarla de nuevo' : 'Solicitada para autorizarla de nuevo') + '):');
     if (motivo == null) return;
     if (!motivo.trim()) { mostrarError('Escribe el motivo de la cancelación.'); return; }
     const folio = REQC.requisicion.folio;
@@ -2286,6 +2864,7 @@
   }
   function verCxp() {
     REQC = null; VOLVER_COM = 'cxp';
+    cerrarFormRecepcion('rcpCom');
     $('comVistaLista').classList.add('oculto'); $('comVistaReq').classList.add('oculto'); $('comVistaCxp').classList.remove('oculto');
     $('rcCotVisor').src = 'about:blank';
     if (CXP) pintarCxp(); else cargarCxp();
@@ -2417,7 +2996,9 @@
     $('vistaCob').classList.toggle('oculto', t !== 'cob');
     $('vistaCom').classList.toggle('oculto', t !== 'com');
     $('vistaReq').classList.toggle('oculto', t !== 'req');
+    $('vistaOps').classList.toggle('oculto', t !== 'ops');
     $('tabReq').classList.toggle('activo', t === 'req');
+    $('tabOps').classList.toggle('activo', t === 'ops');
     $('tabCom').classList.toggle('activo', t === 'com');
     $('tabCob').classList.toggle('activo', t === 'cob');
     $('tabCat').classList.toggle('activo', t === 'cat');
@@ -2427,6 +3008,7 @@
     if (t === 'cat') cargarCatalogo();
     if (t === 'cob') verResumenCob();
     if (t === 'com') verListaCom();
+    if (t === 'ops' && !OPSV) verListaOps();
     if (t === 'req' && !$('reqFilas').querySelectorAll('tr').length) limpiarReq();
     // Lo que trajo el bootstrap ya está; si una lista no llegó, se pide. Lo demás lo pone al día la sincronización
     if (BOOT) {
