@@ -468,6 +468,8 @@ assert.deepEqual([a3.proyectoVisible,a3.proyectoNombre,a3.proveedor,a3.ocFolio,!
 assert.deepEqual(cx.faltantes.map(x=>x.folio+':'+x.pagada+':'+x.faltante+':'+x.proyectoVisible),[OC('0005')+':true:1000:'+p5+'-BON'],'pagada sin factura');
 assert.deepEqual([cx.repPendientes.n,...cx.repPendientes.folios],[1,FPR('0004')]);
 assert(Object.keys(cache).some(k=>k.indexOf('CXP_')!==-1),'en caché');
+assert.equal(cx.faltantes[0].reqFolio,r5,'con su requisición (para abrirla)');
+assert.deepEqual(ok('pedro','bootstrap').com.cxp.totales.map(t=>t.moneda),['MXN','USD'],'ya en caché: viene en la carga inicial');
 // Días de crédito renegociados (con motivo): cambia el vencimiento y la vista se actualiza (la escritura sube la versión)
 falla('pedro','cambiarDiasCreditoFactura',[FPR('0001'),'60',''],/por qué cambian los días de crédito/);
 falla('pedro','cambiarDiasCreditoFactura',[FPR('0001'),'200','Renegociado'],/de 0 a 180/);
@@ -497,7 +499,12 @@ assert.deepEqual([ff[29],ff[30],ff[32],fr.vista.totalFacturado],['Cancelada','pe
 falla('pedro','cancelarFacturaProveedor',[FPR('0002'),'otra vez'],/ya está cancelada/);
 falla('pedro','cambiarDiasCreditoFactura',[FPR('0002'),'10','motivo largo'],/está cancelada/);
 falla('pedro','cancelarFacturaProveedor',['FPR-2000-0001','motivo largo'],/No existe la factura/);
+// Con la orden facturada a medias (1,500 de 2,000 sin IVA) no se paga por el total de sus facturas: falta una entrega
+assert.equal(ok('pedro','getRequisicion',REQ('0002')).facturaCompleta,false);
+falla('pedro','registrarPagoProveedor',[{ocFolio:OC('0001'),fecha:HOY_ISO,monto:1740,monedaPago:'MXN',metodo:'Transferencia',referencia:'X',
+  comprobante:{nombre:'p.pdf',datos:PDF},idSolicitud:'pp1'}],/igual al total de la orden \(\$2,320\.00 MXN\)\. Sus facturas vigentes \(\$1,740\.00 MXN\) todavía no cubren la orden/);
 assert.equal(fact(OC('0001'),{uuid:U(2),folio:'2',fecha:diasAtras(100)+'T08:00:00',subtotal:'500.00',tras:'80.00',total:'580.00'}).folio,FPR('0006'));
+assert.equal(ok('pedro','getRequisicion',REQ('0002')).facturaCompleta,true,'completa otra vez');
 assert.equal(FP().length,7,'la cancelada sigue en la hoja');
 
 // --- Quien pide material no ve facturas ni montos; bitácora; nada fuera del libro y la carpeta de compras ---

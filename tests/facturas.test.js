@@ -124,6 +124,18 @@ const leer=o=>ctx.leerCfdi(cfdi(o));
     CTX({facturas:[Object.assign({},primera,{estado:'Cancelada'})]})).actualizarRfc,true,'la cancelada no fija el emisor');
 }
 
+// ---- facturacionDeOrden: solo una orden facturada completa se paga por el total de sus facturas ----
+{
+  const O={folio:'OC-2026-0001',subtotal:1000};
+  const fa=(t,sub,o)=>Object.assign({folio:'F'+t,ocFolio:'oc-2026-0001',estado:'Vigente',subtotal:sub,descuento:0,total:t},o||{});
+  assert.deepStrictEqual(plano(ctx.facturacionDeOrden([],O)),{facturas:0,total:0,neto:0,completa:false});
+  assert.deepStrictEqual(plano(ctx.facturacionDeOrden([fa(696,600)],O)),{facturas:1,total:696,neto:600,completa:false},'parcial');
+  assert.strictEqual(ctx.facturacionDeOrden([fa(696,600),fa(357.33,399,{retenidos:106.67})],O).completa,true,'tolerancia 1.00');
+  assert.strictEqual(ctx.facturacionDeOrden([fa(696,600),fa(357,398.99)],O).completa,false);
+  assert.strictEqual(ctx.facturacionDeOrden([fa(1160,1000,{estado:'Cancelada'})],O).completa,false,'las canceladas no cuentan');
+  assert.strictEqual(ctx.facturacionDeOrden([fa(1160,1000,{ocFolio:'OC-2026-0002'})],O).facturas,0,'otra orden');
+}
+
 // ---- Factura extranjera (sin CFDI) ----
 {
   const OCX={folio:'OC-2026-0003',estado:'Pagada',moneda:'USD',subtotal:250,rfc:'',proveedorId:'SIN-RFC:jlcpcb'};

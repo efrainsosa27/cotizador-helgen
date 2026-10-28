@@ -442,15 +442,60 @@
         </div>
         <div id="comInfo" class="nota" style="margin-top:6px">Elige un proyecto para ver sus órdenes de compra.</div>
         <table style="margin-top:14px">
-          <thead><tr><th>Folio</th><th>Fecha</th><th>Requisición</th><th>Proveedor</th><th class="num">Total</th><th>Entrega</th><th>Estado</th><th>PDF</th><th></th></tr></thead>
+          <thead><tr><th>Folio</th><th>Fecha</th><th>Requisición</th><th>Proveedor</th><th class="num">Total</th><th class="num">Facturado</th><th>Entrega</th><th>Estado</th><th>PDF</th><th></th></tr></thead>
           <tbody id="ocLista"></tbody>
         </table>
+      </div>
+      <div class="modulo">
+        <h2>3 · Cuentas por pagar</h2>
+        <div id="cxpResumen" class="nota">Cargando…</div>
+        <div class="acciones"><button type="button" class="btn btn-sec" onclick="verCxp()">Ver cuentas por pagar →</button></div>
+      </div>
+    </div>
+
+    <div id="comVistaCxp" class="oculto">
+      <div class="modulo">
+        <div class="acciones" style="margin:0 0 10px"><button type="button" class="btn btn-sec" onclick="verListaCom()">← Requisiciones</button></div>
+        <h2>1 · Cuentas por pagar</h2>
+        <div id="cxpTotales" class="nota">Cargando…</div>
+        <div class="acciones">
+          <input id="cxpBuscar" placeholder="Buscar por proveedor, factura, orden o proyecto…" oninput="pintarCxp()" style="flex:1; min-width:220px">
+          <select id="cxpMoneda" onchange="pintarCxp()" style="width:auto">
+            <option value="">Todas las monedas</option><option value="MXN">MXN</option><option value="USD">USD</option>
+          </select>
+          <label style="display:flex; align-items:center; gap:6px; margin:0; white-space:nowrap">
+            <input type="checkbox" id="cxpVencidas" onchange="pintarCxp()" style="width:auto"> Solo vencidas</label>
+          <button type="button" class="btn btn-sec" onclick="cargarCxp()">Actualizar</button>
+          <button type="button" class="btn btn-sec" onclick="descargarCsvCxp()">Descargar CSV</button>
+        </div>
+      </div>
+      <div class="modulo">
+        <h2>2 · Facturas por pagar</h2>
+        <div style="overflow-x:auto">
+          <table style="font-size:12px">
+            <thead><tr><th>Vence</th><th>Factura</th><th>Proveedor</th><th>Proyecto</th><th>Orden</th><th>Emisión</th><th class="num">Total</th></tr></thead>
+            <tbody id="cxpLista"></tbody>
+          </table>
+        </div>
+        <div class="nota" style="margin-top:8px">Facturas vigentes de órdenes que aún no se pagan, de la más antigua a la más nueva. Vence = emisión +
+          días de crédito de la orden. Los importes de monedas distintas nunca se suman. Haz clic en una factura para abrir su requisición.</div>
+      </div>
+      <div class="modulo">
+        <h2>3 · Órdenes sin factura completa</h2>
+        <div id="cxpRep" class="nota"></div>
+        <div style="overflow-x:auto">
+          <table style="font-size:12px">
+            <thead><tr><th>Orden</th><th>Proveedor</th><th>Proyecto</th><th>Estado</th><th class="num">Subtotal</th><th class="num">Facturado</th><th class="num">Falta</th></tr></thead>
+            <tbody id="cxpFaltantes"></tbody>
+          </table>
+        </div>
+        <div class="nota" style="margin-top:8px">Sin IVA. Las órdenes ya pagadas van primero: pide su factura al proveedor.</div>
       </div>
     </div>
 
     <div id="comVistaReq" class="oculto">
       <div class="modulo">
-        <div class="acciones" style="margin:0 0 10px"><button type="button" class="btn btn-sec" onclick="verListaCom()">← Requisiciones</button></div>
+        <div class="acciones" style="margin:0 0 10px"><button type="button" id="btnVolverCom" class="btn btn-sec" onclick="volverCom()">← Requisiciones</button></div>
         <h2 id="rcTitulo">1 · Requisición</h2>
         <div id="rcInfo" class="nota"></div>
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));margin-top:12px;align-items:start">
@@ -518,8 +563,10 @@
         <div class="grid" style="margin-top:14px">
           <div><label>Fecha de entrega *</label><input id="ocEntrega" type="date"></div>
           <div style="grid-column:span 2"><label>Lugar de entrega *</label><input id="ocLugar" maxlength="200"></div>
+          <div><label>Días de crédito * (0 = contado)</label><input id="ocDias" type="number" min="0" max="180" step="1" style="text-align:right"></div>
           <div><label>Condiciones de pago *</label><input id="ocCondiciones" maxlength="200" placeholder="Ej. Contado, crédito 30 días"></div>
         </div>
+        <div class="nota" style="margin-top:6px">Los días de crédito fijan cuándo vence cada factura de esta orden (fecha de la factura + días).</div>
         <div style="margin-top:12px"><label>Notas para el proveedor (opcional)</label><textarea id="ocNotas" rows="3" maxlength="1000"></textarea></div>
         <div class="acciones">
           <button type="button" id="btnOc" class="btn" onclick="guardarOc()">Autorizar y emitir orden (PDF)</button>
@@ -528,8 +575,40 @@
       </div>
 
       <div id="comModPago" class="modulo oculto">
-        <h2>3 · Orden, pago y cierre</h2>
+        <h2>3 · Orden, facturas, pago y cierre</h2>
         <div id="rcOrden" class="tiles"></div>
+        <div id="rcFacturasCaja" class="sat">
+          <div class="sat-titulo">Facturas del proveedor</div>
+          <div id="rcFacturasResumen" class="nota" style="margin-bottom:8px"></div>
+          <div style="overflow-x:auto">
+            <table style="font-size:12px">
+              <thead><tr><th>Factura</th><th>Emisor · número</th><th>Emisión</th><th>Vence</th><th class="num">Total</th><th>Método</th><th>Archivos</th><th>Estado</th><th></th></tr></thead>
+              <tbody id="rcFacturas"></tbody>
+            </table>
+          </div>
+          <div id="rcFormFactura" class="oculto" style="margin-top:12px">
+            <div class="grid">
+              <div><label>Tipo de factura *</label>
+                <select id="fcTipo" onchange="pintarTipoFactura()">
+                  <option value="CFDI">CFDI · XML del SAT</option>
+                  <option value="Extranjera">Extranjera · sin CFDI</option>
+                </select></div>
+              <div id="fcXmlCaja"><label>XML del CFDI *</label><input id="fcXml" type="file" accept=".xml,text/xml,application/xml"></div>
+              <div><label id="fcPdfLbl">PDF de la factura (opcional)</label><input id="fcPdf" type="file" accept="application/pdf,image/jpeg,image/png"></div>
+            </div>
+            <div id="fcExtCampos" class="grid oculto" style="margin-top:12px">
+              <div><label>Número de factura *</label><input id="fcNumero" maxlength="40" placeholder="Ej. INV-2026-0042"></div>
+              <div><label>Fecha de la factura *</label><input id="fcFecha" type="date" oninput="pintarPreviaFactura()"></div>
+              <div><label>Moneda *</label><select id="fcMoneda" onchange="pintarPreviaFactura()"><option value="MXN">MXN</option><option value="USD">USD</option></select></div>
+              <div><label>Subtotal *</label><input id="fcSubtotal" type="number" min="0" step="0.01" style="text-align:right" oninput="pintarPreviaFactura()"></div>
+              <div><label>Impuestos (0 si no trae)</label><input id="fcImpuestos" type="number" min="0" step="0.01" style="text-align:right" oninput="pintarPreviaFactura()"></div>
+            </div>
+            <div id="fcPrevia" class="nota" style="margin-top:8px"></div>
+            <div style="margin-top:10px"><label>Notas (opcional)</label><input id="fcNotas" maxlength="500"></div>
+            <div class="acciones"><button type="button" id="btnFactura" class="btn" onclick="registrarFacturaProv()">Registrar factura</button>
+              <span id="fcNotaBoton" class="nota"></span></div>
+          </div>
+        </div>
         <div id="rcFormPago" class="sat oculto">
           <div class="sat-titulo">Registrar el pago al proveedor (uno por orden)</div>
           <div class="grid">
@@ -546,7 +625,7 @@
               <input id="ppArchivo" type="file" accept="application/pdf,image/jpeg,image/png,image/heic,.heic"></div>
           </div>
           <div class="acciones"><button type="button" id="btnPagoProv" class="btn" onclick="registrarPagoProv()">Registrar pago</button>
-            <span class="nota">El monto debe ser el total de la orden (±1.00).</span></div>
+            <span id="ppNota" class="nota">El monto debe ser el total de la orden (±1.00).</span></div>
         </div>
         <table style="margin-top:12px">
           <thead><tr><th>Pago</th><th>Fecha</th><th class="num">Monto</th><th>Método</th><th>Estado</th><th>Comprobante</th><th></th></tr></thead>
@@ -793,6 +872,7 @@
     if (d.com) {
       if (d.com.proyectos) recibirProyectosCom(d.com.proyectos);
       if (d.com.requisiciones) { CARGADO.comReqs = true; pintarListaReqCom(d.com.requisiciones); }
+      if (d.com.cxp) { CXP = d.com.cxp; pintarCxp(); }
     }
     if (d.cob) {
       if (d.cob.proyectos) recibirProyectosCob(d.cob.proyectos);
@@ -818,7 +898,7 @@
   let SYNC_EN_CURSO = false, SYNC_OTRA = false, SYNC_INICIADA = false;
   function contextoSync() {
     return { cobResumen: !!RESUMEN, cobProyecto: COB ? COB.proyecto.folio : '', comProyecto: COM ? COM.proyecto.folio : '',
-      req: REQC ? REQC.requisicion.folio : '', rcBuscar: COM_FILTRO.buscar, rcEstado: COM_FILTRO.estado };
+      req: REQC ? REQC.requisicion.folio : '', rcBuscar: COM_FILTRO.buscar, rcEstado: COM_FILTRO.estado, cxp: !!CXP };
   }
   function sincronizarAhora() {
     if (!BOOT || !(window.sesionVigente && sesionVigente())) return; // sin sesión no se forman consultas en cola
@@ -862,6 +942,7 @@
     if (r.comprasProyecto && COM && COM.proyecto.folio === r.comprasProyecto.proyecto.folio) {
       sinInterrumpir('comModOrdenes', () => pintarCompras(r.comprasProyecto));
     }
+    if (r.cxp) { CXP = r.cxp; pintarCxp(); }
     if (r.cobProyectos) recibirProyectosCob(r.cobProyectos);
     if (r.cobranzaProyecto && COB && COB.proyecto.folio === r.cobranzaProyecto.proyecto.folio) {
       sinInterrumpir('cobVistaProyecto', () => pintarCobranza(r.cobranzaProyecto));
@@ -1739,16 +1820,26 @@
   }
 
   // ---- Compras (solo rol de compras): requisiciones → orden de compra → pago → cierre ----
-  let COM_PROYECTOS = [], COM = null, REQC = null, PROVEEDORES = [], ID_OC = nuevoId(), ID_PGP = nuevoId();
+  let COM_PROYECTOS = [], COM = null, REQC = null, PROVEEDORES = [], ID_OC = nuevoId(), ID_PGP = nuevoId(), ID_FPR = nuevoId();
+  let CXP = null, FC_XML = null, VOLVER_COM = 'lista', COND_A_MANO = false;
   const CHIP_OC = { Emitida: 'aceptada', Pagada: 'firmado', Recibida: 'firmado', Cancelada: 'cancelado' };
   const CAMPOS_PROV = { prvRazon: 'razonSocial', prvRfc: 'rfc', prvContacto: 'contacto', prvCorreo: 'correo', prvTel: 'telefono' };
 
   function verListaCom() {
-    REQC = null;
-    $('comVistaReq').classList.add('oculto'); $('comVistaLista').classList.remove('oculto');
+    REQC = null; VOLVER_COM = 'lista';
+    $('comVistaReq').classList.add('oculto'); $('comVistaCxp').classList.add('oculto'); $('comVistaLista').classList.remove('oculto');
     $('rcCotVisor').src = 'about:blank';
     if (BOOT && !CARGADO.comReqs) cargarRequisicionesCom(); // ya cargada: la sincronización la mantiene al día
+    if (BOOT && !CXP) cargarCxp();
   }
+  /** Días de crédito de la orden, solo si sus condiciones de pago no los dicen ya ("Crédito 30 días", "Contado"). */
+  function textoCredito(o) {
+    const d = Number(o.diasCredito) || 0, cond = String(o.condicionesPago || '').toLowerCase();
+    if (d ? new RegExp('\\b' + d + '\\b').test(cond) : /contado/.test(cond)) return '';
+    return ' · ' + (d ? d + ' días de crédito' : 'contado');
+  }
+  /** "← Regresar" del detalle: a la lista o a cuentas por pagar, según de dónde se abrió la requisición. */
+  function volverCom() { if (VOLVER_COM === 'cxp') verCxp(); else verListaCom(); }
   // Filtro con que se pidió la lista (la sincronización la vuelve a pedir igual, aunque haya texto sin buscar)
   const COM_FILTRO = { buscar: '', estado: '' };
   function cargarRequisicionesCom() {
@@ -1772,9 +1863,11 @@
   function pintarReqCom(v) {
     const rq = v.requisicion;
     const cambio = !REQC || REQC.requisicion.folio !== rq.folio || REQC.requisicion.estado !== rq.estado;
+    const cambioFacturas = cambio || REQC.totalFacturado !== v.totalFacturado || REQC.facturaCompleta !== v.facturaCompleta;
     REQC = v;
     listoVista('comVistaReq');
-    $('comVistaLista').classList.add('oculto'); $('comVistaReq').classList.remove('oculto');
+    $('comVistaLista').classList.add('oculto'); $('comVistaCxp').classList.add('oculto'); $('comVistaReq').classList.remove('oculto');
+    $('btnVolverCom').textContent = VOLVER_COM === 'cxp' ? '← Cuentas por pagar' : '← Requisiciones';
     $('rcTitulo').textContent = '1 · Requisición ' + rq.folio;
     $('rcInfo').innerHTML = chipReq(rq.estado) + ' · <b>' + esc(folioVis(v.proyecto)) + '</b> · ' + esc(v.proyecto.cliente) + ' · ' +
       esc(v.proyecto.nombre) + (v.proyecto.estado && v.proyecto.estado !== 'Activo' ? ' · ' + esc(v.proyecto.estado) : '') +
@@ -1800,7 +1893,8 @@
         '<div class="tile"><span>Orden de compra</span><b>' + esc(o.folio) + '</b> ' + '<span class="chip ' + (CHIP_OC[o.estado] || '') + '">' + esc(o.estado) + '</span>' +
         (o.pdfUrl ? '<div class="nota"><a href="' + esc(o.pdfUrl) + '" target="_blank">Abrir PDF</a></div>' : '') + '</div>' +
         '<div class="tile"><span>Total</span><b>' + dinero(o.total, o.moneda) + '</b></div>' +
-        '<div class="tile"><span>Proveedor</span><b style="font-size:13px">' + esc(o.proveedor) + '</b><div class="nota">' + esc(o.condicionesPago) + '</div></div>' +
+        '<div class="tile"><span>Proveedor</span><b style="font-size:13px">' + esc(o.proveedor) + '</b><div class="nota">' + esc(o.condicionesPago) +
+        textoCredito(o) + '</div></div>' +
         '<div class="tile"><span>Entrega</span><b style="font-size:13px">' + esc(fechaMx(o.fechaEntrega)) + '</b><div class="nota">' + esc(o.lugarEntrega) + '</div>' +
         (o.estado === 'Recibida' ? '<div class="nota">Recibida el ' + esc(fechaMx(o.fechaRecepcion)) + ' · ' + esc(o.recibio) + '</div>' : '') + '</div>' +
         (o.estado === 'Emitida' ? '<div class="tile"><span>¿Ya no va?</span>' + botonChico('Cancelar orden', "cancelarOcDesdeReq('" + esc(o.folio) + "')") + '</div>' : '');
@@ -1808,11 +1902,13 @@
     $('rcFormPago').classList.toggle('oculto', !v.puedePagar);
     if (v.puedePagar && cambio) {
       $('ppFecha').value = v.hoy; $('ppFecha').max = v.hoy; $('ppFecha').min = o.fecha || '';
-      $('ppMonto').value = o.total; $('ppMoneda').value = o.moneda; $('ppMetodo').value = 'Transferencia';
+      $('ppMoneda').value = o.moneda; $('ppMetodo').value = 'Transferencia';
       ['ppTc', 'ppRef', 'ppArchivo'].forEach(id => $(id).value = '');
       ID_PGP = nuevoId();
       pintarTcPago();
     }
+    // Monto por omisión: el total de sus facturas si ya cubren la orden (con retenciones es menor); si no, el de la orden
+    if (v.puedePagar && cambioFacturas) $('ppMonto').value = v.facturaCompleta ? v.totalFacturado : o.total;
     $('rcPagos').innerHTML = v.pagos.length ? v.pagos.map(p => '<tr' + (p.estado === 'Cancelado' ? ' class="fila-cancelada" title="' +
       esc('Cancelado por ' + p.canceladoPor + ': ' + p.motivoCancelacion) + '"' : '') + '><td><b>' + esc(p.folio) + '</b></td><td>' + esc(fechaMx(p.fecha)) +
       '</td><td class="num">' + dinero(p.monto, p.monedaPago) + (p.tipoCambio ? '<div class="nota">TC ' + esc(p.tipoCambio) + ' = ' + dinero(p.montoAplicado, p.monedaOc) + '</div>' : '') +
@@ -1820,8 +1916,12 @@
       (p.comprobanteUrl ? '<a href="' + esc(p.comprobanteUrl) + '" target="_blank">Ver</a>' : '') + '</td><td>' +
       (p.estado === 'Vigente' && v.puedeCancelarPago ? '<button type="button" class="quitar" title="Cancelar pago" onclick="cancelarPagoProv(\'' + esc(p.folio) + '\')">×</button>' : '') +
       '</td></tr>').join('') : '<tr><td colspan="7" class="nota">Sin pagos.</td></tr>';
+    if (o) $('ppNota').textContent = 'El monto debe ser el total de la orden (' + dinero(o.total, o.moneda) + ')' +
+      (v.facturaCompleta && Math.abs(v.totalFacturado - o.total) > 0.004 ? ' o el total de sus facturas (' + dinero(v.totalFacturado, o.moneda) + ')' : '') +
+      ', ±1.00.' + (v.totalFacturado > 0 && !v.facturaCompleta ? ' Sus facturas todavía no cubren la orden.' : '');
     $('rcCierre').classList.toggle('oculto', !v.puedeCerrar);
     if (v.puedeCerrar && cambio) { $('rcMotivoCierre').value = ''; $('rcNotasCierre').value = ''; }
+    pintarFacturas(v, cambio);
   }
 
   function revisarReqCom(funcion) {
@@ -1842,8 +1942,18 @@
   function autorrellenarProveedor() {
     const v = $('prvRazon').value.trim().toLowerCase();
     const p = v && PROVEEDORES.find(x => x.etiqueta.toLowerCase() === v);
-    if (p) Object.keys(CAMPOS_PROV).forEach(id => $(id).value = p[CAMPOS_PROV[id]] || '');
+    if (!p) return;
+    Object.keys(CAMPOS_PROV).forEach(id => $(id).value = p[CAMPOS_PROV[id]] || '');
+    if (p.diasCredito !== '' && p.diasCredito != null) { $('ocDias').value = p.diasCredito; condicionesDesdeDias(); }
   }
+  // Condiciones de pago a partir de los días de crédito, mientras no se escriban a mano
+  function condicionesDesdeDias() {
+    const s = String($('ocDias').value).trim();
+    if (COND_A_MANO || s === '' || !/^\d{1,3}$/.test(s)) return;
+    $('ocCondiciones').value = Number(s) === 0 ? 'Contado' : 'Crédito ' + Number(s) + ' días';
+  }
+  $('ocDias').addEventListener('input', condicionesDesdeDias);
+  $('ocCondiciones').addEventListener('input', () => { COND_A_MANO = $('ocCondiciones').value.trim() !== ''; });
   $('prvRazon').addEventListener('change', autorrellenarProveedor);
   $('prvRazon').addEventListener('input', () => { if (PROVEEDORES.some(x => x.etiqueta === $('prvRazon').value)) autorrellenarProveedor(); });
 
@@ -1912,7 +2022,8 @@
   /** Formulario de la orden precargado con los renglones de la requisición (las notas van en la descripción). */
   function precargarOc(v) {
     recibirProveedores(v.proveedores);
-    Object.keys(CAMPOS_PROV).concat(['ocTc', 'ocEntrega', 'ocCondiciones', 'ocNotas']).forEach(id => $(id).value = '');
+    Object.keys(CAMPOS_PROV).concat(['ocTc', 'ocEntrega', 'ocDias', 'ocCondiciones', 'ocNotas']).forEach(id => $(id).value = '');
+    COND_A_MANO = false;
     $('ocFilas').innerHTML = '';
     v.renglones.forEach(r => agregarRenglonOc({ descripcion: r.descripcion + (r.notas ? ' — ' + r.notas : ''), unidad: r.unidad, cantidad: r.cantidad }));
     if (!v.renglones.length) agregarRenglonOc();
@@ -1933,8 +2044,8 @@
                    correo: $('prvCorreo').value, telefono: $('prvTel').value },
       renglones: leerRenglonesOc().map(({_tr, ...r}) => r),
       moneda: $('ocMoneda').value, tipoCambio: $('ocTc').value, ivaTasa: $('ocIva').value,
-      fechaEntrega: $('ocEntrega').value, lugarEntrega: $('ocLugar').value, condicionesPago: $('ocCondiciones').value,
-      notas: $('ocNotas').value, idSolicitud: ID_OC,
+      fechaEntrega: $('ocEntrega').value, lugarEntrega: $('ocLugar').value, diasCredito: $('ocDias').value,
+      condicionesPago: $('ocCondiciones').value, notas: $('ocNotas').value, idSolicitud: ID_OC,
     };
     $('btnOc').disabled = true; $('btnOc').textContent = 'Generando PDF…';
     const listo = () => { $('btnOc').disabled = false; $('btnOc').textContent = 'Autorizar y emitir orden (PDF)'; };
@@ -1994,6 +2105,249 @@
     accionCob(null, 'cancelarOrdenCompra', [folioOc, motivo], () => { abrirReqCom(folio); aviso('ok', 'Orden <b>' + esc(folioOc) + '</b> cancelada.'); });
   }
 
+  // ---- Facturas del proveedor (por orden): CFDI con su XML o factura extranjera con su PDF ----
+  /** Días de la fecha a a la b ("AAAA-MM-DD"); positivo si b es posterior. */
+  const diasDesde = (a, b) => {
+    const t = s => { const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : NaN; };
+    return Math.round((t(b) - t(a)) / 864e5);
+  };
+  const sumarDiasIso = (iso, n) => {
+    const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3] + (Number(n) || 0))).toISOString().slice(0, 10) : '';
+  };
+  const textoDias = d => d > 0 ? 'Vencida hace ' + d + (d === 1 ? ' día' : ' días') : d === 0 ? 'Vence hoy' : 'Vence en ' + (-d) + (d === -1 ? ' día' : ' días');
+
+  function pintarFacturas(v, cambio) {
+    const o = v.orden, lista = v.facturas || [];
+    $('rcFacturasCaja').classList.toggle('oculto', !o);
+    if (!o) return;
+    const pagada = (v.pagos || []).some(p => p.estado === 'Vigente');
+    const vigentes = lista.filter(f => f.estado === 'Vigente');
+    $('rcFacturasResumen').innerHTML = vigentes.length
+      ? 'Facturado: <b>' + dinero(v.totalFacturado, o.moneda) + '</b> · orden ' + dinero(o.total, o.moneda) + ' · ' + vigentes.length +
+        (vigentes.length === 1 ? ' factura vigente' : ' facturas vigentes')
+      : 'Sin facturas todavía' + (pagada ? ' · <span class="aviso-moneda">la orden ya está pagada: pide la factura al proveedor</span>' : '') + '.';
+    $('rcFacturas').innerHTML = lista.length ? lista.map(f => {
+      const d = diasDesde(f.fechaVencimiento, v.hoy);
+      const situacion = f.estado !== 'Vigente' ? '' : pagada ? '<div class="nota">Pagada</div>'
+        : '<div class="nota' + (d > 0 ? ' aviso-moneda' : '') + '">' + textoDias(d) + '</div>';
+      return '<tr' + (f.estado === 'Cancelada' ? ' class="fila-cancelada" title="' + esc('Cancelada por ' + f.canceladoPor + ': ' + f.motivoCancelacion) + '"' : '') + '>' +
+        '<td style="white-space:nowrap"><b>' + esc(f.folio) + '</b><div class="nota">' + (f.tipo === 'CFDI' ? 'CFDI' : 'Extranjera') + '</div></td>' +
+        '<td>' + esc(f.nombreEmisor) + (f.rfcEmisor ? ' <span class="nota">' + esc(f.rfcEmisor) + '</span>' : '') +
+        '<div class="nota">' + esc(f.serieFolio || 'sin número') + (f.uuid ? ' · UUID ' + esc(f.uuid.slice(0, 8)) + '…' : '') + '</div></td>' +
+        '<td>' + esc(fechaMx(f.fechaEmision)) + '</td>' +
+        '<td style="white-space:nowrap">' + esc(fechaMx(f.fechaVencimiento)) + '<div class="nota">' +
+        (Number(f.diasCredito) ? esc(f.diasCredito) + ' días de crédito' : 'contado') + '</div>' + situacion + '</td>' +
+        '<td class="num">' + dinero(f.total, f.moneda) + (f.retenidos ? '<div class="nota">Retenciones ' + dinero(f.retenidos, f.moneda) + '</div>' : '') + '</td>' +
+        '<td>' + esc(f.metodoPago || '—') + '</td>' +
+        '<td style="white-space:nowrap">' + [f.xmlUrl ? '<a href="' + esc(f.xmlUrl) + '" target="_blank">XML</a>' : '',
+          f.pdfUrl ? '<a href="' + esc(f.pdfUrl) + '" target="_blank">PDF</a>' : ''].filter(Boolean).join(' · ') + '</td>' +
+        '<td>' + esc(f.estado) + '</td><td style="white-space:nowrap">' + (f.estado === 'Vigente'
+          ? botonChico('Días', "cambiarDiasFactura('" + esc(f.folio) + "'," + (Number(f.diasCredito) || 0) + ")") +
+            ' <button type="button" class="quitar" title="Cancelar factura" onclick="cancelarFacturaProv(\'' + esc(f.folio) + '\')">×</button>' : '') +
+        '</td></tr>';
+    }).join('') : '<tr><td colspan="9" class="nota">Sin facturas.</td></tr>';
+    $('rcFormFactura').classList.toggle('oculto', !v.puedeFacturar);
+    if (v.puedeFacturar && cambio) limpiarFormFactura(v);
+  }
+
+  /** Formulario vacío; el tipo por omisión es el de la última factura vigente de la orden (o CFDI). */
+  function limpiarFormFactura(v) {
+    const ultima = (v.facturas || []).filter(f => f.estado === 'Vigente').pop();
+    $('fcTipo').value = ultima && ultima.tipo === 'Extranjera' ? 'Extranjera' : 'CFDI';
+    ['fcXml', 'fcPdf', 'fcNumero', 'fcFecha', 'fcSubtotal', 'fcImpuestos', 'fcNotas'].forEach(id => $(id).value = '');
+    $('fcFecha').max = v.hoy; $('fcMoneda').value = v.orden.moneda;
+    FC_XML = null; ID_FPR = nuevoId();
+    $('btnFactura').disabled = false; $('btnFactura').textContent = 'Registrar factura';
+    pintarTipoFactura();
+  }
+  function pintarTipoFactura() {
+    const ext = $('fcTipo').value === 'Extranjera';
+    $('fcXmlCaja').classList.toggle('oculto', ext);
+    $('fcExtCampos').classList.toggle('oculto', !ext);
+    $('fcPdfLbl').textContent = ext ? 'PDF de la factura *' : 'PDF de la factura (opcional)';
+    $('fcNotaBoton').textContent = (ext ? 'Proveedor sin RFC mexicano: captura los datos tal como vienen en su factura.'
+      : 'El servidor lee emisor, importes y folio fiscal del XML.') + ' Se guarda en la carpeta privada de compras.';
+    pintarPreviaFactura();
+  }
+
+  /** Vista previa del CFDI (solo para revisar antes de enviar; quien valida es el servidor con leerCfdi). */
+  function previaCfdi(texto) {
+    const limpio = String(texto || '').replace(/<!--[\s\S]*?-->/g, '');
+    const ent = v => v.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    const attrs = tag => {
+      const m = limpio.match(new RegExp('<(?:[\\w.-]+:)?' + tag + '\\b([^>]*)>'));
+      if (!m) return null;
+      const r = {};
+      m[1].replace(/([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g, (_, k, a, b) => { r[k] = ent(a != null ? a : b); return ''; });
+      return r;
+    };
+    const c = attrs('Comprobante'), e = attrs('Emisor') || {}, t = attrs('TimbreFiscalDigital') || {};
+    if (!c) return null;
+    return { version: c.Version || '', tipo: String(c.TipoDeComprobante || '').toUpperCase(), fecha: String(c.Fecha || '').slice(0, 10),
+      serieFolio: [c.Serie, c.Folio].filter(Boolean).join('-'), moneda: String(c.Moneda || '').toUpperCase(),
+      subtotal: Number(c.SubTotal) || 0, total: Number(c.Total) || 0, metodo: String(c.MetodoPago || '').toUpperCase(),
+      emisor: e.Nombre || '', rfc: e.Rfc || '', uuid: t.UUID || '' };
+  }
+  function pintarPreviaFactura() {
+    const o = REQC && REQC.orden;
+    if (!o) return;
+    const partes = [], avisos = [];
+    let fecha = '';
+    if ($('fcTipo').value === 'Extranjera') {
+      const sub = Number($('fcSubtotal').value) || 0, imp = Number($('fcImpuestos').value) || 0;
+      fecha = $('fcFecha').value;
+      if (sub > 0) partes.push('Total ' + dinero(sub + imp, $('fcMoneda').value));
+      if ($('fcMoneda').value !== o.moneda) avisos.push('La orden es en ' + o.moneda + ': la factura debe ser en la misma moneda.');
+    } else {
+      if (!FC_XML) { $('fcPrevia').innerHTML = ''; return; }
+      const c = FC_XML.previa;
+      if (!c) { $('fcPrevia').innerHTML = '<span class="aviso-moneda">No parece un CFDI: revisa que sea el XML (no el PDF).</span>'; return; }
+      fecha = c.fecha;
+      partes.push('<b>' + esc(c.emisor || 'Sin emisor') + '</b>' + (c.rfc ? ' (' + esc(c.rfc) + ')' : ''), esc(c.serieFolio || 'sin serie ni folio'),
+        esc(fechaMx(c.fecha)), 'Subtotal ' + dinero(c.subtotal, c.moneda), 'Total ' + dinero(c.total, c.moneda), esc(c.metodo));
+      if (c.version !== '4.0') avisos.push('No es CFDI 4.0 (versión ' + (c.version || '?') + ').');
+      if (c.tipo !== 'I') avisos.push('No es una factura de ingreso (tipo ' + (c.tipo || '?') + ').');
+      if (c.moneda !== o.moneda) avisos.push('La factura es en ' + (c.moneda || '?') + ' y la orden en ' + o.moneda + '.');
+      if (!c.uuid) avisos.push('No trae folio fiscal (UUID): no está timbrada.');
+      if (c.metodo === 'PPD') partes.push('PPD: cuando la pagues, pide al proveedor el complemento de pago (REP)');
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(fecha)) partes.push('Vencería el ' + esc(fechaMx(sumarDiasIso(fecha, o.diasCredito))));
+    $('fcPrevia').innerHTML = partes.filter(Boolean).join(' · ') + (avisos.length ? '<br><span class="aviso-moneda">' + avisos.map(esc).join(' ') + '</span>' : '');
+  }
+  $('fcXml').addEventListener('change', () => {
+    const f = $('fcXml').files && $('fcXml').files[0];
+    FC_XML = null; pintarPreviaFactura();
+    if (!f) return;
+    if (f.size > 2 * 1024 * 1024) { mostrarError('El XML pesa más de 2 MB: no parece un CFDI.'); return; }
+    leerArchivo(f).then(datos => {
+      let texto = '';
+      try { texto = new TextDecoder('utf-8').decode(Uint8Array.from(atob(datos), ch => ch.charCodeAt(0))); } catch (e) { texto = ''; }
+      FC_XML = { nombre: f.name, datos: datos, previa: previaCfdi(texto) };
+      pintarPreviaFactura();
+    }, mostrarError);
+  });
+
+  /** La respuesta trae la vista desde donde se registró: la requisición o las órdenes del proyecto. */
+  function aplicarVistaFactura(r) { if (r.desde === 'proyecto') pintarCompras(r.vista); else pintarReqCom(r.vista); }
+
+  function registrarFacturaProv() {
+    if (!REQC || !REQC.orden || $('btnFactura').disabled) return;
+    const ext = $('fcTipo').value === 'Extranjera', pdf = $('fcPdf').files && $('fcPdf').files[0];
+    if (!ext && !FC_XML) { mostrarError('Adjunta el XML del CFDI (el PDF es opcional).'); return; }
+    if (ext && !pdf) { mostrarError('Adjunta el PDF de la factura del proveedor extranjero.'); return; }
+    if (pdf && pdf.size > 10 * 1024 * 1024) { mostrarError('El PDF de la factura pesa más de 10 MB.'); return; }
+    const ocFolio = REQC.orden.folio, xml = FC_XML;
+    $('btnFactura').disabled = true; $('btnFactura').textContent = 'Registrando…';
+    const listo = () => { $('btnFactura').disabled = false; $('btnFactura').textContent = 'Registrar factura'; };
+    (pdf ? leerArchivo(pdf) : Promise.resolve('')).then(pdfDatos => {
+      google.script.run.withSuccessHandler(r => {
+        listo(); aplicarVistaFactura(r);
+        if (REQC && REQC.orden) limpiarFormFactura(REQC);
+        aviso('ok', 'Factura <b>' + esc(r.folio) + '</b> registrada en la orden ' + esc(r.ocFolio) + ' · vence el ' + esc(fechaMx(r.fechaVencimiento)) + '.');
+      }).withFailureHandler(err => { listo(); mostrarError(err); }).registrarFacturaProveedor({
+        ocFolio: ocFolio, tipo: ext ? 'Extranjera' : 'CFDI', xml: ext ? null : { nombre: xml.nombre, datos: xml.datos },
+        pdf: pdfDatos ? { nombre: pdf.name, datos: pdfDatos } : null,
+        numero: ext ? $('fcNumero').value : '', fecha: ext ? $('fcFecha').value : '', moneda: ext ? $('fcMoneda').value : '',
+        subtotal: ext ? $('fcSubtotal').value : '', impuestos: ext ? $('fcImpuestos').value : '',
+        notas: $('fcNotas').value, desde: 'requisicion', idSolicitud: ID_FPR,
+      });
+    }, err => { listo(); mostrarError(err); });
+  }
+  function cancelarFacturaProv(folio) {
+    const motivo = window.prompt('Motivo para cancelar la factura ' + folio + ' (no se borra; deja de contar como por pagar):');
+    if (motivo == null) return;
+    if (!motivo.trim()) { mostrarError('Escribe el motivo de la cancelación.'); return; }
+    accionCob(null, 'cancelarFacturaProveedor', [folio, motivo, 'requisicion'], r => { aplicarVistaFactura(r); aviso('ok', 'Factura <b>' + esc(folio) + '</b> cancelada.'); });
+  }
+  function cambiarDiasFactura(folio, actual) {
+    const dias = window.prompt('Días de crédito de la factura ' + folio + ' (ahora: ' + actual + '; 0 = contado):', String(actual));
+    if (dias == null) return;
+    if (!/^\d{1,3}$/.test(String(dias).trim())) { mostrarError('Los días de crédito deben ser un número entero de 0 a 180.'); return; }
+    const motivo = window.prompt('¿Por qué cambian los días de crédito de ' + folio + '? (queda en la bitácora)');
+    if (motivo == null) return;
+    if (!motivo.trim()) { mostrarError('Escribe por qué cambian los días de crédito.'); return; }
+    accionCob(null, 'cambiarDiasCreditoFactura', [folio, String(dias).trim(), motivo, 'requisicion'], r => {
+      aplicarVistaFactura(r); aviso('ok', 'Factura <b>' + esc(folio) + '</b>: ahora vence el ' + esc(fechaMx(r.fechaVencimiento)) + '.');
+    });
+  }
+
+  // ---- Cuentas por pagar (solo lectura; lo calcula el servidor con antiguedadCxp) ----
+  function cargarCxp() {
+    google.script.run.withSuccessHandler(r => { CXP = r; pintarCxp(); })
+      .withFailureHandler(err => {
+        const t = 'No se pudieron cargar las cuentas por pagar: ' + (err && err.message ? err.message : err);
+        $('cxpResumen').textContent = t; $('cxpTotales').textContent = t;
+      }).cuentasPorPagar();
+  }
+  function verCxp() {
+    REQC = null; VOLVER_COM = 'cxp';
+    $('comVistaLista').classList.add('oculto'); $('comVistaReq').classList.add('oculto'); $('comVistaCxp').classList.remove('oculto');
+    $('rcCotVisor').src = 'about:blank';
+    if (CXP) pintarCxp(); else cargarCxp();
+  }
+  /** Facturas por pagar que pasan los filtros (búsqueda, moneda, solo vencidas). */
+  function filtrarCxp() {
+    const q = $('cxpBuscar').value.trim().toLowerCase(), m = $('cxpMoneda').value, vencidas = $('cxpVencidas').checked;
+    return ((CXP && CXP.abiertas) || []).filter(a => (!q || [a.folio, a.serieFolio, a.proveedor, a.ocFolio, a.reqFolio, a.proyectoVisible, a.proyectoNombre]
+      .join(' ').toLowerCase().includes(q)) && (!m || a.moneda === m) && (!vencidas || a.dias > 0));
+  }
+  function pintarCxp() {
+    if (!CXP) return;
+    const tile = (k, x, clase) => '<div class="tile"><span>' + esc(k) + '</span><b' + (clase ? ' class="' + clase + '"' : '') + '>' + x + '</b></div>';
+    const plural = (n, uno, varios) => n + ' ' + (n === 1 ? uno : varios);
+    const extra = [CXP.faltantes.length ? plural(CXP.faltantes.length, 'orden sin factura completa', 'órdenes sin factura completa') : '',
+      CXP.repPendientes.n ? plural(CXP.repPendientes.n, 'complemento de pago (REP) pendiente', 'complementos de pago (REP) pendientes') : ''].filter(Boolean).join(' · ');
+    // Resumen corto en la lista de Compras: total y vencido por moneda (nunca se suman monedas)
+    $('cxpResumen').innerHTML = (CXP.totales.length ? '<div class="tiles">' + CXP.totales.map(t => tile('Por pagar ' + t.moneda, dinero(t.total, t.moneda)) +
+      tile('Vencido ' + t.moneda, dinero(t.vencido, t.moneda), t.vencido > 0 ? 'negativo' : '')).join('') + '</div>' : 'No hay facturas por pagar.') +
+      (extra ? '<div class="nota">' + esc(extra) + '</div>' : '');
+    $('cxpTotales').innerHTML = CXP.totales.length ? CXP.totales.map(t =>
+      '<div class="sat-titulo" style="margin-top:4px">' + esc(t.moneda) + ' · ' + plural(t.facturas, 'factura por pagar', 'facturas por pagar') +
+      '</div><div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">' +
+      tile('Total por pagar', dinero(t.total, t.moneda)) + CXP.rangos.map(r => tile(r.etiqueta, dinero(t[r.clave], t.moneda),
+        r.clave !== 'porVencer' && t[r.clave] > 0 ? 'negativo' : '')).join('') + '</div>').join('')
+      : '<span class="nota">No hay facturas por pagar.</span>';
+    const lista = filtrarCxp();
+    $('cxpLista').innerHTML = lista.length ? lista.map(a => '<tr class="fila-cat"' + (a.reqFolio ? ' data-req="' + esc(a.reqFolio) + '"' : '') + '>' +
+      '<td style="white-space:nowrap"><b>' + esc(fechaMx(a.fechaVencimiento)) + '</b><div class="nota' + (a.dias > 0 ? ' aviso-moneda' : '') + '">' + textoDias(a.dias) + '</div></td>' +
+      '<td style="white-space:nowrap"><b>' + esc(a.folio) + '</b><div class="nota">' + esc(a.serieFolio || (a.tipo === 'CFDI' ? 'CFDI' : 'Extranjera')) + '</div></td>' +
+      '<td>' + esc(a.proveedor) + '</td><td style="white-space:nowrap">' + esc(a.proyectoVisible) + '<div class="nota">' + esc(a.proyectoNombre) + '</div></td>' +
+      '<td style="white-space:nowrap">' + esc(a.ocFolio) + (a.reqFolio ? '<div class="nota">' + esc(a.reqFolio) + '</div>' : '') + '</td>' +
+      '<td>' + esc(fechaMx(a.fechaEmision)) + '</td><td class="num"><b>' + dinero(a.total, a.moneda) + '</b></td></tr>').join('')
+      : '<tr><td colspan="7" class="nota">' + (CXP.abiertas.length ? 'Ninguna factura coincide con los filtros.' : 'No hay facturas por pagar.') + '</td></tr>';
+    $('cxpRep').innerHTML = CXP.repPendientes.n ? '<span class="aviso-moneda">Facturas PPD de órdenes ya pagadas sin complemento de pago (REP): ' +
+      CXP.repPendientes.folios.map(esc).join(', ') + '. Pídeselo al proveedor.</span>' : '';
+    $('cxpFaltantes').innerHTML = CXP.faltantes.length ? CXP.faltantes.map(x => '<tr class="fila-cat"' + (x.reqFolio ? ' data-req="' + esc(x.reqFolio) + '"' : '') + '>' +
+      '<td style="white-space:nowrap"><b>' + esc(x.folio) + '</b><div class="nota">' + esc(fechaMx(x.fecha)) + '</div></td><td>' + esc(x.proveedor) + '</td>' +
+      '<td style="white-space:nowrap">' + esc(x.proyectoVisible) + '<div class="nota">' + esc(x.proyectoNombre) + '</div></td>' +
+      '<td>' + esc(x.estado) + (x.pagada ? '<div class="nota aviso-moneda">Pagada sin factura</div>' : '') + '</td>' +
+      '<td class="num">' + dinero(x.subtotal, x.moneda) + '</td><td class="num">' + dinero(x.facturado, x.moneda) + '</td>' +
+      '<td class="num"><b>' + dinero(x.faltante, x.moneda) + '</b></td></tr>').join('')
+      : '<tr><td colspan="7" class="nota">Todas las órdenes vigentes tienen su factura.</td></tr>';
+    ['cxpLista', 'cxpFaltantes'].forEach(id => $(id).querySelectorAll('tr[data-req]').forEach(tr => tr.onclick = () => abrirReqCom(tr.dataset.req)));
+  }
+
+  /** CSV de las facturas filtradas (UTF-8 con BOM para Excel; texto que empiece con = + - @ va con apóstrofo). */
+  function csvCxp(lista) {
+    const texto = s => { const v = String(s ?? ''); return '"' + (/^[=+\-@]/.test(v) ? "'" + v : v).replace(/"/g, '""') + '"'; };
+    const etiqueta = {}; ((CXP && CXP.rangos) || []).forEach(r => { etiqueta[r.clave] = r.etiqueta; });
+    const enc = ['Vencimiento', 'Días vencida', 'Antigüedad', 'Factura', 'Tipo', 'Número', 'Proveedor', 'Proyecto', 'Nombre del proyecto',
+      'Orden de compra', 'Requisición', 'Emisión', 'Moneda', 'Total'];
+    const filas = lista.map(a => [texto(a.fechaVencimiento), String(Math.max(0, a.dias)), texto(etiqueta[a.rango] || a.rango), texto(a.folio), texto(a.tipo),
+      texto(a.serieFolio), texto(a.proveedor), texto(a.proyectoVisible), texto(a.proyectoNombre), texto(a.ocFolio), texto(a.reqFolio),
+      texto(a.fechaEmision), texto(a.moneda), r2(a.total).toFixed(2)].join(','));
+    return '﻿' + [enc.map(texto).join(',')].concat(filas).join('\r\n');
+  }
+  function descargarCsvCxp() {
+    if (!CXP) { mostrarError('Espera a que carguen las cuentas por pagar.'); return; }
+    const url = URL.createObjectURL(new Blob([csvCxp(filtrarCxp())], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'cuentas-por-pagar-' + (CXP.hoy || 'hoy') + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   // Órdenes por proyecto (consulta)
   // Proyectos Activos y Cerrados, con o sin contrato (sin contrato, las órdenes van en MXN)
   function recibirProyectosCom(lista) {
@@ -2029,12 +2383,18 @@
       esc('Cancelada por ' + o.canceladoPor + ': ' + o.motivoCancelacion) + '"' : '') + '><td style="white-space:nowrap"><b>' + esc(o.folio) + '</b></td><td>' + esc(fechaMx(o.fecha)) +
       '</td><td>' + (o.reqFolio ? '<a href="#" onclick="abrirReqCom(\'' + esc(o.reqFolio) + '\');return false">' + esc(o.reqFolio) + '</a>' : '') +
       '</td><td>' + esc(o.proveedor) + '</td><td class="num">' + dinero(o.total, o.moneda) +
-      (o.tipoCambio ? '<div class="nota">TC ' + esc(o.tipoCambio) + '</div>' : '') + '</td><td>' + esc(fechaMx(o.fechaEntrega)) +
+      (o.tipoCambio ? '<div class="nota">TC ' + esc(o.tipoCambio) + '</div>' : '') + '</td><td class="num">' + facturadoDeOrden(o) + '</td><td>' + esc(fechaMx(o.fechaEntrega)) +
       '<div class="nota">' + esc(o.lugarEntrega) + '</div></td><td><span class="chip ' + (CHIP_OC[o.estado] || '') + '"' +
       (o.estado === 'Recibida' ? ' title="' + esc('Recibida el ' + fechaMx(o.fechaRecepcion) + ' · ' + o.recibio) + '"' : '') + '>' + esc(o.estado) + '</span></td><td>' +
       (o.pdfUrl ? '<a href="' + esc(o.pdfUrl) + '" target="_blank">Ver</a>' : '') + '</td><td style="white-space:nowrap">' +
       (o.estado === 'Emitida' ? '<button type="button" class="quitar" title="Cancelar orden" onclick="cancelarOc(\'' + esc(o.folio) + '\')">×</button>' : '') +
-      '</td></tr>').join('') : '<tr><td colspan="9" class="nota">Este proyecto no tiene órdenes de compra.</td></tr>';
+      '</td></tr>').join('') : '<tr><td colspan="10" class="nota">Este proyecto no tiene órdenes de compra.</td></tr>';
+  }
+  /** Facturado de una orden (con IVA, sus facturas vigentes); se registran desde su requisición. */
+  function facturadoDeOrden(o) {
+    const n = (o.facturas || []).filter(f => f.estado === 'Vigente').length;
+    if (n) return dinero(o.totalFacturado, o.moneda) + '<div class="nota">' + n + (n === 1 ? ' factura' : ' facturas') + '</div>';
+    return o.estado === 'Cancelada' ? '' : '<span class="nota">Sin factura</span>';
   }
 
   function cancelarOc(folio) {

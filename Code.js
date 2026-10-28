@@ -400,7 +400,8 @@ function intentar_(errores, que, f) {
 
 /**
  * Carga inicial en una sola llamada: roles y, según el rol, catálogo, clientes y proyectos (cotizar), proyectos y "mis
- * requisiciones" (requisiciones), proyectos y requisiciones (compras), proyectos y resumen si ya está en caché (cobranza).
+ * requisiciones" (requisiciones), proyectos, requisiciones y cuentas por pagar (compras), proyectos y resumen (cobranza);
+ * las listas pesadas solo si ya están en caché.
  * Con SOLO_REQUISICION: solo lo de requisiciones y el catálogo sin precios.
  */
 function bootstrap() {
@@ -425,7 +426,8 @@ function bootstrap() {
   }
   if (permisos.compras) {
     d.com = { proyectos: intentar_(errores, 'Proyectos de compras', () => listarProyectosCompras('')),
-      requisiciones: intentar_(errores, 'Requisiciones', () => listarRequisiciones('', '', true)) };
+      requisiciones: intentar_(errores, 'Requisiciones', () => listarRequisiciones('', '', true)),
+      cxp: intentar_(errores, 'Cuentas por pagar', () => cuentasPorPagar(true)) };
   }
   if (permisos.cobranza) {
     d.cob = { proyectos: intentar_(errores, 'Proyectos de cobranza', () => listarProyectosCobranza('')),
@@ -2695,6 +2697,7 @@ function vistaRequisicion_(libro, folioReq) {
     // Facturas de la orden (4.5): se registran desde que la orden existe hasta que se cancela
     facturas: orden ? facturasDeOrden_(todas, orden.folio) : [],
     totalFacturado: orden ? totalFacturadoDeOrden(todas, orden.folio) : 0,
+    facturaCompleta: !!orden && facturacionDeOrden(todas, orden).completa,
     puedeFacturar: !!orden && orden.estado !== OC_CANCELADA,
     proveedores: proveedoresDelLibro_(libro).map(p => { const x = Object.assign({}, p); delete x.fila; return x; }),
     ivaTasas: IVA_OC, metodos: METODOS_PAGO, hoy: hoyIso_(),
@@ -2793,8 +2796,9 @@ function registrarPagoProveedor(p) {
     }
     if (orden.estado !== OC_EMITIDA) throw new Error('La orden ' + orden.folio + ' está ' + orden.estado.toLowerCase() + ': no se puede pagar.');
     if (pagosDeOrden_(libro, orden.folio).some(x => x.estado === 'Vigente')) throw new Error('La orden ' + orden.folio + ' ya tiene un pago.');
+    const fac = facturacionDeOrden(facturasDelLibro_(libro), orden);
     const pago = normalizarPagoProveedor(d0, { moneda: orden.moneda, total: orden.total, fechaOrden: orden.fecha, hoy: hoyIso_(),
-      totalFacturado: totalFacturadoDeOrden(facturasDelLibro_(libro), orden.folio) });
+      totalFacturado: fac.completa ? fac.total : 0, facturadoParcial: fac.completa ? 0 : fac.total });
 
     const hP = hojaCompras_(libro, 'PagosProveedores');
     const folio = siguienteFolio_(PREFIJO_PGP, hP, 'CONSECUTIVO_PGP_');
@@ -3077,8 +3081,9 @@ function cuentasPorPagar(soloCache) {
     }
     const facturas = facturasDelLibro_(libro);
     const r = antiguedadCxp({ hoy: hoy, facturas: facturas, ordenes: ordenes, pagos: pagos });
-    const proyectos = mapaProyectos_(), porFolio = {};
+    const proyectos = mapaProyectos_(), porFolio = {}, reqDeOrden = {};
     facturas.forEach(f => { porFolio[f.folio] = f; });
+    ordenes.forEach(o => { reqDeOrden[o.folio.toUpperCase()] = o.reqFolio || ''; });
     const proyecto = folio => {
       const p = proyectos[String(folio || '').toUpperCase()];
       return { proyectoVisible: p ? p.folioVisible : folio, proyectoNombre: p ? p.nombre : '' };
@@ -3087,7 +3092,7 @@ function cuentasPorPagar(soloCache) {
       const f = porFolio[a.folio] || {};
       Object.assign(a, proyecto(a.proyectoFolio), { reqFolio: f.reqFolio || '', xmlUrl: f.xmlUrl || '', pdfUrl: f.pdfUrl || '' });
     });
-    r.faltantes.forEach(x => Object.assign(x, proyecto(x.proyectoFolio)));
+    r.faltantes.forEach(x => Object.assign(x, proyecto(x.proyectoFolio), { reqFolio: reqDeOrden[x.folio.toUpperCase()] || '' }));
     return r;
   };
   const colecciones = ['facturasProveedor', 'oc', 'pagosProveedores', 'proyectos'];
@@ -3887,10 +3892,11 @@ function normalizarRequisicion(p) {
 }
 
 /**
- * Valida un pago a proveedor. orden = {moneda, total, totalFacturado?, fechaOrden, hoy}. Fecha no futura ni anterior a la
- * orden; método y referencia como en cobranza; si la moneda del pago es otra, tipo de cambio obligatorio (pesos por dólar).
- * El monto en la moneda de la orden debe ser su total o, si tiene facturas vigentes, el total de ellas (un proveedor que
- * retiene impuestos factura menos que el total de la orden; decisión 7), con tolerancia de TOLERANCIA_PAGO (1.00).
+ * Valida un pago a proveedor. orden = {moneda, total, totalFacturado?, facturadoParcial?, fechaOrden, hoy}. Fecha no futura
+ * ni anterior a la orden; método y referencia como en cobranza; si la moneda del pago es otra, tipo de cambio obligatorio
+ * (pesos por dólar). El monto en la moneda de la orden debe ser su total o, si sus facturas ya la cubren (totalFacturado;
+ * ver facturacionDeOrden), el total de ellas: un proveedor que retiene impuestos factura menos que el total de la orden
+ * (decisión 7). Tolerancia TOLERANCIA_PAGO (1.00). facturadoParcial solo sirve para explicar el rechazo.
  */
 function normalizarPagoProveedor(p, orden) {
   const d = p || {};
@@ -3907,7 +3913,8 @@ function normalizarPagoProveedor(p, orden) {
   if (!cuadra(orden.total) && !(facturado > 0 && cuadra(facturado))) {
     throw new Error('El pago (' + formatoMoneda(pago.montoAplicado) + ' ' + orden.moneda + ') debe ser igual al total de la orden (' +
       formatoMoneda(orden.total) + ' ' + orden.moneda + ')' + (facturado > 0 ? ' o al total de sus facturas (' +
-      formatoMoneda(facturado) + ' ' + orden.moneda + ')' : '') + '.');
+      formatoMoneda(facturado) + ' ' + orden.moneda + ')' : '') + '.' + (Number(orden.facturadoParcial) > 0 ? ' Sus facturas vigentes (' +
+      formatoMoneda(orden.facturadoParcial) + ' ' + orden.moneda + ') todavía no cubren la orden.' : ''));
   }
   return { fecha: pago.fecha, monto: pago.monto, monedaPago: pago.monedaPago, tipoCambio: pago.tipoCambio,
     montoAplicado: pago.montoAplicado, metodo: pago.metodo, referencia: pago.referencia };
@@ -4089,6 +4096,19 @@ function textoUtf8(bytes) {
 function nombreArchivoFactura(folio, proveedor, serieFolio, ext) {
   const limpio = s => String(s || '').replace(/[\/\\:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
   return [folio, limpio(proveedor).slice(0, 60), limpio(serieFolio).slice(0, 40)].filter(Boolean).join(' — ') + '.' + ext;
+}
+
+/**
+ * Facturación de una orden: cuántas facturas vigentes, su total (con IVA y retenciones), su neto (sin IVA) y si ya la cubren
+ * (neto ≥ subtotal − TOLERANCIA_FACTURA). Solo una orden facturada completa se puede pagar por el total de sus facturas: con
+ * una entrega aún sin facturar, ese total es menor que lo que se debe (y cada orden tiene un solo pago).
+ */
+function facturacionDeOrden(facturas, orden) {
+  const f = String((orden && orden.folio) || '').toUpperCase();
+  const vig = (facturas || []).filter(x => x.estado === FPR_VIGENTE && String(x.ocFolio).toUpperCase() === f);
+  const total = vig.reduce((s, x) => s + aCentavos(x.total), 0), neto = vig.reduce((s, x) => s + aCentavos(netoFactura(x)), 0);
+  return { facturas: vig.length, total: total / 100, neto: neto / 100,
+    completa: vig.length > 0 && neto >= aCentavos(orden && orden.subtotal) - aCentavos(TOLERANCIA_FACTURA) };
 }
 
 /** Suma (en la moneda de la orden) de los totales de las facturas Vigentes de una orden. */
