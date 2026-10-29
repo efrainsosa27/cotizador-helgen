@@ -31,6 +31,7 @@ const rutas = [
   { re: /^https:\/\/drogheda\.test\/api\/integracion\/cotizador\/evento$/, fn: (url, op) => {
     if (CM.modo === 'caido') throw new Error('Tiempo de espera agotado: https://drogheda.test');
     if (CM.modo === '500') return { codigo: 500, cuerpo: 'Internal Server Error' };
+    if (CM.modo === 'rechaza') return { codigo: 400, cuerpo: { ok: false, error: 'dato inválido' } };
     assert.equal(op.method, 'post');
     const cuerpo = String(op.payload || '');
     assert(/^[\x20-\x7e]*$/.test(cuerpo), 'el cuerpo va en ASCII (lo demás escapado)');
@@ -557,6 +558,62 @@ const evCan = Object.keys(CM.eventos).find(k => k.indexOf(r11.oc + ':oc.cancelad
 assert(evCan, 'oc.cancelada de una orden anulada llega al centro de mando: ' + Object.keys(CM.eventos).filter(k => k.indexOf(r11.oc) === 0));
 assert.equal(filaPend(evCan)[5], 'Enviado');
 assert(!/\d+\.\d\d|1856|1600/.test(JSON.stringify(CM.eventos[evCan])), 'sin montos');
+
+// ================= Revisión independiente (28/10/2026) =================
+const recep = (r, n1, n2, completa) => ({ oc_folio: r.oc, req_folio: r.req, sitio: 'ZLO', completa: !!completa, recibio: 'jesush', cuando: cuando,
+  renglones: [{ n: 1, pedido: 80, recibido: n1 }, { n: 2, pedido: 12, recibido: n2 }] });
+como(null);
+// Recepciones solo de proyectos ligados
+const rS = hastaOrden(P2, { sitio: 'Querétaro' });
+CM.recepciones = [recep(rS, 80, 12, true)];
+tr = plain(P.traerRecepcionesPortal());
+assert.deepEqual(tr.ignoradas, [rS.oc + ' (proyecto no ligado)']);
+assert.notEqual(mia('obrero', rS.req).estado, 'Cerrada', 'no se cierra desde el centro de mando');
+// Antes de cancelar se traen las recepciones: lo que ya llegó al sitio frena la cancelación (si no, se compraría dos veces)
+const rC = hastaOrden(P1);
+ok('obrero', 'marcarEnCamino', rC.req, { paqueteria: 'DHL', guia: '9', fechaEstimada: MANANA, idSolicitud: id('e') });
+CM.recepciones = [recep(rC, 50, 0, false)];
+falla('pedro', 'cancelarOrdenCompra', [rC.oc, 'El proveedor ya no surte el cable', true], /ya tiene material recibido/);
+// Material que llega a una orden ya cancelada: alerta para compras, nunca en silencio
+const rX = hastaOrden(P1);
+CM.recepciones = [];
+ok('pedro', 'cancelarOrdenCompra', rX.oc, 'Duplicada por error de captura');
+CM.recepciones = [recep(rX, 80, 12, true)];
+como(null);
+tr = plain(P.traerRecepcionesPortal());
+assert(tr.alertas && tr.alertas.length === 1 && /cancelada/.test(tr.alertas[0]), JSON.stringify(tr));
+assert(/Atención|registró material de/.test(ok('pedro', 'estadoCentroMando').alerta));
+CM.recepciones = [];
+// Un aviso que el centro de mando rechaza por su contenido (4xx) se aparta tras 4 intentos y no detiene la cancelación
+assert.equal(P.rechazoDefinitivo(400, 4), true);
+assert.equal(P.rechazoDefinitivo(400, 3), false);
+assert.equal(P.rechazoDefinitivo(401, 9), false, 'firma: se arregla con la configuración');
+assert.equal(P.rechazoDefinitivo(500, 9), false);
+const rR = hastaOrden(P1);
+CM.modo = 'rechaza';
+ok('obrero', 'marcarEnCamino', rR.req, { paqueteria: 'DHL', guia: '10', fechaEstimada: MANANA, idSolicitud: id('e') });
+for (let i = 0; i < 3; i++) { como(null); P.cadaQuinceMinutos(); }
+assert.equal(filaPend(rR.oc + ':oc.en_camino:1')[5], 'Rechazado');
+assert.equal(ok('pedro', 'estadoCentroMando').rechazados >= 1, true);
+CM.modo = 'ok';
+const cR = ok('pedro', 'cancelarOrdenCompra', rR.oc, 'El proveedor canceló el pedido', true);
+assert(!cR.confirmar && CM.eventos[rR.oc + ':oc.cancelada:1'], 'la cancelación ya no espera al rechazado');
+// Una orden que ya iba en curso cuando se ligó el proyecto: primero su oc.autorizada
+delete props.PORTAL_SECRETO;
+const rB = hastaOrden(P1);
+props.PORTAL_SECRETO = SECRETO;
+ok('obrero', 'marcarEnCamino', rB.req, { paqueteria: 'DHL', guia: '11', fechaEstimada: MANANA, idSolicitud: id('e') });
+assert.deepEqual(CM.orden.slice(-2), [rB.oc + ':oc.autorizada:1', rB.oc + ':oc.en_camino:1'], 'nunca un envío antes de la autorización');
+// Recepción en el sitio: correo "Recibido en el sitio" (no "en tu lugar") a quien pidió y quien recibe
+correr('AVISOS = [];');
+CM.recepciones = [recep(rB, 80, 12, true)];
+como(null); P.traerRecepcionesPortal();
+const avR = plain(correr('MEMO_.correos || []')).filter(x => x.tipo === 'req.recibida');
+assert.equal(avR.length, 1);
+assert.deepEqual(plain(correr('destinatariosAviso("req.recibida", ' + JSON.stringify(avR[0].datos) + ', {solicitanteEmail: "obrero@helgen.tech", recibeEmail: "rosa@helgen.tech", centroMando: true}, {compras: ["pedro@helgen.tech"]})')).map(g => g.quien),
+  ['compras', 'sitio']);
+assert(/Recibido en el sitio/.test(P.contenidoAviso('req.recibida', 'sitio', { folio: rB.req, centroMando: true }).titulo));
+CM.recepciones = [];
 
 // ================= Interfaz (módulo mod-centro con la página, DOM y fetch simulados) =================
 (async () => {

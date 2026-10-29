@@ -173,6 +173,14 @@ const r5 = nueva('obrero', 'r5', { sitio: '', cotizacion: { nombre: 'c.pdf', dat
 assert.deepEqual(tipos('pedro'), ['autorizar:' + r5]);
 assert.deepEqual(tipos('tania'), [], 'sin el flujo con aprobaciones no hay nada que aprobar');
 assert.deepEqual(pend('obrero').items.map(i => i.tipo + ':' + i.folio + ':' + i.accion), ['recibir:' + r1 + ':Confirmar que llegó']);
+// Revisión 28/10/2026: en el flujo de siempre, En camino sin pagar no se ofrece para confirmar (el servidor pide la orden pagada)
+ok('pedro', 'autorizarRequisicion', r5, { proveedor: { razonSocial: 'Eléctrica del Centro' }, fechaEntrega: masDias(2), condicionesPago: 'Contado',
+  diasCredito: 0, ivaTasa: 0.16, renglones: [{ descripcion: 'Brida', unidad: 'PZA', cantidad: 1, costo: 100 }], idSolicitud: 'oc-r5' });
+ok('pedro', 'marcarEnCamino', r5, { paqueteria: 'DHL', guia: '123', fechaEstimada: masDias(1), idSolicitud: 'enc-r5' });
+assert(!pend('obrero').items.some(i => i.folio === r5), 'en camino sin pagar: todavía no es de quien recibe');
+ok('pedro', 'registrarPagoProveedor', { reqFolio: r5, fecha: HOY_ISO, monto: 116, monedaPago: 'MXN', metodo: 'Transferencia', referencia: 'SPEI r5',
+  comprobante: { nombre: 'c.pdf', datos: PDF }, idSolicitud: 'pg-r5' });
+assert.deepEqual(pend('obrero').items.filter(i => i.folio === r5).map(i => i.tipo + ':' + i.accion), ['recibir:Confirmar que llegó'], 'pagada: ya');
 
 // ======================= Interfaz =======================
 const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');

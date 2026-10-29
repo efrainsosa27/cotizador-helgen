@@ -522,7 +522,9 @@ viejo, solo nombres, sigue sirviendo; `preparar()` lo convierte). Script Propert
 `ADMIN_FOLDER_ID`, `SESION_SECRETO` (lo crea `prepararCapri`; cambiarlo cierra todas las sesiones @helgen.services),
 `PERMISOS_SOLO_LISTADOS` (opcional), `PORTAL_URL`, `PORTAL_SECRETO` (= `COTIZADOR_SECRETO` del centro de mando; **nunca** en el
 código ni en el chat), `PORTAL_PROYECTOS` (`{"PRY-2026-0002": "drogheda"}`), `PORTAL_PRUEBA` (`1` = avisos de prueba) y las que
-escribe CAPRI (`PORTAL_ULTIMA_CONSULTA`, `PORTAL_ULTIMO_OK`, `PORTAL_ERROR_CONSULTA`, `VER_permisos`, `VER_anulaciones`).
+escribe CAPRI (`PORTAL_ULTIMA_CONSULTA`, `PORTAL_ULTIMO_OK`, `PORTAL_ERROR_CONSULTA`, `PORTAL_ALERTA` (material que llegó a una
+orden cancelada o anulada), `VER_permisos`, `VER_anulaciones`, `SESION_DESDE_<huella>` (sesiones de CAPRI cerradas)).
+`AUTORIZAR_OTRO` (opcional, `1`): en el flujo de siempre nadie autoriza lo que pidió (§9).
 Sin `PORTAL_SECRETO` el enlace está apagado y todo funciona como antes.
 
 ## 6. Decisiones tomadas (y por qué)
@@ -776,6 +778,12 @@ Spec: "CAPRI — increment 4 spec" (Claude Docs `https://claude.ai/artifact/2kb6
 - Avisos al centro de mando: se guardan siempre (Pendiente → Enviado) dentro del candado y se mandan al soltarlo (una llamada HTTP
   nunca retiene el candado); un aviso que falla bloquea los siguientes de la misma orden (orden garantizado) y se reintenta cada 15
   min sin límite (no hay botón de descartar: cambiar su `estado` a mano). Nunca montos (se revisa antes de guardar).
+- Revisión independiente (28/10/2026): las **notas no van en los correos** (solo "Hay una nota: ábrela en CAPRI"; ningún
+  filtro detecta montos o proveedores escritos a mano); el flujo de aprobaciones depende de que **alguien tenga el rol** (aunque
+  esté desactivado), no de quién está activo; "Cerrar sesión" y reactivar a alguien **invalidan** sus sesiones de CAPRI; antes de
+  cancelar o anular se **traen las recepciones** del centro de mando (nunca impide cancelar; lo que llegue después a una orden
+  muerta queda como alerta); avisos que el centro de mando **rechaza 4 veces** (4xx) quedan "Rechazado" y no detienen los demás;
+  en proyectos ligados solo se aceptan sus cinco sitios.
 - Por qué es lento (explicado a Leo el 28/10/2026): ~1.7 s fijos por llamada de Apps Script, 385 KB de código cargados en cada
   llamada (9 s la primera tras publicar), lecturas de Sheets de 0.3–1.7 s por pestaña con caché que se invalida con cualquier
   cambio, PDF ~15 s, un solo candado para todas las escrituras y la consulta cada 20 s como efrain@. Plan de mudanza en dos
@@ -910,8 +918,9 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
 
 ## 9. Pendientes e ideas
 - **CAPRI — incremento 4: construido e integrado el 28/10/2026, SIN PUBLICAR** (rama `incremento-4`; 5 módulos A–E + integración;
-  `bash tests/todas.sh` en verde: 16 revisiones; revisión independiente hecha, §6.15). No se probó en PRUEBAS ni en el navegador
-  real. **Pasos para publicar (Efrain, con Leo):**
+  `bash tests/todas.sh` en verde: 17 revisiones). **Revisión independiente** (dos agentes: seguridad y flujos/centro de mando)
+  hecha el 28/10/2026; sus hallazgos se arreglaron con prueba (commit "Revisión independiente…", `tests/revision.test.js` y
+  casos nuevos en identidad, correos, pantallas y centro). No se probó en PRUEBAS ni en el navegador real. **Pasos para publicar (Efrain, con Leo):**
   1. Revisar y hacer merge del PR a `main`. Respaldar la base de datos, el libro de compras y el de cobranza (como siempre, §2).
   2. Recomendado: probar antes en PRUEBAS (anular toca todos los libros; el enlace con el centro de mando con `PORTAL_PRUEBA=1`).
   3. `npx clasp push --force` y comparar el editor con `clasp clone`.
@@ -936,6 +945,11 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
     `proyecto_clave` va como "drogheda" (valor de `PORTAL_PROYECTOS`), no "DRO"; `solicitante`/`autorizo` van como correo; un aviso
     rechazado (p. ej. 400 por sitio desconocido) se reintenta sin límite y detiene los siguientes de esa orden; cancelar un pago a
     proveedor no avisa (el contrato no tiene ese tipo).
+  - **Decisión de Leo pendiente:** en el flujo de siempre (sin Aprobaciones), ¿compras puede autorizar lo que él mismo pidió?
+    Hoy sí (como antes). Con la Script Property `AUTORIZAR_OTRO = '1'` lo autoriza otra persona de compras, o un super admin con
+    motivo (ya programado y probado; no requiere publicar).
+  - Queda de la revisión (riesgo bajo, anotado): en el flujo de siempre no hay campo para asignar quién recibe (recibe quien
+    pidió); un aviso del centro de mando que falla por red (no 4xx) sigue deteniendo los siguientes de su orden hasta que pase.
   - Textos que todavía dicen "operaciones" dentro de Requisiciones y Compras (la pestaña ya dice Aprobaciones).
   - **Manual del Cotizador sin actualizar** (regla 14): el documento no está compartido con la cuenta de Leo en Claude Docs; lo
     actualiza quien lo tenga (Efrain) con §4.8, §5 y este punto.
