@@ -10,8 +10,9 @@ Manual (Compras, Requisiciones, Tareas frecuentes, Historial, Pendientes).
 1. **Varios pagos por orden** (`PGP-`) hasta que la orden queda completa. Cada pago guarda su **tipo**, que decide el servidor:
    **Anticipo** (todavía no se recibe nada), **Parcial** (ya se recibió algo) o **Liquidación** (el que la completa).
 2. **Tope:** lo pagado (en la moneda de la orden) nunca pasa de lo esperado + `TOLERANCIA_PAGO` (1.00). Lo esperado es el total de
-   la orden o, con material devuelto sin reponer, el total por pagar (`totalPorPagarOrden`, regla del incremento 5). Completa =
-   saldo ≤ 1.00.
+   la orden o, con material devuelto sin reponer, el total por pagar (`totalPorPagarOrden`, regla del incremento 5); si ya está
+   facturada completa con retenciones, el total de sus facturas (`porFacturas`; revisión, §11). Es decir: un pago no pasa del saldo
+   que se muestra (+1.00). Completa = saldo ≤ 1.00. Lo pagado de más (p. ej. tras devolver material ya pagado) es **saldo a favor**.
 3. **Plan de pagos opcional** (decisión 3) en la orden: `[{concepto, porcentaje}]`, 1 a 10 etapas, suma exacta 100 %. Se captura
    al autorizar (flujo de siempre) o en la propuesta de compras (flujo con aprobaciones: aprobaciones lo ve y pasa a la orden con el
    visto bueno). Va en el PDF de la orden ("Plan de pagos: Anticipo 30% ($487.20) · Contra entrega 70% ($1,136.80)").
@@ -31,8 +32,9 @@ Manual (Compras, Requisiciones, Tareas frecuentes, Historial, Pendientes).
    crédito del proveedor (ya podía recibir antes de pagar).
 8. **Cancelar un pago** (motivo) cancela ese pago y recalcula la orden sin él; no se puede con la requisición **Cerrada** (regla de
    hoy). Ver la tabla de §4.
-9. **Cuentas por pagar** por saldo: una orden con pagos que no la completan sigue en cuentas por pagar por lo que le falta, con
-   vencimiento por factura (fecha + días de crédito) o por lo que sigue del plan. Pendientes de compras dice el saldo y lo que sigue.
+9. **Cuentas por pagar** por saldo: toda orden con facturas o pagos sale por lo que le falta (la misma cifra que Reportes → CxP),
+   con vencimiento por factura (fecha + días de crédito) o, lo que no tiene factura, por etapa del plan. Pendientes de compras dice
+   el saldo y lo que sigue. El saldo a favor sale aparte (nunca se resta de lo que se debe).
 10. Cada pago conserva **todas las reglas de siempre**: comprobante obligatorio (PDF/imagen, 10 MB, tipo por contenido), método,
     referencia sin número de tarjeta (`pareceNumeroTarjeta`), bloqueo de transferencia sin documentos del proveedor
     (`exigirDocumentosParaPagar_`, excepción de super admin con motivo), tipo de cambio si la moneda es otra, fecha no futura ni
@@ -43,7 +45,8 @@ Manual (Compras, Requisiciones, Tareas frecuentes, Historial, Pendientes).
 
 | Pestaña | Columna nueva | Contenido |
 |---|---|---|
-| `PagosProveedores` | **`tipo`** (V, la última) | `Anticipo` · `Parcial` · `Liquidación`. Vacía en pagos de antes: se leen como `Liquidación` (eran el pago completo) |
+| `PagosProveedores` | **`tipo`** (V) | `Anticipo` · `Parcial` · `Liquidación`. Vacía en pagos de antes: se leen como `Liquidación` (eran el pago completo). Se corrige al cancelar o anular otro pago (§11, 8) |
+| `PagosProveedores` | **`id_solicitud`**, **`huella_solicitud`** (W:X; revisión) | el `idSolicitud` del envío y la huella de su contenido: un reenvío no duplica el pago aunque se pierda el caché, y el mismo id con otros datos se rechaza (§11, 2). Vacías en pagos de antes |
 | `OrdenesCompra` | **`plan_pago`** (AQ, después de `forma_pago`; se busca por nombre con `colOc_`) | JSON `[{concepto, porcentaje}]`; vacía = sin plan. Una celda que no se entiende (editada a mano) se ignora (`planDeCelda`) |
 | `Requisiciones` | — | el plan de la propuesta va dentro de `propuesta (JSON)` (`planPago`), como `formaPago` en el incremento 5 |
 
@@ -54,14 +57,17 @@ Manual (Compras, Requisiciones, Tareas frecuentes, Historial, Pendientes).
 ### Code.js §6.P (al final del archivo)
 | Función | Qué hace |
 |---|---|
-| `saldoOrdenCompra(orden, pagos, movimientos)` *(pura; la usa R)* | Firma y forma del contrato §1: `{esperado, pagado, saldo, completo, vigentes: [{folio, fecha, montoAplicado, tipo}], siguiente: {concepto, monto, vence, etapa?, etapas?} \| null}` y además `moneda`, `etapas` (cada etapa del plan con `monto`, `cubierto`, `acumulado`, `completa`), `porFacturas` y `cancelada`. Ver decisiones 1–3 |
-| `normalizarPlanPago(plan)` *(pura)* | Valida el plan (arreglo o JSON): null sin etapas; 1–10 etapas, concepto ≤ 60 sin repetir, % > 0 con 2 decimales, suma 100 % |
+| `saldoOrdenCompra(orden, pagos, movimientos)` *(pura; la usa R)* | Firma y forma del contrato §1: `{esperado, pagado, saldo, completo, vigentes: [{folio, fecha, montoAplicado, tipo}], siguiente: {concepto, monto, vence, etapa?, etapas?} \| null}` y además `moneda`, `etapas` (cada etapa del plan con `monto`, `cubierto`, `acumulado`, `completa` y, desde la revisión, `vence`), `porFacturas`, `cancelada` y `aFavor` (revisión). Ver decisiones 1–3 |
+| `normalizarPlanPago(plan)` *(pura)* | Valida el plan (arreglo o JSON): null sin etapas; 1–10 etapas, concepto ≤ 60 sin repetir, % un número (o texto con un número) > 0 con 2 decimales, suma 100 % |
 | `planDeCelda(v)`, `textoPlanPago(plan, total, moneda)`, `tipoDePagoProv(completo, recibido)` *(puras)* | Leer la celda, texto del PDF y bitácora, tipo del pago |
-| `pagosProvPorOc_(libro)`, `olvidarPagosProv_()` | Pagos del libro por orden, leídos una vez por petición (`MEMO_.pagosProv`, por id del libro); quien escribe pagos lo olvida |
-| `pagoParcialDe_(orden)` | ¿Orden Emitida con algún pago Vigente? (usa `orden.pagoParcial` si ya viene calculado) |
+| `retiparPagosProv(pagos, completo, orden, movimientos)` *(pura; revisión)* | Tipos que cambian en los pagos que quedan al cancelar o anular otro (§11, 8) |
+| `tramosSinFactura(saldo, restoCts)` *(pura; revisión)* | Lo que no tiene factura, por etapa del plan, cada parte con su vencimiento (§11, 7) |
+| `pagosProvPorOc_(libro)`, `olvidarPagosProv_()` | Pagos del libro por orden, leídos una vez por petición (`MEMO_.pagosProv`, por id del libro); quien escribe pagos lo olvida (y también `olvidarFilas_`, al tomar el candado) |
+| `esPagoParcial_(orden, saldo)`, `pagoParcialDe_(orden)`, `marcadorPagoParcial_(libro)` | "Pagada parcial" = Emitida, sin completar y con algo pagado: una sola regla para la vista de compras, las listas y lo que ve quien pidió (revisión) |
 | `saldoDeOrden_(libro, orden, movs?, facturas?, pagos?)` | `saldoOrdenCompra` con lo del libro (facturas de la orden incluidas) |
 | `aplicarPagoCompleto_(libro, hoja, req, hO, orden)` | Lo que hace el pago que completa una orden (estados de orden y requisición) |
-| `completarPagoTrasDevolucion_(…)` | Una devolución que deja lo ya pagado como completo liquida la orden (decisión 5) |
+| `completarSiCubierta_(libro, hoja, req, hO, orden, motivo)` | Lo ya pagado cubre la orden sin un pago nuevo (devolución, factura con retenciones o una orden que ya estaba así): la deja pagada (antes `completarPagoTrasDevolucion_`; revisión) |
+| `huellaPagoProv_(d, bytes)`, `pagoYaRegistrado_(…)` | Idempotencia del pago por caché y por la hoja, con huella del contenido (revisión) |
 | Constantes | `TIPO_PAGO_ANTICIPO/PARCIAL/LIQUIDACION`, `TIPOS_PAGO_PROV`, `ETIQUETA_PAGADA_PARCIAL`, `MAX_ETAPAS_PLAN`, `TIPO_CXP_SALDO` (en §5, junto a `antiguedadCxp`); `EVENTOS_CORREO.push('req.pagoparcial')` |
 
 ### Cambios fuera de §6.P (marcados con "P (incremento 6)")
@@ -75,7 +81,7 @@ Manual (Compras, Requisiciones, Tareas frecuentes, Historial, Pendientes).
   todo pago Vigente salvo con la requisición Cerrada), `reqParaSolicitante_` / `misRequisicionesDeHojas_` (`pagadaParcial`, sin
   montos), `listarRequisicionesDeHojas_` (`pagadaParcial` y filtro "Pagada parcial"), `vistaCompras_` (`pagado`, `saldo`,
   `pagadaParcial`, `siguiente` por orden), `vistaOperaciones_` (`orden.planPago`, `orden.pagadaParcial`; sin pagos).
-- `cancelarOrdenCompra` (no con pagos Vigentes), `resolverDevolucion` (una línea: `completarPagoTrasDevolucion_`),
+- `cancelarOrdenCompra` (no con pagos Vigentes), `resolverDevolucion` y `registrarFacturaProveedor` (`completarSiCubierta_`),
   `planAnulacion_` (el efecto de anular un pago recalcula con los demás), `aplicarAnulacion_` (olvida los pagos leídos).
 - `recibeAntesDePagar_` (§6.F: crédito **o** pago parcial) y `recibirSinPagar_` (textos y bitácora "Recibir antes de pagar todo
   (pago parcial)").
@@ -85,7 +91,8 @@ Manual (Compras, Requisiciones, Tareas frecuentes, Historial, Pendientes).
 - Correos (6.B): `destinatariosAviso` y `contenidoAviso` (`req.pagoparcial`).
 - `facturacionDeOrden` (solo el comentario). **No hay funciones nuevas en la API**: todo viaja por las de siempre
   (`autorizarRequisicion`, `cotizarRequisicion`, `registrarPagoProveedor`, `cancelarPagoProveedor`), que ya declaraban sus
-  `cambios` (`pagosProveedores`, `requisiciones`, `oc`). `MODULOS_` y `CAMBIOS_API` no cambian.
+  `cambios` (`pagosProveedores`, `requisiciones`, `oc`). `MODULOS_` no cambia; en `CAMBIOS_API` (revisión)
+  `registrarFacturaProveedor` ahora también declara `requisiciones` y `oc` (una factura con retenciones puede dejar pagada la orden).
 
 ### Interfaz (`web/cotizador/index.html`, script principal)
 - Pago a proveedor (`#rcFormPago`): caja `#ppSaldo` (`htmlSaldoPago`): esperado, pagado, saldo y lo que sigue (concepto, monto y
@@ -134,12 +141,16 @@ Otros caminos, comprobados con pruebas:
 
 ## 5. Cuentas por pagar (`antiguedadCxp`)
 
-`d = {facturas, ordenes, pagos, hoy, movimientos?}`. Una orden **sin pagos** debe sus facturas Vigentes completas (como siempre).
-Una orden **con pagos** que no la completan: lo pagado cubre sus facturas en orden de vencimiento; cada factura queda por lo que le
-falta (`pendiente`, `pagado`, `pagoParcial: true`) y lo que no cubre ninguna factura es una fila **`tipo: 'Saldo'`** (`folio` = la
-orden; `serieFolio` = la etapa que sigue o "Saldo") que vence con lo que sigue del plan o recepción/entrega + días de crédito. Una
-orden completa no debe nada. Totales por moneda por lo pendiente (`facturas` y `saldos` cuentan renglones). `faltantes` gana
-`pagoParcial`. `repPendientes` igual (cualquier pago Vigente).
+`d = {facturas, ordenes, pagos, hoy, movimientos?}`. Salen las órdenes vigentes con facturas Vigentes o con pagos Vigentes (las que
+no tienen ninguna de las dos solo salen en Reportes → CxP, su alcance). **Toda** orden se mide por su saldo (`saldoOrdenCompra`, con
+o sin pagos; revisión: antes las órdenes sin pagos debían sus facturas completas aun con material devuelto): lo pagado cubre sus
+facturas en orden de vencimiento; cada factura queda por lo que le falta (`pendiente`, `pagado`, `pagoParcial` si hay algo pagado) y
+lo que no cubre ninguna factura son filas **`tipo: 'Saldo'`** (`folio` = la orden), **una por etapa del plan** (`serieFolio` = su
+concepto, o "Saldo" sin plan; `tramosSinFactura`) con el vencimiento de su etapa (sin plan: recepción/entrega + días de crédito).
+La suma por orden es exactamente la de Reportes → CxP y la del saldo de la vista. Una orden completa no debe nada. Totales por
+moneda por lo pendiente (`facturas` y `saldos` cuentan renglones). `faltantes` gana `pagoParcial`. `repPendientes` igual (cualquier
+pago Vigente). Revisión: **`aFavor`** = [{ocFolio, reqFolio, proyecto…, proveedor, moneda, aFavor, pagado, esperado}] (lo pagado de
+más por orden) y `totalesAFavor` por moneda: aparte, nunca se restan de lo que se debe ni se compensan entre órdenes.
 
 ## 6. Decisiones (y por qué) — y desviaciones del contrato
 
@@ -178,8 +189,8 @@ orden completa no debe nada. Totales por moneda por lo pendiente (`facturas` y `
     cuenta: no es recepción).
 12. **Aprobaciones** ve el plan y la etiqueta "Pagada parcial" de la orden (un sí/no, sin pagos ni montos pagados), porque el plan es
     parte de lo que aprueba.
-13. **Cuentas por pagar de órdenes sin pagos no cambian** (sus facturas completas, aun con material devuelto), para no mover cifras
-    que ya se usan; solo las órdenes con pagos se miden por saldo.
+13. ~~Cuentas por pagar de órdenes sin pagos no cambian~~ **Quitada en la revisión** (§11, 5): daba dos cifras distintas para la misma
+    orden (Compras → Cuentas por pagar contra Reportes → CxP y la vista). Ahora toda orden se mide por su saldo.
 14. **Plan de una sola etapa** se acepta (p. ej. "Contra entrega 100%": dice cuándo se paga); su vencimiento no es el de anticipo.
 
 ## 7. Pruebas
@@ -196,14 +207,17 @@ orden completa no debe nada. Totales por moneda por lo pendiente (`facturas` y `
   5) interfaz con DOM simulado conectada al servidor simulado (plan 30/70 con suma revisada, caja de saldo, dos pagos seguidos desde
   el mismo formulario, cancelar, lista, órdenes por proyecto, cuentas por pagar y CSV, aprobaciones y Mis requisiciones sin montos).
 - Ajustes intencionales en 7 pruebas existentes (decisión 10 y 4).
-- `bash tests/todas.sh`: **22 pruebas ✔ + sintaxis de la interfaz** (antes 21; la nueva es `pagos`).
+- **`tests/pagos-revision.test.js`** (revisión independiente, §11): una sección por hallazgo, cada una falla sin su arreglo; la de
+  interfaz usa `tests/montar-interfaz.js` (el montaje de la interfaz como módulo, con lo que preguntan `confirm`/`prompt`).
+- `tests/arnes.js`: el caché simulado, como el de Apps Script, rechaza valores de más de 100 KB y claves de más de 250 caracteres.
+- `bash tests/todas.sh` (rama `incremento-6-fixp`, con R y la rapidez integrados): **25 pruebas ✔ + sintaxis de la interfaz**.
 
 ## 8. Publicación
 
 - **Sin servicios nuevos de Google** (Sheets, Drive, MailApp y UrlFetch ya están autorizados): `clasp push`, versión nueva publicada
   por **facilities@** desde el editor y `CLOUDFLARE_ACCOUNT_ID=… npx --yes wrangler@4 deploy` (cambió la interfaz). Ver `CLAUDE.md` §9.
-- Respaldar antes el libro de compras (dos columnas nuevas al primer uso: `PagosProveedores.tipo` y `OrdenesCompra.plan_pago`; nada
-  se mueve). Opcional: `prepararCompras()` para escribir los encabezados de una vez.
+- Respaldar antes el libro de compras (columnas nuevas al primer uso: `PagosProveedores.tipo`, `id_solicitud` y `huella_solicitud`,
+  y `OrdenesCompra.plan_pago`; nada se mueve). Opcional: `prepararCompras()` para escribir los encabezados de una vez.
 - **API e interfaz juntas, y que compras recargue la página:** una interfaz vieja en caché con la API nueva dejaría el formulario
   del pago abierto con el mismo `idSolicitud` después de un pago parcial (un segundo pago regresaría el primero); una interfaz nueva
   con la API vieja no manda el plan (se ignoraría) y vuelve a los textos de un solo pago.
@@ -221,7 +235,10 @@ orden completa no debe nada. Totales por moneda por lo pendiente (`facturas` y `
   usar `saldoDeOrden_(libro, orden, movs, facturas, pagos)`. Lecturas baratas para todas las órdenes: `pagosProvPorOc_(libro)`,
   `movimientosPorOc_(libro)`, `facturasDelLibro_(libro)` (una vez cada una).
 - Saltar órdenes con `cancelada: true` o `completo: true`. Para el flujo de 13 semanas: `siguiente.monto` vence en `siguiente.vence`;
-  el resto del saldo (`saldo − siguiente.monto`) son las etapas siguientes (`etapas`, sin fecha propia: decisión 3).
+  el resto del saldo (`saldo − siguiente.monto`) son las etapas siguientes; desde la revisión cada una trae su `vence`
+  (`etapas[].vence`) y `tramosSinFactura(saldo, restoCts)` reparte un resto por etapa (R puede usarlos para partir su "Resto del plan").
+- `aFavor` (revisión): lo pagado de más de esa orden (solo arriba de la tolerancia). No es saldo por pagar; si R lo muestra, aparte y
+  sin compensarlo con otra orden.
 - `antiguedadCxp` ahora recibe `movimientos` y cada renglón trae `pendiente` (lo que se debe), `pagado` y `pagoParcial`; los saldos
   sin factura son `tipo: 'Saldo'` (`folio` = la orden). Los totales suman lo pendiente y traen `saldos`. Para "la de P, misma
   presentación": usar `cuentasPorPagar()` (solo compras) o `antiguedadCxp` con `pendiente`.
@@ -231,9 +248,48 @@ orden completa no debe nada. Totales por moneda por lo pendiente (`facturas` y `
 
 ## 10. Pendiente / ideas
 
+- **Registrar la nota de crédito o el reembolso** de un saldo a favor: hoy no hay cómo, así que el pendiente "Saldo a favor con el
+  proveedor" se queda mientras exista (idea: un movimiento de reembolso en `PagosProveedores` que reste a lo pagado).
+- Pendientes de compras de una orden sin pagos con material devuelto muestra el total de la orden (no el total por pagar): viene del
+  incremento 5; la vista, el tope y Cuentas por pagar ya dicen el saldo.
+
 - Probar en PRUEBAS o en el real con Claude in Chrome (regla 13): anticipo, recibir antes de pagar todo, liquidación, cancelar uno
   de en medio, plan en el PDF, cuentas por pagar; y en el teléfono el formulario del pago y el plan.
 - Fechas por etapa del plan (hoy se deducen; decisión 3) si compras las pide.
 - Complementos de pago (REP) por cada pago parcial de una factura PPD: hoy `repPendientes` sigue marcando la factura mientras la
   orden tenga algún pago.
 - Pasar a `CLAUDE.md` y al Manual al integrar.
+
+## 11. Revisión independiente (30/10/2026, rama `incremento-6-fixp`)
+
+Hallazgos de la revisión y su arreglo (un commit y una prueba de regresión por cada uno, en `tests/pagos-revision.test.js`; los
+fuzzers de la revisión ya no encuentran nada).
+
+1. **(Alta) Factura con retenciones después de pagos parciales:** la orden quedaba Emitida "completa" y la requisición atorada (sin
+   saldo que pagar ni forma de cerrar). `completarSiCubierta_` (antes `completarPagoTrasDevolucion_`) la deja pagada también desde
+   `registrarFacturaProveedor`; un pago a una orden que ya estaba cubierta la cierra en lugar de fallar (`sinPago`, sin registrar
+   otro pago); "Pagada parcial" es una sola regla (`esPagoParcial_`) para compras y para quien pidió.
+2. **(Alta) Idempotencia:** el caché guardaba la vista con todos los proveedores; con ~165 pasaba de 100 KB, `cache.put` lanzaba
+   después de escribir y el reintento duplicaba el pago. Ahora el envío se busca también en la hoja (`id_solicitud` + huella), el
+   caché guarda poco y nunca lanza, y el mismo id con otros datos se rechaza con un mensaje claro. Lo mismo al autorizar una
+   requisición (el reintento emitía otra orden) y los demás cachés de idempotencia usan `guardarIdempotencia_`.
+3. **(Media) Tope con facturas con retenciones:** se medía contra el total de la orden; ahora contra el saldo que se muestra
+   (`porFacturas` o lo esperado).
+4. **(Media) Pagos en otra moneda (interfaz):** al precargar un monto la moneda del pago vuelve a la de la orden; "= $X aplicados" en
+   vivo; un pago en otra moneda que no completa la orden pide confirmación.
+5. **(Media) Dos cifras de cuentas por pagar:** se quitó la decisión 13 (§6): toda orden por su saldo, igual que Reportes → CxP.
+6. **(Media) Lo pagado de más no quedaba en ningún lado:** `aFavor` en `saldoOrdenCompra`, en la requisición, órdenes por proyecto,
+   cuentas por pagar (aparte) y como pendiente de compras.
+7. **(Baja) La fila «Saldo» fechaba todo con la etapa que sigue:** una fila por etapa del plan (`tramosSinFactura`,
+   `etapas[].vence`). No se comparte con `tramosPorPagar` de R: R pone el plan por encima de las facturas (siguiente + resto) y en
+   Cuentas por pagar las facturas ya tienen su fila; R puede usar `etapas[].vence`/`tramosSinFactura`.
+8. **(Baja) El tipo no se recalculaba:** al cancelar o anular un pago, un "Liquidación" que ya no liquida pasa a Anticipo o Parcial
+   (`retiparPagosProv`, según si ya se había recibido algo cuando se registró). Se guarda en la hoja en ese momento (el tipo lo leen
+   la vista, la hoja, la bitácora y R; no se deduce al leer).
+9. **(Baja) `normalizarPlanPago` aceptaba no números** (`true` = 1 %, `[50]` = 50 %): solo un número o un texto con un número.
+10. **(De antes) El correo "Anulado" de un pago a proveedor** le llegaba a quien pidió con el folio PGP en el asunto: ya solo a quien
+    lo registró.
+
+Publicación: además de lo de §8, las columnas `id_solicitud` y `huella_solicitud` de `PagosProveedores` se crean solas; sin
+servicios nuevos de Google. Pruebas intencionalmente ajustadas: `requisiciones` (el mismo id con otros datos se rechaza), `compras`
+(tope contra las facturas), `facturas` (las órdenes de la prueba pura llevan total y OC-2 debe también lo que falta facturar).
