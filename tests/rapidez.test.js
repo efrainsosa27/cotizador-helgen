@@ -10,6 +10,8 @@
 //     falla cualquier prueba que escriba en una pestaña con sus filas guardadas.)
 //  4. Config y la carpeta del área una vez por petición: getConfig_ lee Config una vez (y relee si hubo que migrar);
 //     configLigera_ se reusa también en las escrituras y se olvida al escribir; carpetaArea_ busca y revisa la carpeta una vez.
+//  5. Escribir en una pestaña olvida solo lo leído de esa pestaña (las demás siguen guardadas); escribir en el libro (crear o
+//     borrar una pestaña) o en algo que no es una pestaña olvida todo.
 // Uso: node tests/rapidez.test.js .
 'use strict';
 const assert = require('assert');
@@ -204,6 +206,39 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   correr('carpetaCompras_()');
   assert.equal(perfil.ops.filter(o => o.tipo === 'urlfetch').length, 1, 'en otra petición se vuelven a revisar');
   void quitada; void props;
+}
+
+// ================= 5. Olvidar por pestaña =================
+{
+  const A = crear({ perfil: true });
+  const { ok, props, perfil, correr, como } = A;
+  const P1 = ok('ana', 'crearProyecto', { nombre: 'Uno', cliente: { nombre: 'Luis' }, idSolicitud: 'p1' }).folio;
+  const folio = ok('obrero', 'guardarRequisicion', { proyectoFolio: P1, sitio: 'Querétaro', renglones: [{ descripcion: 'Cable', cantidad: 1 }],
+    cotizacion: { nombre: 'c.pdf', datos: A.PDF }, idSolicitud: 'q1' }).folio;
+  const lecturas = n => perfil.ops.filter(o => o.tipo === 'lee' && o.hoja.endsWith('/' + n)).length;
+  como('pedro@helgen.tech');
+  const F = JSON.stringify(folio);
+  const leerTodo = () => correr(`(() => { const l = libroCompras_(); buscarReq_(l, ${F}); filasDeArea_(hojaCompras_(l, 'RequisicionesEventos'), HOJAS_COMPRAS, 'RequisicionesEventos'); filasProyectos_(); })()`);
+  leerTodo(); // la primera lectura de versiones de la petición olvida lo leído antes (§3): se lee todo dos veces
+  leerTodo();
+  perfil.ops = [];
+  // Un evento nuevo (escritura en RequisicionesEventos): Requisiciones y Proyectos siguen guardadas; Eventos se relee y trae el nuevo
+  correr(`eventoReq_(libroCompras_(), ${F}, 'Solicitada', 'nota de prueba')`);
+  leerTodo();
+  assert.deepEqual([lecturas('Requisiciones'), lecturas('Proyectos'), lecturas('RequisicionesEventos')], [0, 0, 1]);
+  assert(correr(`filasDeArea_(hojaCompras_(libroCompras_(), 'RequisicionesEventos'), HOJAS_COMPRAS, 'RequisicionesEventos')`)
+    .some(r => r[5] === 'nota de prueba'), 'el evento nuevo se ve');
+  // Cambiar el estado (Requisiciones): se relee esa y nada más
+  perfil.ops = [];
+  correr(`(() => { const b = buscarReq_(libroCompras_(), ${F}); cambiarReq_(b.hoja, b.req, 'Rechazada', { motivo: 'por pestaña' }); })()`);
+  assert.equal(correr(`buscarReq_(libroCompras_(), ${F}).req.estado`), 'Rechazada');
+  assert.deepEqual([lecturas('Requisiciones'), lecturas('Proyectos'), lecturas('RequisicionesEventos')], [1, 0, 0]);
+  // Escribir en el libro (crear una pestaña) olvida todo
+  perfil.ops = [];
+  correr(`escribe_(libroCompras_()).insertSheet('Otra')`);
+  leerTodo();
+  assert.deepEqual([lecturas('Requisiciones'), lecturas('Proyectos'), lecturas('RequisicionesEventos')], [1, 1, 1]);
+  void props;
 }
 
 console.log('rapidez: todo bien');

@@ -48,14 +48,14 @@ module.exports = function crearArnes(dir, opciones) {
     const claves = leerMemo.runInContext(ctx);
     if (!claves.length) return;
     const nombre = quien(m).split('/').slice(-1)[0];
-    const mala = claves.find(k => k.endsWith('/' + nombre + '/' + idHoja) || (nombre === 'Proyectos' && k === 'base/Proyectos'));
+    const mala = claves.find(k => k.endsWith('/' + nombre + '/' + idHoja));
     if (mala) throw new Error('Rapidez: escritura en ' + quien(m) + ' con sus filas guardadas en MEMO_.filas (' + mala + '): falta escribe_');
   };
   let nHoja = 0; // getSheetId: cada pestaña tiene su id (una pestaña borrada y vuelta a crear tiene otro)
   function hoja(m) {
     const fmt = function () { an('formato', m); return this; };
     const idHoja = ++nHoja;
-    return { m, getSheetId: () => idHoja, getLastRow: () => { an('ultimaFila', m); return m.length; }, getMaxRows: () => { an('ultimaFila', m); return 1000; },
+    return { m, getSheetId: () => idHoja, getName: () => quien(m).split('/').slice(-1)[0], getLastRow: () => { an('ultimaFila', m); return m.length; }, getMaxRows: () => { an('ultimaFila', m); return 1000; },
       setFrozenRows() { an('formato', m); }, setColumnWidth() { an('formato', m); },
       getDataRange: () => { an('dataRange', m); return {
         getValues: () => { an('lee', m, m.reduce((s, r) => s + r.length, 0)); return m.map(r => r.slice()); },

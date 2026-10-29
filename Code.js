@@ -483,12 +483,15 @@ function filasDatos_(hoja, n) {
 
 // ---- Rapidez (30/10/2026): filas leídas en esta petición ----
 // Una pestaña se leía completa varias veces en la misma llamada (p. ej. Requisiciones 4 veces al sincronizar compras: mis
-// requisiciones, la lista, la requisición abierta y Pendientes). filasEnPeticion_ guarda lo leído en MEMO_.filas y lo reparte
-// en copias. Nunca devuelve algo viejo porque se olvida todo (olvidarFilas_):
-//  - en cada escritura a cualquier hoja: toda escritura pasa por escribe_(hoja) (lo exige tests/rapidez.test.js);
-//  - al tomar y al soltar el candado (candado_): adentro se relee lo que otra persona pudo cambiar mientras se esperaba;
-//  - cada vez que se leen las versiones (versiones_): una lista que se guarda en caché con una versión se arma con filas
-//    leídas después de esa versión, nunca antes.
+// requisiciones, la lista, la requisición abierta y Pendientes). filasEnPeticion_ guarda lo leído en MEMO_.filas (clave que
+// termina en "/<pestaña>/<id de la pestaña>") y lo reparte en copias. Nunca devuelve algo viejo:
+//  - toda escritura pasa por escribe_(hoja) (lo exige tests/rapidez.test.js), que olvida lo leído de esa pestaña (y Config
+//    ya leída, si es Config); una escritura al libro (crear o borrar una pestaña) o a algo que no es una pestaña olvida todo;
+//  - al tomar y al soltar el candado (candado_) se olvida todo: adentro se relee lo que otra persona pudo cambiar mientras
+//    se esperaba;
+//  - cada vez que se leen las versiones (versiones_) se olvida todo: una lista que se guarda en caché con una versión se arma
+//    con filas leídas después de esa versión, nunca antes.
+// Las pestañas que se guardan (compras, cobranza, administración y Proyectos) no tienen fórmulas que dependan de otras.
 function filasEnPeticion_(clave, leer) {
   const memo = MEMO_.filas || (MEMO_.filas = {});
   if (!memo[clave]) memo[clave] = leer();
@@ -500,9 +503,22 @@ function olvidarFilas_() {
   MEMO_.cfgLigera = null; // Config ya leída en la petición (configLigera_)
 }
 
-/** Toda escritura a una hoja va así: escribe_(hoja).getRange(…).setValues(…) / escribe_(hoja).appendRow(…). */
+/** Sufijo de las claves de MEMO_.filas de una pestaña ("/Requisiciones/123"); '' si no se sabe. */
+function sufijoFilas_(hoja) {
+  if (!hoja || typeof hoja.getSheetId !== 'function' || typeof hoja.getName !== 'function') return '';
+  return '/' + hoja.getName() + '/' + hoja.getSheetId();
+}
+
+/**
+ * Toda escritura a una hoja va así: escribe_(hoja).getRange(…).setValues(…) / escribe_(hoja).appendRow(…). Olvida lo leído
+ * de esa pestaña en la petición; si no es una pestaña (el libro: insertSheet, deleteSheet), todo.
+ */
 function escribe_(hoja) {
-  olvidarFilas_();
+  const sufijo = sufijoFilas_(hoja);
+  if (!sufijo) { olvidarFilas_(); return hoja; }
+  const memo = MEMO_.filas || {};
+  Object.keys(memo).forEach(k => { if (k.slice(-sufijo.length) === sufijo) delete memo[k]; });
+  if (/^\/Config\//.test(sufijo)) MEMO_.cfgLigera = null;
   return hoja;
 }
 
@@ -1589,7 +1605,9 @@ function errorProyecto_(mensaje) {
 
 /** Filas de la pestaña Proyectos, leídas una vez por petición (filasEnPeticion_). */
 function filasProyectos_(hoja) {
-  return filasEnPeticion_('base/Proyectos', () => filasDatos_(hoja || hojaProyectos_(), ENCABEZADOS_PROYECTOS.length));
+  const h = hoja || hojaProyectos_(), sufijo = sufijoFilas_(h);
+  const leer = () => filasDatos_(h, ENCABEZADOS_PROYECTOS.length);
+  return sufijo ? filasEnPeticion_('base' + sufijo, leer) : leer();
 }
 
 /** Proyecto por folio (con su número de fila), o null. */
@@ -1980,8 +1998,8 @@ function filasDeArea_(hoja, hojas, nombre) {
   // Rapidez: una vez por petición (filasEnPeticion_); el área fija el libro (compras, cobranza o administración)
   const area = hojas === HOJAS_COMPRAS ? 'compras' : hojas === HOJAS_COBRANZA ? 'cobranza' : hojas === HOJAS_ADMIN ? 'admin' : '';
   if (!area) return leer();
-  const idHoja = typeof hoja.getSheetId === 'function' ? hoja.getSheetId() : '';
-  return filasEnPeticion_(area + '/' + nombre + '/' + idHoja, leer);
+  const sufijo = sufijoFilas_(hoja);
+  return sufijo ? filasEnPeticion_(area + sufijo, leer) : leer();
 }
 
 const marcaDeTexto_ = t => (String(t || '').trim() === MARCAS.energy || t === 'energy') ? 'energy' : 'helgen';
