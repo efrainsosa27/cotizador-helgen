@@ -5,7 +5,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Cotizador Helgen</title>
+<title>CAPRI — Helgen</title>
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
 <link rel="icon" type="image/png" sizes="512x512" href="/isologo-512.png">
@@ -22,9 +22,25 @@
   header { background:var(--azul); color:#fff; padding:14px 24px; display:flex; align-items:center; gap:24px; flex-wrap:wrap;
            border-bottom:3px solid var(--aqua); }
   header img { height:30px; display:block; }
-  header h1 { font-size:16px; margin:0; letter-spacing:2px; color:var(--aqua); }
-  nav button { background:none; border:none; color:#A9B4C8; font-size:14px; cursor:pointer; padding:6px 10px; border-radius:6px; }
-  nav button.activo { background:rgba(255,255,255,.12); color:#fff; }
+  header h1 { font-size:18px; margin:0; letter-spacing:3px; color:var(--aqua); cursor:default; }
+  /* Navegación por grupos (CAPRI): grupos en el encabezado; las pantallas del grupo en la barra de abajo */
+  #navGrupos { display:flex; align-items:center; gap:2px; flex-wrap:wrap; }
+  #navGrupos button, .nav-externo { background:none; border:none; color:#A9B4C8; font:14px 'League Spartan',Arial,sans-serif; cursor:pointer;
+                   padding:6px 10px; border-radius:6px; display:inline-flex; align-items:center; text-decoration:none; }
+  #navGrupos button:hover { color:#fff; }
+  #navGrupos button.activo { background:rgba(255,255,255,.12); color:#fff; }
+  .nav-externo { border:1px solid rgba(169,180,200,.35); margin-left:6px; }
+  .nav-externo:hover { color:var(--aqua); border-color:var(--aqua); }
+  .btn-menu { display:none; background:none; border:1px solid #A9B4C8; color:#fff; border-radius:6px; padding:6px 10px; cursor:pointer;
+              font:14px 'League Spartan',Arial,sans-serif; align-items:center; }
+  .cuenta { display:inline-block; min-width:18px; height:18px; padding:0 5px; margin-left:6px; border-radius:9px; background:var(--aqua);
+            color:var(--azul); font:bold 11px/18px 'Roboto Mono',monospace; text-align:center; }
+  .subnav { background:#fff; border-bottom:1px solid var(--borde); padding:0 24px; overflow-x:auto; }
+  .subnav > div { display:flex; gap:6px; }
+  .subnav button { background:none; border:none; border-bottom:3px solid transparent; color:var(--gris); font-size:14px; cursor:pointer;
+                   padding:11px 10px 8px; white-space:nowrap; display:inline-flex; align-items:center; }
+  .subnav button:hover { color:var(--azul); }
+  .subnav button.activo { color:var(--azul); border-bottom-color:var(--teal); }
   main { max-width:1100px; margin:24px auto; padding:0 16px; }
   .modulo { background:#fff; border-radius:10px; padding:20px; margin-bottom:16px; border:1px solid var(--borde); }
   .modulo h2 { margin:0 0 14px; font-size:15px; color:var(--azul); border-bottom:2px solid var(--teal); padding-bottom:6px; display:inline-block; }
@@ -99,28 +115,89 @@
   .fila-cancelada td { color:var(--gris); text-decoration:line-through; }
   .fila-cancelada td:last-child { text-decoration:none; }
   .aviso-moneda { color:#B45309; font-weight:bold; }
+  /* Pendientes (inicio) */
+  .pend-cabeza { display:flex; align-items:center; gap:8px 16px; flex-wrap:wrap; }
+  .pend-cabeza h2 { margin:0 !important; }
+  .pend-cabeza .acciones { margin:0 0 0 auto; }
+  .pend-seccion { margin-top:18px; }
+  .pend-seccion h3 { font-family:'League Spartan',Arial,sans-serif; font-size:14px; color:var(--azul); margin:0 0 8px; display:flex; align-items:center; }
+  .pend-item { display:flex; align-items:center; gap:12px; padding:10px 12px; margin-bottom:8px; background:#fff;
+               border:1px solid var(--borde); border-left:4px solid var(--teal); border-radius:8px; }
+  .pend-item.urgente { border-left-color:#DC2626; }
+  .pend-info { flex:1; min-width:0; }
+  .pend-info .nota { margin-top:3px; overflow-wrap:anywhere; }
+  .pend-titulo { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .pend-item .btn { white-space:nowrap; padding:8px 14px; font-size:13px; }
+  .pend-vacio { text-align:center; padding:26px 12px 8px; }
+  .pend-vacio b { font-family:'League Spartan',Arial,sans-serif; font-size:18px; color:var(--azul); }
+  .pend-vacio .acciones { justify-content:center; }
+  .resaltado { box-shadow:0 0 0 2px var(--teal); }
+  .tabla-desliza { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  /* Teléfono (≤ 640 px): los grupos se pliegan en un menú; las tablas se deslizan dentro de su recuadro, nunca la página */
+  @media (max-width:640px) {
+    header { padding:10px 16px; gap:10px; }
+    header img { height:24px; }
+    .btn-menu { display:inline-flex; margin-left:auto; }
+    #navGrupos { display:none; order:10; width:100%; flex-direction:column; align-items:stretch; padding-top:6px;
+                 border-top:1px solid rgba(255,255,255,.15); }
+    header.menu-abierto #navGrupos { display:flex; }
+    #navGrupos button, .nav-externo { padding:10px 8px; justify-content:space-between; }
+    .nav-externo { margin:4px 0 0; }
+    .usuario { order:11; width:100%; margin-left:0; justify-content:space-between; }
+    header:not(.menu-abierto) .usuario { display:none; }
+    .subnav { padding:0 16px; }
+    main { margin:12px auto; }
+    .modulo { padding:14px; overflow-x:auto; }
+    .grid { grid-template-columns:1fr !important; }
+    .grid > * { grid-column:auto !important; }
+    .totales { width:100%; }
+    .tabla-desliza > table { min-width:600px; }
+    .pend-item { flex-wrap:wrap; }
+    .pend-item .btn { width:100%; }
+    .pend-cabeza .acciones { margin-left:0; }
+  }
 </style>
 </head>
 <body>
-<header>
+<header id="cabecera">
   <img src="data:image/png;base64,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" alt="Helgen">
-  <h1>COTIZADOR</h1>
-  <nav>
-    <button id="tabNueva" class="activo" onclick="verTab('nueva')">Nueva cotización</button>
-    <button id="tabHist" onclick="verTab('hist')">Historial</button>
-    <button id="tabCat" onclick="verTab('cat')">Catálogo</button>
-    <button id="tabReq" class="oculto" onclick="verTab('req')">Requisiciones</button>
-    <button id="tabOps" class="oculto" onclick="verTab('ops')">Operaciones</button>
+  <h1 title="Cotizaciones · Aprobaciones · Pagos · Requisiciones · Inventario">CAPRI</h1>
+  <!-- En el teléfono los grupos se pliegan en este menú -->
+  <button type="button" id="btnMenu" class="btn-menu" aria-expanded="false" aria-controls="navGrupos" onclick="alternarMenu()">Menú<span id="cntMenu" class="cuenta oculto"></span></button>
+  <!-- Grupos: Pendientes (inicio) · Ventas · Compras · Cobranza · Administración. Los ids tab… y verTab('…') no cambian -->
+  <nav id="navGrupos" aria-label="Secciones">
+    <button id="tabPend" class="activo" onclick="verTab('pend')">Pendientes<span id="cntPend" class="cuenta oculto"></span></button>
+    <button id="grpVentas" class="oculto" onclick="verGrupo('ventas')">Ventas</button>
+    <button id="grpCompras" class="oculto" onclick="verGrupo('compras')">Compras<span id="cntCompras" class="cuenta oculto"></span></button>
     <button id="tabCob" class="oculto" onclick="verTab('cob')">Cobranza</button>
-    <button id="tabCom" class="oculto" onclick="verTab('com')">Compras</button>
-    <button id="tabPend" class="oculto" onclick="verTab('pend')">Pendientes</button>
     <button id="tabAdmin" class="oculto" onclick="verTab('admin')">Administración</button>
+    <a id="lnkInventario" class="nav-externo oculto" href="https://drogheda.helgen.online/" target="_blank" rel="noopener noreferrer"
+       title="Se abre en otra pestaña">Inventario (centro de mando) ↗</a>
   </nav>
   <div id="usuario" class="usuario oculto">
     <span id="usuarioNombre"></span>
     <button type="button" onclick="cerrarSesion()">Cerrar sesión</button>
   </div>
 </header>
+<!-- Pantallas del grupo abierto (solo si tiene más de una) -->
+<nav id="subnav" class="subnav oculto" aria-label="Pantallas de la sección">
+  <div id="subVentas" class="oculto">
+    <button id="tabNueva" onclick="verTab('nueva')">Nueva cotización</button>
+    <button id="tabHist" onclick="verTab('hist')">Historial</button>
+    <button id="tabCat" onclick="verTab('cat')">Catálogo</button>
+  </div>
+  <div id="subCompras" class="oculto">
+    <button id="tabReq" class="oculto" onclick="verTab('req')">Requisiciones<span id="cntReq" class="cuenta oculto"></span></button>
+    <button id="tabOps" class="oculto" onclick="verTab('ops')">Aprobaciones<span id="cntOps" class="cuenta oculto"></span></button>
+    <button id="tabCom" class="oculto" onclick="verTab('com')">Compras<span id="cntCom" class="cuenta oculto"></span></button>
+  </div>
+  <div id="subAdmin" class="oculto">
+    <button id="admTabPermisos" class="oculto" onclick="verAdmin('permisos')">Permisos</button>
+    <button id="admTabDelegaciones" class="oculto" onclick="verAdmin('delegaciones')">Delegaciones</button>
+    <button id="admTabCorreos" class="oculto" onclick="verAdmin('correos')">Correos enviados</button>
+    <button id="admTabAnulados" class="oculto" onclick="verAdmin('anulados')">Anulados</button>
+  </div>
+</nav>
 
 <!-- Inicio de sesión: tapa la app hasta tener un token de Google de @helgen.tech -->
 <div id="login">
@@ -158,8 +235,20 @@
 <main>
   <div id="aviso" class="aviso"></div>
 
-  <!-- ===== PENDIENTES (incremento 4 · pantallas) ===== -->
-  <section id="vistaPend" class="oculto">
+  <!-- ===== PENDIENTES: inicio para todos (incremento 4 · pantallas; lo llena el script mod-pantallas) ===== -->
+  <section id="vistaPend">
+    <div class="modulo">
+      <div class="pend-cabeza">
+        <h2>Pendientes</h2>
+        <span id="pendResumen" class="nota">Lo que espera por ti, de lo más antiguo a lo más nuevo.</span>
+        <div class="acciones">
+          <label id="pendTodosCaja" class="oculto" style="display:flex; align-items:center; gap:6px; margin:0; white-space:nowrap">
+            <input type="checkbox" id="pendTodos" onchange="cambiarPendTodos()" style="width:auto"> Ver los de todos</label>
+          <button type="button" id="btnPendActualizar" class="btn btn-sec" onclick="actualizarPend()">Actualizar</button>
+        </div>
+      </div>
+      <div id="pendLista"><div class="nota" style="margin-top:12px">Cargando…</div></div>
+    </div>
   </section>
 
   <!-- ===== ADMINISTRACIÓN (incremento 4): cada módulo llena su bloque ===== -->
@@ -176,7 +265,7 @@
   </section>
 
   <!-- ===== NUEVA COTIZACIÓN ===== -->
-  <section id="vistaNueva">
+  <section id="vistaNueva" class="oculto">
     <div class="modulo">
       <h2>1 · Cliente y proyecto</h2>
       <div class="grid">
@@ -1111,7 +1200,7 @@
   // ---- Arranque: una sola llamada (bootstrap) ----
   // Las pestañas se dibujan al instante con los roles de la última sesión de este correo (localStorage) y se corrigen al
   // llegar el bootstrap. Es solo interfaz: el servidor vuelve a revisar los permisos en cada llamada.
-  let VERS = {}, BOOT = false, TAB = 'nueva';
+  let VERS = {}, BOOT = false, TAB = 'pend'; // Pendientes es el inicio para todos
   const CARGADO = { reqProy: false, misReq: false, comProy: false, comReqs: false, cobProy: false, ops: false };
   let SITIOS = []; // sitios donde se recibe material (Config → SITIOS)
   const flujoOps = () => !!PERMISOS.flujoOperaciones; // con ROL_OPERACIONES: aprobación, propuesta y recepción por renglón
@@ -1141,20 +1230,89 @@
   const puedeVender = () => PERMISOS.ventas !== undefined ? !!PERMISOS.ventas : !SOLO_REQ;
   let SITIOS_DET = []; // [{codigo, nombre, direccion}] (Config → SITIOS)
 
-  /** Muestra u oculta las pestañas según los permisos; si la visible ya no corresponde, va a la primera permitida. */
+  // ---- Navegación por grupos (CAPRI): Pendientes (inicio) · Ventas · Compras · Cobranza · Administración ----
+  // Los botones de siempre (tabNueva, tabReq…) siguen con su id y su verTab('…'): ahora viven en la barra del grupo (#subnav).
+  const GRUPOS = { pend: ['pend'], ventas: ['nueva', 'hist', 'cat'], compras: ['req', 'ops', 'com'], cob: ['cob'], admin: ['admin'] };
+  const BOTON_TAB = { nueva: 'tabNueva', hist: 'tabHist', cat: 'tabCat', req: 'tabReq', ops: 'tabOps', cob: 'tabCob', com: 'tabCom',
+    pend: 'tabPend', admin: 'tabAdmin' };
+  const BOTON_GRUPO = { pend: 'tabPend', ventas: 'grpVentas', compras: 'grpCompras', cob: 'tabCob', admin: 'tabAdmin' };
+  const SUB_GRUPO = { ventas: 'subVentas', compras: 'subCompras', admin: 'subAdmin' };
+  // Bloques de Administración (cada módulo llena el suyo); Permisos, Correos y Anulados solo para super admin
+  const BLOQUES_ADMIN = { permisos: ['adminPermisos', 'admTabPermisos'], delegaciones: ['adminDelegaciones', 'admTabDelegaciones'],
+    correos: ['adminCorreos', 'admTabCorreos'], anulados: ['adminAnulados', 'admTabAnulados'] };
+  const ULTIMA_DEL_GRUPO = {};
+  let ADMIN_BLOQUE = '';
+  // Conteos de Pendientes ({total, ops, com, req}; los manda el servidor con los pendientes). Sin ellos, se cuentan las listas cargadas
+  let CONTEOS_PEND = null, CUENTA_COM_LOCAL = 0;
+  function grupoDe(t) { return Object.keys(GRUPOS).find(g => GRUPOS[g].indexOf(t) !== -1) || 'pend'; }
+  function tabVisible(t) { return !!BOTON_TAB[t] && !$(BOTON_TAB[t]).classList.contains('oculto'); }
+  /** Bloques de Administración que esta persona puede ver (sin ninguno, no ve Administración). */
+  function bloquesAdmin() {
+    if (PERMISOS.superadmin) return Object.keys(BLOQUES_ADMIN);
+    return PERMISOS.operaciones || (PERMISOS.compras && !SOLO_REQ) ? ['delegaciones'] : [];
+  }
+  /** Abre un grupo: la pantalla que se usó la última vez o, si no, la primera con algo pendiente o la primera que puede ver. */
+  function verGrupo(g) {
+    const visibles = GRUPOS[g].filter(tabVisible);
+    if (!visibles.length) return;
+    const conPendientes = visibles.find(t => cuentaTab(t) > 0);
+    const ultima = ULTIMA_DEL_GRUPO[g];
+    verTab(visibles.indexOf(ultima) !== -1 ? ultima : conPendientes || visibles[0]);
+  }
+  function verAdmin(b) {
+    ADMIN_BLOQUE = b;
+    if (TAB !== 'admin') verTab('admin'); else pintarAdmin();
+  }
+  /** En Administración se ve un bloque a la vez (el elegido o el primero permitido). */
+  function pintarAdmin() {
+    const puede = bloquesAdmin();
+    if (puede.indexOf(ADMIN_BLOQUE) === -1) ADMIN_BLOQUE = puede[0] || '';
+    Object.keys(BLOQUES_ADMIN).forEach(b => {
+      $(BLOQUES_ADMIN[b][0]).classList.toggle('oculto', b !== ADMIN_BLOQUE);
+      $(BLOQUES_ADMIN[b][1]).classList.toggle('oculto', puede.indexOf(b) === -1);
+      $(BLOQUES_ADMIN[b][1]).classList.toggle('activo', b === ADMIN_BLOQUE);
+    });
+  }
+  /** Grupos visibles, el grupo abierto, su barra de pantallas, la liga al inventario y los conteos. */
+  function pintarNav() {
+    const g = grupoDe(TAB);
+    $('grpVentas').classList.toggle('oculto', !GRUPOS.ventas.some(tabVisible));
+    $('grpCompras').classList.toggle('oculto', !GRUPOS.compras.some(tabVisible));
+    Object.keys(BOTON_GRUPO).forEach(k => $(BOTON_GRUPO[k]).classList.toggle('activo', k === g));
+    Object.keys(SUB_GRUPO).forEach(k => $(SUB_GRUPO[k]).classList.toggle('oculto', k !== g));
+    const enBarra = g === 'admin' ? bloquesAdmin().length : SUB_GRUPO[g] ? GRUPOS[g].filter(tabVisible).length : 0;
+    $('subnav').classList.toggle('oculto', enBarra < 2);
+    if (g === 'admin') pintarAdmin();
+    // El inventario vive en el centro de mando: liga para quien pide, aprueba o compra
+    $('lnkInventario').classList.toggle('oculto', !(PERMISOS.requisicion || PERMISOS.operaciones || (PERMISOS.compras && !SOLO_REQ)));
+    pintarConteos();
+  }
+  /** Menú del teléfono (≤ 640 px): abre o cierra los grupos (sin argumento, alterna). */
+  function alternarMenu(abrir) {
+    const c = $('cabecera'), si = abrir === undefined ? !c.classList.contains('menu-abierto') : !!abrir;
+    c.classList.toggle('menu-abierto', si);
+    const b = $('btnMenu');
+    if (b.setAttribute) b.setAttribute('aria-expanded', si ? 'true' : 'false');
+  }
+
+  /**
+   * Muestra u oculta las pestañas según los permisos (solo interfaz: el servidor revisa cada llamada); si la visible ya no
+   * corresponde, va a Pendientes (el inicio, que todos ven). Ventas (Nueva cotización, Historial, Catálogo) con puedeVender();
+   * Administración con super admin o con Aprobaciones o Compras (sus delegaciones).
+   */
   function aplicarPermisos(permisos, solo) {
     PERMISOS = permisos || {}; SOLO_REQ = !!solo;
-    ['tabNueva', 'tabHist', 'tabCat'].forEach(id => $(id).classList.toggle('oculto', SOLO_REQ));
+    const vende = puedeVender();
+    ['tabNueva', 'tabHist', 'tabCat'].forEach(id => $(id).classList.toggle('oculto', !vende));
+    $('tabPend').classList.remove('oculto');
     $('tabReq').classList.toggle('oculto', !PERMISOS.requisicion);
     $('tabOps').classList.toggle('oculto', !PERMISOS.operaciones); // también con SOLO_REQUISICION
     $('tabCob').classList.toggle('oculto', SOLO_REQ || !PERMISOS.cobranza);
     $('tabCom').classList.toggle('oculto', SOLO_REQ || !PERMISOS.compras);
-    $('tabAdmin').classList.toggle('oculto', !PERMISOS.superadmin);
+    $('tabAdmin').classList.toggle('oculto', !bloquesAdmin().length);
     pintarSitios();
     avisarModulos('alPermisos', PERMISOS, SOLO_REQ);
-    const boton = { nueva: 'tabNueva', hist: 'tabHist', cat: 'tabCat', req: 'tabReq', ops: 'tabOps', cob: 'tabCob', com: 'tabCom',
-      pend: 'tabPend', admin: 'tabAdmin' }[TAB];
-    if ($(boton).classList.contains('oculto')) verTab(SOLO_REQ ? 'req' : 'nueva');
+    if (!tabVisible(TAB)) verTab('pend'); else pintarNav();
   }
   function rolesDeUltimaSesion(correo) {
     if (BOOT) return;
@@ -2246,12 +2404,28 @@
       x => { MISREQ_PENDIENTE = null; pintarMisReq(x.requisiciones || MIS_REQ); });
   }
 
-  /** Pendientes en las pestañas: operaciones (aprobar y visto bueno), quien pide (corregir y recibir), compras (por cotizar). */
+  /**
+   * Cuántos pendientes hay en una pestaña: los de Pendientes (servidor) o, si todavía no llegan, los de las listas cargadas
+   * (aprobaciones: aprobar y visto bueno; quien pide: corregir y recibir; compras: por cotizar).
+   */
+  function cuentaTab(t) {
+    if (!tabVisible(t)) return 0;
+    if (CONTEOS_PEND) return Number(CONTEOS_PEND[t]) || 0;
+    if (t === 'ops') return OPS ? OPS.filter(pendienteOps).length : 0;
+    if (t === 'req') return MIS_REQ.filter(r => r.puedeRecibir || (r.estado === 'Devuelta' && r.puedeEditar)).length;
+    if (t === 'com') {
+      if (COM_LISTA && !COM_FILTRO.buscar && !COM_FILTRO.estado) CUENTA_COM_LOCAL = COM_LISTA.filter(r => r.estado === 'Aprobada').length;
+      return CUENTA_COM_LOCAL;
+    }
+    return 0;
+  }
+  /** Números en la navegación: por pantalla (Requisiciones, Aprobaciones, Compras), por grupo, en Pendientes y en el menú. */
   function pintarConteos() {
-    const n = (t, k) => t + (k ? ' (' + k + ')' : '');
-    $('tabOps').textContent = n('Operaciones', OPS ? OPS.filter(pendienteOps).length : 0);
-    $('tabReq').textContent = n('Requisiciones', MIS_REQ.filter(r => r.puedeRecibir || (r.estado === 'Devuelta' && r.puedeEditar)).length);
-    if (COM_LISTA && !COM_FILTRO.buscar && !COM_FILTRO.estado) $('tabCom').textContent = n('Compras', COM_LISTA.filter(r => r.estado === 'Aprobada').length);
+    const poner = (id, n) => { $(id).textContent = n ? String(n) : ''; $(id).classList.toggle('oculto', !n); };
+    const req = cuentaTab('req'), ops = cuentaTab('ops'), com = cuentaTab('com');
+    poner('cntReq', req); poner('cntOps', ops); poner('cntCom', com); poner('cntCompras', req + ops + com);
+    const total = CONTEOS_PEND ? Number(CONTEOS_PEND.total) || 0 : req + ops + com;
+    poner('cntPend', total); poner('cntMenu', total);
   }
 
   /** Devuelta: el solicitante corrige renglones (y si quiere, la cotización) y la reenvía con el mismo folio. */
@@ -3252,6 +3426,9 @@
     $('tabCat').classList.toggle('activo', t === 'cat');
     $('tabNueva').classList.toggle('activo', t === 'nueva');
     $('tabHist').classList.toggle('activo', t === 'hist');
+    ULTIMA_DEL_GRUPO[grupoDe(t)] = t;
+    pintarNav(); // grupo abierto, su barra y Administración (un bloque a la vez)
+    alternarMenu(false);
     if (t === 'hist') cargarHistorial();
     if (t === 'cat') cargarCatalogo();
     if (t === 'cob') verResumenCob();
@@ -3272,6 +3449,19 @@
   function mostrarError(err) {
     aviso('error', esc(err && err.message ? err.message : err));
     $('btnGuardar').disabled = false; $('btnGuardar').textContent = 'Guardar y generar PDF';
+  }
+
+  // En el teléfono las tablas se deslizan dentro de su recuadro y la página nunca se mueve de lado: cada tabla que no tenga ya
+  // un contenedor con desplazamiento queda dentro de uno (.tabla-desliza; en ≤ 640 px con ancho mínimo para que no se apriete)
+  if (document.querySelectorAll) {
+    document.querySelectorAll('main table').forEach(t => {
+      const padre = t.parentElement;
+      if (!padre || padre.classList.contains('tabla-desliza') || /overflow-x/.test(padre.getAttribute('style') || '')) return;
+      const caja = document.createElement('div');
+      caja.className = 'tabla-desliza';
+      padre.insertBefore(caja, t);
+      caja.appendChild(t);
+    });
   }
 </script>
 
@@ -3524,7 +3714,165 @@
 </script>
 
 <script id="mod-pantallas">
-  // Pantallas: CAPRI, navegación por grupos, Pendientes (inicio) y conteos
+  // Pantallas: CAPRI, navegación por grupos, Pendientes (inicio) y conteos. La navegación por grupos vive en aplicarPermisos /
+  // verTab (script principal); aquí lo que depende de los pendientes (servidor: pendientes(), también en el bootstrap y en la
+  // sincronización) y las ligas directas de los correos (#req=REQ-AAAA-NNNN y #pend).
+  let PEND = null, PEND_TODOS = false, PEND_PEDIDO = 0, PEND_CARGANDO = false, PEND_VISTOS = [], PEND_DIA = '', LIGA_VISTA = false;
+  const SECCIONES_PEND = [['aprobaciones', 'Aprobaciones', 'Aprobaciones'], ['compras', 'Compras', 'Compras'],
+    ['mias', 'Mis requisiciones', 'Quien pide o recibe']];
+  const hoyLocal = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); };
+  const plural = (n, uno, varios) => n + ' ' + (n === 1 ? uno : varios);
+
+  /** Pendientes del servidor (bootstrap, sincronizar o pendientes()): la lista y los números de la navegación (siempre los propios). */
+  function recibirPendientes(p) {
+    if (!p) return;
+    PEND = p; PEND_CARGANDO = false; PEND_DIA = hoyLocal();
+    PEND_TODOS = !!p.todos && !!PERMISOS.superadmin; $('pendTodos').checked = PEND_TODOS;
+    CONTEOS_PEND = p.conteos || null;
+    pintarConteos();
+    pintarPendientes();
+  }
+  function actualizarPend() {
+    const pedido = ++PEND_PEDIDO; // si se pide otra vez (p. ej. cambia el interruptor), gana la última respuesta
+    PEND_CARGANDO = true; $('btnPendActualizar').disabled = true;
+    const fin = () => { PEND_CARGANDO = false; $('btnPendActualizar').disabled = false; };
+    google.script.run.withSuccessHandler(p => { if (pedido !== PEND_PEDIDO) return; fin(); recibirPendientes(p); })
+      .withFailureHandler(err => {
+        if (pedido !== PEND_PEDIDO) return;
+        fin();
+        $('pendLista').innerHTML = '<div class="aviso error" style="margin-top:12px">No se pudieron cargar los pendientes: ' +
+          esc(err && err.message ? err.message : err) + ' <a href="#" onclick="actualizarPend();return false">Intentar de nuevo</a></div>';
+      }).pendientes(PEND_TODOS);
+  }
+  /** Super admin: ver los pendientes de todos (o volver a los suyos). */
+  function cambiarPendTodos() {
+    PEND_TODOS = !!$('pendTodos').checked && !!PERMISOS.superadmin;
+    $('pendLista').innerHTML = '<div class="nota" style="margin-top:12px">Cargando…</div>';
+    actualizarPend();
+  }
+
+  /** Cuánto lleva esperando (o, una factura, cuándo vence). */
+  function textoEspera(x) {
+    if (x.tipo === 'factura') {
+      const d = Number(x.diasVencida) || 0;
+      return d > 0 ? 'Vencida hace ' + plural(d, 'día', 'días') : d === 0 ? 'Vence hoy' : 'Vence el ' + fechaMx(x.vence) + ' (en ' + plural(-d, 'día', 'días') + ')';
+    }
+    return 'Desde el ' + fechaMx(x.desde) + (x.dias === 0 ? ' (hoy)' : x.dias === 1 ? ' (ayer)' : ' (hace ' + x.dias + ' días)');
+  }
+  function htmlItem(x, i) {
+    return '<div class="pend-item' + (x.urgente ? ' urgente' : '') + '"><div class="pend-info">' +
+      '<div class="pend-titulo"><b>' + esc(x.folio) + '</b><span class="chip">' + esc(x.titulo) + '</span>' + chipPrio(x.prioridad) + '</div>' +
+      (x.detalle ? '<div class="nota">' + esc(x.detalle) + '</div>' : '') +
+      '<div class="nota">' + [x.sitio ? 'Sitio: <b>' + esc(x.sitio) + '</b>' : '', esc(textoEspera(x)),
+        x.para ? 'Espera a: <b>' + esc(x.para) + '</b>' : ''].filter(Boolean).join(' · ') + '</div></div>' +
+      '<button type="button" class="btn" onclick="irPendiente(' + i + ')">' + esc(x.accion) + '</button></div>';
+  }
+  function htmlVacio() {
+    const atajos = [puedeVender() ? botonChico('Nueva cotización', "verTab('nueva')") : '',
+      PERMISOS.requisicion ? botonChico('Nueva requisición', "verTab('req')") : ''].filter(Boolean).join('');
+    return '<div class="pend-vacio"><b>Nada pendiente</b><p class="nota">' + (PEND && PEND.todos ? 'Nadie tiene nada pendiente.'
+      : 'Cuando algo espere por ti (aprobar, cotizar, pagar, corregir o recibir) aparecerá aquí.') + '</p>' +
+      (atajos ? '<div class="acciones">' + atajos + '</div>' : '') + '</div>';
+  }
+  /** Pendientes por sección (Aprobaciones, Compras, Mis requisiciones), de lo más antiguo a lo más nuevo, un botón por cada uno. */
+  function pintarPendientes() {
+    $('pendTodosCaja').classList.toggle('oculto', !PERMISOS.superadmin);
+    if (!PEND) return;
+    const items = PEND.items || [];
+    PEND_VISTOS = items;
+    $('pendResumen').textContent = PEND.todos ? 'Lo que espera a cada persona, de lo más antiguo a lo más nuevo.'
+      : 'Lo que espera por ti, de lo más antiguo a lo más nuevo.';
+    const avisos = (PEND.avisos || []).length ? '<div class="nota aviso-moneda" style="margin-top:10px">' + PEND.avisos.map(esc).join('<br>') + '</div>' : '';
+    if (!items.length) { $('pendLista').innerHTML = htmlVacio() + avisos; return; }
+    $('pendLista').innerHTML = SECCIONES_PEND.map(([k, mio, todos]) => {
+      const lista = items.map((x, i) => [x, i]).filter(([x]) => x.seccion === k);
+      return lista.length ? '<div class="pend-seccion"><h3>' + esc(PEND.todos ? todos : mio) + '<span class="cuenta">' + lista.length + '</span></h3>' +
+        lista.map(([x, i]) => htmlItem(x, i)).join('') + '</div>' : '';
+    }).join('') + avisos;
+  }
+
+  function irPendiente(i) {
+    const x = PEND_VISTOS[i];
+    if (x) abrirDestino(x.destino, x.req || x.folio, x.tipo);
+  }
+  /** Abre la pantalla donde se resuelve un pendiente: Aprobaciones, Compras (requisición o cuentas por pagar) o mis requisiciones. */
+  function abrirDestino(destino, folio, tipo) {
+    const tab = { ops: 'ops', com: 'com', cxp: 'com', req: 'req' }[destino];
+    if (!tab || !tabVisible(tab)) { aviso('error', 'Tu cuenta no tiene acceso a esa pantalla.'); return; }
+    if (destino === 'ops') { verTab('ops'); abrirOps(folio); }
+    else if (destino === 'com') { verTab('com'); abrirReqCom(folio); }
+    else if (destino === 'cxp') { verTab('com'); verCxp(); }
+    else irAMiReq(folio, tipo);
+  }
+  /** Mis requisiciones: corregir la devuelta, abrir la recepción o señalar la tarjeta (si no está en la lista, se pide). */
+  function irAMiReq(folio, tipo) {
+    const hacer = () => {
+      const r = MIS_REQ.find(x => x.folio === folio);
+      if (!r) { aviso('error', 'No encontramos la requisición <b>' + esc(folio) + '</b> entre las tuyas.'); return; }
+      if (tipo === 'corregir' && r.puedeEditar) { editarReq(folio); return; }
+      if (tipo === 'recibir' && r.puedeRecibir && REC_ABIERTA !== folio) abrirRecepcion(folio);
+      resaltarMiReq(folio);
+    };
+    const tiene = MIS_REQ.some(x => x.folio === folio);
+    if (!tiene) {
+      CARGADO.misReq = true; // se pide aquí: verTab ya no la vuelve a pedir
+      google.script.run.withSuccessHandler(l => { pintarMisReq(l); hacer(); })
+        .withFailureHandler(err => { CARGADO.misReq = false; mostrarError(err); }).misRequisiciones();
+    }
+    verTab('req');
+    if (tiene) hacer();
+  }
+  function resaltarMiReq(folio) {
+    const caja = document.getElementById('rcpCaja-' + folio), tarjeta = caja && caja.parentElement;
+    if (!tarjeta || !tarjeta.classList) return;
+    tarjeta.classList.add('resaltado');
+    if (tarjeta.scrollIntoView) tarjeta.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setTimeout(() => tarjeta.classList.remove('resaltado'), 2500);
+  }
+
+  /** Liga directa (correos): #req=REQ-AAAA-NNNN o #pend. */
+  function leerLiga() {
+    let h = '';
+    try { h = decodeURIComponent(String((window.location && window.location.hash) || '')).trim(); } catch (e) { return null; }
+    const m = h.match(/^#req=(REQ-\d{4}-\d{3,})$/i);
+    if (m) return { folio: m[1].toUpperCase() };
+    return /^#pend(ientes)?$/i.test(h) ? { pend: true } : null;
+  }
+  /**
+   * Abre lo que dice la liga, ya con la sesión y los permisos: primero lo que ese folio espera de esta persona (Pendientes); si no
+   * espera nada, según su rol: Aprobaciones, Compras o sus requisiciones. La liga se quita de la dirección (recargar no la repite).
+   */
+  function seguirLiga() {
+    const liga = leerLiga();
+    if (!liga) return;
+    try { if (window.history && window.history.replaceState) window.history.replaceState(null, '', window.location.pathname + window.location.search); } catch (e) {}
+    if (liga.pend) { verTab('pend'); return; }
+    const it = PEND && !PEND.todos ? (PEND.items || []).find(x => x.req === liga.folio || x.folio === liga.folio) : null;
+    if (it) { abrirDestino(it.destino, it.req || it.folio, it.tipo); return; }
+    const tab = ['ops', 'com', 'req'].find(tabVisible);
+    if (tab) abrirDestino(tab, liga.folio);
+    else aviso('error', 'Tu cuenta no tiene acceso a la requisición <b>' + esc(liga.folio) + '</b>.');
+  }
+  if (typeof window.addEventListener === 'function') window.addEventListener('hashchange', () => { if (BOOT) seguirLiga(); });
+
+  registrarModulo({
+    nombre: 'Pantallas',
+    alBootstrap(d) {
+      if (d.pendientes) recibirPendientes(d.pendientes);
+      else actualizarPend(); // no llegó en la carga inicial (falló esa pieza): se pide aparte
+      if (!LIGA_VISTA) { LIGA_VISTA = true; setTimeout(seguirLiga, 0); } // cuando termine la carga inicial
+    },
+    alSincronizar(r) {
+      if (r && r.pendientes) recibirPendientes(r.pendientes);
+      else if (PEND && PEND_DIA !== hoyLocal() && !PEND_CARGANDO) actualizarPend(); // cambió el día: vencimientos y "hace N días"
+    },
+    contexto: () => ({ pendTodos: PEND_TODOS }),
+    alPermisos(p) {
+      if (!p.superadmin && PEND_TODOS) { PEND_TODOS = false; $('pendTodos').checked = false; if (BOOT) actualizarPend(); }
+      $('pendTodosCaja').classList.toggle('oculto', !p.superadmin);
+    },
+    alVerTab(t) { if (t === 'pend' && BOOT && !PEND && !PEND_CARGANDO) actualizarPend(); },
+  });
 </script>
 
 <script id="mod-anular">

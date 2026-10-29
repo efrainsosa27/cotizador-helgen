@@ -6937,9 +6937,235 @@ function modCentroMando_() {
 function avisarPortal_(tipo, folioOc) {}
 
 // ---- 6.D Pantallas: Pendientes (inicio), conteos y navegación por grupos ----
+// Pendientes = lo que espera a cada quien, de lo más antiguo a lo más nuevo, con un botón que abre la pantalla donde se resuelve:
+// Aprobaciones (aprobar y dar el visto bueno; nunca lo propio), Compras (autorizar o cotizar, pagar, marcar En camino en
+// proyectos ligados al centro de mando, facturas que vencen en 7 días o ya vencieron) y quien pide o recibe (corregir lo devuelto,
+// recibir el material). Un super admin puede ver además los de todos. Quien pide o recibe nunca ve montos, proveedor ni orden.
+// Solo lee: la pestaña Requisiciones y OrdenesCompra una vez por versión (caché compartido entre usuarios) y las cuentas por
+// pagar (caché por día). Va en la carga inicial y en la sincronización cuando cambia algo de lo que depende.
+
+/** Estados en que una requisición todavía espera a alguien (Cerrada, Rechazada y Cancelada ya no). */
+const ESTADOS_PENDIENTES = [REQ_SOLICITADA, REQ_DEVUELTA, REQ_APROBADA, REQ_COTIZADA, REQ_AUTORIZADA, REQ_PAGADA, REQ_RECIBIDA, REQ_EN_CAMINO];
+/** Colecciones de las que dependen los pendientes (si cambia una, la sincronización los vuelve a mandar). */
+const COLECCIONES_PENDIENTES = ['requisiciones', 'oc', 'pagosProveedores', 'facturasProveedor', 'permisos', 'proyectos', 'anulaciones'];
+/** Una factura de proveedor sale en Pendientes desde 7 días antes de vencer. */
+const DIAS_AVISO_FACTURA = 7;
 
 function modPantallas_() {
-  return { nombre: 'Pantallas', api: {}, cambios: {}, solo: [], publicas: [] };
+  return { nombre: 'Pantallas', api: { pendientes: pendientes }, cambios: {}, solo: ['pendientes'], publicas: [],
+    bootstrap(permisos, errores) { return { pendientes: pendientes(false) }; },
+    sincronizar(permisos, ctx, algo, r, errores) {
+      if (algo.apply(null, COLECCIONES_PENDIENTES)) r.pendientes = pendientes(!!(ctx && ctx.pendTodos) && esSuperAdmin_());
+    } };
+}
+
+/**
+ * Pendientes del usuario de la sesión. todos = true: los de todos (solo super admin; si no, PERMISO). Devuelve {hoy, todos, flujo,
+ * items, conteos, avisos}: items de lo más antiguo a lo más nuevo (ver itemsPendientes); conteos = los del usuario (también con
+ * todos), para los números de la navegación.
+ */
+function pendientes(todos) {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión para continuar.');
+  const verTodos = todos === true;
+  if (verTodos && !esSuperAdmin_()) throw errorPermiso_('Solo un super admin puede ver los pendientes de todos.');
+  const hoy = hoyIso_(), avisos = [];
+  const roles = { aprobaciones: esOperaciones_(), compras: esCompras_(), requisicion: esRequisicion_() };
+  let cxp = [];
+  if (roles.compras) {
+    try { cxp = (cuentasPorPagar() || {}).abiertas || []; } catch (e) { avisos.push('Facturas de proveedor: ' + e.message); }
+  }
+  const usuarios = contextoRoles_().usuarios, nombres = {};
+  Object.keys(usuarios).forEach(c => { if (usuarios[c].nombre) nombres[c] = usuarios[c].nombre; });
+  const o = { yo: yo_(), roles: roles, flujo: flujoOperaciones_(), hoy: hoy, cxp: cxp, nombres: nombres, ligado: proyectoLigadoPend_ };
+  const base = basePendientes_();
+  const mios = itemsPendientes(base, o);
+  return { hoy: hoy, todos: verTodos, flujo: o.flujo, items: verTodos ? itemsPendientes(base, Object.assign({}, o, { todos: true })) : mios,
+    conteos: conteosPendientes(mios), avisos: avisos };
+}
+
+/**
+ * Requisiciones que todavía esperan a alguien, con lo que Pendientes necesita (su orden y su propuesta vigente, con montos: se
+ * filtran por rol en itemsPendientes). Una lectura de Requisiciones y otra de OrdenesCompra; en caché por versión para todos.
+ */
+function basePendientes_() {
+  return enCache_('pendientes', ['requisiciones', 'oc', 'pagosProveedores', 'proyectos', 'anulaciones'], TTL_CACHE, () => {
+    const libro = libroComprasSiExiste_(); // solo lee: el libro lo crea la primera requisición
+    if (!libro) return [];
+    const proyectos = mapaProyectos_(), abiertas = [];
+    filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
+      if (!String(r[0] || '').trim()) return;
+      const q = reqDesdeFila_(r, i + 2);
+      if (ESTADOS_PENDIENTES.indexOf(q.estado) !== -1) abiertas.push({ q: q, desde: marcaPendiente_(r[12], q.fecha) });
+    });
+    const ordenes = abiertas.some(x => x.q.ocFolio) ? ordenesPorFolio_(libro) : {};
+    return abiertas.map(x => {
+      const q = x.q, p = proyectos[q.proyectoFolio.toUpperCase()], prop = propuestaVigente_(q);
+      const oc = q.ocFolio ? ordenes[q.ocFolio.toUpperCase()] || null : null;
+      return { folio: q.folio, fecha: q.fecha, desde: x.desde, proyectoFolio: q.proyectoFolio,
+        proyectoVisible: p ? p.folioVisible : q.proyectoFolio, proyectoNombre: p ? p.nombre : '',
+        solicitanteEmail: q.solicitanteEmail, solicitante: q.solicitante, estado: q.estado, motivo: q.motivo, sitio: q.sitio,
+        prioridad: q.prioridad, fechaRequerida: q.fechaRequerida, recibeEmail: q.recibeEmail,
+        elaboroEmail: prop ? String(prop.elaboroEmail || '').toLowerCase() : '',
+        propuesta: prop ? { proveedor: prop.proveedor ? prop.proveedor.razonSocial : '', total: prop.total, moneda: prop.moneda } : null,
+        oc: oc ? { folio: oc.folio, estado: oc.estado, proveedor: oc.proveedor, total: oc.total, moneda: oc.moneda } : null };
+    });
+  });
+}
+
+/** Momento ordenable ("AAAA-MM-DD HH:mm") de la celda "actualizado" (Date de Sheets o texto); si falta, la fecha del registro. */
+function marcaPendiente_(v, fecha) {
+  if (v instanceof Date) return Utilities.formatDate(v, 'America/Mexico_City', 'yyyy-MM-dd HH:mm');
+  return marcaOrdenable(v) || marcaOrdenable(fecha);
+}
+
+/**
+ * ¿El proyecto está ligado al centro de mando (drogheda.helgen.online)? Lo decide el módulo del centro de mando con su función
+ * proyectoLigado_(folio); mientras no exista, ninguno (y no hay pendientes de "marcar En camino").
+ */
+function proyectoLigadoPend_(folio) {
+  try {
+    return typeof proyectoLigado_ === 'function' && !!proyectoLigado_(folio);
+  } catch (e) {
+    return false;
+  }
+}
+
+// -- Lógica pura de Pendientes (se prueba en Node) --
+
+/** "2026-10-28 14:05:09", "2026-10-28" o "28/10/2026 14:05" → "2026-10-28 14:05"; '' si no es una fecha. */
+function marcaOrdenable(texto) {
+  const t = String(texto == null ? '' : texto).trim().replace(/^'/, '');
+  const d2 = s => String(s).padStart(2, '0');
+  let m = t.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2}))?/);
+  if (m) return m[1] + '-' + m[2] + '-' + m[3] + ' ' + d2(m[4] || '0') + ':' + (m[5] || '00');
+  m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?: (\d{1,2}):(\d{2}))?/);
+  if (m) return m[3] + '-' + d2(m[2]) + '-' + d2(m[1]) + ' ' + d2(m[4] || '0') + ':' + (m[5] || '00');
+  return '';
+}
+
+/**
+ * Pendientes a partir de las requisiciones abiertas (basePendientes_). o = {yo, roles: {aprobaciones, compras, requisicion}, flujo
+ * (con aprobaciones), todos (los de todos, para el super admin), hoy (AAAA-MM-DD), cxp (facturas abiertas de cuentasPorPagar),
+ * nombres ({correo: nombre}), ligado(proyectoFolio) → ¿ligado al centro de mando?}. Cada item: {tipo, seccion (aprobaciones,
+ * compras, mias), folio, req (requisición que se abre), titulo, detalle, sitio, desde (AAAA-MM-DD), dias (que lleva esperando),
+ * prioridad, urgente, accion (texto del botón), destino (ops = Aprobaciones, com = Compras, cxp = cuentas por pagar, req = mis
+ * requisiciones), para (solo con todos: a quién espera)}; las facturas además {vence, diasVencida}. De lo más antiguo a lo más
+ * nuevo. Reglas: nadie aprueba ni da el visto bueno a lo suyo (ni a la propuesta que preparó); quien pide o recibe nunca ve
+ * montos, proveedor ni folio de la orden.
+ */
+function itemsPendientes(base, o) {
+  const x = o || {}, roles = x.roles || {}, todos = !!x.todos, flujo = !!x.flujo, hoy = String(x.hoy || '');
+  const yo = String(x.yo || '').toLowerCase();
+  const ligado = typeof x.ligado === 'function' ? x.ligado : () => false;
+  const nombre = c => (x.nombres || {})[c] || c;
+  const dinero = (n, m) => formatoMoneda(n) + ' ' + (m || 'MXN');
+  const fecha = iso => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[3] + '/' + m[2] + '/' + m[1] : String(iso || ''); };
+  const esFecha = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
+  const diasDesde = d => esFecha(d) && esFecha(hoy) ? Math.max(0, diasEntre(d, hoy)) : 0;
+  const proyecto = q => [q.proyectoVisible, q.proyectoNombre].filter(Boolean).join(' · ');
+  const items = [];
+  const agregar = (q, seccion, it, para) => {
+    const desde = String(q.desde || '').slice(0, 10);
+    items.push(Object.assign({ folio: q.folio, req: q.folio, sitio: q.sitio || '', desde: desde, dias: diasDesde(desde),
+      prioridad: q.prioridad || '', urgente: q.prioridad === 'Urgente', orden: q.desde || '' }, it, {
+      seccion: seccion, detalle: (it.detalle || []).filter(Boolean).join(' · ') }, todos ? { para: para } : {}));
+  };
+
+  // Facturas abiertas que vencen en DIAS_AVISO_FACTURA días o ya vencieron, por orden: se anotan en el pendiente de pagar su orden
+  const facturas = {}, anotadas = {};
+  ((roles.compras || todos) ? (x.cxp || []) : []).filter(f => Number(f.dias) >= -DIAS_AVISO_FACTURA).forEach(f => {
+    const k = String(f.ocFolio || '').toUpperCase();
+    (facturas[k] = facturas[k] || []).push(f);
+  });
+  const textoVence = f => Number(f.dias) > 0 ? 'factura vencida hace ' + f.dias + ' día' + (f.dias === 1 ? '' : 's')
+    : Number(f.dias) === 0 ? 'factura vence hoy' : 'factura vence el ' + fecha(f.fechaVencimiento);
+
+  (base || []).forEach(q => {
+    const suya = q.solicitanteEmail === yo, recibe = q.recibeEmail || q.solicitanteEmail;
+    // Aprobaciones (solo con el flujo con aprobaciones): aprobar y visto bueno, nunca lo propio ni la propuesta que uno preparó
+    if (flujo && (roles.aprobaciones || todos)) {
+      if (q.estado === REQ_SOLICITADA && (todos || !suya)) {
+        agregar(q, 'aprobaciones', { tipo: 'aprobar', titulo: 'Por aprobar', accion: 'Aprobar', destino: 'ops',
+          detalle: [proyecto(q), 'pidió ' + q.solicitante, q.fechaRequerida ? 'se necesita el ' + fecha(q.fechaRequerida) : ''] }, 'Aprobaciones');
+      }
+      if (q.estado === REQ_COTIZADA && (todos || (!suya && q.elaboroEmail !== yo))) {
+        const p = q.propuesta || {};
+        agregar(q, 'aprobaciones', { tipo: 'visto', titulo: 'Propuesta por visto bueno', accion: 'Dar visto bueno', destino: 'ops',
+          detalle: [proyecto(q), p.proveedor, p.total != null ? dinero(p.total, p.moneda) : ''] }, 'Aprobaciones');
+      }
+    }
+    // Compras: autorizar (flujo de siempre) o cotizar (con aprobaciones), pagar, marcar En camino (proyectos ligados)
+    if (roles.compras || todos) {
+      if (!flujo && q.estado === REQ_SOLICITADA) {
+        agregar(q, 'compras', { tipo: 'autorizar', titulo: 'Por autorizar', accion: 'Revisar', destino: 'com',
+          detalle: [proyecto(q), 'pidió ' + q.solicitante] }, 'Compras');
+      }
+      if (flujo && q.estado === REQ_APROBADA) {
+        const regresada = !!q.motivo;
+        agregar(q, 'compras', { tipo: 'cotizar', titulo: regresada ? 'Propuesta regresada' : 'Por cotizar',
+          accion: regresada ? 'Corregir propuesta' : 'Cotizar', destino: 'com',
+          detalle: [proyecto(q), 'pidió ' + q.solicitante, regresada ? 'motivo: ' + q.motivo : ''] }, 'Compras');
+      }
+      const oc = q.oc;
+      if (oc && oc.estado === OC_EMITIDA && [REQ_AUTORIZADA, REQ_EN_CAMINO, REQ_RECIBIDA].indexOf(q.estado) !== -1) {
+        const fs = facturas[String(oc.folio).toUpperCase()] || [];
+        fs.forEach(f => { anotadas[f.folio] = true; });
+        const recibida = q.estado === REQ_RECIBIDA, encamino = q.estado === REQ_EN_CAMINO;
+        agregar(q, 'compras', { tipo: recibida ? 'pagarRecibida' : 'pagar',
+          titulo: recibida ? 'Recibida, falta pagar' : encamino ? 'En camino, falta pagar' : 'Orden por pagar',
+          accion: recibida || encamino ? 'Pagar' : 'Enviar y pagar', destino: 'com',
+          urgente: q.prioridad === 'Urgente' || fs.some(f => Number(f.dias) > 0),
+          detalle: [proyecto(q), oc.folio, oc.proveedor, dinero(oc.total, oc.moneda)].concat(fs.map(textoVence)) }, 'Compras');
+      }
+      if (oc && q.estado === REQ_PAGADA && ligado(q.proyectoFolio)) {
+        agregar(q, 'compras', { tipo: 'encamino', titulo: 'Por marcar En camino', accion: 'Marcar En camino', destino: 'com',
+          detalle: [proyecto(q), oc.folio, oc.proveedor] }, 'Compras');
+      }
+    }
+    // Quien pide o recibe: corregir lo devuelto, recibir el material (sin montos, proveedor ni orden)
+    if (roles.requisicion || todos) {
+      if (q.estado === REQ_DEVUELTA && (todos || suya)) {
+        agregar(q, 'mias', { tipo: 'corregir', titulo: suya ? 'Te la devolvieron' : 'Devuelta', accion: 'Corregir y reenviar',
+          destino: suya ? 'req' : 'com', detalle: [proyecto(q), q.motivo ? 'motivo: ' + q.motivo : ''] }, nombre(q.solicitanteEmail));
+      }
+      const porRecibir = flujo ? [REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO] : [REQ_PAGADA, REQ_EN_CAMINO];
+      const mia = suya || recibe === yo;
+      if (porRecibir.indexOf(q.estado) !== -1 && (todos || mia)) {
+        const enCentro = ligado(q.proyectoFolio);
+        agregar(q, 'mias', { tipo: 'recibir', titulo: q.estado === REQ_EN_CAMINO ? 'En camino' : 'Por recibir',
+          accion: enCentro ? 'Recibir en el centro de mando' : flujo ? 'Registrar lo que llegó' : 'Confirmar que llegó',
+          destino: mia ? 'req' : 'com', detalle: [proyecto(q), recibe === yo && !suya ? 'la pidió ' + q.solicitante
+            : recibe !== q.solicitanteEmail ? 'recibe ' + nombre(recibe) : ''] }, nombre(recibe));
+      }
+    }
+  });
+
+  // Facturas que no se anotaron en una orden por pagar (órdenes de antes, sin requisición abierta)
+  Object.keys(facturas).forEach(k => facturas[k].forEach(f => {
+    if (anotadas[f.folio]) return;
+    const vencida = Number(f.dias) > 0;
+    items.push(Object.assign({ tipo: 'factura', seccion: 'compras', folio: f.folio, req: f.reqFolio || '',
+      titulo: vencida ? 'Factura vencida' : 'Factura por vencer', sitio: '', desde: f.fechaVencimiento, dias: 0,
+      vence: f.fechaVencimiento, diasVencida: Number(f.dias) || 0, prioridad: '', urgente: vencida,
+      accion: f.reqFolio ? 'Abrir y pagar' : 'Ver cuentas por pagar', destino: f.reqFolio ? 'com' : 'cxp',
+      detalle: [f.proveedor, f.serieFolio || '', dinero(f.total, f.moneda), f.ocFolio, f.proyectoVisible].filter(Boolean).join(' · '),
+      orden: marcaOrdenable(f.fechaVencimiento) }, todos ? { para: 'Compras' } : {}));
+  }));
+
+  items.sort((a, b) => a.orden < b.orden ? -1 : a.orden > b.orden ? 1 : a.folio < b.folio ? -1 : a.folio > b.folio ? 1 : 0);
+  return items.map(it => { const y = Object.assign({}, it); delete y.orden; return y; });
+}
+
+/** Cuántos pendientes hay por sección y por pestaña (ops = Aprobaciones, com = Compras con cuentas por pagar, req = Requisiciones). */
+function conteosPendientes(items) {
+  const c = { total: 0, aprobaciones: 0, compras: 0, mias: 0, ops: 0, com: 0, req: 0 };
+  (items || []).forEach(it => {
+    c.total++;
+    if (c[it.seccion] != null) c[it.seccion]++;
+    const tab = it.destino === 'cxp' ? 'com' : it.destino;
+    if (tab === 'ops' || tab === 'com' || tab === 'req') c[tab]++;
+  });
+  return c;
 }
 
 // ---- 6.E Anular: un super admin anula cualquier registro con folio (con lo que depende de él) ----
