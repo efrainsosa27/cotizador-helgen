@@ -27,6 +27,8 @@
 // 11. Memos derivados (MEMOS_DERIVADOS_: devoluciones, pagos a proveedor, anulados, roles, Config ligera): se olvidan al releer
 //     las versiones, con el candado (menos los roles) y al escribir en su pestaña; el arnés falla una escritura en su pestaña con
 //     el memo guardado; el activador ya no guarda «mis requisiciones» con una devolución resuelta como Abierta.
+// 12. Huella cambiada y una escritura en medio: lo que la consulta de fondo guarda con la versión que subió se lee después de
+//     subirla (lleva el proyecto que otra ejecución creó mientras tanto).
 // Uso: node tests/rapidez.test.js .
 'use strict';
 const assert = require('assert');
@@ -463,6 +465,42 @@ const compras = A => {
   correr('VENDEDOR_ = null; MEMO_ = {};');
   const mia = ok('obrero', 'misRequisiciones').find(x => x.folio === req);
   assert.deepEqual(mia.devoluciones.map(d => d.estado), [enHoja()], 'lo que quedó en caché trae la devolución como está en la hoja');
+}
+
+// ================= 12. Huella cambiada y una escritura en medio =================
+{
+  const A = crear();
+  const { ok, cache, props } = A;
+  const C = compras(A);
+  // gancho: corre una vez cuando fuenteConHuella_ va a comparar la huella de proyectos (después de leer la hoja y antes de
+  // subir la versión)
+  let gancho = null;
+  const original = A.ctx.CacheService.getScriptCache;
+  A.ctx.CacheService.getScriptCache = () => {
+    const c = original(), get = c.get;
+    c.get = k => { if (gancho && /^H_proyectos/.test(k)) { const g = gancho; gancho = null; g(); } return get(k); };
+    return c;
+  };
+  C.proyecto('Uno');
+  const P2 = C.proyecto('Dos');
+  const vers = ok('obrero', 'bootstrap').versiones;
+  ok('obrero', 'sincronizar', vers, {});
+  // Alguien cierra "Dos" a mano (otra huella) y vence la marca: la consulta de fondo relee la hoja; mientras compara la huella,
+  // otra ejecución crea "Tres" y sube la versión
+  const pry = A.libros.DB.pest.Proyectos.m;
+  pry[pry.findIndex(r => r[0] === P2)][6] = 'Cerrado';
+  Object.keys(cache).filter(k => /^R_proyectos/.test(k)).forEach(k => delete cache[k]);
+  let P3 = '';
+  gancho = () => C.otraEjecucion(() => { P3 = C.proyecto('Tres'); });
+  const s = ok('obrero', 'sincronizar', vers, {});
+  assert(P3 && !gancho, 'la otra ejecución corrió en medio');
+  assert.notEqual(s.versiones.proyectos, vers.proyectos, 'subió la versión');
+  // Lo que se guardó con la versión nueva ya lleva el proyecto que la otra ejecución creó (y "Dos" cerrado)
+  const folios = l => l.map(p => p.folio);
+  assert(folios(s.reqProyectos).indexOf(P3) !== -1, 'la consulta lo trae: ' + folios(s.reqProyectos));
+  assert(folios(ok('rosa', 'listarProyectosRequisicion', '')).indexOf(P3) !== -1, 'otra persona, del caché, también');
+  assert.equal(ok('rosa', 'listarProyectosRequisicion', '').find(p => p.folio === P2).estado, 'Cerrado');
+  assert.equal(String(props.VER_proyectos), String(s.versiones.proyectos), 'la versión que vio es la de la propiedad');
 }
 
 console.log('rapidez: todo bien');

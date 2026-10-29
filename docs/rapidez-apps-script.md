@@ -197,6 +197,12 @@ usan esa fuente (mis requisiciones, Compras, Pendientes, operaciones, resumen de
 de antes **y se guardaban con la versión nueva**, hasta 6 h. Reproducido también con la versión publicada. Ahora el valor solo se
 reusa con la misma versión. Sin carrera, nada cambia. Prueba: §10 (falla sin el arreglo).
 
+**Revisión 2 (la misma carrera, dentro de `fuenteConHuella_`).** Cuando la consulta de fondo relee una hoja y ve otra huella, sube
+la versión y guardaba lo que había leído **antes** de subirla. Si otra ejecución escribía en medio (por ejemplo, creaba un
+proyecto y subía ella la versión), ese dato viejo quedaba con la versión de después: todos dejaban de ver el proyecto nuevo hasta
+la siguiente revisión de la hoja. Ahora, después de subir y leer la versión, se vuelven a leer la hoja y la huella (una lectura
+más, solo cuando alguien editó la hoja a mano). Prueba: §12.
+
 ## 6. Ruta del PDF (guardar cotización y emitir orden)
 
 ### 6.1 De qué está hecho (después de los cambios)

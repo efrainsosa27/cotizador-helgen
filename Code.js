@@ -684,13 +684,18 @@ function fuenteConHuella_(nombre, coleccion, cadaSeg, leer, revisar) {
     MEMO_['F_' + nombre] = { valor: previo, revisado: !!revisar, version: v };
     return previo;
   }
-  const valor = leer();
-  const huella = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(valor)));
+  const firma = x => Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(x)));
+  let valor = leer();
+  let huella = firma(valor);
   const anterior = String(cache.get('H_' + nombre) || '').split('|');
   let version = v;
   if (anterior.length === 2 && Number(anterior[0]) === v && anterior[1] !== huella) {
     subirVersiones_([coleccion]); // alguien la editó directo en la hoja
     version = versiones_()[coleccion];
+    // Otra ejecución pudo escribir (y subir la versión) entre la lectura y la subida: lo leído antes no se guarda con la versión
+    // de después. Se relee después de leer la versión (versiones_ ya olvidó las filas de la petición).
+    valor = leer();
+    huella = firma(valor);
   }
   guardarCache_('F_' + nombre + '_' + version, valor, TTL_CACHE);
   cache.put('H_' + nombre, version + '|' + huella, TTL_CACHE);
