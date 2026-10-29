@@ -46,6 +46,8 @@ module.exports = function crearArnes(dir, opciones) {
   }
 
   // ---- Drive (todo lo nuevo nace compartido con el dominio; privado_ lo quita con la API de Drive) ----
+  // Ligas con el formato real de Drive (revisión 5b): el centro de mando solo acepta https://drive.google.com/… o docs.google.com
+  const urlArchivo = id => 'https://drive.google.com/file/d/' + id + '/view', urlCarpeta = id => 'https://drive.google.com/drive/folders/' + id;
   let nId = 0;
   const carpetas = {}, archivos = {};
   const compartible = o => Object.assign(o, { acceso: 'DOMAIN', setSharing: () => { throw new Error('Access denied: DriveApp.'); } });
@@ -61,7 +63,7 @@ module.exports = function crearArnes(dir, opciones) {
   }
   function carpeta(nombre, padre) {
     const f = compartible({ id: 'F' + (++nId), nombre, padre, hijos: [], archivos: [], trashed: false });
-    Object.assign(f, { getId: () => f.id, getName: () => f.nombre, getUrl: () => 'https://drive/' + f.id, isTrashed: () => f.trashed,
+    Object.assign(f, { getId: () => f.id, getName: () => f.nombre, getUrl: () => urlCarpeta(f.id), isTrashed: () => f.trashed,
       setName: n => { f.nombre = n; return f; },
       getFoldersByName: n => { const l = f.hijos.filter(h => h.nombre === n); let i = 0; return { hasNext: () => i < l.length, next: () => l[i++] }; },
       // Incremento 5 (F): archivos por nombre (documentos de proveedor: "(2)", "(3)"… sin borrar el anterior)
@@ -70,7 +72,7 @@ module.exports = function crearArnes(dir, opciones) {
       createFolder: n => { const h = carpeta(n, f); f.hijos.push(h); return h; },
       createFile: b => { const id = 'A' + (++nId); const a = compartible({ id, blob: b, padre: f, nombre: b && b.name });
         archivos[id] = a; f.archivos.push(a);
-        return Object.assign(a, { getId: () => id, getUrl: () => 'https://drive/file/' + id, getName: () => a.nombre, setName: n => { a.nombre = n; return a; } }); } });
+        return Object.assign(a, { getId: () => id, getUrl: () => urlArchivo(id), getName: () => a.nombre, setName: n => { a.nombre = n; return a; } }); } });
     carpetas[f.id] = f;
     return f;
   }
@@ -156,7 +158,7 @@ module.exports = function crearArnes(dir, opciones) {
       createFolder: n => miUnidad.createFolder(n), getRootFolder: () => miUnidad,
       getFileById: id => { const a = archivos[id]; if (!a) throw new Error('No se encontró el archivo');
         return { getParents: () => { let d = false; return { hasNext: () => !d, next: () => { d = true; return a.padre; } }; },
-          moveTo: f => { a.padre = f; }, setSharing: () => a.setSharing(), getId: () => id, getUrl: () => 'https://drive/file/' + id,
+          moveTo: f => { a.padre = f; }, setSharing: () => a.setSharing(), getId: () => id, getUrl: () => urlArchivo(id),
           getName: () => a.nombre || (a.blob && a.blob.name) || '', setName: n => { a.nombre = n; },
           isTrashed: () => !!a.trashed,
           getBlob: () => ({ getName: () => a.blob.name, getContentType: () => a.blob.mime, getBytes: () => a.blob.bytes }) }; },
@@ -184,7 +186,7 @@ module.exports = function crearArnes(dir, opciones) {
   const FOTO = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0, 16, 0x4A, 0x46, 0x49, 0x46, 0, 1]).toString('base64');
   const conFotos = rs => rs.map(r => Object.assign({ foto: { nombre: 'foto.jpg', datos: FOTO, mime: 'image/jpeg' } }, r));
   const FOTOS = { renglones: conFotos(Array.from({ length: 20 }, (_, i) => ({ renglon: i + 1 }))) };
-  return Object.assign(A, { ctx, P: ctx, correr, como, post, ok, falla, plain, props, cache, libros, carpetas, archivos, correos, llamadas, rutas,
+  return Object.assign(A, { urlArchivo, urlCarpeta, ctx, P: ctx, correr, como, post, ok, falla, plain, props, cache, libros, carpetas, archivos, correos, llamadas, rutas,
     tokens, claims, activadores, HOY, HOY_ISO, masDias, ANIO: String(HOY.getFullYear()), miUnidad, maestra, hoja, libro,
     PDF: Buffer.from('%PDF-1.4 cotizacion del proveedor').toString('base64'), FOTO, conFotos, FOTOS });
 };

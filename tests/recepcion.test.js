@@ -24,6 +24,15 @@ function verificar(op, cuerpo) {
   const esperada = 'sha256=' + crypto.createHmac('sha256', SECRETO).update(t + '\n' + cuerpo, 'utf8').digest('hex');
   return f === esperada ? '' : 'firma inválida';
 }
+// Igual que url_archivo_valida del centro de mando (hbox-docs backend/compras.py; revisión 5b): https, host drive.google.com o
+// docs.google.com, sin usuario, puerto, «@», «\\» ni caracteres de control. Una liga que el servidor rechazaría falla aquí también.
+function urlDriveValida(url) {
+  if (typeof url !== 'string' || !url || url.length > 500 || url.includes('@') || url.includes('\\')) return false;
+  if ([...url].some(ch => ch.charCodeAt(0) < 0x21 || ch.charCodeAt(0) === 0x7f)) return false;
+  let u;
+  try { u = new URL(url); } catch (e) { return false; }
+  return u.protocol === 'https:' && !u.username && !u.password && !u.port && ['drive.google.com', 'docs.google.com'].includes(u.hostname.toLowerCase());
+}
 const rutas = [
   { re: /^https:\/\/drogheda\.test\/api\/integracion\/cotizador\/evento$/, fn: (url, op) => {
     if (CM.modoEvento === '500') return { codigo: 500, cuerpo: 'Internal Server Error' };
@@ -55,6 +64,7 @@ const rutas = [
     if (e) { CM.rechazos.push(e); return { codigo: 401, cuerpo: { ok: false, error: e } }; }
     if (CM.modoArchivo === '500') return { codigo: 500, cuerpo: 'Internal Server Error' };
     const b = JSON.parse(cuerpo);
+    if (!urlDriveValida(b.url)) { CM.rechazos.push('url ' + b.url); return { codigo: 400, cuerpo: { ok: false, error: 'La url tiene que ser https de Google Drive.' } }; }
     CM.posts.push(b);
     CM.archivadas[b.id] = b.url;
     return { codigo: 200, cuerpo: { ok: true } };
@@ -228,9 +238,9 @@ const foto1 = archivos[mm[0][col('MovimientosInventario', 'foto_id')]];
 assert.deepEqual([foto1.nombre, foto1.acceso, foto1.padre.nombre, foto1.padre.padre.nombre, foto1.padre.padre.padre.nombre],
   [mm[0][0] + ' — r1.jpg', 'PRIVATE', 'Recepciones', P2, ANIO], 'Compras/AAAA/<proyecto>/Recepciones/<REC> — r1.jpg, privada');
 assert.equal(foto1.padre.acceso, 'PRIVATE');
-assert.equal(mm[0][col('MovimientosInventario', 'foto_url')], 'https://drive/file/' + foto1.id);
+assert.equal(mm[0][col('MovimientosInventario', 'foto_url')], A.urlArchivo(foto1.id));
 let vc = ok('pedro', 'getRequisicion', s1.req);
-assert.deepEqual([vc.recepcionCompleta, vc.recepciones[0].renglones[0].fotoUrl], [true, 'https://drive/file/' + foto1.id], 'compras: "Ver foto"');
+assert.deepEqual([vc.recepcionCompleta, vc.recepciones[0].renglones[0].fotoUrl], [true, A.urlArchivo(foto1.id)], 'compras: "Ver foto"');
 let m1 = mia('obrero', s1.req);
 assert.deepEqual([m1.fotos.length, m1.devoluciones.length, m1.reportables.map(x => x.renglon)], [0, 0, [1, 2]],
   'quien pidió sin acceso a la carpeta no recibe las ligas; puede reportar en los dos renglones');
@@ -281,7 +291,7 @@ assert.deepEqual(pend.items.filter(x => x.tipo === 'devolucion').map(x => x.foli
 assert.equal(ok('obrero', 'pendientes', false).items.filter(x => x.tipo === 'devolucion').length, 0);
 vc = ok('pedro', 'getRequisicion', s1.req);
 assert.deepEqual([vc.devoluciones.length, vc.devoluciones[0].fotoUrl, vc.tiposDev.length, vc.resolucionesDev.length],
-  [1, 'https://drive/file/' + d1[10], 5, 4]);
+  [1, A.urlArchivo(d1[10]), 5, 4]);
 // No se cancela la recepción de un renglón con devolución
 falla('pedro', 'cancelarRecepcion', [mm[0][0], 'Se registró mal'], /ya está cerrada/);
 
@@ -466,8 +476,8 @@ const fc = col('MovimientosInventario', 'foto_id');
 assert.deepEqual(mm.map(r => r[8] + ':' + r[12] + ':' + r[13] + ':' + (archivos[r[fc]] ? archivos[r[fc]].nombre : r[fc])),
   ['1:80:centro de mando:' + mm[0][0] + ' — r1.jpg', '2:12:centro de mando:' + mm[0][0] + ' — r2.jpg']);
 assert.deepEqual([archivos[mm[0][fc]].acceso, archivos[mm[0][fc]].padre.nombre, archivos[mm[0][fc]].padre.padre.nombre], ['PRIVATE', 'Recepciones', P1]);
-assert.deepEqual(CM.posts.map(p => p.id + '=' + p.url).sort(), ['F-P1=https://drive/file/' + devs().slice(-1)[0][10],
-  'F-R1=https://drive/file/' + mm[0][fc], 'F-R2=https://drive/file/' + mm[1][fc]].sort(), 'aviso de archivada con la liga de Drive');
+assert.deepEqual(CM.posts.map(p => p.id + '=' + p.url).sort(), ['F-P1=' + A.urlArchivo(devs().slice(-1)[0][10]),
+  'F-R1=' + A.urlArchivo(mm[0][fc]), 'F-R2=' + A.urlArchivo(mm[1][fc])].sort(), 'aviso de archivada con la liga de Drive');
 let d9 = devs().slice(-1)[0];
 assert.deepEqual([d9[0], d9[5], d9[7], d9[8], d9[9], d9[12], d9[13], d9[14], archivos[d9[10]].nombre],
   [DEV('0009'), 1, 10, 'Dañado', 'Rollo aplastado en la entrega', 'Centro de mando', 'jesush', 'Abierta', DEV('0009') + ' — r1.jpg']);
@@ -545,7 +555,7 @@ const getsY = CM.gets.filter(x => x === 'F-Y1').length;
 CM.modoArchivo = 'ok';
 como(null);
 tr = plain(P.traerRecepcionesPortal());
-assert.deepEqual([tr.archivadas, CM.gets.filter(x => x === 'F-Y1').length, CM.archivadas['F-Y1'] === 'https://drive/file/' + movsDe(c3.oc)[0][fc]], [1, getsY, true]);
+assert.deepEqual([tr.archivadas, CM.gets.filter(x => x === 'F-Y1').length, CM.archivadas['F-Y1'] === A.urlArchivo(movsDe(c3.oc)[0][fc])], [1, getsY, true]);
 assert.equal(archivos[movsDe(c3.oc)[0][fc]] && archivos[movsDe(c3.oc)[0][fc]].nombre, movsDe(c3.oc)[0][0] + ' — r1.jpg');
 // Foto que ya no existe (404): no es error
 CM.recepciones = [{ oc_folio: c3.oc, req_folio: c3.req, sitio: 'QRO', completa: false, recibio: 'jesusr', cuando: new Date().toISOString(), renglones: [
@@ -556,7 +566,7 @@ assert.deepEqual([tr.ok, tr.errores, tr.fotosPerdidas], [true, [], ['F-NO']]);
 // Problema del sitio sin foto (faltante): una sola DEV por comentario aunque llegue dos veces; requisición cerrada (≤ 30 días)
 const nDevs = devs().length;
 CM.recepciones = [{ oc_folio: c2.oc, req_folio: c2.req, sitio: 'VER', completa: true, recibio: 'alan', cuando: new Date().toISOString(), renglones: [
-  { n: 2, pedido: 12, recibido: 12, foto: { id: 'F-X2', archivada: true, url: 'https://drive/file/x' }, problema: { tipo: 'Faltante', comentario: 'Faltó un tubo', cantidad: 1, foto: null } }] }];
+  { n: 2, pedido: 12, recibido: 12, foto: { id: 'F-X2', archivada: true, url: A.urlArchivo('x') }, problema: { tipo: 'Faltante', comentario: 'Faltó un tubo', cantidad: 1, foto: null } }] }];
 como(null); P.traerRecepcionesPortal();
 como(null); P.traerRecepcionesPortal();
 assert.equal(devs().length, nDevs + 1, 'una sola DEV por problema');

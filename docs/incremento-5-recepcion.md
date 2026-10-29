@@ -261,6 +261,9 @@ Reponer no se duplica, reposición nueva se copia y cierra, falla de foto no ava
 archivada que falla no vuelve a bajar la foto, 404 no es error, faltante del sitio (no se descuenta; "Devolver" lo acepta y
 completa la requisición), fotos de una orden cancelada, "Reponer" con el aviso pendiente, proyecto sin ligar no avisa; sincronizar; y la interfaz con DOM
 simulado conectada al servidor simulado ("Recibí el material", reportar, "Lo recogí", Compras: lista, caja y resolver).
+Revisión 5b: el arnés (`tests/arnes.js`) da ligas de Drive con el formato real (`https://drive.google.com/file/d/<id>/view`,
+`urlArchivo`) y el centro de mando simulado (aquí y en `tests/revision5-centro.test.js`) rechaza con 400, como el servidor
+(`url_archivo_valida`), una liga que no sea https de drive.google.com o docs.google.com.
 Pruebas existentes actualizadas solo donde el comportamiento cambió a propósito (las recepciones llevan foto; la pestaña
 Devoluciones existe; centro: los movimientos de "Lo recogí"). `bash tests/todas.sh`: todas pasan.
 

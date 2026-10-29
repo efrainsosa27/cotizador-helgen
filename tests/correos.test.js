@@ -320,7 +320,7 @@ const archivoSol = Object.values(A.archivos).find(a => a.nombre === s.nombre || 
 assert.equal(archivoSol.acceso, 'PRIVATE', 'el PDF queda restringido');
 assert.equal(archivoSol.padre.nombre, 'Requisiciones');
 assert.equal(archivoSol.padre.padre.nombre, p1);
-assert.equal(s.url, 'https://drive/file/' + archivoSol.id);
+assert.equal(s.url, A.urlArchivo(archivoSol.id));
 const bit = LC.pest.Bitacora.m[LC.pest.Bitacora.m.length - 1];
 assert.equal(LC.pest.Bitacora.m.length, bitAntes + 1);
 assert.deepEqual([bit[1], bit[2], bit[3], bit[4]], ['pedro@helgen.tech', 'Solicitud de cotización', p1, r1 + ' · 1 renglón(es) · para Ferretera del Puerto · ' + s.nombre]);

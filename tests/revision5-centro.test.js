@@ -5,6 +5,8 @@
 //  C. La reposición recibida en el centro de mando en el mismo minuto que "Reponer" sí se cuenta (antes: minuto y <=).
 //  D. Fotos que CAPRI no puede ligar (orden que no existe, anulada o de un proyecto no ligado) se archivan igual (privadas) y se
 //     avisa foto-archivada: antes el centro de mando las ofrecía para siempre.
+//  H. El arnés usa ligas de Drive con el formato real y el centro de mando simulado las revisa como el servidor (url_archivo_valida):
+//     una liga que el servidor rechazaría hace fallar estas pruebas.
 // Uso: node tests/revision5-centro.test.js .
 'use strict';
 const assert = require('assert'), crypto = require('crypto');
@@ -19,6 +21,15 @@ function verificar(op, cuerpo) {
   if (!t || !f) return 'sin firma';
   if (Math.abs(Date.now() - Date.parse(t)) > 5 * 60000) return 'firma vencida';
   return f === 'sha256=' + crypto.createHmac('sha256', SECRETO).update(t + '\n' + cuerpo, 'utf8').digest('hex') ? '' : 'firma inválida';
+}
+// Igual que url_archivo_valida del centro de mando (hbox-docs backend/compras.py; revisión 5b): https, host drive.google.com o
+// docs.google.com, sin usuario, puerto, «@», «\\» ni caracteres de control. Una liga que el servidor rechazaría falla aquí también.
+function urlDriveValida(url) {
+  if (typeof url !== 'string' || !url || url.length > 500 || url.includes('@') || url.includes('\\')) return false;
+  if ([...url].some(ch => ch.charCodeAt(0) < 0x21 || ch.charCodeAt(0) === 0x7f)) return false;
+  let u;
+  try { u = new URL(url); } catch (e) { return false; }
+  return u.protocol === 'https:' && !u.username && !u.password && !u.port && ['drive.google.com', 'docs.google.com'].includes(u.hostname.toLowerCase());
 }
 const rutas = [
   { re: /^https:\/\/drogheda\.test\/api\/integracion\/cotizador\/evento$/, fn: (url, op) => {
@@ -45,6 +56,7 @@ const rutas = [
     const cuerpo = String(op.payload || ''), e = verificar(op, cuerpo);
     if (e) { CM.rechazos.push(e); return { codigo: 401, cuerpo: { ok: false, error: e } }; }
     const b = JSON.parse(cuerpo);
+    if (!urlDriveValida(b.url)) { CM.rechazos.push('url ' + b.url); return { codigo: 400, cuerpo: { ok: false, error: 'La url tiene que ser https de Google Drive.' } }; }
     CM.posts.push(b);
     CM.archivadas[b.id] = b.url;
     return { codigo: 200, cuerpo: { ok: true } };
@@ -185,6 +197,16 @@ const eventos = tipo => Object.values(CM.eventos).filter(e => e.tipo === tipo);
   CM.recepciones.forEach(x => x.renglones.forEach(l => { l.foto.archivada = true; l.foto.url = CM.archivadas[l.foto.id]; }));
   traer();
   assert.equal(CM.gets.length, gets);
+}
+
+// ================= H. Ligas de Drive con el formato real =================
+{
+  assert.deepEqual(['https://drive.google.com/file/d/A1/view', 'https://docs.google.com/document/d/x', 'https://drive/file/A1',
+    'http://drive.google.com/file/d/A1/view', 'https://drive.google.com:444/x', 'https://u@drive.google.com/x', 'https://drive.google.com.evil.mx/x']
+    .map(urlDriveValida), [true, true, false, false, false, false, false], 'la misma regla que el servidor');
+  assert(CM.posts.length > 0 && CM.posts.every(p => urlDriveValida(p.url) && /^https:\/\/drive\.google\.com\/file\/d\/[^/]+\/view$/.test(p.url)),
+    'todo lo que CAPRI avisó como archivado pasa el filtro del servidor: ' + JSON.stringify(CM.posts.map(p => p.url)));
+  assert.deepEqual(CM.rechazos, [], 'el centro de mando simulado no rechazó nada');
 }
 
 console.log('revision5-centro: ok');

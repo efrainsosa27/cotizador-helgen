@@ -325,7 +325,7 @@ assert.equal(ok('pedro', 'getProveedor', 'EDC200101AB1').clabe, CLABE2, 'la orde
 // ---- Pago con documentos: banco y CLABE de la carátula en la vista; el pago pasa ----
 const v2 = ok('pedro', 'getRequisicion', r2);
 assert.deepEqual([v2.proveedorPago.banco, v2.proveedorPago.clabe, plain(v2.proveedorPago.faltanPago)], ['Banamex', CLABE2, []]);
-assert(/^https:\/\/drive\/file\//.test(v2.proveedorPago.caratulaUrl));
+assert(/^https:\/\/drive\.google\.com\/file\/d\/[^/]+\/view$/.test(v2.proveedorPago.caratulaUrl));
 falla('pedro', 'registrarPagoProveedor', [PAGO(r2, { referencia: '5555 5555 5555 4444' })], /parece un número de tarjeta/);
 assert(/^PGP-/.test(ok('pedro', 'registrarPagoProveedor', PAGO(r2)).folio));
 
