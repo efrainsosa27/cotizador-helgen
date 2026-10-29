@@ -158,6 +158,9 @@
   }
   /* Centro de mando (incremento 4): la columna de ítem solo en proyectos ligados */
   .sin-item .col-item { display:none; }
+  /* Plan de pagos de la orden (incremento 6, P): renglones compactos que caben en el teléfono */
+  .plan-tabla td { padding:3px 4px; border:none; }
+  @media (max-width:640px) { .plan-tabla td.plan-monto { width:80px !important; font-size:11px; } }
 </style>
 </head>
 <body>
@@ -630,6 +633,7 @@
               <option value="Autorizada">Autorizada (por pagar)</option><option value="Pagada">Pagada (por recibir)</option>
               <option value="En camino">En camino (por recibir)</option>
               <option value="Recibida">Recibida (por pagar)</option>
+              <option value="Pagada parcial">Pagada parcial (con saldo)</option>
               <option value="Devuelta">Devuelta</option><option value="Cerrada">Cerrada</option>
               <option value="Rechazada">Rechazada</option><option value="Cancelada">Cancelada</option>
             </select></div>
@@ -733,15 +737,17 @@
         </div>
       </div>
       <div class="modulo">
-        <h2>2 · Facturas por pagar</h2>
+        <h2>2 · Facturas y saldos por pagar</h2>
         <div style="overflow-x:auto">
           <table style="font-size:12px">
-            <thead><tr><th>Vence</th><th>Factura</th><th>Proveedor</th><th>Proyecto</th><th>Orden</th><th>Emisión</th><th class="num">Total</th></tr></thead>
+            <thead><tr><th>Vence</th><th>Factura</th><th>Proveedor</th><th>Proyecto</th><th>Orden</th><th>Emisión</th><th class="num">Por pagar</th></tr></thead>
             <tbody id="cxpLista"></tbody>
           </table>
         </div>
-        <div class="nota" style="margin-top:8px">Facturas vigentes de órdenes que aún no se pagan, de la más antigua a la más nueva. Vence = emisión +
-          días de crédito de la orden. Los importes de monedas distintas nunca se suman. Haz clic en una factura para abrir su requisición.</div>
+        <div class="nota" style="margin-top:8px">Lo que falta pagar de cada orden, de lo más antiguo a lo más nuevo. Vence = emisión de la factura +
+          días de crédito de la orden. Una orden pagada en parte queda por su saldo: sus pagos cubren primero la factura que vence antes, y lo
+          que todavía no tiene factura aparece como «Saldo» con el vencimiento de lo que sigue de su plan de pagos. Los importes de monedas
+          distintas nunca se suman. Haz clic en un renglón para abrir su requisición.</div>
       </div>
       <div class="modulo">
         <h2>3 · Órdenes sin factura completa</h2>
@@ -841,6 +847,19 @@
         </div>
         <div class="nota" style="margin-top:6px">Los días de crédito fijan cuándo vence cada factura de esta orden (fecha de la factura + días).
           Con <b>crédito del proveedor</b> quien pidió puede confirmar que llegó el material antes del pago.</div>
+        <!-- Plan de pagos (incremento 6, P): opcional; concepto y %, deben sumar 100 %. Sin plan se paga en uno o varios pagos -->
+        <div id="ocPlanCaja" class="sat">
+          <div class="sat-titulo">Plan de pagos (opcional)</div>
+          <div class="nota" style="margin-bottom:8px">Si el proveedor pide anticipo, divide el pago en etapas (concepto y %; deben sumar 100%).
+            Sin plan, la orden se paga en uno o varios pagos hasta completarla.</div>
+          <div style="overflow-x:auto"><table class="plan-tabla"><tbody id="ocPlanFilas"></tbody></table></div>
+          <div class="acciones" style="flex-wrap:wrap">
+            <button type="button" class="btn btn-sec" style="padding:4px 10px;font-size:12px" onclick="agregarEtapaPlan()">+ Agregar etapa</button>
+            <button type="button" class="btn btn-sec" style="padding:4px 10px;font-size:12px" onclick="planRapido(50)">50% anticipo · 50% contra entrega</button>
+            <button type="button" id="btnPlanQuitar" class="btn btn-sec oculto" style="padding:4px 10px;font-size:12px" onclick="quitarPlanOc()">Sin plan</button>
+            <span id="ocPlanSuma" class="nota"></span>
+          </div>
+        </div>
         <div style="margin-top:12px"><label>Notas para el proveedor (opcional)</label><textarea id="ocNotas" rows="3" maxlength="1000"></textarea></div>
         <div id="propExtra" class="grid oculto" style="margin-top:12px">
           <div><label>Quién recibe en sitio *</label><select id="propRecibe"></select></div>
@@ -900,7 +919,9 @@
           </div>
         </div>
         <div id="rcFormPago" class="sat oculto">
-          <div class="sat-titulo">Registrar el pago al proveedor (uno por orden)</div>
+          <div class="sat-titulo">Registrar un pago al proveedor</div>
+          <!-- Saldo de la orden (incremento 6, P): esperado, pagado, saldo, lo que sigue del plan y montos rápidos -->
+          <div id="ppSaldo"></div>
           <!-- banco y CLABE de la carátula, documentos que faltan (mod-proveedores) -->
           <div id="ppProveedor" class="oculto" style="margin-bottom:10px"></div>
           <div class="grid">
@@ -918,10 +939,11 @@
               <input id="ppArchivo" type="file" accept="application/pdf,image/jpeg,image/png,image/heic,.heic"></div>
           </div>
           <div class="acciones"><button type="button" id="btnPagoProv" class="btn" onclick="registrarPagoProv()">Registrar pago</button>
-            <span id="ppNota" class="nota">El monto debe ser el total de la orden (±1.00).</span></div>
+            <span id="ppNota" class="nota">Se puede pagar en partes (anticipo, parciales y liquidación) hasta el total de la orden (±1.00).</span></div>
         </div>
+        <div id="rcSaldoResumen" class="nota oculto" style="margin-top:12px"></div>
         <table style="margin-top:12px">
-          <thead><tr><th>Pago</th><th>Fecha</th><th class="num">Monto</th><th>Método</th><th>Estado</th><th>Comprobante</th><th></th></tr></thead>
+          <thead><tr><th>Pago</th><th>Tipo</th><th>Fecha</th><th class="num">Monto</th><th>Método</th><th>Estado</th><th>Comprobante</th><th></th></tr></thead>
           <tbody id="rcPagos"></tbody>
         </table>
         <div id="rcCierre" class="sat oculto">
@@ -2279,6 +2301,11 @@
   const historial = eventos => '<div class="sat-titulo">Historial</div><div class="nota">' + (eventos || []).map(e => esc(fechaMx(e.fecha)) +
     ' · <b>' + esc(e.estado) + '</b> · ' + esc(e.nombre) + (e.nota ? ': ' + esc(e.nota) : '')).join('<br>') + '</div>';
   const chipReq = e => '<span class="chip ' + (CHIP_REQ[e] || '') + '">' + esc(e) + '</span>';
+  // Pagos parciales (incremento 6, P): etiqueta derivada (no es un estado: la orden sigue Emitida hasta completar el pago)
+  const chipParcial = si => si ? ' <span class="chip aceptada" title="La orden tiene pagos que todavía no la completan">Pagada parcial</span>' : '';
+  /** "Anticipo 30% ($487.20 MXN) · Contra entrega 70% (…)" (montos solo con total; vista previa: el servidor manda los suyos). */
+  const textoPlan = (plan, total, moneda) => (plan || []).map(e => esc(e.concepto) + ' ' + esc(e.porcentaje) + '%' +
+    (total > 0 ? ' (' + dinero(r2(total * Number(e.porcentaje) / 100), moneda) + ')' : '')).join(' · ');
   const fechaMx = iso => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})(.*)$/); return m ? m[3] + '/' + m[2] + '/' + m[1] + m[4].slice(0, 6) : String(iso || ''); };
   const botonChico = (texto, accion, sec) => '<button type="button" class="btn' + (sec === false ? '' : ' btn-sec') +
     '" style="padding:4px 10px;font-size:12px" onclick="' + accion + '">' + texto + '</button>';
@@ -2409,7 +2436,7 @@
     Object.keys(FORMS_REC).filter(k => k.indexOf('rcp-') === 0).forEach(k => { delete FORMS_REC[k]; });
     $('reqLista').innerHTML = !MIS_REQ.length ? '<div class="nota">Todavía no tienes requisiciones.</div>' : MIS_REQ.map(r =>
       '<div class="sat" style="margin-top:10px">' +
-      '<div class="sat-titulo">' + esc(r.folio) + ' · ' + chipReq(r.estado) + (r.prioridad ? ' ' + chipPrio(r.prioridad) : '') + ' · ' +
+      '<div class="sat-titulo">' + esc(r.folio) + ' · ' + chipReq(r.estado) + chipParcial(r.pagadaParcial) + (r.prioridad ? ' ' + chipPrio(r.prioridad) : '') + ' · ' +
         esc(r.proyectoVisible || r.proyectoFolio) + ' — ' + esc(r.proyectoNombre) + '</div>' +
       ((r.sitio || r.fechaRequerida || r.esReceptor || (r.recibe && r.recibe !== correoActual())) ? '<div class="nota">' + [
         r.sitio ? 'Sitio: <b>' + esc(etiquetaSitio(r.sitio)) + '</b>' : '', r.fechaRequerida ? 'Para el ' + esc(fechaMx(r.fechaRequerida)) : '',
@@ -2668,9 +2695,9 @@
     $('opsModOrden').classList.toggle('oculto', !o);
     if (o) {
       const tile = (k, x, nota) => '<div class="tile"><span>' + esc(k) + '</span><b style="font-size:13px">' + x + '</b>' + (nota ? '<div class="nota">' + nota + '</div>' : '') + '</div>';
-      $('opsOrden').innerHTML = tile('Orden de compra', esc(o.folio) + ' <span class="chip ' + (CHIP_OC[o.estado] || '') + '">' + esc(o.estado) + '</span>') +
-        tile('Proveedor', esc(o.proveedor), dinero(o.total, o.moneda)) + tile('Entrega', esc(fechaMx(o.fechaEntrega)), esc(o.lugarEntrega)) +
-        tile('Recibe', esc(rq.recibe)) + (o.formaPago ? tile('Forma de pago', esc(o.formaPago)) : ''); // F (incremento 5)
+      $('opsOrden').innerHTML = tile('Orden de compra', esc(o.folio) + ' <span class="chip ' + (CHIP_OC[o.estado] || '') + '">' + esc(o.estado) + '</span>' +
+        chipParcial(o.pagadaParcial)) + tile('Proveedor', esc(o.proveedor), dinero(o.total, o.moneda)) + tile('Entrega', esc(fechaMx(o.fechaEntrega)), esc(o.lugarEntrega)) +
+        tile('Recibe', esc(rq.recibe)) + (o.formaPago ? tile('Forma de pago', esc(o.formaPago), o.planPago ? 'Plan: ' + textoPlan(o.planPago) : '') : ''); // F (incremento 5); plan: P
       $('opsAvance').innerHTML = htmlAvance(v.avance, v.recepciones, false);
     }
     avisarModulos('alVistaOps', v); // centro de mando: En camino
@@ -2685,7 +2712,9 @@
       tile('Entrega', esc(fechaMx(pr.fechaEntrega)), esc(pr.lugarEntrega)) +
       // Forma de pago (F, incremento 5; el servidor la deduce en propuestas de antes)
       tile('Pago', esc(pr.formaPago || pr.condicionesPago), esc(pr.condicionesPago) + ' · ' +
-        (Number(pr.diasCredito) ? esc(pr.diasCredito) + ' días de crédito' : 'contado')) +
+        (Number(pr.diasCredito) ? esc(pr.diasCredito) + ' días de crédito' : 'contado') +
+        // P (incremento 6): plan de pagos de la propuesta (pasa a la orden con el visto bueno)
+        (pr.planPago && pr.planPago.length ? '<br>Plan: ' + textoPlan(pr.planPago, pr.total, pr.moneda) : '')) +
       tile('Recibe', esc(pr.recibe), 'Preparó: ' + esc(pr.elaboroNombre) + ' · ' + esc(fechaMx(pr.fecha)));
     $('opsPropRenglones').innerHTML = pr.renglones.map(r => {
       const o = dec[r.renglon] || null, no = r.disponibilidad === 'No disponible';
@@ -2771,6 +2800,7 @@
   // ---- Compras (solo rol de compras): requisiciones → orden de compra → pago → cierre ----
   let COM_PROYECTOS = [], COM = null, REQC = null, PROVEEDORES = [], ID_OC = nuevoId(), ID_PGP = nuevoId(), ID_FPR = nuevoId();
   let CXP = null, FC_XML = null, VOLVER_COM = 'lista', COND_A_MANO = false, COM_LISTA = null, PROP_MODO = false;
+  let OC_TOTAL_VISTA = 0; // P (incremento 6): total de la vista previa de la orden (montos del plan de pagos)
   const CHIP_OC = { Emitida: 'aceptada', Pagada: 'firmado', Recibida: 'firmado', Cancelada: 'cancelado' };
   const CAMPOS_PROV = { prvRazon: 'razonSocial', prvRfc: 'rfc', prvContacto: 'contacto', prvCorreo: 'correo', prvTel: 'telefono' };
 
@@ -2803,7 +2833,7 @@
     $('rcLista').innerHTML = COM_LISTA.length ? COM_LISTA.map(r => '<tr class="fila-cat" onclick="abrirReqCom(\'' + esc(r.folio) + '\')">' +
       '<td style="white-space:nowrap"><b>' + esc(r.folio) + '</b></td><td>' + esc(fechaMx(r.fecha)) + '</td><td>' + esc(r.proyectoVisible || r.proyectoFolio) +
       '<div class="nota">' + esc(r.proyectoNombre) + (r.sitio ? ' · ' + esc(r.sitio) : '') + '</div></td><td>' + esc(r.solicitante) + '</td><td class="num">' + esc(r.renglones) +
-      '</td><td>' + chipReq(r.estado) + (r.prioridad ? ' ' + chipPrio(r.prioridad) : '') + '</td><td>' + esc(r.ocFolio) + '</td></tr>').join('')
+      '</td><td>' + chipReq(r.estado) + chipParcial(r.pagadaParcial) + (r.prioridad ? ' ' + chipPrio(r.prioridad) : '') + '</td><td>' + esc(r.ocFolio) + '</td></tr>').join('')
       : '<tr><td colspan="7" class="nota">No hay requisiciones con ese filtro.</td></tr>';
     pintarConteos();
   }
@@ -2817,7 +2847,8 @@
     if (FORMS_REC.rcpCom && FORMS_REC.rcpCom.folio !== rq.folio) cerrarFormRecepcion('rcpCom'); // era de otra requisición
     const cambio = !REQC || REQC.requisicion.folio !== rq.folio || REQC.requisicion.estado !== rq.estado;
     const cambioFacturas = cambio || REQC.totalFacturado !== v.totalFacturado || REQC.facturaCompleta !== v.facturaCompleta ||
-      (REQC.porPagar && REQC.porPagar.total) !== (v.porPagar && v.porPagar.total); // revisión: total por pagar con devoluciones
+      (REQC.porPagar && REQC.porPagar.total) !== (v.porPagar && v.porPagar.total) || // revisión: total por pagar con devoluciones
+      (REQC.saldo && REQC.saldo.pagado) !== (v.saldo && v.saldo.pagado); // P (incremento 6): otro pago registrado o cancelado
     REQC = v;
     listoVista('comVistaReq');
     $('comVistaLista').classList.add('oculto'); $('comVistaCxp').classList.add('oculto'); $('comVistaReq').classList.remove('oculto');
@@ -2860,13 +2891,16 @@
     if (o) {
       $('rcOrden').innerHTML =
         '<div class="tile"><span>Orden de compra</span><b>' + esc(o.folio) + '</b> ' + '<span class="chip ' + (CHIP_OC[o.estado] || '') + '">' + esc(o.estado) + '</span>' +
-        (o.pdfUrl ? '<div class="nota"><a href="' + esc(o.pdfUrl) + '" target="_blank">Abrir PDF</a></div>' : '') + '</div>' +
-        '<div class="tile"><span>Total</span><b>' + dinero(o.total, o.moneda) + '</b></div>' +
+        chipParcial(v.pagadaParcial) + (o.pdfUrl ? '<div class="nota"><a href="' + esc(o.pdfUrl) + '" target="_blank">Abrir PDF</a></div>' : '') + '</div>' +
+        '<div class="tile"><span>Total</span><b>' + dinero(o.total, o.moneda) + '</b>' + (v.saldo && v.saldo.pagado > 0 ? '<div class="nota">Pagado ' +
+          dinero(v.saldo.pagado, o.moneda) + (v.saldo.completo ? '' : ' · saldo <b>' + dinero(v.saldo.saldo, o.moneda) + '</b>') + '</div>' : '') +
+        (o.planPago ? '<div class="nota">Plan: ' + textoPlan(o.planPago) + '</div>' : '') + '</div>' +
         '<div class="tile"><span>Proveedor</span><b style="font-size:13px">' + esc(o.proveedor) + '</b><div class="nota">' + esc(o.condicionesPago) +
         textoCredito(o) + '</div></div>' +
         '<div class="tile"><span>Entrega</span><b style="font-size:13px">' + esc(fechaMx(o.fechaEntrega)) + '</b><div class="nota">' + esc(o.lugarEntrega) + '</div>' +
         (o.estado === 'Recibida' ? '<div class="nota">Recibida el ' + esc(fechaMx(o.fechaRecepcion)) + ' · ' + esc(o.recibio) + '</div>' : '') + '</div>' +
-        (o.estado === 'Emitida' && !o.fechaRecepcion && !(v.recepciones || []).some(x => x.estado === 'Vigente') ? '<div class="tile"><span>¿Ya no va?</span>' +
+        (o.estado === 'Emitida' && !o.fechaRecepcion && !(v.recepciones || []).some(x => x.estado === 'Vigente') &&
+          !(v.saldo && v.saldo.pagado > 0) ? '<div class="tile"><span>¿Ya no va?</span>' + // P: con pagos parciales primero se cancelan
           botonChico('Cancelar orden', "cancelarOcDesdeReq('" + esc(o.folio) + "')") + '</div>' : '');
     }
     // Recepción en sitio (con operaciones): avance, recepciones (cancelar una equivocada) y registrar en lugar de quien recibe
@@ -2884,17 +2918,32 @@
       ID_PGP = nuevoId();
       pintarTcPago();
     }
-    // Monto por omisión: con material devuelto sin reponer, el total por pagar (revisión, incremento 5); si no, el total de sus
-    // facturas si ya cubren la orden (con retenciones es menor); si no, el de la orden
-    if (v.puedePagar && cambioFacturas) $('ppMonto').value = v.porPagar ? v.porPagar.total : v.facturaCompleta ? v.totalFacturado : o.total;
+    // Monto por omisión (P, incremento 6): lo que sigue según el plan o el saldo (el servidor ya descuenta lo devuelto sin reponer y
+    // mide contra sus facturas si ya la cubren con retenciones). Con un servidor de antes (sin saldo): el total por pagar con
+    // devoluciones, el total de sus facturas si ya la cubren o el de la orden
+    if (v.puedePagar && cambioFacturas) $('ppMonto').value = v.saldo && v.saldo.siguiente ? v.saldo.siguiente.monto
+      : v.porPagar ? v.porPagar.total : v.facturaCompleta ? v.totalFacturado : o.total;
+    $('ppSaldo').innerHTML = v.puedePagar ? htmlSaldoPago(v) : '';
+    const sr = v.saldo && v.saldo.vigentes && v.saldo.vigentes.length ? v.saldo : null;
+    $('rcSaldoResumen').classList.toggle('oculto', !sr);
+    if (sr) $('rcSaldoResumen').innerHTML = 'Pagado <b>' + dinero(sr.pagado, o.moneda) + '</b> de ' + dinero(sr.esperado, o.moneda) +
+      (sr.completo ? ' · orden pagada por completo' : ' · saldo <b>' + dinero(sr.saldo, o.moneda) + '</b>');
     $('rcPagos').innerHTML = v.pagos.length ? v.pagos.map(p => '<tr' + (p.estado === 'Cancelado' ? ' class="fila-cancelada" title="' +
-      esc('Cancelado por ' + p.canceladoPor + ': ' + p.motivoCancelacion) + '"' : '') + '><td><b>' + esc(p.folio) + '</b></td><td>' + esc(fechaMx(p.fecha)) +
+      esc('Cancelado por ' + p.canceladoPor + ': ' + p.motivoCancelacion) + '"' : '') + '><td><b>' + esc(p.folio) + '</b></td><td>' +
+      (p.tipo ? '<span class="chip ' + (p.tipo === 'Liquidación' ? 'firmado' : 'aceptada') + '">' + esc(p.tipo) + '</span>' : '') + '</td><td>' + esc(fechaMx(p.fecha)) +
       '</td><td class="num">' + dinero(p.monto, p.monedaPago) + (p.tipoCambio ? '<div class="nota">TC ' + esc(p.tipoCambio) + ' = ' + dinero(p.montoAplicado, p.monedaOc) + '</div>' : '') +
       '</td><td>' + esc(p.metodo) + (p.referencia ? '<div class="nota">' + esc(p.referencia) + '</div>' : '') + '</td><td>' + esc(p.estado) + '</td><td>' +
       (p.comprobanteUrl ? '<a href="' + esc(p.comprobanteUrl) + '" target="_blank">Ver</a>' : '') + '</td><td>' +
       (p.estado === 'Vigente' && v.puedeCancelarPago ? '<button type="button" class="quitar" title="Cancelar pago" onclick="cancelarPagoProv(\'' + esc(p.folio) + '\')">×</button>' : '') +
-      '</td></tr>').join('') : '<tr><td colspan="7" class="nota">Sin pagos.</td></tr>';
-    if (o && v.porPagar) {
+      '</td></tr>').join('') : '<tr><td colspan="8" class="nota">Sin pagos.</td></tr>';
+    if (o && v.saldo) {
+      // P (incremento 6): varios pagos hasta completar la orden; el tope es lo esperado (con devoluciones, el total por pagar)
+      const m = o.moneda, sd = v.saldo;
+      $('ppNota').textContent = 'Se puede pagar en partes (anticipo, parciales y liquidación). Lo pagado no puede pasar de ' + dinero(sd.esperado, m) +
+        (v.porPagar ? ' (la orden de ' + dinero(o.total, m) + ' menos ' + dinero(v.porPagar.descontado, m) + ' de material devuelto sin reponer)' : '') +
+        ', ±1.00.' + (sd.porFacturas ? ' Sus facturas ya cubren la orden (con retenciones): se completa al llegar a ' + dinero(sd.porFacturas, m) + '.' : '') +
+        (v.totalFacturado > 0 && !v.facturaCompleta ? ' Sus facturas todavía no cubren la orden.' : '');
+    } else if (o && v.porPagar) {
       $('ppNota').textContent = 'El monto debe ser el total por pagar: ' + dinero(v.porPagar.total, o.moneda) + ' (la orden de ' +
         dinero(o.total, o.moneda) + ' menos ' + dinero(v.porPagar.descontado, o.moneda) + ' de material devuelto sin reponer), ±1.00.';
     } else if (o) $('ppNota').textContent = 'El monto debe ser el total de la orden (' + dinero(o.total, o.moneda) + ')' +
@@ -3033,6 +3082,59 @@
     const iva = r2(sub * tasa);
     $('ocSub').textContent = dinero(sub, m); $('ocIvaMonto').textContent = dinero(iva, m); $('ocTot').textContent = dinero(sub + iva, m);
     $('ocLblIva').textContent = 'IVA (' + Math.round(tasa * 100) + '%)'; $('ocLblTot').textContent = 'TOTAL ' + m;
+    OC_TOTAL_VISTA = r2(sub + iva);
+    pintarPlanOc();
+  }
+
+  // ---- Plan de pagos de la orden (incremento 6, P): opcional; concepto y %, deben sumar 100 % (el servidor lo vuelve a revisar) ----
+  function agregarEtapaPlan(e) {
+    const d = e || {};
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td><input class="plan-concepto" maxlength="60" placeholder="Concepto (p. ej. Anticipo)"></td>' +
+      '<td style="width:72px"><input class="plan-pct" type="number" min="0" max="100" step="0.01" placeholder="%" style="text-align:right"></td>' +
+      '<td class="num plan-monto nota" style="width:110px"></td><td style="width:28px"><button type="button" class="quitar" title="Quitar etapa">×</button></td>';
+    tr.querySelector('.plan-concepto').value = d.concepto || '';
+    tr.querySelector('.plan-pct').value = d.porcentaje != null ? d.porcentaje : '';
+    tr.querySelector('.plan-concepto').addEventListener('input', pintarPlanOc);
+    tr.querySelector('.plan-pct').addEventListener('input', pintarPlanOc);
+    tr.querySelector('.quitar').onclick = () => { tr.remove(); pintarPlanOc(); };
+    $('ocPlanFilas').appendChild(tr);
+    pintarPlanOc();
+  }
+  /** Atajo: anticipo de p % y el resto contra entrega (se puede editar después). */
+  function planRapido(p) {
+    $('ocPlanFilas').innerHTML = '';
+    agregarEtapaPlan({ concepto: 'Anticipo', porcentaje: p });
+    agregarEtapaPlan({ concepto: 'Contra entrega', porcentaje: 100 - p });
+  }
+  function quitarPlanOc() { $('ocPlanFilas').innerHTML = ''; pintarPlanOc(); }
+  /** Etapas capturadas (sin los renglones vacíos). */
+  function leerPlanOc() {
+    return [...$('ocPlanFilas').querySelectorAll('tr')].map(tr => ({ concepto: String(tr.querySelector('.plan-concepto').value || '').trim(),
+      porcentaje: String(tr.querySelector('.plan-pct').value == null ? '' : tr.querySelector('.plan-pct').value).trim() }))
+      .filter(e => e.concepto || e.porcentaje !== '');
+  }
+  /** Monto de cada etapa (vista previa sobre el total de la orden) y si los porcentajes suman 100 %. */
+  function pintarPlanOc() {
+    const filas = [...$('ocPlanFilas').querySelectorAll('tr')], m = $('ocMoneda').value === 'USD' ? 'USD' : 'MXN';
+    filas.forEach(tr => {
+      const pct = Number(tr.querySelector('.plan-pct').value) || 0;
+      tr.querySelector('.plan-monto').textContent = pct > 0 && OC_TOTAL_VISTA > 0 ? dinero(r2(OC_TOTAL_VISTA * pct / 100), m) : '';
+    });
+    const plan = leerPlanOc(), suma = r2(plan.reduce((t, e) => t + (Number(e.porcentaje) || 0), 0));
+    $('ocPlanSuma').innerHTML = !plan.length ? 'Sin plan: se paga en uno o varios pagos.' : Math.abs(suma - 100) < 0.005 ? '✓ Suman 100%'
+      : '<span class="aviso-moneda">Suman ' + esc(suma) + '% (deben sumar 100%)</span>';
+    $('btnPlanQuitar').classList.toggle('oculto', !filas.length);
+  }
+  /** El plan para mandar: null sin etapas; false (con el error a la vista) si está incompleto o no suma 100 %. */
+  function planOcValido() {
+    const plan = leerPlanOc();
+    if (!plan.length) return null;
+    const falta = plan.find(e => !e.concepto || !(Number(e.porcentaje) > 0));
+    if (falta) { mostrarError('Cada etapa del plan de pagos necesita concepto y porcentaje mayor a 0.'); return false; }
+    const suma = r2(plan.reduce((t, e) => t + Number(e.porcentaje), 0));
+    if (Math.abs(suma - 100) > 0.004) { mostrarError('Los porcentajes del plan de pagos deben sumar 100% (suman ' + suma + '%).'); return false; }
+    return plan.map(e => ({ concepto: e.concepto, porcentaje: Number(e.porcentaje) }));
   }
 
   /** Orden en otra moneda que el proyecto: tipo de cambio obligatorio. */
@@ -3096,6 +3198,8 @@
       $('ocNotas').value = prev.notas || '';
       $('ocEntrega').value = prev.fechaEntrega >= v.hoy ? prev.fechaEntrega : '';
     }
+    $('ocPlanFilas').innerHTML = ''; // P (incremento 6): el plan de la propuesta anterior; en la orden de siempre, sin plan
+    ((prev && prev.planPago) || []).forEach(e => agregarEtapaPlan(e));
     ID_OC = nuevoId();
     $('btnOc').disabled = false; $('btnOc').textContent = textoBotonOc();
     pintarTcOc();
@@ -3116,6 +3220,8 @@
     if (!REQC || $('btnOc').disabled) return;
     if (PROP_MODO) { enviarPropuesta(); return; }
     const folio = REQC.requisicion.folio;
+    const planPago = planOcValido(); // P (incremento 6)
+    if (planPago === false) return;
     const payload = {
       proveedor: { razonSocial: $('prvRazon').value, rfc: $('prvRfc').value, contacto: $('prvContacto').value,
                    correo: $('prvCorreo').value, telefono: $('prvTel').value },
@@ -3123,6 +3229,7 @@
       moneda: $('ocMoneda').value, tipoCambio: $('ocTc').value, ivaTasa: $('ocIva').value,
       fechaEntrega: $('ocEntrega').value, lugarEntrega: $('ocLugar').value, diasCredito: $('ocDias').value,
       formaPago: $('ocFormaPago').value, // F (incremento 5): obligatoria
+      planPago: planPago, // P (incremento 6): opcional (null = sin plan)
       condicionesPago: $('ocCondiciones').value, notas: $('ocNotas').value, idSolicitud: ID_OC,
     };
     // Con excepción de super admin: si autoriza lo que él pidió, se le pide el motivo y se reintenta
@@ -3141,6 +3248,8 @@
     const renglones = leerRenglonesOc().map(({_tr, ...r}) => r);
     const sinSust = renglones.find(r => r.disponibilidad === 'Sustituto' && !String(r.descripcion).trim());
     if (sinSust) { mostrarError('Escribe qué se comprará en lugar del renglón ' + sinSust.renglon + '.'); return; }
+    const planPago = planOcValido(); // P (incremento 6): va en la propuesta (aprobaciones lo ve) y pasa a la orden
+    if (planPago === false) return;
     const payload = {
       proveedor: { razonSocial: $('prvRazon').value, rfc: $('prvRfc').value, contacto: $('prvContacto').value,
                    correo: $('prvCorreo').value, telefono: $('prvTel').value },
@@ -3148,6 +3257,7 @@
       moneda: $('ocMoneda').value, tipoCambio: $('ocTc').value, ivaTasa: $('ocIva').value,
       fechaEntrega: $('ocEntrega').value, lugarEntrega: $('ocLugar').value, diasCredito: $('ocDias').value,
       formaPago: $('ocFormaPago').value, // F (incremento 5): obligatoria
+      planPago: planPago,
       condicionesPago: $('ocCondiciones').value, notas: $('ocNotas').value, idSolicitud: ID_OC,
     };
     const texto = $('btnOc').textContent;
@@ -3163,6 +3273,31 @@
     if (archivo) leerArchivo(archivo).then(enviar, err => { listo(); mostrarError(err); });
     else enviar(null);
   }
+
+  /**
+   * Saldo de la orden en el formulario del pago (P, incremento 6): esperado, pagado, saldo y lo que sigue (etapa del plan o el saldo,
+   * con su vencimiento), las etapas del plan con lo cubierto y botones para poner el monto de lo que sigue o de todo el saldo.
+   */
+  function htmlSaldoPago(v) {
+    const sd = v.saldo, o = v.orden;
+    if (!sd || !o) return '';
+    const m = o.moneda, sig = sd.siguiente;
+    const tile = (k, x, nota, clase) => '<div class="tile"><span>' + k + '</span><b' + (clase ? ' class="' + clase + '"' : '') + '>' + x + '</b>' +
+      (nota ? '<div class="nota">' + nota + '</div>' : '') + '</div>';
+    const vencido = sig && sig.vence && sig.vence < (v.hoy || '');
+    const n = (sd.vigentes || []).length;
+    return '<div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">' +
+      tile('Esperado', dinero(sd.esperado, m), v.porPagar ? 'menos lo devuelto' : sd.porFacturas ? 'facturas: ' + dinero(sd.porFacturas, m) : '') +
+      tile('Pagado', dinero(sd.pagado, m), n ? n + (n === 1 ? ' pago' : ' pagos') : 'sin pagos') +
+      tile('Saldo', dinero(sd.saldo, m)) +
+      (sig ? tile(sig.etapa ? 'Sigue: ' + esc(sig.concepto) : 'Por pagar', dinero(sig.monto, m), sig.vence ? (vencido ? '<span class="aviso-moneda">venció el ' +
+        esc(fechaMx(sig.vence)) + '</span>' : 'vence el ' + esc(fechaMx(sig.vence))) : '', vencido ? 'negativo' : '') : '') + '</div>' +
+      (sd.etapas ? '<div class="nota" style="margin:-6px 0 8px">Plan: ' + sd.etapas.map(e => (e.completa ? '✓ ' : '') + esc(e.concepto) + ' ' +
+        esc(e.porcentaje) + '% (' + dinero(e.monto, m) + (e.completa || !e.cubierto ? '' : ', van ' + dinero(e.cubierto, m)) + ')').join(' · ') + '</div>' : '') +
+      (sig ? '<div class="acciones" style="margin:0 0 10px">' + (sig.etapa ? botonChico('Monto de ' + esc(sig.concepto) + ' · ' + dinero(sig.monto, m), 'montoPago(' + Number(sig.monto) + ')') : '') +
+        (!sig.etapa || Math.abs(sig.monto - sd.saldo) > 0.004 ? botonChico('Todo el saldo · ' + dinero(sd.saldo, m), 'montoPago(' + Number(sd.saldo) + ')') : '') + '</div>' : '');
+  }
+  function montoPago(n) { $('ppMonto').value = r2(n); }
 
   /** Pago en otra moneda que la orden: tipo de cambio obligatorio. */
   function pintarTcPago() {
@@ -3187,13 +3322,19 @@
         tipoCambio: $('ppTc').value, metodo: $('ppMetodo').value, referencia: $('ppRef').value,
         comprobante: { nombre: archivo.name, datos: datos }, idSolicitud: ID_PGP,
       }], r => {
+        // P (incremento 6): el formulario sigue abierto si queda saldo: el siguiente pago es otro envío (otro idSolicitud y comprobante)
+        ID_PGP = nuevoId();
+        ['ppRef', 'ppArchivo', 'ppTc'].forEach(id => { $(id).value = ''; });
         pintarReqCom(r.vista);
-        aviso('ok', 'Pago <b>' + esc(r.folio) + '</b> registrado · <a href="' + esc(r.url) + '" target="_blank">Ver comprobante</a>' + extraPortal(r));
+        const sd = r.vista && r.vista.saldo, m = r.vista && r.vista.orden ? r.vista.orden.moneda : '';
+        aviso('ok', 'Pago <b>' + esc(r.folio) + '</b>' + (r.tipo ? ' (' + esc(r.tipo.toLowerCase()) + ')' : '') + ' registrado' +
+          (sd && !sd.completo ? ' · queda un saldo de <b>' + dinero(sd.saldo, m) + '</b>' : sd ? ' · orden pagada por completo' : '') +
+          ' · <a href="' + esc(r.url) + '" target="_blank">Ver comprobante</a>' + extraPortal(r));
       }, false, 'Subiendo comprobante…');
     }, err => { listo(); mostrarError(err); });
   }
   function cancelarPagoProv(folio) {
-    const motivo = window.prompt('Motivo para cancelar el pago ' + folio + ' (no se borra; la requisición vuelve a Autorizada):');
+    const motivo = window.prompt('Motivo para cancelar el pago ' + folio + ' (no se borra; el saldo de la orden se recalcula sin él):');
     if (motivo == null) return;
     if (!motivo.trim()) { mostrarError('Escribe el motivo de la cancelación.'); return; }
     accionCob(null, 'cancelarPagoProveedor', [folio, motivo], v => { pintarReqCom(v); aviso('ok', 'Pago <b>' + esc(folio) + '</b> cancelado.'); });
@@ -3203,7 +3344,8 @@
     if (!$('rcMotivoCierre').value.trim()) { mostrarError('Escribe por qué cierras la requisición en lugar de quien la pidió.'); return; }
     accionCob('btnCerrarCom', 'cerrarRequisicionCompras', [folio, $('rcMotivoCierre').value, $('rcNotasCierre').value],
       v => { pintarReqCom(v); aviso('ok', 'Requisición <b>' + esc(folio) + '</b> ' + (v.requisicion && v.requisicion.estado === 'Recibida'
-        ? 'recibida (crédito del proveedor): falta registrar el pago.' : 'cerrada · orden recibida.') + extraPortal(v)); });
+        ? (v.pagadaParcial ? 'recibida (pagada en parte): falta completar el pago.' : 'recibida (crédito del proveedor): falta registrar el pago.')
+        : 'cerrada · orden recibida.') + extraPortal(v)); });
   }
   /** Compras separa renglones aprobados en otra requisición (p. ej. otro proveedor); conservan la aprobación de operaciones. */
   function separarReqCom() {
@@ -3431,7 +3573,8 @@
   /** Facturas por pagar que pasan los filtros (búsqueda, moneda, solo vencidas). */
   function filtrarCxp() {
     const q = $('cxpBuscar').value.trim().toLowerCase(), m = $('cxpMoneda').value, vencidas = $('cxpVencidas').checked;
-    return ((CXP && CXP.abiertas) || []).filter(a => (!q || [a.folio, a.serieFolio, a.proveedor, a.ocFolio, a.reqFolio, a.proyectoVisible, a.proyectoNombre]
+    return ((CXP && CXP.abiertas) || []).filter(a => (!q || [a.folio, a.serieFolio, a.proveedor, a.ocFolio, a.reqFolio, a.proyectoVisible, a.proyectoNombre,
+      a.tipo === 'Saldo' ? 'saldo sin factura' : '', a.pagoParcial ? 'pagada parcial' : '']
       .join(' ').toLowerCase().includes(q)) && (!m || a.moneda === m) && (!vencidas || a.dias > 0));
   }
   function pintarCxp() {
@@ -3446,6 +3589,7 @@
       (extra ? '<div class="nota">' + esc(extra) + '</div>' : '');
     $('cxpTotales').innerHTML = CXP.totales.length ? CXP.totales.map(t =>
       '<div class="sat-titulo" style="margin-top:4px">' + esc(t.moneda) + ' · ' + plural(t.facturas, 'factura por pagar', 'facturas por pagar') +
+      (t.saldos ? ' y ' + plural(t.saldos, 'saldo sin factura', 'saldos sin factura') : '') + // P (incremento 6)
       '</div><div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">' +
       tile('Total por pagar', dinero(t.total, t.moneda)) + CXP.rangos.map(r => tile(r.etiqueta, dinero(t[r.clave], t.moneda),
         r.clave !== 'porVencer' && t[r.clave] > 0 ? 'negativo' : '')).join('') + '</div>').join('')
@@ -3453,32 +3597,38 @@
     const lista = filtrarCxp();
     $('cxpLista').innerHTML = lista.length ? lista.map(a => '<tr class="fila-cat"' + (a.reqFolio ? ' data-req="' + esc(a.reqFolio) + '"' : '') + '>' +
       '<td style="white-space:nowrap"><b>' + esc(fechaMx(a.fechaVencimiento)) + '</b><div class="nota' + (a.dias > 0 ? ' aviso-moneda' : '') + '">' + textoDias(a.dias) + '</div></td>' +
-      '<td style="white-space:nowrap"><b>' + esc(a.folio) + '</b><div class="nota">' + esc(a.serieFolio || (a.tipo === 'CFDI' ? 'CFDI' : 'Extranjera')) + '</div></td>' +
+      // P (incremento 6): lo que falta de una orden pagada en parte que todavía no tiene factura (folio = la orden)
+      (a.tipo === 'Saldo' ? '<td style="white-space:nowrap"><b>Saldo</b><div class="nota">' + esc(a.serieFolio || '') + ' · sin factura</div></td>'
+        : '<td style="white-space:nowrap"><b>' + esc(a.folio) + '</b><div class="nota">' + esc(a.serieFolio || (a.tipo === 'CFDI' ? 'CFDI' : 'Extranjera')) + '</div></td>') +
       '<td>' + esc(a.proveedor) + '</td><td style="white-space:nowrap">' + esc(a.proyectoVisible) + '<div class="nota">' + esc(a.proyectoNombre) + '</div></td>' +
       '<td style="white-space:nowrap">' + esc(a.ocFolio) + (a.reqFolio ? '<div class="nota">' + esc(a.reqFolio) + '</div>' : '') + '</td>' +
-      '<td>' + esc(fechaMx(a.fechaEmision)) + '</td><td class="num"><b>' + dinero(a.total, a.moneda) + '</b></td></tr>').join('')
+      '<td>' + esc(fechaMx(a.fechaEmision)) + '</td><td class="num"><b>' + dinero(porPagarCxp(a), a.moneda) + '</b>' +
+      (a.tipo !== 'Saldo' && Math.abs(porPagarCxp(a) - a.total) > 0.004 ? '<div class="nota">de ' + dinero(a.total, a.moneda) +
+        (a.pagado > 0 ? ' · pagado ' + dinero(a.pagado, a.moneda) : '') + '</div>' : a.pagoParcial ? '<div class="nota">pagada en parte</div>' : '') + '</td></tr>').join('')
       : '<tr><td colspan="7" class="nota">' + (CXP.abiertas.length ? 'Ninguna factura coincide con los filtros.' : 'No hay facturas por pagar.') + '</td></tr>';
     $('cxpRep').innerHTML = CXP.repPendientes.n ? '<span class="aviso-moneda">Facturas PPD de órdenes ya pagadas sin complemento de pago (REP): ' +
       CXP.repPendientes.folios.map(esc).join(', ') + '. Pídeselo al proveedor.</span>' : '';
     $('cxpFaltantes').innerHTML = CXP.faltantes.length ? CXP.faltantes.map(x => '<tr class="fila-cat"' + (x.reqFolio ? ' data-req="' + esc(x.reqFolio) + '"' : '') + '>' +
       '<td style="white-space:nowrap"><b>' + esc(x.folio) + '</b><div class="nota">' + esc(fechaMx(x.fecha)) + '</div></td><td>' + esc(x.proveedor) + '</td>' +
       '<td style="white-space:nowrap">' + esc(x.proyectoVisible) + '<div class="nota">' + esc(x.proyectoNombre) + '</div></td>' +
-      '<td>' + esc(x.estado) + (x.pagada ? '<div class="nota aviso-moneda">Pagada sin factura</div>' : '') + '</td>' +
+      '<td>' + esc(x.estado) + (x.pagada ? '<div class="nota aviso-moneda">' + (x.pagoParcial ? 'Pagada parcial sin factura' : 'Pagada sin factura') + '</div>' : '') + '</td>' +
       '<td class="num">' + dinero(x.subtotal, x.moneda) + '</td><td class="num">' + dinero(x.facturado, x.moneda) + '</td>' +
       '<td class="num"><b>' + dinero(x.faltante, x.moneda) + '</b></td></tr>').join('')
       : '<tr><td colspan="7" class="nota">Todas las órdenes vigentes tienen su factura.</td></tr>';
     ['cxpLista', 'cxpFaltantes'].forEach(id => $(id).querySelectorAll('tr[data-req]').forEach(tr => tr.onclick = () => abrirReqCom(tr.dataset.req)));
   }
 
+  /** Lo que falta pagar de un renglón de cuentas por pagar (P, incremento 6: pendiente; con un servidor de antes, el total). */
+  const porPagarCxp = a => a.pendiente != null ? Number(a.pendiente) : Number(a.total);
   /** CSV de las facturas filtradas (UTF-8 con BOM para Excel; texto que empiece con = + - @ va con apóstrofo). */
   function csvCxp(lista) {
     const texto = s => { const v = String(s ?? ''); return '"' + (/^[=+\-@]/.test(v) ? "'" + v : v).replace(/"/g, '""') + '"'; };
     const etiqueta = {}; ((CXP && CXP.rangos) || []).forEach(r => { etiqueta[r.clave] = r.etiqueta; });
     const enc = ['Vencimiento', 'Días vencida', 'Antigüedad', 'Factura', 'Tipo', 'Número', 'Proveedor', 'Proyecto', 'Nombre del proyecto',
-      'Orden de compra', 'Requisición', 'Emisión', 'Moneda', 'Total'];
+      'Orden de compra', 'Requisición', 'Emisión', 'Moneda', 'Total', 'Pagado', 'Por pagar'];
     const filas = lista.map(a => [texto(a.fechaVencimiento), String(Math.max(0, a.dias)), texto(etiqueta[a.rango] || a.rango), texto(a.folio), texto(a.tipo),
       texto(a.serieFolio), texto(a.proveedor), texto(a.proyectoVisible), texto(a.proyectoNombre), texto(a.ocFolio), texto(a.reqFolio),
-      texto(a.fechaEmision), texto(a.moneda), r2(a.total).toFixed(2)].join(','));
+      texto(a.fechaEmision), texto(a.moneda), r2(a.total).toFixed(2), r2(a.pagado || 0).toFixed(2), r2(porPagarCxp(a)).toFixed(2)].join(','));
     return '﻿' + [enc.map(texto).join(',')].concat(filas).join('\r\n');
   }
   function descargarCsvCxp() {
@@ -3525,11 +3675,14 @@
       esc('Cancelada por ' + o.canceladoPor + ': ' + o.motivoCancelacion) + '"' : '') + '><td style="white-space:nowrap"><b>' + esc(o.folio) + '</b></td><td>' + esc(fechaMx(o.fecha)) +
       '</td><td>' + (o.reqFolio ? '<a href="#" onclick="abrirReqCom(\'' + esc(o.reqFolio) + '\');return false">' + esc(o.reqFolio) + '</a>' : '') +
       '</td><td>' + esc(o.proveedor) + '</td><td class="num">' + dinero(o.total, o.moneda) +
-      (o.tipoCambio ? '<div class="nota">TC ' + esc(o.tipoCambio) + '</div>' : '') + '</td><td class="num">' + facturadoDeOrden(o) + '</td><td>' + esc(fechaMx(o.fechaEntrega)) +
+      (o.tipoCambio ? '<div class="nota">TC ' + esc(o.tipoCambio) + '</div>' : '') +
+      (o.pagado > 0 && o.saldo > 0 ? '<div class="nota">Pagado ' + dinero(o.pagado, o.moneda) + ' · saldo ' + dinero(o.saldo, o.moneda) + '</div>' : '') + // P
+      '</td><td class="num">' + facturadoDeOrden(o) + '</td><td>' + esc(fechaMx(o.fechaEntrega)) +
       '<div class="nota">' + esc(o.lugarEntrega) + '</div></td><td><span class="chip ' + (CHIP_OC[o.estado] || '') + '"' +
-      (o.estado === 'Recibida' ? ' title="' + esc('Recibida el ' + fechaMx(o.fechaRecepcion) + ' · ' + o.recibio) + '"' : '') + '>' + esc(o.estado) + '</span></td><td>' +
+      (o.estado === 'Recibida' ? ' title="' + esc('Recibida el ' + fechaMx(o.fechaRecepcion) + ' · ' + o.recibio) + '"' : '') + '>' + esc(o.estado) + '</span>' +
+      chipParcial(o.pagadaParcial) + '</td><td>' +
       (o.pdfUrl ? '<a href="' + esc(o.pdfUrl) + '" target="_blank">Ver</a>' : '') + '</td><td style="white-space:nowrap">' +
-      (o.estado === 'Emitida' ? '<button type="button" class="quitar" title="Cancelar orden" onclick="cancelarOc(\'' + esc(o.folio) + '\')">×</button>' : '') +
+      (o.estado === 'Emitida' && !(o.pagado > 0) ? '<button type="button" class="quitar" title="Cancelar orden" onclick="cancelarOc(\'' + esc(o.folio) + '\')">×</button>' : '') +
       '</td></tr>').join('') : '<tr><td colspan="10" class="nota">Este proyecto no tiene órdenes de compra.</td></tr>';
   }
   /** Facturado de una orden (con IVA, sus facturas vigentes); se registran desde su requisición. */
@@ -4974,8 +5127,10 @@
       }
       if (v.recibeAntesDePagar && !v.centroMando) {
         $('rcCierreTitulo').textContent = 'Registrar que llegó, en lugar de quien la pidió (falta pagar)';
-        $('rcCierreNota').textContent = 'Orden con crédito del proveedor: quien pidió confirma con "Recibí el material" y la requisición queda ' +
-          'Recibida hasta que registres el pago. Hazlo tú solo si no puede (p. ej. ya no está en la obra).';
+        // P (incremento 6): con un pago parcial también se recibe antes de terminar de pagar
+        $('rcCierreNota').textContent = (v.recibeAntesPor === 'parcial' ? 'Orden pagada en parte: quien pidió confirma con "Recibí el material" y la ' +
+          'requisición queda Recibida hasta completar el pago. ' : 'Orden con crédito del proveedor: quien pidió confirma con "Recibí el material" y la ' +
+          'requisición queda Recibida hasta que registres el pago. ') + 'Hazlo tú solo si no puede (p. ej. ya no está en la obra).';
         $('btnCerrarCom').textContent = 'Registrar que llegó (queda Recibida)';
       } else {
         $('btnCerrarCom').textContent = 'Cerrar requisición (material recibido)';

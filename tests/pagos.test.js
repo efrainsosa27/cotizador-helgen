@@ -62,6 +62,7 @@ const mia = req => ok('obrero', 'misRequisiciones').find(x => x.folio === req);
 const ultimaDev = () => H('Devoluciones').slice(-1)[0][0];
 let visto = 0;
 const correosNuevos = () => { const c = A.correos.slice(visto); visto = A.correos.length; return c; };
+const guardado = {}; // requisiciones de una sección que usa otra (la interfaz)
 const sinMontos = (texto, que) => assert(!/\$|\d,\d{3}\.\d{2}|\b\d+\.\d{2}\b|PGP-|OC-|Ferretera/.test(texto), (que || '') + ' sin montos: ' + texto.slice(0, 300));
 
 // ================= 0. Lógica pura =================
@@ -387,6 +388,7 @@ const sinMontos = (texto, que) => assert(!/\$|\d,\d{3}\.\d{2}|\b\d+\.\d{2}\b|PGP
     return { req: folio, oc: ok('tania', 'autorizarPropuesta', folio, w2.propuesta.version, id('vb'), w2.propuesta.huella).ocFolio };
   })();
   assert.deepEqual(JSON.parse(filaOc(g.oc)[col('OrdenesCompra', 'plan_pago')]), PLAN, 'el plan de la propuesta pasa a la orden');
+  guardado.g = g;
   correosNuevos();
   pagar(g.req, 487.2);
   assert.equal(correosNuevos().filter(x => /Pagada parcial/.test(x.subject)).length, 0, 'con aprobaciones no hay req.pagoparcial (ya se le avisó al autorizar)');
@@ -495,5 +497,137 @@ const sinMontos = (texto, que) => assert(!/\$|\d,\d{3}\.\d{2}|\b\d+\.\d{2}\b|PGP
   // Órdenes por proyecto: lo pagado y el saldo
   const oc = ok('pedro', 'getComprasProyecto', P2).ordenes.find(o => o.folio === x.oc);
   assert.deepEqual([oc.pagado, oc.saldo, oc.pagadaParcial, oc.siguiente.concepto, oc.planPago.length], [812, 812, true, 'Finiquito', 2]);
+  guardado.x = x;
 }
-console.log('OK pagos');
+
+// ================= 5. Interfaz (DOM simulado conectado al servidor simulado) =================
+const fs = require('fs'), vm = require('vm'), path = require('path');
+const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
+function montar(quien, permisos) {
+  const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const token = 'h.' + b64({ email: quien + '@helgen.tech', given_name: quien, exp: Math.floor(Date.now() / 1000) + 3600 }) + '.f';
+  function elemento(tag) {
+    const e = { tag, value: '', textContent: '', className: '', title: '', src: '', placeholder: '', disabled: false, hijos: [], oyentes: {}, _clases: new Set(), porClase: {},
+      classList: { add: c => e._clases.add(c), remove: c => e._clases.delete(c), contains: c => e._clases.has(c), toggle: (c, f) => f ? e._clases.add(c) : e._clases.delete(c) },
+      addEventListener: (t, f) => (e.oyentes[t] = e.oyentes[t] || []).push(f), disparar: t => (e.oyentes[t] || []).forEach(f => f({ target: e })),
+      focus() {}, remove() {}, click() {}, insertAdjacentHTML(pos, x) { e.innerHTML += x; }, appendChild: h => e.hijos.push(h), prepend: h => e.hijos.unshift(h), contains: () => false,
+      querySelector: sel => e.porClase[sel] || (e.porClase[sel] = elemento('input')), querySelectorAll: sel => sel === 'tr' ? e.hijos : [] };
+    let h = ''; Object.defineProperty(e, 'innerHTML', { get: () => h, set: v => { h = v; if (v === '') e.hijos.length = 0; } });
+    return e;
+  }
+  const porId = {}, oyentesDoc = {};
+  const document = { getElementById: id => porId[id] || (porId[id] = elemento('div')), querySelector: () => ({ src: 'data:logo' }), createElement: t => elemento(t),
+    visibilityState: 'visible', activeElement: null, body: elemento('body'),
+    addEventListener: (t, f) => (oyentesDoc[t] = oyentesDoc[t] || []).push(f), dispatchEvent: ev => (oyentesDoc[ev.type] || []).forEach(f => f(ev)) };
+  document.getElementById('login').classList.add('oculto');
+  const almacen = { cotizadorHelgenSesion: token }, llamadas = [];
+  async function fetch(url, o) {
+    const c = JSON.parse(o.body); llamadas.push(c);
+    const datos = c.funcion === 'sincronizar' ? { ok: true, datos: { versiones: {}, permisos: permisos, soloRequisicion: false, cambios: [] } } : A.post(quien, c.funcion, ...c.args);
+    return { ok: true, json: async () => datos };
+  }
+  class FileReader { readAsDataURL(f) { this.result = 'data:' + f.type + ';base64,' + f.b64; setImmediate(() => this.onload()); } }
+  const dialogos = { confirmar: true, prompt: null };
+  const ctx = { document, fetch, console, JSON, Date, Math, Number, String, Array, Object, Promise, Proxy, Error, Uint8Array, TextDecoder, FileReader,
+    atob: s => Buffer.from(s, 'base64').toString('binary'), crypto: { randomUUID: () => 'id-' + Math.random() },
+    sessionStorage: { getItem: k => almacen[k] ?? null, setItem: (k, v) => almacen[k] = v, removeItem: k => delete almacen[k] },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, confirm: () => dialogos.confirmar, prompt: () => dialogos.prompt,
+    CustomEvent: class { constructor(type, o) { this.type = type; this.detail = o && o.detail; } },
+    setTimeout, clearTimeout, setInterval: () => 0, scrollTo() {} };
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  ['api-web', undefined, 'mod-proveedores', 'mod-recepcion'].forEach(n => vm.runInContext(scripts.find(x => x.id === n).src, ctx));
+  return { ctx, $: id => document.getElementById(id), llamadas, dialogos, run: c => vm.runInContext(c, ctx) };
+}
+const esperar = async (k = 25) => { for (let i = 0; i < k; i++) await new Promise(r => setImmediate(r)); };
+const comprobante = n => ({ name: n || 'spei.pdf', type: 'application/pdf', size: 2048, b64: A.PDF });
+(async () => {
+  const C = montar('pedro', { compras: true, requisicion: true, ventas: true, superadmin: false });
+  await esperar();
+  const { $ } = C;
+  // ---- Autorizar con plan de pagos: atajo 30/70, suma revisada antes de mandar, el plan va al servidor ----
+  const nueva = ok('obrero', 'guardarRequisicion', { proyectoFolio: P2, sitio: 'Querétaro', renglones: RENGLONES,
+    cotizacion: { nombre: 'cot.pdf', datos: A.PDF }, idSolicitud: id('q') }).folio;
+  C.run('abrirReqCom(' + JSON.stringify(nueva) + ')');
+  await esperar();
+  assert(!$('comModOc').classList.contains('oculto') && /Sin plan: se paga en uno o varios pagos/.test($('ocPlanSuma').innerHTML), 'el plan es opcional');
+  assert($('btnPlanQuitar').classList.contains('oculto'));
+  $('prvRazon').value = 'Ferretera del Puerto'; $('ocEntrega').value = MANANA; $('ocDias').value = '0'; $('ocFormaPago').value = 'Transferencia';
+  $('ocCondiciones').value = 'Contado';
+  const filasOc = $('ocFilas').hijos;
+  filasOc[0].querySelector('.costo').value = '10'; filasOc[1].querySelector('.costo').value = '50';
+  C.run('recalcularOc()');
+  C.run('planRapido(30)');
+  const etapas = $('ocPlanFilas').hijos;
+  assert.deepEqual(etapas.map(t => [t.querySelector('.plan-concepto').value, t.querySelector('.plan-pct').value, t.querySelector('.plan-monto').textContent]),
+    [['Anticipo', 30, '$487.20 MXN'], ['Contra entrega', 70, '$1,136.80 MXN']], 'montos de cada etapa sobre el total de la vista previa');
+  assert(/✓ Suman 100%/.test($('ocPlanSuma').innerHTML) && !$('btnPlanQuitar').classList.contains('oculto'));
+  etapas[1].querySelector('.plan-pct').value = '60'; C.run('pintarPlanOc()');
+  assert(/Suman 90% \(deben sumar 100%\)/.test($('ocPlanSuma').innerHTML));
+  C.run('guardarOc()'); await esperar();
+  assert(/deben sumar 100% \(suman 90%\)/.test($('aviso').innerHTML) && !C.llamadas.some(c => c.funcion === 'autorizarRequisicion'), 'no se manda un plan que no suma 100');
+  etapas[1].querySelector('.plan-pct').value = '70';
+  C.run('guardarOc()'); await esperar();
+  const au = C.llamadas.find(c => c.funcion === 'autorizarRequisicion');
+  assert.deepEqual(au.args[1].planPago, PLAN, 'el plan va en la orden');
+  const ocNueva = au && ok('pedro', 'getRequisicion', nueva).orden.folio;
+  assert.deepEqual(JSON.parse(filaOc(ocNueva)[col('OrdenesCompra', 'plan_pago')]), PLAN);
+  // ---- Pago: esperado, pagado, saldo y lo que sigue; el monto se precarga con el anticipo ----
+  assert(!$('rcFormPago').classList.contains('oculto'));
+  let ps = $('ppSaldo').innerHTML;
+  assert(/Esperado/.test(ps) && /\$1,624\.00 MXN/.test(ps) && /Sigue: Anticipo/.test(ps) && /\$487\.20 MXN/.test(ps) && /vence el/.test(ps) &&
+    /Plan: Anticipo 30% \(\$487\.20 MXN\) · Contra entrega 70%/.test(ps) && /montoPago\(1624\)/.test(ps), ps);
+  assert.equal($('ppMonto').value, 487.2, 'lo que sigue del plan');
+  assert(/Plan: Anticipo 30% · Contra entrega 70%/.test($('rcOrden').innerHTML), 'la orden muestra su plan');
+  assert(/Se puede pagar en partes/.test($('ppNota').textContent) && /\$1,624\.00 MXN, ±1\.00/.test($('ppNota').textContent), $('ppNota').textContent);
+  $('ppRef').value = 'SPEI 1'; $('ppArchivo').files = [comprobante()];
+  const id1 = C.run('ID_PGP');
+  C.run('registrarPagoProv()'); await esperar();
+  const r1 = C.llamadas.filter(c => c.funcion === 'registrarPagoProveedor');
+  assert.deepEqual([r1.length, r1[0].args[0].monto, r1[0].args[0].idSolicitud], [1, 487.2, id1]);
+  assert(/\(anticipo\) registrado · queda un saldo de <b>\$1,136\.80 MXN<\/b>/.test($('aviso').innerHTML), $('aviso').innerHTML);
+  assert(/Pagada parcial/.test($('rcOrden').innerHTML) && /saldo <b>\$1,136\.80 MXN<\/b>/.test($('rcOrden').innerHTML));
+  assert(/chip aceptada">Anticipo/.test($('rcPagos').innerHTML) && /cancelarPagoProv/.test($('rcPagos').innerHTML));
+  assert(/Pagado <b>\$487\.20 MXN<\/b> de \$1,624\.00 MXN · saldo <b>\$1,136\.80 MXN<\/b>/.test($('rcSaldoResumen').innerHTML));
+  assert.deepEqual([$('ppMonto').value, $('ppRef').value, $('ppArchivo').value, C.run('ID_PGP') !== id1], [1136.8, '', '', true],
+    'queda abierto para el siguiente pago, con otro idSolicitud');
+  assert(!/cancelarOcDesdeReq/.test($('rcOrden').innerHTML), 'con pagos la orden no se cancela desde aquí');
+  // Segundo pago desde el mismo formulario: es otro pago (no lo absorbe la idempotencia)
+  $('ppMonto').value = '500'; $('ppRef').value = 'SPEI 2'; $('ppArchivo').files = [comprobante('spei2.pdf')];
+  C.run('registrarPagoProv()'); await esperar();
+  assert.equal(pagosDe(ocNueva).filter(r => r[17] === 'Vigente').length, 2, 'dos pagos en la hoja');
+  ps = $('ppSaldo').innerHTML;
+  assert(/Sigue: Contra entrega/.test(ps) && /\$636\.80 MXN/.test(ps) && /2 pagos/.test(ps), ps);
+  C.run('montoPago(636.8)'); assert.equal($('ppMonto').value, 636.8);
+  // Cancelar un pago (motivo obligatorio): se recalcula el saldo
+  const pg2 = pagosDe(ocNueva)[1][0];
+  C.dialogos.prompt = 'Transferencia rebotada';
+  C.run('cancelarPagoProv(' + JSON.stringify(pg2) + ')'); await esperar();
+  assert.deepEqual(C.llamadas.find(c => c.funcion === 'cancelarPagoProveedor').args, [pg2, 'Transferencia rebotada']);
+  assert(/fila-cancelada/.test($('rcPagos').innerHTML) && $('ppMonto').value === 1136.8, 'saldo de nuevo: 1,136.80');
+  // ---- Lista de compras (etiqueta), órdenes por proyecto (pagado y saldo; sin cancelar) y cuentas por pagar (saldo sin factura) ----
+  C.run('pintarListaReqCom(' + JSON.stringify(ok('pedro', 'listarRequisiciones', '', '')) + ')');
+  assert(new RegExp(nueva + '[\\s\\S]*?Pagada parcial').test($('rcLista').innerHTML), 'chip en la lista');
+  C.run("abrirProyectoCom('" + P2 + "')"); await esperar();
+  const li = $('ocLista').innerHTML, filaNueva = li.split('<tr').find(t => t.indexOf(ocNueva) !== -1);
+  assert(/Pagado \$487\.20 MXN · saldo \$1,136\.80 MXN/.test(filaNueva) && /Pagada parcial/.test(filaNueva) && !/cancelarOc\(/.test(filaNueva), filaNueva);
+  C.run('cargarCxp()'); await esperar(); C.run('verCxp()');
+  const cl = $('cxpLista').innerHTML;
+  assert(/<b>Saldo<\/b><div class="nota">Contra entrega · sin factura/.test(cl) && /<b>Saldo<\/b><div class="nota">Finiquito · sin factura/.test(cl), cl);
+  assert(/saldos? sin factura/.test($('cxpTotales').innerHTML));
+  const csv = C.run('csvCxp(filtrarCxp())');
+  assert(/"Total","Pagado","Por pagar"/.test(csv) && /,1136\.80/.test(csv), csv);
+  // ---- Aprobaciones: el plan en la propuesta y en la orden ----
+  C.run('pintarOps(' + JSON.stringify(ok('leo', 'getRequisicionOperaciones', guardado.g.req)) + ')');
+  assert(/Plan: Anticipo 30% \(\$487\.20 MXN\) · Contra entrega 70% \(\$1,136\.80 MXN\)/.test($('opsPropInfo').innerHTML), $('opsPropInfo').innerHTML);
+  assert(/Plan: Anticipo 30% · Contra entrega 70%/.test($('opsOrden').innerHTML));
+  // ---- Quien pidió: "Pagada parcial" sin montos y ya puede confirmar que llegó ----
+  const U = montar('obrero', { compras: false, requisicion: true, ventas: true, superadmin: false });
+  await esperar();
+  U.run('pintarMisReq(' + JSON.stringify(ok('obrero', 'misRequisiciones')) + ')');
+  const tarjeta = U.$('reqLista').innerHTML.split('class="sat"').find(t => t.indexOf(nueva) !== -1);
+  assert(/Pagada parcial/.test(tarjeta) && /recibiMaterial/.test(tarjeta), tarjeta);
+  assert(!/\$|487|1,136|PGP-|OC-|Ferretera/.test(tarjeta), 'sin montos, pagos, orden ni proveedor');
+  console.log('OK pagos');
+})().catch(e => { console.error(e); process.exit(1); });
