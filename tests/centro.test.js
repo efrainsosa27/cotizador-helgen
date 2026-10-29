@@ -200,8 +200,8 @@ assert.equal(H('RequisicionesRenglones')[0].slice(-1)[0], 'inventario_item');
 assert.deepEqual(H('RequisicionesRenglones')[1], ['REQ-2025-0099', 1, 1, 'Guantes de carnaza', 5, 'PAR', ''], 'la fila vieja no cambia');
 assert.deepEqual(H('RequisicionesRenglones').filter(r => r[0] === r0.req).map(r => r.slice(3).join('|')),
   ['Cable THW 10|80|M||CAB-THW-10', 'Tubo conduit 3/4|12|PZA|'], 'ítem por renglón (solo si tiene)');
-assert.deepEqual(H('OrdenesCompra')[0].slice(-6), ['paqueteria', 'guia', 'fecha_estimada', 'en_camino_en', 'en_camino_por', 'forma_pago'],
-  'centro de mando y, al final, forma_pago (F, incremento 5)');
+assert.deepEqual(H('OrdenesCompra')[0].slice(-7), ['paqueteria', 'guia', 'fecha_estimada', 'en_camino_en', 'en_camino_por', 'forma_pago', 'plan_pago'],
+  'centro de mando, forma_pago (F, incremento 5) y, al final, plan_pago (P, incremento 6)');
 let filaOc = H('OrdenesCompra').find(r => r[0] === r0.oc);
 assert.deepEqual(JSON.parse(filaOc[21]).map(r => r.descripcion + ':' + (r.item || '')), ['Cable THW 10:CAB-THW-10', 'Tubo conduit 1":TUB-1', 'Flete:'],
   'la orden conserva el ítem (exacto: el de quien pidió; sustituto: el que eligió compras)');

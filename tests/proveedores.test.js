@@ -188,7 +188,7 @@ const a1 = ok('pedro', 'autorizarRequisicion', r1, OC());
 assert(/Proveedor Eléctrica del Centro: Falta la constancia de situación fiscal, la carátula bancaria y el comprobante de domicilio\./.test(a1.avisoProveedor),
   'la respuesta avisa lo que falta: ' + a1.avisoProveedor);
 assert(/no se le podrá registrar un pago por transferencia/.test(a1.avisoProveedor));
-assert.equal(LC().OrdenesCompra.m[0][LC().OrdenesCompra.m[0].length - 1], 'forma_pago', 'columna al final');
+assert.equal(LC().OrdenesCompra.m[0][LC().OrdenesCompra.m[0].length - 2], 'forma_pago', 'columna al final (antes de plan_pago, P incremento 6)');
 assert.equal(filaOc(a1.ocFolio)[colOc('forma_pago')], 'Transferencia');
 const pdf1 = Object.values(A.archivos).find(x => x.nombre && x.nombre.indexOf(a1.ocFolio) === 0);
 assert(/Forma de pago<\/td><td>Transferencia/.test(pdf1.blob.html), 'el PDF de la orden dice la forma de pago');

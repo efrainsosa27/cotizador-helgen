@@ -493,7 +493,8 @@ assert(!('cxp' in ok('tania','sincronizar',vSync,{cxp:true})),'sin compras no re
 // --- Pago igual al total facturado (con retenciones): se acepta; la factura sale de cuentas por pagar ---
 const pago3=extra=>({ocFolio:OC('0003'),fecha:HOY_ISO,monedaPago:'MXN',metodo:'Transferencia',referencia:'SPEI 3',comprobante:{nombre:'p.pdf',datos:PDF},
   idSolicitud:'pf'+(++nId),...extra});
-falla('pedro','registrarPagoProveedor',[pago3({monto:1900})],/total de la orden \(\$2,146\.00 MXN\) o al total de sus facturas \(\$1,961\.00 MXN\)/);
+// P (incremento 6): un monto menor ya no se rechaza (sería un pago parcial); lo que pasa del total de la orden + 1.00, sí
+falla('pedro','registrarPagoProveedor',[pago3({monto:2147.01})],/pasa el saldo de la orden: faltan \$2,146\.00 MXN por pagar \(total de la orden \$2,146\.00 MXN; tolerancia ±1\.00\)/);
 v=ok('pedro','registrarPagoProveedor',pago3({monto:1961})).vista;
 assert.deepEqual([v.orden.estado,v.requisicion.estado],['Pagada','Pagada']);
 cx=ok('pedro','cuentasPorPagar');
@@ -507,10 +508,14 @@ assert.deepEqual([ff[29],ff[30],ff[32],fr.vista.totalFacturado],['Cancelada','pe
 falla('pedro','cancelarFacturaProveedor',[FPR('0002'),'otra vez'],/ya está cancelada/);
 falla('pedro','cambiarDiasCreditoFactura',[FPR('0002'),'10','motivo largo'],/está cancelada/);
 falla('pedro','cancelarFacturaProveedor',['FPR-2000-0001','motivo largo'],/No existe la factura/);
-// Con la orden facturada a medias (1,500 de 2,000 sin IVA) no se paga por el total de sus facturas: falta una entrega
+// Con la orden facturada a medias (1,500 de 2,000 sin IVA) el total de sus facturas no la completa: falta una entrega (P, incremento 6:
+// pagar 1,740 sería un pago parcial; aquí se revisa con saldoOrdenCompra y que lo que pasa del total sí se rechaza)
 assert.equal(ok('pedro','getRequisicion',REQ('0002')).facturaCompleta,false);
-falla('pedro','registrarPagoProveedor',[{ocFolio:OC('0001'),fecha:HOY_ISO,monto:1740,monedaPago:'MXN',metodo:'Transferencia',referencia:'X',
-  comprobante:{nombre:'p.pdf',datos:PDF},idSolicitud:'pp1'}],/igual al total de la orden \(\$2,320\.00 MXN\)\. Sus facturas vigentes \(\$1,740\.00 MXN\) todavía no cubren la orden/);
+assert.deepEqual((({completo,saldo})=>[completo,saldo])(P.saldoOrdenCompra(Object.assign({},ok('pedro','getRequisicion',REQ('0002')).orden,
+  {facturas:FP().slice(1).map((r,i)=>({folio:r[0],ocFolio:r[8],estado:r[29],total:r[19],subtotal:r[15],descuento:r[16],fechaVencimiento:r[6]}))}),
+  [{estado:'Vigente',montoAplicado:1740}],[])),[false,580],'1,740 de 2,320: no se completa con facturas a medias');
+falla('pedro','registrarPagoProveedor',[{ocFolio:OC('0001'),fecha:HOY_ISO,monto:2321.01,monedaPago:'MXN',metodo:'Transferencia',referencia:'X',
+  comprobante:{nombre:'p.pdf',datos:PDF},idSolicitud:'pp1'}],/pasa el saldo de la orden: faltan \$2,320\.00 MXN por pagar/);
 assert.equal(fact(OC('0001'),{uuid:U(2),folio:'2',fecha:diasAtras(100)+'T08:00:00',subtotal:'500.00',tras:'80.00',total:'580.00'}).folio,FPR('0006'));
 assert.equal(ok('pedro','getRequisicion',REQ('0002')).facturaCompleta,true,'completa otra vez');
 assert.equal(FP().length,7,'la cancelada sigue en la hoja');
