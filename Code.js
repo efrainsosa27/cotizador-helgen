@@ -1273,7 +1273,9 @@ function guardarProducto(p) {
  * Si se borran sus filas de la base de datos, dejan de sugerirse.
  */
 function getClientes() {
+  // Una cotización anulada no sugiere a su cliente (§6.E)
   const filas = db_().getSheetByName('Cotizaciones').getDataRange().getValues().slice(1)
+    .filter(r => !esAnulado_(r[0]))
     .map(r => {
       const f = r.slice();
       f[1] = f[1] instanceof Date ? Utilities.formatDate(f[1], 'America/Mexico_City', 'dd/MM/yyyy') : String(f[1] || '');
@@ -1288,7 +1290,7 @@ function listarCotizaciones(busqueda) {
   const filas = hoja.getDataRange().getDisplayValues().slice(1);
   // Correo → "Nombre Apellido" con todas las filas (antes de filtrar), para ponerle nombre a las filas viejas
   const nombres = nombresDeVendedores(filas);
-  const datos = filas.reverse();
+  const datos = filas.filter(r => !esAnulado_(r[0])).reverse(); // las anuladas no salen en el historial (§6.E)
   const q = String(busqueda || '').toLowerCase().trim();
   // Folio del proyecto con su clave (PRY-AAAA-NNNN-XXX); si no se puede leer Proyectos, el de la hoja
   let proyectos = {};
@@ -1490,7 +1492,7 @@ function hojaProyectos_() {
 function listarProyectos(busqueda, incluirInactivos) {
   // El buscador de cotizaciones (solo activos) no muestra proyectos con contrato firmado
   const contratos = incluirInactivos ? {} : contratosCache_();
-  return filtrarProyectos(proyectosCache_().filter(p => {
+  return filtrarProyectos(proyectosVisibles_().filter(p => {
     const c = contratos[p.folio.toUpperCase()];
     return !(c && c.estado === ESTADO_FIRMADO);
   }), busqueda, incluirInactivos, 50).map(proyectoParaLista_);
@@ -1876,8 +1878,9 @@ function datosCobranza_(libro, folio) {
   const f = String(folio).toUpperCase();
   const hC = hojaCobranza_(libro, 'Contratos'), hE = hojaCobranza_(libro, 'Esquemas'), hP = hojaCobranza_(libro, 'Pagos');
   let contrato = null;
+  // Un contrato anulado no cuenta: el proyecto queda sin aceptada y la siguiente se agrega en otra fila (§6.E)
   filasCobranza_(hC, 'Contratos').forEach((r, i) => {
-    if (String(r[0]).toUpperCase() === f) contrato = contratoDesdeFila_(r, i + 2);
+    if (String(r[0]).toUpperCase() === f && String(r[7] || '') !== ESTADO_ANULADA) contrato = contratoDesdeFila_(r, i + 2);
   });
   const etapas = filasCobranza_(hE, 'Esquemas')
     .filter(r => String(r[0]).toUpperCase() === f)
@@ -1885,7 +1888,7 @@ function datosCobranza_(libro, folio) {
     .map(r => ({ etapa: String(r[2]), porcentaje: Number(r[3]) }));
   const pagos = [];
   filasCobranza_(hP, 'Pagos').forEach((r, i) => {
-    if (String(r[3]).toUpperCase() === f) pagos.push(pagoDesdeFila_(r, i + 2));
+    if (String(r[3]).toUpperCase() === f && String(r[18] || '') !== ESTADO_ANULADA) pagos.push(pagoDesdeFila_(r, i + 2));
   });
   return { hojas: { contratos: hC, esquemas: hE, pagos: hP }, contrato: contrato, etapas: etapas, pagos: pagos };
 }
@@ -1898,7 +1901,7 @@ function contratosDelLibro_() {
   const hoja = libro.getSheetByName('Contratos');
   if (!hoja) return mapa;
   filasCobranza_(hoja, 'Contratos').forEach((r, i) => {
-    if (String(r[0] || '').trim()) mapa[String(r[0]).toUpperCase()] = contratoDesdeFila_(r, i + 2);
+    if (String(r[0] || '').trim() && String(r[7] || '') !== ESTADO_ANULADA) mapa[String(r[0]).toUpperCase()] = contratoDesdeFila_(r, i + 2);
   });
   return mapa;
 }
@@ -1919,8 +1922,9 @@ function foliosConContratoFirmado_() {
 function cotizacionesDeProyecto_(folio) {
   const f = String(folio).toUpperCase();
   const hoja = db_().getSheetByName('Cotizaciones');
+  // Una anulada ni se muestra ni se puede aceptar (§6.E)
   return hoja.getDataRange().getValues().slice(1)
-    .filter(r => String(r[19] || '').toUpperCase() === f && String(r[0] || '').trim())
+    .filter(r => String(r[19] || '').toUpperCase() === f && String(r[0] || '').trim() && !esAnulado_(r[0]))
     .map(r => ({
       folio: String(r[0]), fecha: r[1] instanceof Date ? Utilities.formatDate(r[1], 'America/Mexico_City', 'dd/MM/yyyy') : String(r[1] || ''),
       cliente: String(r[2] || ''), subtotal: Number(r[7]) || 0, iva: Number(r[8]) || 0, total: Number(r[9]) || 0,
@@ -1933,6 +1937,7 @@ function cotizacionesDeProyecto_(folio) {
 function proyectoParaCobranza_(folio) {
   const proyecto = buscarProyecto_(hojaProyectos_(), folio);
   if (!proyecto) throw new Error('No existe el proyecto ' + String(folio || '').toUpperCase() + '.');
+  if (esAnulado_(proyecto.folio)) throw new Error('El proyecto ' + proyecto.folioVisible + ' está anulado.');
   return proyecto;
 }
 
@@ -1989,7 +1994,7 @@ function vistaCobranza_(libro, proyecto) {
  */
 function margenDeContrato_(contrato) {
   try {
-    const ordenes = ordenesDeProyecto_(libroComprasSiExiste_(), contrato.proyectoFolio).filter(o => o.estado !== OC_CANCELADA);
+    const ordenes = ordenesDeProyecto_(libroComprasSiExiste_(), contrato.proyectoFolio).filter(ocVigente);
     return margenProyecto(contrato.subtotal, contrato.moneda, costosDeOrdenes(ordenes, contrato.moneda));
   } catch (e) {
     return { error: 'No se pudo calcular el margen: ' + e.message };
@@ -1999,7 +2004,7 @@ function margenDeContrato_(contrato) {
 /** Sin cotización aceptada no hay margen: solo el costo de las órdenes de compra vigentes, por moneda. null si no hay. */
 function margenSinContrato_(proyectoFolio) {
   try {
-    const ordenes = ordenesDeProyecto_(libroComprasSiExiste_(), proyectoFolio).filter(o => o.estado !== OC_CANCELADA);
+    const ordenes = ordenesDeProyecto_(libroComprasSiExiste_(), proyectoFolio).filter(ocVigente);
     return ordenes.length ? { sinContrato: true, costos: costosDeOrdenes(ordenes, 'MXN') } : null;
   } catch (e) {
     return { error: 'No se pudo calcular el costo de las órdenes: ' + e.message };
@@ -2045,16 +2050,18 @@ function resumenCobranzaGeneral(soloSiHay) {
 
 function resumenCobranzaDeHojas_() {
   const libro = libroCobranza_();
+  // Lo anulado no cuenta (§6.E): contratos, pagos y órdenes por su estado; proyectos por el registro de Anulaciones
   const contratos = filasCobranza_(hojaCobranza_(libro, 'Contratos'), 'Contratos')
-    .map((r, i) => contratoDesdeFila_(r, i + 2)).filter(c => c.proyectoFolio);
+    .map((r, i) => contratoDesdeFila_(r, i + 2)).filter(c => c.proyectoFolio && c.estado !== ESTADO_ANULADA);
   const esquemas = filasCobranza_(hojaCobranza_(libro, 'Esquemas'), 'Esquemas')
     .map(r => ({ proyectoFolio: String(r[0]), orden: Number(r[1]), etapa: String(r[2]), porcentaje: Number(r[3]) }));
-  const pagos = filasCobranza_(hojaCobranza_(libro, 'Pagos'), 'Pagos').map((r, i) => pagoDesdeFila_(r, i + 2));
-  const proyectos = proyectosCache_();
+  const pagos = filasCobranza_(hojaCobranza_(libro, 'Pagos'), 'Pagos').map((r, i) => pagoDesdeFila_(r, i + 2))
+    .filter(p => p.estado !== ESTADO_ANULADA);
+  const proyectos = proyectosVisibles_();
   const libroCompras = libroComprasSiExiste_();
   const ordenes = libroCompras
     ? filasDeArea_(hojaCompras_(libroCompras, 'OrdenesCompra'), HOJAS_COMPRAS, 'OrdenesCompra')
-      .filter(r => String(r[0] || '').trim()).map((r, i) => ordenDesdeFila_(r, i + 2))
+      .map((r, i) => String(r[0] || '').trim() ? ordenDesdeFila_(r, i + 2) : null).filter(o => o && o.estado !== ESTADO_ANULADA)
     : [];
   return Object.assign(resumenGeneralCobranza({ contratos: contratos, esquemas: esquemas, pagos: pagos, proyectos: proyectos,
     ordenes: ordenes }), { hoy: hoyIso_() });
@@ -2086,7 +2093,7 @@ function marcarAceptada(proyectoFolio, cotizacionFolio, confirmado) {
     }
     // Lo mismo con las órdenes de compra vigentes: su costo está en la moneda del proyecto (el margen nunca mezcla monedas)
     const oc = ordenesDeProyecto_(libroComprasSiExiste_(), proyecto.folio)
-      .find(o => o.estado !== OC_CANCELADA && o.monedaProyecto && o.monedaProyecto !== cot.moneda);
+      .find(o => ocVigente(o) && o.monedaProyecto && o.monedaProyecto !== cot.moneda);
     if (oc) {
       throw new Error('El proyecto ya tiene órdenes de compra en ' + oc.monedaProyecto + ': la cotización aceptada debe ser en ' +
         oc.monedaProyecto + '.');
@@ -2281,6 +2288,7 @@ function cancelarPago(folioPago, motivo) {
     let pago = null;
     filasCobranza_(hoja, 'Pagos').forEach((r, i) => { if (String(r[0]).toUpperCase() === folio) pago = pagoDesdeFila_(r, i + 2); });
     if (!pago) throw new Error('No existe el pago ' + folio + '.');
+    if (pago.estado === ESTADO_ANULADA) throw new Error('El pago ' + folio + ' está anulado.');
     if (pago.estado !== 'Vigente') throw new Error('El pago ' + folio + ' ya está cancelado.');
     hoja.getRange(pago.fila, 19, 1, 4).setValues([['Cancelado', textoCelda(VENDEDOR_.email),
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
@@ -2403,13 +2411,15 @@ function ordenDesdeFila_(r, fila) {
   };
 }
 
-/** Órdenes de un proyecto, en orden de registro. Sin libro de compras: ninguna. */
+/** Órdenes de un proyecto, en orden de registro (sin las anuladas: no se ven ni cuentan). Sin libro de compras: ninguna. */
 function ordenesDeProyecto_(libro, folio) {
   if (!libro) return [];
   const f = String(folio || '').toUpperCase();
   const lista = [];
   filasDeArea_(hojaCompras_(libro, 'OrdenesCompra'), HOJAS_COMPRAS, 'OrdenesCompra').forEach((r, i) => {
-    if (String(r[2]).toUpperCase() === f && String(r[0] || '').trim()) lista.push(ordenDesdeFila_(r, i + 2));
+    if (String(r[2]).toUpperCase() === f && String(r[0] || '').trim() && String(r[28] || '') !== ESTADO_ANULADA && !esAnulado_(r[0])) {
+      lista.push(ordenDesdeFila_(r, i + 2));
+    }
   });
   return lista;
 }
@@ -2443,6 +2453,7 @@ function guardarProveedor_(libro, prov) {
 function proyectoParaCompras_(folio) {
   const proyecto = buscarProyecto_(hojaProyectos_(), folio);
   if (!proyecto) throw new Error('No existe el proyecto ' + String(folio || '').toUpperCase() + '.');
+  if (esAnulado_(proyecto.folio)) throw new Error('El proyecto ' + proyecto.folioVisible + ' está anulado.');
   return proyecto;
 }
 
@@ -2485,7 +2496,7 @@ function vistaCompras_(libro, proyecto) {
 function listarProyectosCompras(busqueda) {
   exigirCompras_();
   const contratos = contratosCache_();
-  return filtrarProyectos(proyectosCache_().filter(p => p.estado !== 'Cancelado'), busqueda, true, 50)
+  return filtrarProyectos(proyectosVisibles_().filter(p => p.estado !== 'Cancelado'), busqueda, true, 50)
     .map(p => Object.assign(datosProyectoCompras_(p), { fecha: p.fecha }, monedaDeProyecto_(contratos[p.folio.toUpperCase()] || null)));
 }
 
@@ -2561,6 +2572,7 @@ function buscarOrden_(libro, folioOc) {
     if (String(r[0]).toUpperCase() === folio) orden = ordenDesdeFila_(r, i + 2);
   });
   if (!orden) throw new Error('No existe la orden de compra ' + folio + '.');
+  if (orden.estado === ESTADO_ANULADA) throw new Error('La orden de compra ' + orden.folio + ' está anulada.');
   return { hoja: hoja, orden: orden };
 }
 
@@ -2744,6 +2756,7 @@ function buscarReq_(libro, folioReq) {
     if (String(r[0]).toUpperCase() === folio) req = reqDesdeFila_(r, i + 2);
   });
   if (!req) throw new Error('No existe la requisición ' + folio + '.');
+  if (req.estado === ESTADO_ANULADA) throw new Error('La requisición ' + req.folio + ' está anulada.');
   return { hoja: hoja, req: req };
 }
 
@@ -2842,7 +2855,7 @@ function movimientosPorOc_(libro) {
   if (!libro) return mapa;
   filasDeArea_(hojaCompras_(libro, 'MovimientosInventario'), HOJAS_COMPRAS, 'MovimientosInventario').forEach((r, i) => {
     const m = movDesdeFila_(r, i + 2);
-    if (!m.folio || m.tipo !== TIPO_ENTRADA_COMPRA) return;
+    if (!m.folio || m.tipo !== TIPO_ENTRADA_COMPRA || m.estado === ESTADO_ANULADA) return; // anuladas: ni se ven ni cuentan
     const f = m.ocFolio.toUpperCase();
     (mapa[f] = mapa[f] || []).push(m);
   });
@@ -2870,7 +2883,7 @@ function ordenesPorFolio_(libro) {
   const mapa = {};
   if (!libro) return mapa;
   filasDeArea_(hojaCompras_(libro, 'OrdenesCompra'), HOJAS_COMPRAS, 'OrdenesCompra').forEach((r, i) => {
-    if (String(r[0] || '').trim()) mapa[String(r[0]).toUpperCase()] = ordenDesdeFila_(r, i + 2);
+    if (String(r[0] || '').trim() && String(r[28] || '') !== ESTADO_ANULADA && !esAnulado_(r[0])) mapa[String(r[0]).toUpperCase()] = ordenDesdeFila_(r, i + 2);
   });
   return mapa;
 }
@@ -2898,7 +2911,7 @@ const compraSinCostos_ = prop => prop ? (prop.renglones || []).map(r => ({ rengl
 function reqParaSolicitante_(req, ren, eventos, proyectos, x) {
   const p = proyectos[req.proyectoFolio.toUpperCase()];
   const o = x || {}, flujo = !!o.flujo, yo = o.yo || '';
-  const orden = o.orden && o.orden.estado !== OC_CANCELADA &&
+  const orden = ocVigente(o.orden) &&
     [REQ_AUTORIZADA, REQ_PAGADA, REQ_RECIBIDA, REQ_CERRADA].indexOf(req.estado) !== -1 ? o.orden : null;
   const avance = orden ? avanceRecepcion(orden.renglones, o.movimientos, renglonesSinRecepcion(propuestaVigente_(req))) : null;
   const recibe = req.recibeEmail || req.solicitanteEmail;
@@ -2928,7 +2941,7 @@ function reqParaSolicitante_(req, ren, eventos, proyectos, x) {
 function listarProyectosRequisicion(busqueda) {
   exigirRequisicion_();
   const q = textoNormal(busqueda);
-  return proyectosCache_().slice().reverse()
+  return proyectosVisibles_().slice().reverse()
     .filter(p => p.estado !== 'Cancelado')
     .filter(p => !q || textoNormal([p.folioVisible, p.clave, p.nombre].join(' ')).includes(q))
     .slice(0, 50)
@@ -2954,8 +2967,8 @@ function misRequisicionesDeHojas_(yo, flujo) {
   let ordenes = null, movs = null;
   filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
     const req = reqDesdeFila_(r, i + 2);
-    // Quien recibe la ve desde que hay orden de compra
-    if (!req.folio || (req.solicitanteEmail !== yo && !(req.recibeEmail === yo && req.ocFolio))) return;
+    // Quien recibe la ve desde que hay orden de compra; las anuladas no se ven
+    if (!req.folio || req.estado === ESTADO_ANULADA || esAnulado_(req.folio) || (req.solicitanteEmail !== yo && !(req.recibeEmail === yo && req.ocFolio))) return;
     const f = req.folio.toUpperCase();
     let orden = null, m = [];
     if (req.ocFolio) {
@@ -3116,7 +3129,7 @@ function listarRequisicionesDeHojas_(busqueda, estado) {
   const lista = [];
   filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
     const req = reqDesdeFila_(r, i + 2);
-    if (!req.folio) return;
+    if (!req.folio || req.estado === ESTADO_ANULADA || esAnulado_(req.folio)) return;
     const p = proyectos[req.proyectoFolio.toUpperCase()];
     const x = { folio: req.folio, fecha: req.fecha, proyectoFolio: req.proyectoFolio, proyectoNombre: p ? p.nombre : '',
       proyectoVisible: p ? p.folioVisible : req.proyectoFolio,
@@ -3141,13 +3154,13 @@ function pagoProvDesdeFila_(r, fila) {
   };
 }
 
-/** Pagos de una orden (en orden de registro). */
-function pagosDeOrden_(libro, folioOc) {
+/** Pagos de una orden (en orden de registro), sin los anulados salvo conAnulados. */
+function pagosDeOrden_(libro, folioOc, conAnulados) {
   const f = String(folioOc || '').toUpperCase();
   const lista = [];
   if (!f) return lista;
   filasDeArea_(hojaCompras_(libro, 'PagosProveedores'), HOJAS_COMPRAS, 'PagosProveedores').forEach((r, i) => {
-    if (String(r[3]).toUpperCase() === f) lista.push(pagoProvDesdeFila_(r, i + 2));
+    if (String(r[3]).toUpperCase() === f && (conAnulados || String(r[17] || '') !== ESTADO_ANULADA)) lista.push(pagoProvDesdeFila_(r, i + 2));
   });
   return lista;
 }
@@ -3318,7 +3331,7 @@ function registrarPagoProveedor(p) {
 
     const hP = hojaCompras_(libro, 'PagosProveedores');
     const folio = siguienteFolio_(PREFIJO_PGP, hP, 'CONSECUTIVO_PGP_');
-    const n = pagosDeOrden_(libro, orden.folio).length + 1;
+    const n = pagosDeOrden_(libro, orden.folio, true).length + 1; // "(n)" del archivo: también cuentan los anulados
     const archivo = privado_(carpetaRequisiciones_(req.proyectoFolio).createFile(Utilities.newBlob(bytes, tipo.mime,
       nombreArchivoReq(req.folio, 'Comprobante pago', tipo.ext, n))));
     const t = textoCelda;
@@ -3352,6 +3365,7 @@ function cancelarPagoProveedor(folioPago, motivo) {
       if (String(r[0]).toUpperCase() === folio) pago = pagoProvDesdeFila_(r, i + 2);
     });
     if (!pago) throw new Error('No existe el pago ' + folio + '.');
+    if (pago.estado === ESTADO_ANULADA) throw new Error('El pago ' + pago.folio + ' está anulado.');
     if (pago.estado !== 'Vigente') throw new Error('El pago ' + pago.folio + ' ya está cancelado.');
     const { hoja, req } = buscarReq_(libro, pago.reqFolio);
     if (req.estado === REQ_CERRADA) throw new Error('La requisición ' + req.folio + ' ya está cerrada (material recibido): el pago no se puede cancelar.');
@@ -3411,7 +3425,7 @@ function listarOperacionesDeHojas_() {
   const lista = [];
   filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
     const req = reqDesdeFila_(r, i + 2);
-    if (!req.folio) return;
+    if (!req.folio || req.estado === ESTADO_ANULADA || esAnulado_(req.folio)) return;
     const p = proyectos[req.proyectoFolio.toUpperCase()];
     const prop = req.estado === REQ_COTIZADA ? propuestaVigente_(req) : null;
     lista.push({ folio: req.folio, fecha: req.fecha, proyectoFolio: req.proyectoFolio, proyectoNombre: p ? p.nombre : '',
@@ -3809,6 +3823,7 @@ function cancelarRecepcion(folioRec, motivo) {
       if (x.folio.toUpperCase() === folio) filas.push(x);
     });
     if (!filas.length) throw new Error('No existe la recepción ' + folio + '.');
+    if (filas.every(x => x.estado === ESTADO_ANULADA)) throw new Error('La recepción ' + folio + ' está anulada.');
     if (!filas.some(x => x.estado === 'Vigente')) throw new Error('La recepción ' + folio + ' ya está cancelada.');
     const { hoja, req } = buscarReq_(libro, filas[0].reqFolio);
     if (req.estado === REQ_CERRADA) {
@@ -3904,12 +3919,12 @@ function facturaProvDesdeFila_(r, fila) {
   };
 }
 
-/** Todas las facturas del libro de compras (con su fila). Sin libro: ninguna. */
-function facturasDelLibro_(libro) {
+/** Facturas del libro de compras (con su fila), sin las anuladas salvo conAnuladas (no se ven ni cuentan). Sin libro: ninguna. */
+function facturasDelLibro_(libro, conAnuladas) {
   if (!libro) return [];
   const lista = [];
   filasDeArea_(hojaCompras_(libro, 'FacturasProveedor'), HOJAS_COMPRAS, 'FacturasProveedor').forEach((r, i) => {
-    if (String(r[0] || '').trim()) lista.push(facturaProvDesdeFila_(r, i + 2));
+    if (String(r[0] || '').trim() && (conAnuladas || String(r[29] || '') !== ESTADO_ANULADA)) lista.push(facturaProvDesdeFila_(r, i + 2));
   });
   return lista;
 }
@@ -3922,8 +3937,9 @@ function facturasDeOrden_(facturas, ocFolio) {
 
 function buscarFactura_(libro, folioFpr) {
   const folio = String(folioFpr || '').trim().toUpperCase();
-  const factura = facturasDelLibro_(libro).find(x => x.folio.toUpperCase() === folio);
+  const factura = facturasDelLibro_(libro, true).find(x => x.folio.toUpperCase() === folio);
   if (!factura) throw new Error('No existe la factura ' + folio + '.');
+  if (factura.estado === ESTADO_ANULADA) throw new Error('La factura ' + factura.folio + ' está anulada.');
   return { hoja: hojaCompras_(libro, 'FacturasProveedor'), factura: factura };
 }
 
@@ -4063,12 +4079,12 @@ function cuentasPorPagar(soloCache) {
   const calcular = () => {
     const libro = libroComprasSiExiste_();
     const ordenes = [], pagos = [];
-    if (libro) {
+    if (libro) { // lo anulado no se debe ni cuenta (§6.E); las facturas anuladas las quita facturasDelLibro_
       filasDeArea_(hojaCompras_(libro, 'OrdenesCompra'), HOJAS_COMPRAS, 'OrdenesCompra').forEach((r, i) => {
-        if (String(r[0] || '').trim()) ordenes.push(ordenDesdeFila_(r, i + 2));
+        if (String(r[0] || '').trim() && String(r[28] || '') !== ESTADO_ANULADA) ordenes.push(ordenDesdeFila_(r, i + 2));
       });
       filasDeArea_(hojaCompras_(libro, 'PagosProveedores'), HOJAS_COMPRAS, 'PagosProveedores').forEach((r, i) => {
-        if (String(r[0] || '').trim()) pagos.push(pagoProvDesdeFila_(r, i + 2));
+        if (String(r[0] || '').trim() && String(r[17] || '') !== ESTADO_ANULADA) pagos.push(pagoProvDesdeFila_(r, i + 2));
       });
     }
     const facturas = facturasDelLibro_(libro);
@@ -4761,7 +4777,7 @@ function resumenGeneralCobranza(d) {
     const r = resumenCobranza(c, etapas, pagosP);
     const siguiente = r.etapas.find(e => aCentavos(e.saldo) > 0);
     const ultimoPago = pagosP.filter(x => x.estado === 'Vigente').map(x => String(x.fecha || '')).sort().pop() || '';
-    const ocs = (ordenes[folio] || []).filter(o => o.estado !== OC_CANCELADA);
+    const ocs = (ordenes[folio] || []).filter(ocVigente); // ni canceladas ni anuladas
     let margen = null, margenError = '';
     try {
       margen = margenProyecto(c.subtotal, c.moneda, costosDeOrdenes(ocs, c.moneda));
@@ -5515,7 +5531,7 @@ function antiguedadCxp(d) {
   const abiertas = [], totales = {};
   vigentes.forEach(f => {
     const o = ordenes[may(f.ocFolio)];
-    if (!o || o.estado === OC_CANCELADA || pagadas[may(f.ocFolio)]) return;
+    if (!ocVigente(o) || pagadas[may(f.ocFolio)]) return; // sin orden, cancelada o anulada: no se debe
     const dias = diasEntre(f.fechaVencimiento, hoy);
     const rango = RANGOS_CXP.find(r => dias <= r.hasta);
     abiertas.push({ folio: f.folio, tipo: f.tipo, serieFolio: f.serieFolio, ocFolio: o.folio, proyectoFolio: o.proyectoFolio,
@@ -6927,7 +6943,641 @@ function modPantallas_() {
 }
 
 // ---- 6.E Anular: un super admin anula cualquier registro con folio (con lo que depende de él) ----
+// Anular no es borrar: las filas se quedan (los folios nunca se vuelven a usar), el estado pasa a 'Anulada' (los proyectos a
+// 'Cancelado', lo único que admite su lista desplegable) y el registro sale de todas las listas y totales. Las cotizaciones no
+// tienen estado: las esconde el registro de Anulaciones (libro de Administración), igual que a los proyectos. Cada anulación
+// deja una fila por registro en Anulaciones (con la copia de cómo estaba), renglones en la Bitacora de su área y en la de
+// Administración, y los archivos se quedan en Drive con "ANULADA — " al inicio del nombre. Se ofrece desde una sola página
+// (Administración → Anular), no con un botón en cada pantalla. Restaurar no es parte de este incremento.
 
 function modAnular_() {
-  return { nombre: 'Anular', api: {}, cambios: {}, solo: [], publicas: [] };
+  // Aquí solo listas literales: este módulo se arma al cargar el archivo, antes de las const de más abajo
+  return { nombre: 'Anular',
+    api: { previsualizarAnulacion: previsualizarAnulacion, anular: anular, listarAnulados: listarAnulados },
+    // Una anulación puede tocar cualquier colección (es rara: se suben todas y los navegadores vuelven a pedir sus listas)
+    cambios: { anular: ['anulaciones', 'proyectos', 'contratos', 'cotizaciones', 'requisiciones', 'oc', 'pagosCobranza',
+      'pagosProveedores', 'facturasProveedor'] },
+    solo: [], publicas: [],
+    // La lista de anulados de Administración (solo super admin) se vuelve a mandar cuando alguien anula algo
+    sincronizar(permisos, ctx, algo, r, errores) {
+      if (permisos.superadmin && ctx.anulados && algo('anulaciones')) {
+        r.anulados = intentar_(errores, 'Anulados', () => listarAnulados(ctx.anuladosBuscar || ''));
+      }
+    },
+  };
+}
+
+const ESTADO_ANULADA = 'Anulada';
+const PREFIJO_ARCHIVO_ANULADO = 'ANULADA — ', PREFIJO_CARPETA_ANULADA = 'ANULADO — ';
+const MOTIVO_ANULAR_MIN = 10, MOTIVO_ANULAR_MAX = 500;
+const TIPOS_ANULAR = { cotizacion: 'Cotización', proyecto: 'Proyecto', contrato: 'Contrato', pago: 'Pago de cliente',
+  req: 'Requisición', oc: 'Orden de compra', pgp: 'Pago a proveedor', fpr: 'Factura de proveedor', rec: 'Recepción' };
+const PREFIJOS_ANULAR = { PRY: 'proyecto', PAG: 'pago', REQ: 'req', OC: 'oc', PGP: 'pgp', FPR: 'fpr', REC: 'rec' };
+
+/**
+ * (Lógica pura) Qué se quiere anular, a partir de lo que escribió el super admin: {clave (de TIPOS_ANULAR), folio}. El tipo
+ * sale del prefijo: PRY, PAG, REQ, OC, PGP, FPR, REC; cualquier otro (HLG o el PREFIJO_FOLIO de Config) es una cotización.
+ * Los contratos no tienen folio: "CONTRATO PRY-AAAA-NNNN" (también con la clave del proyecto). El proyecto con clave
+ * (PRY-AAAA-NNNN-XXX) se guarda con su llave interna.
+ */
+function folioParaAnular(texto) {
+  const s = String(texto == null ? '' : texto).trim().toUpperCase().replace(/\s+/g, ' ');
+  const pry = /^PRY-\d{4}-\d{4,}(-[A-Z]{3})?$/;
+  const c = s.match(/^CONTRATO(?: DE)?:? (\S+)$/);
+  if (c) {
+    if (!pry.test(c[1])) throw new Error('Escribe el contrato como «CONTRATO PRY-AAAA-NNNN».');
+    return { clave: 'contrato', folio: 'CONTRATO ' + folioInterno(c[1]), proyectoFolio: folioInterno(c[1]) };
+  }
+  if (pry.test(s)) return { clave: 'proyecto', folio: folioInterno(s) };
+  const m = s.match(/^([A-Z]{2,6})-\d{4}-\d{4,}$/);
+  if (!m) {
+    throw new Error('Escribe un folio (HLG-, PRY-, PAG-, REQ-, OC-, PGP-, FPR- o REC-AAAA-NNNN) o «CONTRATO PRY-AAAA-NNNN».');
+  }
+  return { clave: PREFIJOS_ANULAR[m[1]] || 'cotizacion', folio: s };
+}
+
+/** (Lógica pura) Id de un archivo de Drive a partir de su liga (…/file/d/<id>/view, …?id=<id>); '' si no se reconoce. */
+function idDeUrlDrive(url) {
+  const s = String(url || '');
+  const m = s.match(/\/d\/([-\w]{3,})/) || s.match(/[?&]id=([-\w]{3,})/) || s.match(/\/file\/([-\w]{3,})/);
+  return m ? m[1] : '';
+}
+
+/**
+ * (Lógica pura) JSON para una celda (máximo ~50 000 caracteres en Sheets). Si no cabe, los textos largos se recortan con una
+ * marca; si aun así no cabe, se guarda solo el principio con {recortado: true}.
+ */
+function jsonCelda(valor, max) {
+  const limite = max || 45000;
+  let s = JSON.stringify(valor === undefined ? null : valor);
+  if (s.length <= limite) return s;
+  s = JSON.stringify(valor, (k, v) => typeof v === 'string' && v.length > 1500 ? v.slice(0, 1500) + '…(recortado: ' + v.length + ' caracteres)' : v);
+  if (s.length <= limite) return s;
+  return JSON.stringify({ recortado: true, inicio: s.slice(0, limite - 200) });
+}
+
+/** ¿Una orden de compra cuenta (margen, costos, pendientes)? Ni las canceladas ni las anuladas. (Lógica pura) */
+function ocVigente(o) {
+  return !!o && o.estado !== OC_CANCELADA && o.estado !== ESTADO_ANULADA;
+}
+
+/** Folios anulados (en mayúsculas) según la pestaña Anulaciones; sin libro de Administración, ninguno. Los contratos no van
+ * (no tienen folio: los esconde su estado). */
+function anuladosDeHoja_() {
+  const set = {};
+  const libro = libroAdminSiExiste_();
+  const hoja = libro && libro.getSheetByName('Anulaciones');
+  if (!hoja) return set;
+  filasDeArea_(hoja, HOJAS_ADMIN, 'Anulaciones').forEach(r => {
+    const folio = String(r[3] || '').trim().toUpperCase();
+    if (folio && String(r[2] || '') !== TIPOS_ANULAR.contrato) set[folio] = true;
+  });
+  return set;
+}
+
+/**
+ * PARA TODOS LOS MÓDULOS: {FOLIO: true} de todo lo anulado (cotizaciones, proyectos, pagos, requisiciones, órdenes, pagos a
+ * proveedor, facturas y recepciones; los contratos no: los esconde su estado). En caché por la versión de 'anulaciones' (solo
+ * anular la cambia, y anular lee la hoja directo), así que también sirve durante una escritura; una vez por petición. Sin
+ * libro de Administración: {}. Para una lista: const a = foliosAnulados_(); filas.filter(r => !a[folio.toUpperCase()]).
+ */
+function foliosAnulados_() {
+  if (MEMO_.anulados) return MEMO_.anulados;
+  if (!propiedades_()[AREA_ADMIN.propLibro]) return (MEMO_.anulados = {});
+  const clave = claveCache_('anulados', ['anulaciones']);
+  let v = leerCache_(clave);
+  if (v === undefined) {
+    v = anuladosDeHoja_();
+    guardarCache_(clave, v, TTL_CACHE);
+  }
+  return (MEMO_.anulados = v);
+}
+
+/**
+ * PARA TODOS LOS MÓDULOS: ¿está anulado este folio? (mayúsculas o minúsculas; un proyecto también con su clave,
+ * PRY-AAAA-NNNN-XXX). Barato: usa foliosAnulados_(). Lo anulado no cuenta como pendiente para nadie. Las filas con columna de
+ * estado además quedan en 'Anulada' (ESTADO_ANULADA): una lectura de hoja puede saltarlas por cualquiera de los dos.
+ */
+function esAnulado_(folio) {
+  const f = String(folio == null ? '' : folio).trim().toUpperCase();
+  if (!f) return false;
+  const a = foliosAnulados_();
+  return !!(a[f] || (/^PRY-\d{4}-\d{4,}-[A-Z]{3}$/.test(f) && a[folioInterno(f)]));
+}
+
+/** Proyectos que no están anulados (las listas de todas las pestañas parten de aquí; el mapa de folios visibles no). */
+function proyectosVisibles_() {
+  return proyectosCache_().filter(p => !esAnulado_(p.folio));
+}
+
+/** Filas de una pestaña si existe (anular solo lee: no crea pestañas). */
+function filasSiHay_(libro, hojas, nombre) {
+  const hoja = libro && libro.getSheetByName(nombre);
+  return hoja ? filasDeArea_(hoja, hojas, nombre) : [];
+}
+
+/** Todo lo que una anulación puede tocar, leído de las hojas en este momento (también lo ya anulado o cancelado). */
+function datosAnular_() {
+  const may = s => String(s || '').trim().toUpperCase();
+  const lc = libroCobranzaSiExiste_(), lo = libroComprasSiExiste_();
+  const d = { libroCob: lc, libroCom: lo, anulados: anuladosDeHoja_(), cot: [], pry: [], contratos: [], esquemas: [], pagos: [],
+    ordenes: [], reqs: [], pgp: [], fpr: [], movs: [] };
+  db_().getSheetByName('Cotizaciones').getDataRange().getValues().slice(1).forEach((r, i) => {
+    if (!String(r[0] || '').trim()) return;
+    d.cot.push({ folio: String(r[0]).trim(), fila: i + 2, valores: r, proyectoFolio: may(r[19]), cliente: String(r[2] || ''),
+      empresa: String(r[3] || ''), total: Number(r[9]) || 0, moneda: String(r[20] || '') || 'MXN', pdfUrl: String(r[11] || ''),
+      vendedorEmail: String(r[16] || r[10] || '') });
+  });
+  const hP = hojaProyectos_();
+  const filasP = hP.getLastRow() > 1 ? hP.getRange(2, 1, hP.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
+  filasP.forEach((r, i) => {
+    const p = proyectosDesdeFilas([r])[0];
+    if (p) d.pry.push(Object.assign(p, { fila: i + 2, valores: r, vendedorEmail: String(r[8] || '') }));
+  });
+  filasSiHay_(lc, HOJAS_COBRANZA, 'Contratos').forEach((r, i) => {
+    if (String(r[0] || '').trim()) d.contratos.push(Object.assign(contratoDesdeFila_(r, i + 2), { valores: r }));
+  });
+  filasSiHay_(lc, HOJAS_COBRANZA, 'Esquemas').forEach((r, i) => d.esquemas.push({ proyectoFolio: may(r[0]), fila: i + 2, valores: r }));
+  filasSiHay_(lc, HOJAS_COBRANZA, 'Pagos').forEach((r, i) => {
+    if (String(r[0] || '').trim()) {
+      d.pagos.push(Object.assign(pagoDesdeFila_(r, i + 2), { valores: r, comprobanteId: String(r[14] || ''), registroEmail: String(r[16] || '') }));
+    }
+  });
+  filasSiHay_(lo, HOJAS_COMPRAS, 'OrdenesCompra').forEach((r, i) => {
+    if (String(r[0] || '').trim()) {
+      d.ordenes.push(Object.assign(ordenDesdeFila_(r, i + 2), { valores: r, pdfId: String(r[23] || ''), elaboroEmail: String(r[25] || '') }));
+    }
+  });
+  filasSiHay_(lo, HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
+    if (String(r[0] || '').trim()) d.reqs.push(Object.assign(reqDesdeFila_(r, i + 2), { valores: r }));
+  });
+  filasSiHay_(lo, HOJAS_COMPRAS, 'PagosProveedores').forEach((r, i) => {
+    if (String(r[0] || '').trim()) d.pgp.push(Object.assign(pagoProvDesdeFila_(r, i + 2), { valores: r, registroEmail: String(r[15] || '') }));
+  });
+  filasSiHay_(lo, HOJAS_COMPRAS, 'FacturasProveedor').forEach((r, i) => {
+    if (String(r[0] || '').trim()) {
+      d.fpr.push(Object.assign(facturaProvDesdeFila_(r, i + 2), { valores: r, xmlId: String(r[23] || ''), pdfId: String(r[25] || ''),
+        registroEmail: String(r[27] || '') }));
+    }
+  });
+  filasSiHay_(lo, HOJAS_COMPRAS, 'MovimientosInventario').forEach((r, i) => {
+    if (String(r[0] || '').trim()) d.movs.push(Object.assign(movDesdeFila_(r, i + 2), { valores: r }));
+  });
+  return d;
+}
+
+/**
+ * Lo que arrastra anular `objetivo` ({clave, folio} de folioParaAnular), sin cambiar nada: {raiz, registros (lo que queda
+ * Anulado, en orden), efectos (lo que cambia en registros que siguen: requisición que vuelve a cotizarse, orden que se
+ * puede pagar otra vez…), avisos, archivos (ids a renombrar), carpeta (del proyecto), para (correos), ocsPortal}.
+ * Cascada: proyecto → cotizaciones, contrato, pagos, requisiciones y órdenes; cotización aceptada → contrato → pagos;
+ * requisición → sus órdenes; orden → sus pagos, facturas y recepciones.
+ */
+function planAnulacion_(d, objetivo) {
+  const may = s => String(s || '').trim().toUpperCase();
+  const T = TIPOS_ANULAR;
+  const plan = { raiz: null, registros: [], efectos: [], avisos: [], archivos: [], carpeta: null, para: [], ocsPortal: [] };
+  const ya = {};
+  const enPlan = (clave, folio) => !!ya[clave + '|' + may(folio)];
+  const agregar = r => {
+    const k = r.clave + '|' + may(r.folio);
+    if (ya[k]) return false;
+    ya[k] = true;
+    r.tipo = T[r.clave];
+    plan.registros.push(r);
+    if (!plan.raiz) plan.raiz = r;
+    return true;
+  };
+  const correo = (...cs) => cs.forEach(c => {
+    const x = String(c || '').trim().toLowerCase();
+    if (/^[^@\s]+@[^@\s]+$/.test(x) && plan.para.indexOf(x) === -1) plan.para.push(x);
+  });
+  const archivo = id => { const x = String(id || '').trim(); if (x && plan.archivos.indexOf(x) === -1) plan.archivos.push(x); };
+  const dinero = (n, m) => formatoMoneda(n) + ' ' + (m || 'MXN');
+  const proyectoDe = f => d.pry.find(p => may(p.folio) === may(f)) || null;
+  const fv = f => { const p = proyectoDe(f); return p ? p.folioVisible : String(f || ''); };
+  const reqDe = f => (f ? d.reqs.find(r => may(r.folio) === may(f)) : null) || null;
+  const ordenDe = f => (f ? d.ordenes.find(o => may(o.folio) === may(f)) : null) || null;
+  const contratoActivo = pf => {
+    let c = null;
+    d.contratos.forEach(x => { if (may(x.proyectoFolio) === may(pf) && x.estado !== ESTADO_ANULADA) c = x; });
+    return c;
+  };
+  const recepciones = () => {
+    const g = {}, orden = [];
+    d.movs.forEach(m => {
+      const k = may(m.folio);
+      if (!g[k]) { g[k] = { folio: m.folio, ocFolio: m.ocFolio, reqFolio: m.reqFolio, proyectoFolio: m.proyectoFolio, sitio: m.sitio, filas: [] }; orden.push(g[k]); }
+      g[k].filas.push(m);
+    });
+    return orden;
+  };
+  const recs = recepciones();
+  const vivo = x => x.estado !== ESTADO_ANULADA;
+
+  function proyecto(p) {
+    if (!agregar({ clave: 'proyecto', folio: p.folio, x: p, proyectoFolio: p.folio, estado: p.estado,
+      descripcion: [p.folioVisible, p.nombre, p.cliente].filter(Boolean).join(' · ') })) return;
+    correo(p.vendedorEmail);
+    if (p.carpetaId) plan.carpeta = { id: p.carpetaId };
+    const f = may(p.folio);
+    d.cot.filter(q => q.proyectoFolio === f && !d.anulados[may(q.folio)]).forEach(cotizacion);
+    const c = contratoActivo(p.folio);
+    if (c) contrato(c);
+    d.pagos.filter(x => may(x.proyectoFolio) === f && vivo(x)).forEach(pagoCliente);
+    d.reqs.filter(r => may(r.proyectoFolio) === f && vivo(r)).forEach(requisicion);
+    d.ordenes.filter(o => may(o.proyectoFolio) === f && vivo(o)).forEach(orden);
+  }
+  function cotizacion(q) {
+    const c = q.proyectoFolio ? contratoActivo(q.proyectoFolio) : null;
+    const aceptada = !!c && may(c.cotizacion) === may(q.folio);
+    const estado = !aceptada ? '' : c.estado === ESTADO_FIRMADO ? 'Aceptada (contrato firmado)' : 'Aceptada';
+    if (!agregar({ clave: 'cotizacion', folio: q.folio, x: q, proyectoFolio: q.proyectoFolio, estado: estado,
+      descripcion: [q.folio, [q.cliente, q.empresa].filter(Boolean).join(' — '), dinero(q.total, q.moneda),
+        q.proyectoFolio ? fv(q.proyectoFolio) : 'Sin proyecto'].join(' · ') })) return;
+    correo(q.vendedorEmail);
+    archivo(idDeUrlDrive(q.pdfUrl));
+    if (aceptada) contrato(c);
+  }
+  function contrato(c) {
+    if (!agregar({ clave: 'contrato', folio: 'CONTRATO ' + may(c.proyectoFolio), x: c, proyectoFolio: c.proyectoFolio, estado: c.estado,
+      descripcion: 'Contrato de ' + fv(c.proyectoFolio) + ' · ' + c.cotizacion + ' · ' + dinero(c.total, c.moneda) +
+        (c.fechaFirma ? ' · firmado el ' + c.fechaFirma : ' · sin firmar') })) return;
+    correo(c.aceptadaPor, c.firmadoPor);
+    d.pagos.filter(x => may(x.proyectoFolio) === may(c.proyectoFolio) && vivo(x)).forEach(pagoCliente);
+  }
+  function pagoCliente(x) {
+    if (!agregar({ clave: 'pago', folio: x.folio, x: x, proyectoFolio: x.proyectoFolio, estado: x.estado,
+      descripcion: [x.folio, dinero(x.monto, x.monedaPago), x.fecha, x.metodo, fv(x.proyectoFolio)].filter(Boolean).join(' · ') })) return;
+    correo(x.registroEmail);
+    archivo(x.comprobanteId);
+  }
+  function requisicion(r) {
+    if (!agregar({ clave: 'req', folio: r.folio, x: r, proyectoFolio: r.proyectoFolio, estado: r.estado,
+      descripcion: [r.folio, r.solicitante, fv(r.proyectoFolio)].filter(Boolean).join(' · ') })) return;
+    correo(r.solicitanteEmail, r.recibeEmail);
+    archivo(r.cotizacionId);
+    ((r.propuesta && r.propuesta.archivos) || []).forEach(a => archivo(a && a.id));
+    d.ordenes.filter(o => may(o.reqFolio) === may(r.folio) && vivo(o)).forEach(orden);
+  }
+  function orden(o) {
+    if (!agregar({ clave: 'oc', folio: o.folio, x: o, proyectoFolio: o.proyectoFolio, estado: o.estado,
+      descripcion: [o.folio, o.proveedor, dinero(o.total, o.moneda), o.reqFolio, fv(o.proyectoFolio)].filter(Boolean).join(' · ') })) return;
+    correo(o.elaboroEmail);
+    const r = reqDe(o.reqFolio);
+    if (r) correo(r.solicitanteEmail, r.recibeEmail);
+    archivo(o.pdfId);
+    if (o.estado !== OC_CANCELADA) plan.ocsPortal.push(o.folio);
+    const f = may(o.folio);
+    d.pgp.filter(x => may(x.ocFolio) === f && vivo(x)).forEach(pagoProveedor);
+    d.fpr.filter(x => may(x.ocFolio) === f && vivo(x)).forEach(factura);
+    recs.filter(g => may(g.ocFolio) === f && g.filas.some(vivo)).forEach(recepcion);
+  }
+  function pagoProveedor(x) {
+    if (!agregar({ clave: 'pgp', folio: x.folio, x: x, proyectoFolio: x.proyectoFolio, estado: x.estado,
+      descripcion: [x.folio, dinero(x.monto, x.monedaPago), x.fecha, x.ocFolio].filter(Boolean).join(' · ') })) return;
+    correo(x.registroEmail);
+    const r = reqDe(x.reqFolio);
+    if (r) correo(r.solicitanteEmail, r.recibeEmail);
+    archivo(x.comprobanteId);
+  }
+  function factura(x) {
+    if (!agregar({ clave: 'fpr', folio: x.folio, x: x, proyectoFolio: x.proyectoFolio, estado: x.estado,
+      descripcion: [x.folio, x.tipo === FPR_CFDI ? 'CFDI ' + (x.serieFolio || x.uuid) : x.serieFolio, x.nombreEmisor,
+        dinero(x.total, x.moneda), x.ocFolio].filter(Boolean).join(' · ') })) return;
+    correo(x.registroEmail);
+    archivo(x.xmlId);
+    archivo(x.pdfId);
+  }
+  function recepcion(g) {
+    const vivas = g.filas.filter(vivo);
+    if (!agregar({ clave: 'rec', folio: g.folio, x: g, proyectoFolio: g.proyectoFolio,
+      estado: vivas.some(m => m.estado === 'Vigente') ? 'Vigente' : (vivas[0] || g.filas[0]).estado,
+      descripcion: [g.folio, vivas.length + ' renglón(es)', g.sitio, g.ocFolio].filter(Boolean).join(' · ') })) return;
+    g.filas.forEach(m => { correo(m.correo); archivo(m.evidenciaId); });
+    const r = reqDe(g.reqFolio);
+    if (r) correo(r.solicitanteEmail, r.recibeEmail);
+  }
+
+  // ---- Raíz ----
+  const f = objetivo.folio;
+  if (objetivo.clave === 'proyecto') {
+    const p = proyectoDe(f);
+    if (!p) throw new Error('No existe el proyecto ' + f + '.');
+    if (d.anulados[may(p.folio)]) throw new Error('El proyecto ' + p.folioVisible + ' ya está anulado.');
+    proyecto(p);
+  } else if (objetivo.clave === 'contrato') {
+    const p = proyectoDe(objetivo.proyectoFolio);
+    if (!p) throw new Error('No existe el proyecto ' + objetivo.proyectoFolio + '.');
+    if (d.anulados[may(p.folio)]) throw new Error('El proyecto ' + p.folioVisible + ' está anulado.');
+    const c = contratoActivo(p.folio);
+    if (!c) throw new Error('El proyecto ' + p.folioVisible + ' no tiene contrato (cotización aceptada) que anular.');
+    contrato(c);
+  } else if (objetivo.clave === 'cotizacion') {
+    const q = d.cot.find(x => may(x.folio) === f);
+    if (!q) throw new Error('No existe la cotización ' + f + '.');
+    if (d.anulados[f]) throw new Error('La cotización ' + f + ' ya está anulada.');
+    cotizacion(q);
+  } else {
+    const fuentes = { pago: [d.pagos, 'el pago', pagoCliente], req: [d.reqs, 'la requisición', requisicion], oc: [d.ordenes, 'la orden de compra', orden],
+      pgp: [d.pgp, 'el pago a proveedor', pagoProveedor], fpr: [d.fpr, 'la factura de proveedor', factura], rec: [recs, 'la recepción', recepcion] };
+    const [lista, que, fn] = fuentes[objetivo.clave];
+    const x = lista.find(y => may(y.folio) === f);
+    if (!x) throw new Error('No existe ' + que + ' ' + f + '.');
+    const anulada = objetivo.clave === 'rec' ? !x.filas.some(vivo) : !vivo(x);
+    if (anulada) throw new Error(que.charAt(0).toUpperCase() + que.slice(1) + ' ' + f + ' ya está ' + (/^la /.test(que) ? 'anulada' : 'anulado') + '.');
+    fn(x);
+  }
+
+  // ---- Efectos en lo que sigue en pie ----
+  plan.registros.forEach(r => {
+    if (r.clave === 'oc') {
+      // Su requisición (si sigue) vuelve a cotizarse (con operaciones: Aprobada, sin la propuesta) o a autorizarse (Solicitada)
+      const o = r.x, q = reqDe(o.reqFolio);
+      if (!q || !vivo(q) || enPlan('req', q.folio) || may(q.ocFolio) !== may(o.folio)) return;
+      const conAprobacion = !!q.aprobacion, a = conAprobacion ? REQ_APROBADA : REQ_SOLICITADA;
+      plan.efectos.push({ clave: 'reqSinOrden', req: q, orden: o, a: a, conAprobacion: conAprobacion,
+        texto: q.folio + ' (' + q.estado + ') vuelve a ' + a + ' sin orden de compra' + (conAprobacion
+          ? ': se retira la propuesta (conserva su número de versión) y compras la cotiza de nuevo.'
+          : ': queda pendiente de autorizar de nuevo.') });
+    } else if (r.clave === 'pgp' && r.x.estado === 'Vigente' && !enPlan('oc', r.x.ocFolio)) {
+      // La orden se puede pagar otra vez (vuelve al estado que tenía antes del pago)
+      const o = ordenDe(r.x.ocFolio), q = reqDe(r.x.reqFolio);
+      const oc = o && vivo(o) && (o.estado === OC_PAGADA || o.estado === OC_RECIBIDA) ? OC_EMITIDA : '';
+      const rq = q && vivo(q) ? (q.estado === REQ_PAGADA ? REQ_AUTORIZADA : q.estado === REQ_CERRADA ? REQ_RECIBIDA : '') : '';
+      plan.efectos.push({ clave: 'pagoProveedor', pago: r.x, orden: oc ? o : null, oc: oc, req: rq ? q : null, a: rq,
+        texto: [o ? o.folio + (oc ? ' pasa de ' + o.estado + ' a ' + oc : ' sigue ' + o.estado) : '',
+          q ? q.folio + (rq ? ' pasa de ' + q.estado + ' a ' + rq : ' sigue ' + q.estado) : ''].filter(Boolean).join('; ') +
+          ': la orden queda por pagar otra vez.' });
+    } else if (r.clave === 'rec' && r.x.filas.some(m => m.estado === 'Vigente') && !enPlan('oc', r.x.ocFolio)) {
+      // La orden espera el material otra vez (como cancelarRecepcion; una Cerrada vuelve a Pagada)
+      const o = ordenDe(r.x.ocFolio), q = reqDe(r.x.reqFolio);
+      const rq = q && vivo(q) ? (q.estado === REQ_RECIBIDA ? REQ_AUTORIZADA : q.estado === REQ_CERRADA ? REQ_PAGADA : '') : '';
+      const oc = rq === REQ_PAGADA && o && o.estado === OC_RECIBIDA ? OC_PAGADA : '';
+      plan.efectos.push({ clave: 'recepcion', rec: r.x, orden: o && vivo(o) ? o : null, oc: oc, req: rq ? q : null, a: rq,
+        texto: (q ? q.folio + (rq ? ' pasa de ' + q.estado + ' a ' + rq : ' sigue ' + q.estado) + '; ' : '') +
+          (o ? o.folio + (oc ? ' pasa de ' + o.estado + ' a ' + oc : '') + ' espera otra vez el material de ' + r.x.folio + '.' : '') });
+    } else if (r.clave === 'contrato' && !enPlan('proyecto', r.proyectoFolio)) {
+      const c = r.x;
+      plan.efectos.push({ clave: 'info', texto: fv(c.proyectoFolio) + ' queda sin cotización aceptada' +
+        (enPlan('cotizacion', c.cotizacion) ? '.' : '; ' + c.cotizacion + ' sigue en el proyecto, sin aceptar.') +
+        ' Se borra su esquema de pagos (queda copia en Anulaciones).' });
+    } else if (r.clave === 'pago' && !enPlan('contrato', 'CONTRATO ' + may(r.proyectoFolio)) && !enPlan('proyecto', r.proyectoFolio)) {
+      plan.efectos.push({ clave: 'info', texto: 'El cobrado, el saldo y el avance por etapa de ' + fv(r.proyectoFolio) + ' se recalculan sin ' + r.folio + '.' });
+    } else if (r.clave === 'fpr' && !enPlan('oc', r.x.ocFolio)) {
+      plan.efectos.push({ clave: 'info', texto: 'Lo facturado y las cuentas por pagar de ' + r.x.ocFolio + ' se recalculan sin ' + r.folio + '.' });
+    }
+  });
+  if (plan.carpeta) {
+    plan.efectos.push({ clave: 'info', texto: 'La carpeta del proyecto en Drive se renombra con «' + PREFIJO_CARPETA_ANULADA +
+      '» al inicio (las carpetas privadas de Cobranza y Compras se quedan como están).' });
+  }
+
+  // ---- Avisos ----
+  if (plan.registros.some(r => r.clave === 'oc')) {
+    plan.avisos.push('El material que el centro de mando ya recibió se queda ahí: la anulación no lo regresa. Se le avisa que la orden ya no va.');
+  }
+  if (plan.registros.some(r => r.clave === 'pago' || r.clave === 'pgp')) {
+    plan.avisos.push('Anular un pago no mueve dinero: solo corrige el registro.');
+  }
+  if (plan.archivos.length) {
+    plan.avisos.push(plan.archivos.length + ' archivo(s) se quedan en Drive con «' + PREFIJO_ARCHIVO_ANULADO + '» al inicio del nombre.');
+  }
+  plan.avisos.push('Nada se borra y los folios no se vuelven a usar. Lo anulado sale de todas las listas y totales.');
+  return plan;
+}
+
+/** Lo que ve el super admin antes de confirmar (y lo que devuelve anular: debe ser lo mismo). */
+function resumenPlan_(plan) {
+  return {
+    folio: plan.raiz.folio, tipo: plan.raiz.tipo, descripcion: plan.raiz.descripcion,
+    registros: plan.registros.map(r => ({ tipo: r.tipo, folio: r.folio, descripcion: r.descripcion, estado: r.estado || '' })),
+    efectos: plan.efectos.map(e => e.texto), avisos: plan.avisos.slice(), archivos: plan.archivos.length,
+    carpeta: plan.carpeta ? plan.carpeta.nombre || '' : '', para: plan.para.slice(),
+  };
+}
+
+/** Nombre actual de la carpeta del proyecto (para mostrarla antes de renombrar); '' si no se encuentra. */
+function nombreCarpetaPlan_(plan) {
+  if (!plan.carpeta) return;
+  try { plan.carpeta.nombre = DriveApp.getFolderById(plan.carpeta.id).getName(); } catch (e) { plan.carpeta.nombre = ''; }
+}
+
+/** Motivo de una anulación: obligatorio, de 10 a 500 caracteres. */
+function motivoAnular_(motivo) {
+  const m = String(motivo == null ? '' : motivo).trim().replace(/\s+/g, ' ');
+  if (m.length < MOTIVO_ANULAR_MIN) throw new Error('Escribe el motivo de la anulación (al menos ' + MOTIVO_ANULAR_MIN + ' caracteres).');
+  if (m.length > MOTIVO_ANULAR_MAX) throw new Error('El motivo debe tener máximo ' + MOTIVO_ANULAR_MAX + ' caracteres.');
+  return m;
+}
+
+/** El registro de anulaciones vive en el libro de Administración: sin él no se puede esconder nada (no se crea a escondidas). */
+function libroAnulaciones_() {
+  const libro = libroAdminSiExiste_();
+  if (!libro) throw new Error('Falta el libro de Administración: corre prepararCapri() desde el editor antes de anular.');
+  return libro;
+}
+
+/**
+ * Vista previa (solo super admin; no cambia nada): qué es el folio, todo lo que se anularía con él, qué cambia en lo que
+ * sigue en pie, avisos, cuántos archivos se renombran y a quién se avisa.
+ */
+function previsualizarAnulacion(folio) {
+  exigirSuperAdmin_();
+  libroAnulaciones_();
+  const plan = planAnulacion_(datosAnular_(), folioParaAnular(folio));
+  nombreCarpetaPlan_(plan);
+  return resumenPlan_(plan);
+}
+
+/**
+ * Anula un registro y lo que depende de él (ver planAnulacion_). Solo super admin, motivo de 10 a 500 caracteres; candado e
+ * idempotencia (ANU_<idSolicitud>, 6 h). Escribe 'Anulada' (proyectos: 'Cancelado'), aplica los efectos, renombra archivos y
+ * la carpeta del proyecto, deja una fila por registro en Anulaciones y renglones en las Bitacoras, avisa a los involucrados
+ * (notificar_ 'anulado') y al centro de mando por cada orden (avisarPortal_ 'oc.cancelada'). Devuelve lo mismo que la vista
+ * previa más la lista de anulados.
+ */
+function anular(folio, motivo, idSolicitud) {
+  exigirSuperAdmin_();
+  const m = motivoAnular_(motivo);
+  const objetivo = folioParaAnular(folio);
+  const libroAdmin = libroAnulaciones_();
+  const id = String(idSolicitud || '').slice(0, 64);
+  const cache = CacheService.getScriptCache();
+  const claveCache = id ? 'ANU_' + id : '';
+  return conCandado_(() => {
+    if (claveCache) {
+      const previo = cache.get(claveCache);
+      if (previo) return Object.assign(JSON.parse(previo), { anulados: listarAnuladosDeHoja_('') });
+    }
+    const d = datosAnular_();
+    const plan = planAnulacion_(d, objetivo);
+    nombreCarpetaPlan_(plan);
+    const fallas = aplicarAnulacion_(d, plan, m);
+    registrarAnulacion_(libroAdmin, plan, m);
+    SpreadsheetApp.flush();
+    MEMO_.anulados = null;
+    // Avisos (se mandan al terminar, fuera del candado): involucrados y centro de mando
+    notificar_('anulado', { folio: plan.raiz.folio, tipo: plan.raiz.tipo, motivo: m,
+      cascada: plan.registros.map(r => ({ tipo: r.tipo, folio: r.folio })), para: plan.para.slice() });
+    plan.ocsPortal.forEach(oc => { try { avisarPortal_('oc.cancelada', oc); } catch (e) { fallas.push('Centro de mando (' + oc + '): ' + e.message); } });
+    // En el caché de idempotencia va sin la lista de anulados (puede ser grande): al repetir se vuelve a leer
+    const resultado = Object.assign(resumenPlan_(plan), { fallas: fallas });
+    guardarIdempotencia_(cache, claveCache, resultado);
+    return Object.assign({}, resultado, { anulados: listarAnuladosDeHoja_('') });
+  });
+}
+
+/** Escribe la anulación en las hojas, aplica los efectos y renombra en Drive. Devuelve lo que no se pudo renombrar. */
+function aplicarAnulacion_(d, plan, m) {
+  const ahora = ahoraTexto_(), yo = yo_(), t = textoCelda;
+  const raiz = plan.raiz.folio;
+  const nota = (r) => (r === plan.raiz ? '' : ' · en cascada de ' + raiz);
+  const hojaCob = n => d.libroCob.getSheetByName(n), hojaCom = n => d.libroCom.getSheetByName(n);
+  // Estado Anulada; quién, cuándo y por qué en las columnas de cancelación si están vacías (una cancelación previa se conserva)
+  const marcar = (hoja, fila, colEstado, colCancelacion, yaCancelado) => {
+    hoja.getRange(fila, colEstado).setValue(ESTADO_ANULADA);
+    if (!yaCancelado) hoja.getRange(fila, colCancelacion, 1, 3).setValues([[t(yo), ahora, t('Anulada: ' + m)]]);
+  };
+  const esquemasBorrar = [];
+  plan.registros.forEach(r => {
+    const x = r.x;
+    if (r.clave === 'proyecto') {
+      hojaProyectos_().getRange(x.fila, COL_ESTADO_PROYECTO).setValue('Cancelado');
+    } else if (r.clave === 'contrato') {
+      const h = hojaCob('Contratos');
+      h.getRange(x.fila, 8).setValue(ESTADO_ANULADA);
+      h.getRange(x.fila, 13).setValue(ahora);
+      r.esquema = d.esquemas.filter(e => e.proyectoFolio === String(x.proyectoFolio).toUpperCase());
+      r.esquema.forEach(e => esquemasBorrar.push(e.fila));
+      bitacora_(d.libroCob, 'Anular contrato', x.proyectoFolio, r.descripcion + nota(r), m);
+    } else if (r.clave === 'pago') {
+      marcar(hojaCob('Pagos'), x.fila, 19, 20, !!x.canceladoPor);
+      bitacora_(d.libroCob, 'Anular pago', x.proyectoFolio, r.descripcion + nota(r), m);
+    } else if (r.clave === 'req') {
+      const h = hojaCom('Requisiciones');
+      h.getRange(x.fila, 6, 1, 2).setValues([[ESTADO_ANULADA, t('Anulada: ' + m)]]);
+      h.getRange(x.fila, 13).setValue(ahora);
+      eventoReq_(d.libroCom, x.folio, ESTADO_ANULADA, 'Requisición anulada por administración.');
+    } else if (r.clave === 'oc') {
+      marcar(hojaCom('OrdenesCompra'), x.fila, COL_ESTADO_OC, COL_ESTADO_OC + 3, !!x.canceladoPor);
+    } else if (r.clave === 'pgp') {
+      marcar(hojaCom('PagosProveedores'), x.fila, 18, 19, !!x.canceladoPor);
+    } else if (r.clave === 'fpr') {
+      marcar(hojaCom('FacturasProveedor'), x.fila, COL_ESTADO_FPR, COL_ESTADO_FPR + 1, !!x.canceladoPor);
+    } else if (r.clave === 'rec') {
+      const h = hojaCom('MovimientosInventario');
+      x.filas.filter(f => f.estado !== ESTADO_ANULADA).forEach(f => marcar(h, f.fila, 19, 20, !!f.canceladoPor));
+    }
+    if (['req', 'oc', 'pgp', 'fpr', 'rec'].indexOf(r.clave) !== -1) {
+      bitacora_(d.libroCom, 'Anular ' + r.tipo.toLowerCase(), r.proyectoFolio, r.descripcion + nota(r), m, HOJAS_COMPRAS);
+    }
+  });
+  // Esquemas de pagos de los contratos anulados (de abajo hacia arriba para no mover las filas que faltan)
+  if (esquemasBorrar.length) {
+    const h = hojaCob('Esquemas');
+    esquemasBorrar.sort((a, b) => b - a).forEach(fila => h.deleteRow(fila));
+  }
+
+  // Efectos en lo que sigue en pie
+  plan.efectos.forEach(e => {
+    if (e.clave === 'reqSinOrden') {
+      const hR = hojaCom('Requisiciones'), q = e.req;
+      cambiarReq_(hR, q, e.a, { ocFolio: '', motivo: 'Se anuló la orden ' + e.orden.folio + ': ' + m, notasRecepcion: '' });
+      if (e.conAprobacion) camposReq_(hR, q, { propuesta: propuestaRetirada_(q.propuesta), voboEmail: '', fechaVobo: '' });
+      eventoReq_(d.libroCom, q.folio, e.a, e.conAprobacion ? 'Se anuló la orden de compra; compras la cotizará de nuevo.'
+        : 'Se anuló la orden de compra; queda pendiente de autorizar de nuevo.');
+      bitacora_(d.libroCom, 'Requisición a ' + e.a, q.proyectoFolio, q.folio + ' · se anuló ' + e.orden.folio, m, HOJAS_COMPRAS);
+    } else if (e.clave === 'pagoProveedor') {
+      if (e.orden) hojaCom('OrdenesCompra').getRange(e.orden.fila, COL_ESTADO_OC).setValue(e.oc);
+      if (e.req) {
+        cambiarReq_(hojaCom('Requisiciones'), e.req, e.a, {});
+        eventoReq_(d.libroCom, e.req.folio, e.a, 'Se anuló el pago.');
+      }
+      bitacora_(d.libroCom, 'Orden por pagar otra vez', e.pago.proyectoFolio, e.texto, m, HOJAS_COMPRAS);
+    } else if (e.clave === 'recepcion') {
+      if (e.orden) {
+        const hO = hojaCom('OrdenesCompra');
+        if (e.oc) hO.getRange(e.orden.fila, COL_ESTADO_OC).setValue(e.oc);
+        hO.getRange(e.orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([['', '']]);
+      }
+      if (e.req) cambiarReq_(hojaCom('Requisiciones'), e.req, e.a, { notasRecepcion: '' });
+      if (e.rec.reqFolio) {
+        eventoReq_(d.libroCom, e.rec.reqFolio, e.req ? e.a : (reqDeDatos_(d, e.rec.reqFolio) || {}).estado || '',
+          'Se anuló la recepción ' + e.rec.folio + '; hay que registrarla de nuevo.');
+      }
+      bitacora_(d.libroCom, 'Recepción anulada: material pendiente otra vez', e.rec.proyectoFolio, e.texto, m, HOJAS_COMPRAS);
+    }
+  });
+
+  // Drive: los archivos se quedan con "ANULADA — " al inicio; la carpeta principal del proyecto con "ANULADO — " (por id)
+  const fallas = [];
+  const renombrar = (item, prefijo) => { const n = item.getName(); if (n.indexOf(prefijo) !== 0) item.setName(prefijo + n); };
+  plan.archivos.forEach(id => {
+    try { renombrar(DriveApp.getFileById(id), PREFIJO_ARCHIVO_ANULADO); } catch (e) { fallas.push('Archivo ' + id + ': ' + e.message); }
+  });
+  if (plan.carpeta) {
+    try { renombrar(DriveApp.getFolderById(plan.carpeta.id), PREFIJO_CARPETA_ANULADA); } catch (e) { fallas.push('Carpeta del proyecto: ' + e.message); }
+  }
+  return fallas;
+}
+
+function reqDeDatos_(d, folio) {
+  return d.reqs.find(r => r.folio.toUpperCase() === String(folio || '').toUpperCase()) || null;
+}
+
+/** Una fila en Anulaciones por registro (la raíz con toda la cascada) y un renglón en la Bitacora de Administración. */
+function registrarAnulacion_(libroAdmin, plan, m) {
+  const hoja = hojaAdmin_(libroAdmin, 'Anulaciones');
+  const ahora = ahoraTexto_(), yo = yo_(), t = textoCelda;
+  const raiz = plan.raiz;
+  plan.registros.forEach(r => {
+    const cascada = r === raiz ? {
+      raiz: true, descripcion: r.descripcion,
+      registros: plan.registros.map(x => ({ tipo: x.tipo, folio: x.folio, descripcion: x.descripcion, estado: x.estado || '' })),
+      efectos: plan.efectos.map(e => e.texto), archivos: plan.archivos.length,
+      carpeta: plan.carpeta ? plan.carpeta.nombre || '' : '',
+    } : { de: raiz.folio, tipoRaiz: raiz.tipo };
+    const x = r.x;
+    const antes = r.clave === 'rec' ? { hoja: 'MovimientosInventario', filas: x.filas.map(f => ({ fila: f.fila, valores: f.valores })) }
+      : { hoja: { proyecto: 'Proyectos', cotizacion: 'Cotizaciones', contrato: 'Contratos', pago: 'Pagos', req: 'Requisiciones',
+        oc: 'OrdenesCompra', pgp: 'PagosProveedores', fpr: 'FacturasProveedor' }[r.clave], fila: x.fila, valores: x.valores };
+    if (r.clave === 'contrato') antes.esquema = (r.esquema || []).map(e => e.valores);
+    hoja.appendRow([ahora, t(yo), r.tipo, t(r.folio), t(m), jsonCelda(cascada), jsonCelda(antes)]);
+  });
+  bitacoraAdmin_('Anular ' + raiz.tipo.toLowerCase(), raiz.folio, plan.registros.length + ' registro(s): ' +
+    plan.registros.map(r => r.folio).join(', ').slice(0, 2000), m);
+}
+
+/**
+ * Registros anulados para Administración (solo super admin; solo lectura): uno por anulación, con quién, cuándo, por qué,
+ * lo que arrastró y sus efectos; los más recientes primero (máx. 200). filtro = texto (folio, tipo, motivo o correo).
+ */
+function listarAnulados(filtro) {
+  exigirSuperAdmin_();
+  if (!libroAdminSiExiste_()) return [];
+  const texto = filtro && typeof filtro === 'object' ? filtro.buscar : filtro;
+  return enCache_('anulados_lista_' + textoNormal(texto).slice(0, 80), ['anulaciones'], TTL_CACHE, () => listarAnuladosDeHoja_(texto));
+}
+
+function listarAnuladosDeHoja_(texto) {
+  const libro = libroAdminSiExiste_();
+  const hoja = libro && libro.getSheetByName('Anulaciones');
+  if (!hoja) return [];
+  const q = textoNormal(texto);
+  const lista = [];
+  filasDeArea_(hoja, HOJAS_ADMIN, 'Anulaciones').forEach(r => {
+    const folio = String(r[3] || '').trim();
+    if (!folio) return;
+    const c = jsonCelda_(r[5]) || {};
+    if (c.de) return; // parte de la cascada de otra anulación: va dentro de esa
+    const correo = String(r[1] || '');
+    const x = { fecha: fechaTexto_(r[0]), correo: correo, nombre: nombreDeCorreo_(correo), tipo: String(r[2] || ''), folio: folio,
+      motivo: String(r[4] || ''), descripcion: c.descripcion || '',
+      registros: Array.isArray(c.registros) ? c.registros : [{ tipo: String(r[2] || ''), folio: folio }],
+      efectos: Array.isArray(c.efectos) ? c.efectos : [], archivos: Number(c.archivos) || 0, carpeta: c.carpeta || '' };
+    if (q && !textoNormal([x.folio, x.tipo, x.motivo, x.correo, x.nombre, x.descripcion].concat(x.registros.map(y => y.folio)).join(' ')).includes(q)) return;
+    lista.push(x);
+  });
+  return lista.reverse().slice(0, 200);
 }
