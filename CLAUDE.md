@@ -146,6 +146,15 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
   exista; §4.8).
 - En caché por versión: `listarProyectos`, `listarProyectosCobranza/Compras/Requisicion`, `misRequisiciones` (por correo),
   `listarRequisiciones` (por filtro), `resumenCobranzaGeneral`, historial (folio con clave). Las vistas de detalle no.
+- **Rapidez (30/10/2026, rama `rapidez-apps-script`, sin publicar; detalle y mediciones en `docs/rapidez-apps-script.md`).** Por
+  petición: IDs de Script Properties (`idGuardado_`), libros abiertos (`abrirLibro_`), una sola `getLastRow` por lectura
+  (`filasDatos_`), filas de cada pestaña (`filasEnPeticion_` → `MEMO_.filas`, también Proyectos), Config (`configLigera_`) y la
+  carpeta del área (`carpetaArea_`). Lo guardado en `MEMO_.filas` se olvida: al escribir en esa pestaña (`escribe_`), al tomar
+  o soltar el candado (`candado_`) y al leer las versiones (`versiones_`). Entre peticiones: encabezados revisados 6 h
+  (`encabezadosRevisados_`, `ENCABEZADOS_OK`; si se confiaron sin leer, `escribe_` revisa que la pestaña no esté vacía antes de
+  la primera escritura: `confiarEncabezados_`); un valor chico del caché va en una entrada (`V:<json>`; los grandes, en
+  trozos `N:n`). Una fuente en `MEMO_` solo se reusa con la misma versión. Las vistas de compras toman moneda y línea de
+  `contratosCache_()`. Perfil: `tests/perfil.js` (operaciones con Google por escenario, `--detalle`, `--respuestas`, `--estado`).
 
 ### 4.2 Catálogo de productos
 - `hojaCatalogo_()` — abre "Catálogo Helgen"; si no existe, `crearCatalogo_()` (bajo candado). Llama `asegurarColumnasSat_()`.
@@ -873,6 +882,10 @@ Spec: "CAPRI — increment 4 spec" (Claude Docs `https://claude.ai/artifact/2kb6
 17. (CAPRI) Un correo de aviso nunca lleva montos, proveedores ni folio de orden de compra; un aviso al centro de mando nunca lleva
     montos. Ninguna llamada HTTP (centro de mando) ni envío de correo dentro de `conCandado_`: se forman dentro y se mandan al
     terminar (`conAvisoPortal_`, `enviarCorreosPendientes_`).
+18. (Rapidez) Toda escritura a una hoja va como `escribe_(hoja).getRange(…).setValues(…)` / `escribe_(hoja).appendRow(…)`, y todo
+    candado se toma con `candado_()` (nunca `LockService.getScriptLock()` directo). Si no, una lectura posterior en la misma
+    petición vería filas viejas (`MEMO_.filas`). `tests/rapidez.test.js` revisa el código y el arnés falla la prueba que escriba en
+    una pestaña con sus filas guardadas.
 
 ## 8. Cómo trabajar
 
@@ -890,6 +903,8 @@ node tests/cobranza.test.js .                                  # cobranza por do
 node tests/compras.test.js .                                   # compras por doPost: ROL_COMPRAS, órdenes (desde requisiciones), PDF, proveedores, pagar/recibir/cancelar, margen, monedas
 node tests/requisiciones.test.js .                             # requisiciones por doPost: permisos (solo las suyas, SOLO_REQUISICION), estados, folios REQ/PGP, OC, pago, cierre; bootstrap y sincronizar por rol, caché por versiones, cambio a mano en la hoja
 node tests/probar-busqueda-sat.js Code.js "<ruta>/SAT_c_ClaveProdServ.csv"   # ver qué sugiere la búsqueda por palabras
+node tests/rapidez.test.js .                                   # rapidez: IDs, encabezados, MEMO_.filas (escribe_/candado_), caché, carreras
+node tests/perfil.js .                                         # perfil: operaciones con Google por escenario y segundos estimados (docs/rapidez-apps-script.md)
 
 # Subir y publicar la API (misma API_URL)
 npx clasp push --force
