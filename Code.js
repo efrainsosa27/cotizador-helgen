@@ -3330,9 +3330,9 @@ function autorizarRequisicion(folioReq, oc, motivoExcepcion) {
       if (previo) return JSON.parse(previo);
     }
     const { hoja, req } = buscarReq_(libro, folioReq);
-    // Flujo de siempre: compras autoriza, también lo que pidió (como antes de CAPRI). Script Property AUTORIZAR_OTRO = '1':
-    // lo autoriza otra persona de compras, o un super admin con motivo (la interfaz ya lo pide). Decisión pendiente (§9).
-    const propia = String(propiedades_().AUTORIZAR_OTRO || '') === '1' && req.solicitanteEmail === yo_();
+    // Separación de funciones también en el flujo de siempre (decisión de Leo, 29/10/2026): nadie autoriza lo que pidió; solo
+    // un super admin, con motivo que queda en la bitácora de Administración (la interfaz lo pide)
+    const propia = req.solicitanteEmail === yo_();
     if (propia && !excepcionPosible_(motivoExcepcion)) {
       throw errorPermiso_('No puedes autorizar tu propia requisición: la autoriza otra persona de compras.' + textoExcepcion_());
     }

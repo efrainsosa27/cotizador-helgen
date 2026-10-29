@@ -364,7 +364,9 @@ falla('pedro','cancelarOrdenCompra',[OC('0001'),'Ya no se necesita'],/ya se reci
 ok('pedro','guardarRequisicion',nueva('pedro',{proyectoFolio:p2,idSolicitud:'rq-p'}));
 const R5=REQ('0004');
 falla('pedro','cerrarRequisicionCompras',[R5,'El trabajador ya no está'],/está solicitada: no se puede cerrar/);
-r=ok('pedro','autorizarRequisicion',R5,oc({moneda:'USD',ivaTasa:0,renglones:[{descripcion:'Cable',cantidad:1,costo:50}]}));
+// Nadie autoriza lo que pidió (decisión de Leo, 29/10/2026): pedro pidió, lo autoriza efrain
+falla('pedro','autorizarRequisicion',[R5,oc({moneda:'USD',ivaTasa:0,renglones:[{descripcion:'Cable',cantidad:1,costo:50}]})],/No puedes autorizar tu propia requisición/);
+r=ok('efrain','autorizarRequisicion',R5,oc({moneda:'USD',ivaTasa:0,renglones:[{descripcion:'Cable',cantidad:1,costo:50}]}));
 assert.deepEqual([r.ocFolio,r.total,r.moneda],[OC('0002'),50,'USD']);
 ok('pedro','registrarPagoProveedor',{reqFolio:R5,fecha:HOY_ISO,monto:925,monedaPago:'MXN',tipoCambio:18.5,metodo:'Efectivo',comprobante:{datos:JPG}});
 vr=ok('efrain','cerrarRequisicionCompras',R5,'El trabajador ya no está en la obra','Llegó completo');

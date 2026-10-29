@@ -1,5 +1,5 @@
 // Regresiones de la revisión independiente del incremento 4 (28/10/2026), una sección por hallazgo: el flujo de aprobaciones
-// no se apaga al desactivar a quien aprueba; AUTORIZAR_OTRO; @helgen.services nunca super admin; delegaciones sin encadenar;
+// no se apaga al desactivar a quien aprueba; nadie autoriza lo suyo (solo super admin con motivo); @helgen.services nunca super admin; delegaciones sin encadenar;
 // topes globales de la entrada con código; argumentos de onclick seguros. (Las sesiones revocables están en identidad.test.js,
 // las notas fuera de los correos en correos.test.js y lo del centro de mando en centro.test.js.)
 // Uso: node tests/revision.test.js .
@@ -44,19 +44,19 @@ falla('tania', 'autorizarRequisicion', [rT, OC()], /flujo de operaciones/);
 ok('leo', 'guardarUsuario', Object.assign({}, adri, { activo: true, roles: ['solo_requisicion'] }));
 assert.equal(flujo(), false);
 
-// ---- AUTORIZAR_OTRO = '1': en el flujo de siempre nadie autoriza lo que pidió (super admin, con motivo) ----
+// ---- Flujo de siempre: nadie autoriza lo que pidió; solo un super admin, con motivo (decisión de Leo, 29/10/2026) ----
 const rT2 = req('tania');
-props.AUTORIZAR_OTRO = '1';
 let e = falla('tania', 'autorizarRequisicion', [rT2, OC()], /tu propia requisición/, 'PERMISO');
 assert(!/super admin/.test(e.error), 'a quien no es super admin no se le ofrece la excepción');
+falla('tania', 'autorizarRequisicion', [rT2, OC(), 'Motivo largo pero no es super admin'], /tu propia requisición/, 'PERMISO');
 assert(/^OC-/.test(ok('efrain', 'autorizarRequisicion', rT2, OC()).ocFolio), 'otra persona de compras sí');
 const rL = req('leo');
 e = falla('leo', 'autorizarRequisicion', [rL, OC()], /Como super admin puedes hacerlo/, 'PERMISO');
+falla('leo', 'autorizarRequisicion', [rL, OC(), 'corto'], /tu propia requisición/, 'PERMISO');
 assert(/^OC-/.test(ok('leo', 'autorizarRequisicion', rL, OC(), 'Nadie más de compras está hoy').ocFolio));
 const bitAdmin = A.libros[props.ADMIN_DB_ID].pest.Bitacora.m;
-assert.equal(bitAdmin[bitAdmin.length - 1][2], 'Excepción de super admin: autorizar su propia requisición');
-delete props.AUTORIZAR_OTRO;
-assert(/^OC-/.test(ok('tania', 'autorizarRequisicion', req('tania'), OC()).ocFolio), 'sin la propiedad, como antes');
+assert.deepEqual(bitAdmin[bitAdmin.length - 1].slice(1, 6), ['leo@helgen.tech', 'Excepción de super admin: autorizar su propia requisición', rL, '',
+  'Nadie más de compras está hoy']);
 
 // ---- Delegaciones: empiezan a más tardar en 30 días y no se encadenan ----
 falla('tania', 'crearDelegacion', [{ a: 'obrero@helgen.tech', roles: ['compras'], desde: masDias(31), hasta: masDias(40) }], /a más tardar en 30 días/);

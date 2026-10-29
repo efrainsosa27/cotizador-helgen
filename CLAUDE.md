@@ -524,7 +524,6 @@ viejo, solo nombres, sigue sirviendo; `preparar()` lo convierte). Script Propert
 código ni en el chat), `PORTAL_PROYECTOS` (`{"PRY-2026-0002": "drogheda"}`), `PORTAL_PRUEBA` (`1` = avisos de prueba) y las que
 escribe CAPRI (`PORTAL_ULTIMA_CONSULTA`, `PORTAL_ULTIMO_OK`, `PORTAL_ERROR_CONSULTA`, `PORTAL_ALERTA` (material que llegó a una
 orden cancelada o anulada), `VER_permisos`, `VER_anulaciones`, `SESION_DESDE_<huella>` (sesiones de CAPRI cerradas)).
-`AUTORIZAR_OTRO` (opcional, `1`): en el flujo de siempre nadie autoriza lo que pidió (§9).
 Sin `PORTAL_SECRETO` el enlace está apagado y todo funciona como antes.
 
 ## 6. Decisiones tomadas (y por qué)
@@ -771,6 +770,8 @@ Spec: "CAPRI — increment 4 spec" (Claude Docs `https://claude.ai/artifact/2kb6
   lo que él mismo hizo; un correo por grupo de destinatarios. El super admin **no** recibe los avisos de aprobaciones y compras
   solo por serlo (integración: si no, le llegaría todo).
 - Delegación por rango de fechas (≤ 90 días), solo aprobaciones y compras.
+- Separación de funciones en todo el flujo: nadie aprueba, da el visto bueno ni **autoriza** (flujo de siempre, decisión del
+  29/10/2026) lo que pidió o preparó; solo un super admin, con motivo en la bitácora.
 - Sugerencias: solo lo que **la misma persona** ya pidió (no lo de otros).
 - **El centro de mando es el sistema del inventario; CAPRI lo alimenta.** El receptor asignado marca "Lo recogí"/En camino en
   CAPRI; el usuario del sitio recibe en `drogheda.helgen.online` (entra al inventario del sitio) y CAPRI trae esa recepción para
@@ -945,9 +946,8 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
     `proyecto_clave` va como "drogheda" (valor de `PORTAL_PROYECTOS`), no "DRO"; `solicitante`/`autorizo` van como correo; un aviso
     rechazado (p. ej. 400 por sitio desconocido) se reintenta sin límite y detiene los siguientes de esa orden; cancelar un pago a
     proveedor no avisa (el contrato no tiene ese tipo).
-  - **Decisión de Leo pendiente:** en el flujo de siempre (sin Aprobaciones), ¿compras puede autorizar lo que él mismo pidió?
-    Hoy sí (como antes). Con la Script Property `AUTORIZAR_OTRO = '1'` lo autoriza otra persona de compras, o un super admin con
-    motivo (ya programado y probado; no requiere publicar).
+  - **Decidido por Leo (29/10/2026):** también en el flujo de siempre nadie autoriza la requisición que pidió; solo un super admin,
+    con motivo (≥ 10 caracteres) que queda en la bitácora de Administración (`autorizarRequisicion`, tercer parámetro).
   - Queda de la revisión (riesgo bajo, anotado): en el flujo de siempre no hay campo para asignar quién recibe (recibe quien
     pidió); un aviso del centro de mando que falla por red (no 4xx) sigue deteniendo los siguientes de su orden hasta que pase.
   - Textos que todavía dicen "operaciones" dentro de Requisiciones y Compras (la pestaña ya dice Aprobaciones).
