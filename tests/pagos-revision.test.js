@@ -13,6 +13,8 @@
 //  6. Saldo a favor (lo pagado de más, p. ej. tras devolver material ya pagado): en la vista, órdenes por proyecto, cuentas por
 //     pagar (aparte, por orden: nunca se resta de lo que se debe) y como pendiente de compras; quien pidió no lo ve.
 //  7. Cuentas por pagar: lo que no tiene factura, una fila por etapa del plan con su vencimiento (antes todo con la que sigue).
+//  8. Al cancelar o anular un pago, un pago que decía "Liquidación" y ya no liquida pasa a Anticipo o Parcial (según si ya se había
+//     recibido algo cuando se registró).
 // Uso: node tests/pagos-revision.test.js .
 'use strict';
 const assert = require('assert');
@@ -341,6 +343,42 @@ const guardado = {}; // lo que usa la sección de interfaz
   assert.equal(cxp.totales.find(t => t.moneda === 'MXN').saldos >= 4, true, 'cada etapa cuenta como saldo sin factura');
   // Cada etapa de saldoOrdenCompra trae su vencimiento
   assert.deepEqual(vista(b.req).saldo.etapas.map(e => e.vence), [HOY_ISO, masDias(16), masDias(16)]);
+}
+
+// ================= 8. El tipo de los pagos que quedan se corrige al cancelar o anular otro (r12 b) =================
+{
+  const tipos = oc => pagosDe(oc).map(r => [r[0], r[col('PagosProveedores', 'tipo')], r[col('PagosProveedores', 'estado')]]);
+  // a) 10.29 (anticipo) + 1,613.71 (liquidación); se cancela el primero: el segundo ya no liquida → Anticipo (nada se ha recibido)
+  const s = siempre();
+  const p1 = pagar(s.req, 10.29), p2 = pagar(s.req, 1613.71);
+  assert.deepEqual([p1.tipo, p2.tipo], ['Anticipo', 'Liquidación']);
+  const v = ok('pedro', 'cancelarPagoProveedor', p1.folio, 'Rebotó');
+  assert.deepEqual([v.orden.estado, v.saldo.saldo], ['Emitida', 10.29]);
+  assert.deepEqual(tipos(s.oc), [[p1.folio, 'Anticipo', 'Cancelado'], [p2.folio, 'Anticipo', 'Vigente']]);
+  assert.equal(v.pagos.find(p => p.folio === p2.folio).tipo, 'Anticipo', 'la vista también');
+  assert(H('Bitacora').some(b => b[2] === 'Cancelar pago a proveedor' && b[4].indexOf(p2.folio + ' pasa a Anticipo') !== -1));
+  // Al liquidar otra vez, el nuevo pago es la liquidación
+  assert.equal(pagar(s.req, 10.29).tipo, 'Liquidación');
+  // b) Recibida (con una devolución abierta) antes de liquidar: el pago que deja de liquidar pasa a Parcial (ya se había recibido)
+  const t = siempre();
+  const q1 = pagar(t.req, 500);
+  ok('obrero', 'cerrarRequisicion', t.req, '', { renglones: [{ renglon: 1, foto: F, problema: { tipo: 'Dañado', cantidad: 10, comentario: 'Golpeado', foto: F } }, { renglon: 2, foto: F }] });
+  const q2 = pagar(t.req, 1124);
+  assert.deepEqual([q2.tipo, q2.vista.requisicion.estado, q2.vista.orden.estado], ['Liquidación', 'Recibida', 'Pagada']);
+  ok('pedro', 'cancelarPagoProveedor', q1.folio, 'Se registró dos veces');
+  assert.deepEqual(tipos(t.oc), [[q1.folio, 'Anticipo', 'Cancelado'], [q2.folio, 'Parcial', 'Vigente']]);
+  // c) Anular (super admin) el primero hace lo mismo
+  const u = siempre();
+  const r1 = pagar(u.req, 10.29), r2 = pagar(u.req, 1613.71);
+  ok('leo', 'anular', r1.folio, 'Pago capturado en la orden equivocada', id('an'));
+  assert.deepEqual(tipos(u.oc), [[r1.folio, 'Anticipo', 'Anulada'], [r2.folio, 'Anticipo', 'Vigente']]);
+  // Pura: solo las "Liquidación" (o sin tipo, de antes) Vigentes y solo si la orden ya no está completa
+  const pg = [{ folio: 'A', estado: 'Vigente', tipo: 'Liquidación', fechaRegistro: '2026-10-02 10:00:00', fila: 3 },
+    { folio: 'B', estado: 'Cancelado', tipo: 'Liquidación', fila: 4 }, { folio: 'C', estado: 'Vigente', tipo: '', fechaRegistro: '2026-10-05', fila: 5 }];
+  const mov = [{ tipo: 'Entrada por compra', estado: 'Vigente', fecha: '2026-10-03' }];
+  assert.deepEqual(plain(P.retiparPagosProv(pg, false, {}, mov)), [{ folio: 'A', fila: 3, de: 'Liquidación', a: 'Anticipo' }, { folio: 'C', fila: 5, de: '', a: 'Parcial' }]);
+  assert.deepEqual(plain(P.retiparPagosProv(pg, true, {}, mov)), []);
+  assert.deepEqual(plain(P.retiparPagosProv(pg, false, { fechaRecepcion: '2026-10-01' }, [])).map(x => x.a), ['Parcial', 'Parcial']);
 }
 
 // ================= Interfaz (al final: es asíncrona; DOM simulado conectado al servidor simulado) =================

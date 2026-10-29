@@ -2653,6 +2653,7 @@ const HOJAS_COMPRAS = {
   },
 };
 const COL_ESTADO_OC = 29; // AC: estado, recepción (AD:AE) y cancelación (AF:AH)
+const COL_TIPO_PGP = 22; // V de PagosProveedores: tipo del pago (P, incremento 6; se corrige al cancelar o anular otro)
 /** Columna (desde 1) de un encabezado de OrdenesCompra (las del centro de mando se buscan por nombre). */
 const colOc_ = nombre => HOJAS_COMPRAS.OrdenesCompra.enc.indexOf(nombre) + 1;
 
@@ -3903,8 +3904,11 @@ function cancelarPagoProveedor(folioPago, motivo) {
     if (req.estado === REQ_CERRADA) throw new Error('La requisición ' + req.folio + ' ya está cerrada (material recibido): el pago no se puede cancelar.');
     const { hoja: hO, orden } = buscarOrden_(libro, pago.ocFolio);
     const restantes = pagosDeOrden_(libro, orden.folio).filter(x => x.folio.toUpperCase() !== folio);
+    const movs = movimientosPorOc_(libro)[orden.folio.toUpperCase()] || [];
     // La orden sin este pago, como si siguiera abierta (Emitida): ¿lo que queda la sigue cubriendo?
-    const despues = saldoDeOrden_(libro, Object.assign({}, orden, { estado: OC_EMITIDA }), null, null, restantes);
+    const despues = saldoDeOrden_(libro, Object.assign({}, orden, { estado: OC_EMITIDA }), movs, null, restantes);
+    // Revisión del incremento 6: si ya no la cubre, el pago que decía "Liquidación" ya no liquida (Anticipo o Parcial)
+    const retipos = retiparPagosProv(restantes, despues.completo, orden, movs);
     const completa = orden.estado === OC_PAGADA || orden.estado === OC_RECIBIDA;
     let nuevo = req.estado;
     if (completa && !despues.completo) {
@@ -3913,6 +3917,7 @@ function cancelarPagoProveedor(folioPago, motivo) {
     }
     escribe_(hP).getRange(pago.fila, 18, 1, 4).setValues([['Cancelado', textoCelda(VENDEDOR_.email),
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
+    retipos.forEach(x => escribe_(hP).getRange(x.fila, COL_TIPO_PGP).setValue(x.a));
     olvidarPagosProv_();
     if (completa && !despues.completo) escribe_(hO).getRange(orden.fila, COL_ESTADO_OC).setValue(OC_EMITIDA);
     cambiarReq_(hoja, req, nuevo, {});
@@ -3922,8 +3927,8 @@ function cancelarPagoProveedor(folioPago, motivo) {
       despues.completo ? 'Se canceló un pago; la orden sigue pagada.' : 'Se canceló un pago; la orden queda pagada en parte.');
     bitacora_(libro, 'Cancelar pago a proveedor', req.proyectoFolio, pago.folio + ' · ' + orden.folio + ' · ' + req.folio + ' · ' +
       formatoMoneda(pago.monto) + ' ' + pago.monedaPago + (pago.tipo ? ' · ' + pago.tipo : '') + ' · pagado ' + formatoMoneda(despues.pagado) +
-      ' de ' + formatoMoneda(despues.esperado) + ' ' + orden.moneda + (completa && !despues.completo ? ' · ' + orden.folio + ' vuelve a Emitida' : ''),
-      m, HOJAS_COMPRAS);
+      ' de ' + formatoMoneda(despues.esperado) + ' ' + orden.moneda + (completa && !despues.completo ? ' · ' + orden.folio + ' vuelve a Emitida' : '') +
+      retipos.map(x => ' · ' + x.folio + ' pasa a ' + x.a).join(''), m, HOJAS_COMPRAS);
     SpreadsheetApp.flush();
     return vistaRequisicion_(libro, req.folio);
   });
@@ -10151,7 +10156,9 @@ function planAnulacion_(d, objetivo) {
       const cubierta = !!s && s.completo && s.pagado > 0;
       const oc = !cubierta && o && vivo(o) && (o.estado === OC_PAGADA || o.estado === OC_RECIBIDA) ? OC_EMITIDA : '';
       const rq = !cubierta && q && vivo(q) ? (q.estado === REQ_PAGADA ? REQ_AUTORIZADA : q.estado === REQ_CERRADA ? REQ_RECIBIDA : '') : '';
-      plan.efectos.push({ clave: 'pagoProveedor', pago: r.x, orden: oc ? o : null, oc: oc, req: rq ? q : null, a: rq,
+      // Revisión del incremento 6: si ya no la cubren, el que decía "Liquidación" pasa a Anticipo o Parcial (como al cancelar)
+      const retipos = o && s ? retiparPagosProv(quedan, s.completo, o, d.movs.filter(m => may(m.ocFolio) === may(o.folio) && vivo(m))) : [];
+      plan.efectos.push({ clave: 'pagoProveedor', pago: r.x, orden: oc ? o : null, oc: oc, req: rq ? q : null, a: rq, retipos: retipos,
         texto: [o ? o.folio + (oc ? ' pasa de ' + o.estado + ' a ' + oc : ' sigue ' + o.estado) : '',
           q ? q.folio + (rq ? ' pasa de ' + q.estado + ' a ' + rq : ' sigue ' + q.estado) : ''].filter(Boolean).join('; ') +
           (cubierta ? ': los demás pagos la siguen cubriendo.' : s && s.pagado > 0 ? ': la orden queda pagada en parte (saldo ' +
@@ -10349,6 +10356,7 @@ function aplicarAnulacion_(d, plan, m) {
       bitacora_(d.libroCom, 'Requisición a ' + e.a, q.proyectoFolio, q.folio + ' · se anuló ' + e.orden.folio, m, HOJAS_COMPRAS);
     } else if (e.clave === 'pagoProveedor') {
       if (e.orden) escribe_(hojaCom('OrdenesCompra')).getRange(e.orden.fila, COL_ESTADO_OC).setValue(e.oc);
+      (e.retipos || []).forEach(x => escribe_(hojaCom('PagosProveedores')).getRange(x.fila, COL_TIPO_PGP).setValue(x.a));
       if (e.req) {
         cambiarReq_(hojaCom('Requisiciones'), e.req, e.a, {});
         eventoReq_(d.libroCom, e.req.folio, e.a, 'Se anuló el pago.');
@@ -12168,6 +12176,25 @@ function textoPlanPago(plan, total, moneda) {
 /** Tipo de un pago a proveedor: Liquidación si completa la orden; si no, Parcial si ya se recibió algo y Anticipo si no. */
 function tipoDePagoProv(completo, recibido) {
   return completo ? TIPO_PAGO_LIQUIDACION : recibido ? TIPO_PAGO_PARCIAL : TIPO_PAGO_ANTICIPO;
+}
+
+/**
+ * (Lógica pura; revisión del incremento 6) Tipos que cambian en los pagos que quedan después de cancelar o anular otro: si la orden ya
+ * no está completa, un pago Vigente que dice "Liquidación" (o sin tipo, de antes: era el pago completo) ya no la liquida y pasa a
+ * Anticipo o Parcial según si ya se había recibido algo el día que se registró (fecha de recepción de la orden o una entrada por
+ * compra Vigente hasta ese día), como lo habría decidido registrarPagoProveedor. Se guarda en la hoja (no se deduce al leer): el tipo
+ * lo leen la vista, la hoja, la bitácora y R (saldoOrdenCompra.vigentes) y solo cambia en ese momento. Devuelve [{folio, fila, de, a}].
+ */
+function retiparPagosProv(pagos, completo, orden, movimientos) {
+  if (completo) return [];
+  const o = orden || {};
+  return (pagos || []).filter(p => p && p.estado === 'Vigente' && (p.tipo === TIPO_PAGO_LIQUIDACION || !p.tipo)).map(p => {
+    const dia = String(p.fechaRegistro || p.fecha || '').slice(0, 10);
+    const hasta = f => !!f && (!dia || String(f).slice(0, 10) <= dia);
+    const recibido = hasta(o.fechaRecepcion) ||
+      (movimientos || []).some(m => m.tipo === TIPO_ENTRADA_COMPRA && m.estado === 'Vigente' && hasta(m.fecha));
+    return { folio: p.folio, fila: p.fila, de: p.tipo || '', a: tipoDePagoProv(false, recibido) };
+  });
 }
 
 /** Fecha "AAAA-MM-DD" + días, o '' si la fecha no es válida. */
