@@ -74,6 +74,9 @@ const F = { nombre: 'foto.jpg', datos: FOTO, mime: 'image/jpeg' };
 const MONTOS = /costo|importe|subtotal|iva|total|cambio|moneda|margen|monto|precio/i;
 const llaves = (o, acc) => { acc = acc || []; if (o && typeof o === 'object') Object.keys(o).forEach(k => { if (!Array.isArray(o)) acc.push(k); llaves(o[k], acc); }); return acc; };
 A.libros.DB.pest.Config.m.push(['SITIOS', 'QRO | Querétaro\nZLO | Manzanillo (TIMSA)\nVER | Veracruz (ICAVE)']);
+// F (incremento 5, al integrar): sin CSF y carátula del proveedor no se paga; estas pruebas no son de documentos (con la base
+// esto no cambia nada; formaPago tampoco: la base la ignora)
+P.exigirDocumentosParaPagar_ = function () {};
 
 // ================= Lógica pura =================
 const JPEG = [0xFF, 0xD8, 0xFF, 0xE0, 0, 16], PNG = [0x89, 0x50, 0x4E, 0x47, 13, 10];
@@ -175,7 +178,7 @@ const p2 = ok('ana', 'crearProyecto', { nombre: 'Casa del Lago', ubicacion: 'Que
 assert.deepEqual([p1, p2], [P1, P2]);
 const RENGLONES = [{ descripcion: 'Cable THW 10', cantidad: 80, unidad: 'm' }, { descripcion: 'Tubo conduit 3/4', cantidad: 12, unidad: 'pza' }];
 const OCD = () => ({ proveedor: { razonSocial: 'Ferretera del Puerto' }, fechaEntrega: MANANA, lugarEntrega: 'Querétaro', condicionesPago: 'Contado',
-  diasCredito: 0, idSolicitud: id('oc'), renglones: [{ descripcion: 'Cable THW 10', unidad: 'M', cantidad: 80, costo: 10 },
+  diasCredito: 0, formaPago: 'Transferencia', idSolicitud: id('oc'), renglones: [{ descripcion: 'Cable THW 10', unidad: 'M', cantidad: 80, costo: 10 },
     { descripcion: 'Tubo conduit 3/4', unidad: 'PZA', cantidad: 12, costo: 50 }] });
 const pagar = folio => ok('efrain', 'registrarPagoProveedor', { reqFolio: folio, fecha: HOY_ISO, monto: 1624, monedaPago: 'MXN',
   metodo: 'Transferencia', referencia: 'SPEI ' + id(), comprobante: { nombre: 'c.pdf', datos: PDF }, idSolicitud: id('pg') });
@@ -369,7 +372,7 @@ assert.deepEqual(movsDe(s3.oc).filter(r => r[3] === 'Entrada por compra').map(r 
 
 // ================= Con aprobaciones: "Registrar lo que llegó", "Lo recogí" y pagar una retenida =================
 props.ROL_OPERACIONES = 'adri@helgen.tech';
-const PROP = () => ({ proveedor: { razonSocial: 'Ferretera del Puerto' }, fechaEntrega: MANANA, condicionesPago: 'Contado', diasCredito: 0,
+const PROP = () => ({ proveedor: { razonSocial: 'Ferretera del Puerto' }, fechaEntrega: MANANA, condicionesPago: 'Contado', diasCredito: 0, formaPago: 'Transferencia',
   recibe: 'rosa@helgen.tech', idSolicitud: id('p'), renglones: [{ renglon: 1, disponibilidad: 'Exacto', costo: 10 }, { renglon: 2, disponibilidad: 'Exacto', costo: 50 }] });
 function conOps(proyecto, sitio) {
   const folio = ok('obrero', 'guardarRequisicion', { proyectoFolio: proyecto, sitio: sitio || 'Querétaro', renglones: RENGLONES, idSolicitud: id('q') }).folio;

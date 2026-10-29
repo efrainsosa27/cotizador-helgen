@@ -191,6 +191,14 @@ Sin montos, proveedor ni folio de orden (reglas de B). Fuera de doPost (activado
 - **`reqParaSolicitante_` / `vistaRequisicion_`**: H no cambia `puedeCerrar` ni `puedeRecibir`; solo agrega campos al final.
 - **arnés** (`tests/arnes.js`): exporta `FOTO`, `conFotos`, `FOTOS` y las respuestas con `Buffer` dan `getContent()`. Si F tiene
   pruebas que reciben material, necesitan foto (`conFotos(renglones)` o `FOTOS` en `cerrarRequisicion`).
+- **Merge de prueba con F** (`incremento-5-f` = `f7aab98`, del bundle de F; hecho en una rama temporal y descartado): conflictos
+  solo en `MODULOS_` (quedan los dos), el comentario y la firma de `cerrarRequisicion` (queda `cerrarRequisicion(folioReq, notas,
+  d)` con los dos comentarios; el cuerpo es el de H y `cerrarReq_` ya trae la rama de crédito de F), el `return` de
+  `vistaRequisicion_` (las dos líneas de F + `return Object.assign({`), las secciones nuevas al final de `Code.js` (§6.H y luego
+  §6.F, completas) y los dos `<script>` nuevos al final de la interfaz. Con eso **todas las pruebas pasan** (20 + sintaxis) si en
+  `tests/proveedores.test.js` (de F): `cerrarRequisicion(r3, 'Llegó completo', FOTOS)` (foto obligatoria) y el `falla` de
+  `cancelarOrdenCompra` acepta también `/ya tiene material recibido/` ("Recibí el material" ahora deja entradas y esa revisión
+  va primero). `tests/recepcion.test.js` ya manda `formaPago` y salta el bloqueo de documentos (`P.exigirDocumentosParaPagar_`).
 - **Centro de mando (módulo I)**: este lado supone que `recibido` de cada renglón es acumulado y que, tras `oc.devolucion`
   "Reponer", el sitio baja `recibido` y reabre el renglón (o que su recepción vieja conserva su `cuando`); con cualquiera de las
   dos, CAPRI no duplica (regla de `cuando` vs. la última reposición). Confirmar con `backend/compras.py`.
