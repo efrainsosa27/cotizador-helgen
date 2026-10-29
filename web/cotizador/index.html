@@ -659,10 +659,42 @@
         <div id="ocEnviarCaja" class="sat oculto"></div>
       </div>
       <div class="modulo">
-        <h2>3 · Cuentas por pagar</h2>
+        <h2>3 · Cuentas por pagar y proveedores</h2>
         <div id="cxpResumen" class="nota">Cargando…</div>
-        <div class="acciones"><button type="button" class="btn btn-sec" onclick="verCxp()">Ver cuentas por pagar →</button></div>
+        <div class="acciones"><button type="button" class="btn btn-sec" onclick="verCxp()">Ver cuentas por pagar →</button>
+          <!-- proveedores (mod-proveedores): datos bancarios y documentos -->
+          <button type="button" class="btn btn-sec" onclick="verProveedores()">Proveedores →</button></div>
       </div>
+    </div>
+
+    <!-- Proveedores (mod-proveedores, incremento 5): lista con documentos y ficha (datos, banco, CLABE y documentos) -->
+    <div id="comVistaProv" class="oculto">
+      <div class="modulo">
+        <div class="acciones" style="margin:0 0 10px">
+          <button type="button" class="btn btn-sec" onclick="verListaCom()">← Requisiciones</button>
+          <button type="button" class="btn" onclick="PROVEEDORES_F.nuevo()">+ Nuevo proveedor</button>
+        </div>
+        <h2>1 · Proveedores</h2>
+        <div class="proy-fila">
+          <div><label>Buscar (razón social, RFC, contacto, banco o terminación de la CLABE)</label><input id="provBuscar" autocomplete="off"></div>
+          <div style="max-width:240px;min-width:180px"><label>Mostrar</label>
+            <select id="provEstado" onchange="PROVEEDORES_F.cargar()">
+              <option value="activos">Activos</option><option value="faltan">Les falta un documento</option>
+              <option value="avisos">Con avisos</option><option value="inactivos">Inactivos</option><option value="todos">Todos</option>
+            </select></div>
+          <button type="button" class="btn btn-sec" onclick="PROVEEDORES_F.cargar()">Buscar</button>
+        </div>
+        <div id="provInfo" class="nota" style="margin-top:8px"></div>
+        <div class="tabla-desliza" style="margin-top:10px">
+          <table style="font-size:12px">
+            <thead><tr><th>Proveedor</th><th>Contacto</th><th>Banco</th><th>Forma de pago</th><th>Documentos</th></tr></thead>
+            <tbody id="provLista"><tr><td colspan="5" class="nota">Cargando…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="nota" style="margin-top:8px">Sin constancia de situación fiscal y carátula bancaria no se registra un pago al proveedor
+          (se le paga a la CLABE de la carátula). Avisos: comprobante de domicilio con más de 3 meses y constancia con más de 12.</div>
+      </div>
+      <div id="provFicha" class="modulo oculto"></div>
     </div>
 
     <div id="comVistaCxp" class="oculto">
@@ -747,6 +779,8 @@
           <div><label>Correo</label><input id="prvCorreo" type="email" maxlength="100"></div>
           <div><label>Teléfono</label><input id="prvTel" maxlength="40"></div>
         </div>
+        <!-- documentos que le faltan al proveedor elegido (mod-proveedores) -->
+        <div id="prvAviso" class="nota aviso-moneda oculto" style="margin-top:6px"></div>
         <datalist id="ocCatalogo"></datalist>
         <datalist id="ocClaves"></datalist>
         <div class="grid" style="margin:14px 0 12px">
@@ -780,10 +814,14 @@
         <div class="grid" style="margin-top:14px">
           <div><label>Fecha de entrega *</label><input id="ocEntrega" type="date"></div>
           <div style="grid-column:span 2"><label>Lugar de entrega *</label><input id="ocLugar" maxlength="200"></div>
+          <div><label>Forma de pago *</label>
+            <select id="ocFormaPago"><option value="">Elige…</option><option>Transferencia</option><option>Crédito del proveedor</option>
+              <option>Tarjeta de crédito</option><option>Tarjeta de débito (en sitio)</option><option>Efectivo</option><option>Cheque</option></select></div>
           <div><label>Días de crédito * (0 = contado)</label><input id="ocDias" type="number" min="0" max="180" step="1" style="text-align:right"></div>
           <div><label>Condiciones de pago *</label><input id="ocCondiciones" maxlength="200" placeholder="Ej. Contado, crédito 30 días"></div>
         </div>
-        <div class="nota" style="margin-top:6px">Los días de crédito fijan cuándo vence cada factura de esta orden (fecha de la factura + días).</div>
+        <div class="nota" style="margin-top:6px">Los días de crédito fijan cuándo vence cada factura de esta orden (fecha de la factura + días).
+          Con <b>crédito del proveedor</b> quien pidió puede confirmar que llegó el material antes del pago.</div>
         <div style="margin-top:12px"><label>Notas para el proveedor (opcional)</label><textarea id="ocNotas" rows="3" maxlength="1000"></textarea></div>
         <div id="propExtra" class="grid oculto" style="margin-top:12px">
           <div><label>Quién recibe en sitio *</label><select id="propRecibe"></select></div>
@@ -842,6 +880,8 @@
         </div>
         <div id="rcFormPago" class="sat oculto">
           <div class="sat-titulo">Registrar el pago al proveedor (uno por orden)</div>
+          <!-- banco y CLABE de la carátula, documentos que faltan (mod-proveedores) -->
+          <div id="ppProveedor" class="oculto" style="margin-bottom:10px"></div>
           <div class="grid">
             <div><label>Fecha del pago *</label><input id="ppFecha" type="date"></div>
             <div><label>Monto *</label><input id="ppMonto" type="number" min="0" step="0.01" style="text-align:right"></div>
@@ -850,8 +890,9 @@
             <div id="ppTcCaja" class="oculto"><label>Tipo de cambio del día (pesos por dólar) *</label>
               <input id="ppTc" type="number" min="0" step="0.0001" style="text-align:right"></div>
             <div><label>Método *</label>
-              <select id="ppMetodo"><option>Transferencia</option><option>Efectivo</option><option>Cheque</option></select></div>
-            <div><label>Referencia (opcional solo en efectivo)</label><input id="ppRef" maxlength="100"></div>
+              <select id="ppMetodo"><option>Transferencia</option><option>Tarjeta de crédito</option><option>Tarjeta de débito</option>
+                <option>Efectivo</option><option>Cheque</option></select></div>
+            <div><label>Referencia (rastreo, autorización o ticket; nunca el número de la tarjeta)</label><input id="ppRef" maxlength="100"></div>
             <div><label>Comprobante (PDF o imagen, máx. 10 MB) *</label>
               <input id="ppArchivo" type="file" accept="application/pdf,image/jpeg,image/png,image/heic,.heic"></div>
           </div>
@@ -2199,6 +2240,8 @@
   }
   /** Nota "Guardado. El centro de mando se actualizará en unos minutos" que manda el servidor si un aviso quedó pendiente. */
   const extraPortal = r => r && r.avisoPortal ? ' <span class="aviso-moneda">' + esc(r.avisoPortal) + '</span>' : '';
+  // Documentos que le faltan al proveedor de la orden o propuesta (incremento 5, F: avisoProveedor)
+  const extraProveedor = r => r && r.avisoProveedor ? '<br><span class="aviso-moneda">' + esc(r.avisoProveedor) + '</span>' : '';
   const CHIP_DISP = { Exacto: 'firmado', Sustituto: 'aceptada', 'No disponible': 'cancelado', Adicional: '' };
   const chipDisp = d => '<span class="chip ' + (CHIP_DISP[d] || '') + '">' + esc(d) + '</span>';
   const chipPrio = p => p ? '<span class="chip ' + (p === 'Urgente' ? 'cancelado' : p === 'Normal' ? 'aceptada' : '') + '">' + esc(p) + '</span>' : '';
@@ -2502,7 +2545,9 @@
   function recibiMaterial(folio) {
     const notas = window.prompt('¿Recibiste el material de ' + folio + '? Si algo faltó, escríbelo aquí (opcional) y acepta:', '');
     if (notas == null) return;
-    accionCob(null, 'cerrarRequisicion', [folio, notas], l => { pintarMisReq(l); aviso('ok', 'Requisición <b>' + esc(folio) + '</b> cerrada: material recibido.'); });
+    // F (incremento 5): con crédito del proveedor queda Recibida (compras paga después); si no, Cerrada
+    accionCob(null, 'cerrarRequisicion', [folio, notas], l => { pintarMisReq(l); const x = (l || []).find(r => r.folio === folio);
+      aviso('ok', 'Requisición <b>' + esc(folio) + '</b> ' + (x && x.estado === 'Recibida' ? 'recibida: compras pagará al proveedor.' : 'cerrada: material recibido.')); });
   }
 
   // ---- Operaciones (ROL_OPERACIONES): aprueba renglón por renglón y da el visto bueno a la propuesta de compras ----
@@ -2603,7 +2648,7 @@
       const tile = (k, x, nota) => '<div class="tile"><span>' + esc(k) + '</span><b style="font-size:13px">' + x + '</b>' + (nota ? '<div class="nota">' + nota + '</div>' : '') + '</div>';
       $('opsOrden').innerHTML = tile('Orden de compra', esc(o.folio) + ' <span class="chip ' + (CHIP_OC[o.estado] || '') + '">' + esc(o.estado) + '</span>') +
         tile('Proveedor', esc(o.proveedor), dinero(o.total, o.moneda)) + tile('Entrega', esc(fechaMx(o.fechaEntrega)), esc(o.lugarEntrega)) +
-        tile('Recibe', esc(rq.recibe));
+        tile('Recibe', esc(rq.recibe)) + (o.formaPago ? tile('Forma de pago', esc(o.formaPago)) : ''); // F (incremento 5)
       $('opsAvance').innerHTML = htmlAvance(v.avance, v.recepciones, false);
     }
     avisarModulos('alVistaOps', v); // centro de mando: En camino
@@ -2616,7 +2661,9 @@
     $('opsPropInfo').innerHTML = tile('Proveedor', esc(pr.proveedor.razonSocial), esc([pr.proveedor.rfc, pr.proveedor.contacto].filter(Boolean).join(' · '))) +
       tile('Total', dinero(pr.total, pr.moneda), 'IVA ' + Math.round(pr.ivaTasa * 100) + '%' + (pr.tipoCambio ? ' · TC ' + esc(pr.tipoCambio) : '')) +
       tile('Entrega', esc(fechaMx(pr.fechaEntrega)), esc(pr.lugarEntrega)) +
-      tile('Pago', esc(pr.condicionesPago), Number(pr.diasCredito) ? esc(pr.diasCredito) + ' días de crédito' : 'contado') +
+      // Forma de pago (F, incremento 5; el servidor la deduce en propuestas de antes)
+      tile('Pago', esc(pr.formaPago || pr.condicionesPago), esc(pr.condicionesPago) + ' · ' +
+        (Number(pr.diasCredito) ? esc(pr.diasCredito) + ' días de crédito' : 'contado')) +
       tile('Recibe', esc(pr.recibe), 'Preparó: ' + esc(pr.elaboroNombre) + ' · ' + esc(fechaMx(pr.fecha)));
     $('opsPropRenglones').innerHTML = pr.renglones.map(r => {
       const o = dec[r.renglon] || null, no = r.disponibilidad === 'No disponible';
@@ -2796,7 +2843,7 @@
         textoCredito(o) + '</div></div>' +
         '<div class="tile"><span>Entrega</span><b style="font-size:13px">' + esc(fechaMx(o.fechaEntrega)) + '</b><div class="nota">' + esc(o.lugarEntrega) + '</div>' +
         (o.estado === 'Recibida' ? '<div class="nota">Recibida el ' + esc(fechaMx(o.fechaRecepcion)) + ' · ' + esc(o.recibio) + '</div>' : '') + '</div>' +
-        (o.estado === 'Emitida' && !(v.recepciones || []).some(x => x.estado === 'Vigente') ? '<div class="tile"><span>¿Ya no va?</span>' +
+        (o.estado === 'Emitida' && !o.fechaRecepcion && !(v.recepciones || []).some(x => x.estado === 'Vigente') ? '<div class="tile"><span>¿Ya no va?</span>' +
           botonChico('Cancelar orden', "cancelarOcDesdeReq('" + esc(o.folio) + "')") + '</div>' : '');
     }
     // Recepción en sitio (con operaciones): avance, recepciones (cancelar una equivocada) y registrar en lugar de quien recibe
@@ -2853,6 +2900,7 @@
     if (!p) return;
     Object.keys(CAMPOS_PROV).forEach(id => $(id).value = p[CAMPOS_PROV[id]] || '');
     if (p.diasCredito !== '' && p.diasCredito != null) { $('ocDias').value = p.diasCredito; condicionesDesdeDias(); }
+    if (p.formaPagoHabitual) $('ocFormaPago').value = p.formaPagoHabitual; // F (incremento 5): la habitual del proveedor
   }
   // Condiciones de pago a partir de los días de crédito, mientras no se escriban a mano
   function condicionesDesdeDias() {
@@ -2976,7 +3024,7 @@
     PROP_MODO = !!v.puedeCotizar;
     const prev = PROP_MODO ? v.requisicion.propuesta : null;
     recibirProveedores(v.proveedores);
-    Object.keys(CAMPOS_PROV).concat(['ocTc', 'ocEntrega', 'ocDias', 'ocCondiciones', 'ocNotas']).forEach(id => $(id).value = '');
+    Object.keys(CAMPOS_PROV).concat(['ocTc', 'ocEntrega', 'ocDias', 'ocCondiciones', 'ocNotas', 'ocFormaPago']).forEach(id => $(id).value = '');
     COND_A_MANO = false;
     $('ocTitulo').textContent = PROP_MODO ? '2 · Propuesta de compra (para el visto bueno de operaciones)' : '2 · Orden de compra';
     $('ocEnc').innerHTML = '<tr>' + (PROP_MODO ? '<th>Propuesta</th>' : '') + '<th style="width:100px">Clave</th><th>Descripción</th>' +
@@ -3015,6 +3063,8 @@
     if (prev) {
       Object.keys(CAMPOS_PROV).forEach(id => $(id).value = (prev.proveedor || {})[CAMPOS_PROV[id]] || '');
       $('ocTc').value = prev.tipoCambio || ''; $('ocDias').value = prev.diasCredito;
+      // F: las propuestas de antes no traen forma de pago (con días de crédito, crédito del proveedor)
+      $('ocFormaPago').value = prev.formaPago || (Number(prev.diasCredito) > 0 ? 'Crédito del proveedor' : 'Transferencia');
       $('ocCondiciones').value = prev.condicionesPago || ''; COND_A_MANO = !!prev.condicionesPago;
       $('ocNotas').value = prev.notas || '';
       $('ocEntrega').value = prev.fechaEntrega >= v.hoy ? prev.fechaEntrega : '';
@@ -3045,13 +3095,14 @@
       renglones: leerRenglonesOc().map(({_tr, ...r}) => r),
       moneda: $('ocMoneda').value, tipoCambio: $('ocTc').value, ivaTasa: $('ocIva').value,
       fechaEntrega: $('ocEntrega').value, lugarEntrega: $('ocLugar').value, diasCredito: $('ocDias').value,
+      formaPago: $('ocFormaPago').value, // F (incremento 5): obligatoria
       condicionesPago: $('ocCondiciones').value, notas: $('ocNotas').value, idSolicitud: ID_OC,
     };
     // Con excepción de super admin: si autoriza lo que él pidió, se le pide el motivo y se reintenta
     accionConExcepcion('btnOc', 'autorizarRequisicion', [folio, payload], r => {
       pintarReqCom(r.vista);
       aviso('ok', 'Requisición <b>' + esc(r.folio) + '</b> autorizada · Orden de compra <b>' + esc(r.ocFolio) + '</b> · Total ' +
-            dinero(r.total, r.moneda) + ' · <a href="' + esc(r.url) + '" target="_blank">Abrir PDF</a>' + extraPortal(r));
+            dinero(r.total, r.moneda) + ' · <a href="' + esc(r.url) + '" target="_blank">Abrir PDF</a>' + extraPortal(r) + extraProveedor(r));
     }, false, 'Generando PDF…');
   }
 
@@ -3069,6 +3120,7 @@
       renglones: renglones, recibe: $('propRecibe').value,
       moneda: $('ocMoneda').value, tipoCambio: $('ocTc').value, ivaTasa: $('ocIva').value,
       fechaEntrega: $('ocEntrega').value, lugarEntrega: $('ocLugar').value, diasCredito: $('ocDias').value,
+      formaPago: $('ocFormaPago').value, // F (incremento 5): obligatoria
       condicionesPago: $('ocCondiciones').value, notas: $('ocNotas').value, idSolicitud: ID_OC,
     };
     const texto = $('btnOc').textContent;
@@ -3078,7 +3130,7 @@
       $('propArchivo').value = ''; ID_OC = nuevoId(); listo();
       pintarReqCom(r.vista);
       aviso('ok', 'Propuesta de <b>' + esc(r.folio) + '</b>' + (r.version > 1 ? ' (versión ' + esc(r.version) + ')' : '') +
-        ' enviada a operaciones para su visto bueno.');
+        ' enviada a operaciones para su visto bueno.' + extraProveedor(r));
     }).withFailureHandler(err => { listo(); mostrarError(err); })
       .cotizarRequisicion(folio, Object.assign(payload, { cotizacion: datos ? { nombre: archivo.name, datos: datos } : null }));
     if (archivo) leerArchivo(archivo).then(enviar, err => { listo(); mostrarError(err); });
@@ -3101,14 +3153,16 @@
     $('btnPagoProv').disabled = true; $('btnPagoProv').textContent = 'Subiendo comprobante…';
     const listo = () => { $('btnPagoProv').disabled = false; $('btnPagoProv').textContent = 'Registrar pago'; };
     leerArchivo(archivo).then(datos => {
-      google.script.run.withSuccessHandler(r => {
-        listo(); pintarReqCom(r.vista);
-        aviso('ok', 'Pago <b>' + esc(r.folio) + '</b> registrado · <a href="' + esc(r.url) + '" target="_blank">Ver comprobante</a>' + extraPortal(r));
-      }).withFailureHandler(err => { listo(); mostrarError(err); }).registrarPagoProveedor({
+      listo();
+      // F (incremento 5): sin CSF y carátula del proveedor el servidor lo niega (PERMISO); un super admin puede con motivo
+      accionConExcepcion('btnPagoProv', 'registrarPagoProveedor', [{
         reqFolio: folio, fecha: $('ppFecha').value, monto: $('ppMonto').value, monedaPago: $('ppMoneda').value,
         tipoCambio: $('ppTc').value, metodo: $('ppMetodo').value, referencia: $('ppRef').value,
         comprobante: { nombre: archivo.name, datos: datos }, idSolicitud: ID_PGP,
-      });
+      }], r => {
+        pintarReqCom(r.vista);
+        aviso('ok', 'Pago <b>' + esc(r.folio) + '</b> registrado · <a href="' + esc(r.url) + '" target="_blank">Ver comprobante</a>' + extraPortal(r));
+      }, false, 'Subiendo comprobante…');
     }, err => { listo(); mostrarError(err); });
   }
   function cancelarPagoProv(folio) {
@@ -3121,7 +3175,8 @@
     const folio = REQC.requisicion.folio;
     if (!$('rcMotivoCierre').value.trim()) { mostrarError('Escribe por qué cierras la requisición en lugar de quien la pidió.'); return; }
     accionCob('btnCerrarCom', 'cerrarRequisicionCompras', [folio, $('rcMotivoCierre').value, $('rcNotasCierre').value],
-      v => { pintarReqCom(v); aviso('ok', 'Requisición <b>' + esc(folio) + '</b> cerrada · orden recibida.' + extraPortal(v)); });
+      v => { pintarReqCom(v); aviso('ok', 'Requisición <b>' + esc(folio) + '</b> ' + (v.requisicion && v.requisicion.estado === 'Recibida'
+        ? 'recibida (crédito del proveedor): falta registrar el pago.' : 'cerrada · orden recibida.') + extraPortal(v)); });
   }
   /** Compras separa renglones aprobados en otra requisición (p. ej. otro proveedor); conservan la aprobación de operaciones. */
   function separarReqCom() {
@@ -4642,6 +4697,276 @@
       // La sincronización manda la lista otra vez cuando alguien anula algo (con la búsqueda de esta página)
       contexto() { return esSuper() && est.montado && TAB === 'admin' ? { anulados: true, anuladosBuscar: est.buscar } : {}; },
       alSincronizar(r) { if (r && r.anulados && est.montado) pintarLista(r.anulados); },
+    });
+  })();
+</script>
+
+<script id="mod-proveedores">
+  // Proveedores y forma de pago (incremento 5, módulo F): subvista "Proveedores" en Compras (lista con el estado de sus documentos y
+  // ficha con datos bancarios y documentos), aviso de documentos al elegir el proveedor de la orden, banco y CLABE de la carátula al
+  // pagar, forma de pago en la orden y "Registrar que llegó" con crédito del proveedor. El servidor revisa todo (solo compras o
+  // super admin; sin CSF y carátula no se registra un pago). Lo que necesitan los onclick va en window.PROVEEDORES_F.
+  (function () {
+    const DOCS = [['csf', 'Constancia de situación fiscal', 'CSF'], ['caratula', 'Carátula bancaria', 'Carátula'],
+      ['domicilio', 'Comprobante de domicilio', 'Domicilio']];
+    const FORMAS = ['Transferencia', 'Crédito del proveedor', 'Tarjeta de crédito', 'Tarjeta de débito (en sitio)', 'Efectivo', 'Cheque'];
+    // Bancos por los 3 primeros dígitos de la CLABE: solo para sugerir el nombre (se escribe como dice la carátula)
+    const BANCOS = { '002': 'Banamex', '012': 'BBVA México', '014': 'Santander', '021': 'HSBC', '030': 'BanBajío', '036': 'Inbursa',
+      '044': 'Scotiabank', '058': 'Banregio', '072': 'Banorte', '127': 'Banco Azteca', '137': 'BanCoppel', '646': 'STP' };
+    const est = { lista: null, ficha: null, id: '', idSol: nuevoId(), guardando: false };
+    const hoyLocal = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+    const dmy = iso => { const m = String(iso || '').match(/^(\d{4})-(\d\d)-(\d\d)/); return m ? m[3] + '/' + m[2] + '/' + m[1] : String(iso || ''); };
+    const limpioNum = s => String(s || '').replace(/[\s-]/g, '');
+    const visible = () => TAB === 'com' && !$('comVistaProv').classList.contains('oculto');
+
+    /** Copia de validarClabe (Code.js) para avisar al escribir: true o el texto del error. El servidor la vuelve a revisar. */
+    function clabeValida(v) {
+      const c = limpioNum(v);
+      if (!/^\d{18}$/.test(c)) return 'La CLABE debe tener 18 dígitos.';
+      let suma = 0;
+      for (let i = 0; i < 17; i++) suma += (Number(c[i]) * [3, 7, 1][i % 3]) % 10;
+      return (10 - (suma % 10)) % 10 === Number(c[17]) ? true : 'La CLABE no es válida (no coincide su dígito verificador).';
+    }
+
+    // ---- Subvista Proveedores (Compras) ----
+    function ocultar() { $('comVistaProv').classList.add('oculto'); }
+    function verProveedores() {
+      if (!PERMISOS.compras) return;
+      if (TAB !== 'com') verTab('com');
+      REQC = null;
+      if (typeof cerrarFormRecepcion === 'function') cerrarFormRecepcion('rcpCom');
+      ['comVistaLista', 'comVistaCxp', 'comVistaReq'].forEach(id => $(id).classList.add('oculto'));
+      $('comVistaProv').classList.remove('oculto');
+      $('rcCotVisor').src = 'about:blank';
+      if (!est.lista) cargar(); else pintarLista(est.lista);
+    }
+    const filtro = () => ({ texto: $('provBuscar').value, estado: $('provEstado').value || 'activos' });
+    function cargar() {
+      $('provInfo').textContent = 'Cargando…';
+      google.script.run.withSuccessHandler(pintarLista).withFailureHandler(mostrarError).listarProveedores(filtro());
+    }
+    /** Chips de documentos: verde = lo tiene; ámbar = viejo (domicilio > 3 meses, CSF > 12); rojo = falta. Con texto, no solo color. */
+    function chipsDocs(p) {
+      return DOCS.map(([k, nombre, corto]) => {
+        const d = (p.documentos || {})[k] || {};
+        const clase = !d.tiene ? 'cancelado' : d.vencido ? 'aceptada' : 'firmado';
+        const texto = corto + (!d.tiene ? ' · falta' : d.vencido ? ' · vieja' : '');
+        const titulo = nombre + (!d.tiene ? ': falta' : ': del ' + dmy(d.fecha) + (d.vencido ? ' (vieja)' : ''));
+        return '<span class="chip ' + clase + '" title="' + esc(titulo) + '" style="margin:0 4px 4px 0">' + esc(texto) + '</span>';
+      }).join('');
+    }
+    function pintarLista(r) {
+      est.lista = r || { proveedores: [] };
+      const l = est.lista.proveedores || [];
+      $('provInfo').textContent = l.length + (est.lista.total > l.length ? ' de ' + est.lista.total : '') + ' proveedor(es).';
+      $('provLista').innerHTML = l.length ? l.map(p => '<tr class="fila-cat" onclick="PROVEEDORES_F.abrir(' + jsArg(p.id) + ')">' +
+        '<td><b>' + esc(p.razonSocial) + '</b>' + (p.activo ? '' : ' <span class="chip cancelado">Inactivo</span>') +
+        '<div class="nota">' + esc(p.rfc || 'Sin RFC') + '</div></td>' +
+        '<td>' + esc(p.contacto) + '<div class="nota">' + esc([p.correo, p.telefono].filter(Boolean).join(' · ')) + '</div></td>' +
+        '<td>' + (p.banco ? esc(p.banco) + (p.clabe4 ? '<div class="nota">CLABE ··' + esc(p.clabe4) + '</div>' : p.cuenta4
+          ? '<div class="nota">Cuenta ··' + esc(p.cuenta4) + '</div>' : '') : '<span class="nota">Sin datos bancarios</span>') + '</td>' +
+        '<td>' + esc(p.formaPagoHabitual || '—') + (Number(p.diasCredito) ? '<div class="nota">' + esc(p.diasCredito) + ' días de crédito</div>' : '') + '</td>' +
+        '<td>' + chipsDocs(p) + ((p.avisos || []).length ? '<div class="nota aviso-moneda">' + p.avisos.map(esc).join('<br>') + '</div>' : '') +
+        '</td></tr>').join('')
+        : '<tr><td colspan="5" class="nota">No hay proveedores con ese filtro. Se agregan solos al emitir una orden de compra o con "+ Nuevo proveedor".</td></tr>';
+    }
+
+    // ---- Ficha (alta o edición) ----
+    function abrir(id) {
+      if (!visible()) verProveedores();
+      google.script.run.withSuccessHandler(pintarFicha).withFailureHandler(mostrarError).getProveedor(id);
+    }
+    function nuevo() { if (!visible()) verProveedores(); pintarFicha(null); }
+    function cerrar() { est.ficha = null; est.id = ''; $('provFicha').classList.add('oculto'); $('provFicha').innerHTML = ''; }
+    const campo = (id, etiqueta, max, tipo) => '<div><label>' + etiqueta + '</label><input id="' + id + '" maxlength="' + max + '"' +
+      (tipo ? ' type="' + tipo + '"' : '') + ' autocomplete="off"></div>';
+    function pintarFicha(p) {
+      est.ficha = p; est.id = p ? p.id : ''; est.idSol = nuevoId();
+      const x = p || { activo: true, documentos: {}, avisos: [] }, hoy = hoyLocal();
+      const caja = $('provFicha');
+      caja.classList.remove('oculto');
+      caja.innerHTML = '<h2>2 · ' + (p ? esc(p.razonSocial) : 'Nuevo proveedor') + '</h2>' +
+        ((x.avisos || []).length ? '<div class="nota aviso-moneda" style="margin-bottom:10px">' + x.avisos.map(esc).join('<br>') + '</div>' : '') +
+        '<div class="grid">' + campo('pfRazon', 'Razón social *', 150) + campo('pfRfc', 'RFC', 13) + campo('pfContacto', 'Contacto', 100) +
+          campo('pfCorreo', 'Correo', 100, 'email') + campo('pfTel', 'Teléfono', 40) +
+          '<div style="grid-column:span 2"><label>Dirección</label><input id="pfDireccion" maxlength="300"></div></div>' +
+        '<div class="sat-titulo" style="margin-top:16px">Datos bancarios (como dice la carátula)</div>' +
+        '<div class="grid">' + campo('pfBanco', 'Banco', 60) +
+          '<div><label>CLABE (18 dígitos)</label><input id="pfClabe" maxlength="24" inputmode="numeric" autocomplete="off"><div id="pfClabeNota" class="nota"></div></div>' +
+          campo('pfCuenta', 'Cuenta (o IBAN si es del extranjero)', 40) + campo('pfTitular', 'Titular de la cuenta', 150) + '</div>' +
+        '<div id="pfBancoAviso" class="nota aviso-moneda oculto" style="margin-top:6px">Cambiaste los datos bancarios: sube abajo la carátula ' +
+          'bancaria nueva con su fecha (obligatoria). El cambio queda en la bitácora y compras recibe un aviso.</div>' +
+        '<div class="grid" style="margin-top:12px"><div><label>Forma de pago habitual</label><select id="pfForma"><option value="">Sin definir</option>' +
+          FORMAS.map(f => '<option>' + esc(f) + '</option>').join('') + '</select></div>' +
+          '<div><label>Días de crédito habituales</label><input id="pfDias" type="number" min="0" max="180" step="1" style="text-align:right"></div>' +
+          '<div><label style="display:flex;gap:6px;align-items:center;margin-top:24px"><input type="checkbox" id="pfActivo" style="width:auto"> Activo</label></div></div>' +
+        '<div style="margin-top:12px"><label>Notas internas</label><textarea id="pfNotas" rows="2" maxlength="1000"></textarea></div>' +
+        '<div class="sat-titulo" style="margin-top:16px">Documentos (PDF o foto, máx. 10 MB)</div>' +
+        '<div class="tabla-desliza"><table style="font-size:12px"><thead><tr><th>Documento</th><th>Actual</th><th>Subir nuevo</th><th>Fecha del documento</th></tr></thead><tbody>' +
+        DOCS.map(([k, nombre]) => {
+          const d = (x.documentos || {})[k] || {};
+          return '<tr><td>' + esc(nombre) + '</td><td style="white-space:nowrap">' + (d.tiene ? '<a href="' + esc(d.url) + '" target="_blank" rel="noopener">Abrir</a> · ' +
+            esc(dmy(d.fecha)) + (d.vencido ? ' <span class="chip aceptada">vieja</span>' : '') : '<span class="chip cancelado">Falta</span>') + '</td>' +
+            '<td><input type="file" id="pfArch-' + k + '" accept="application/pdf,image/jpeg,image/png,image/heic,.heic"></td>' +
+            '<td><input type="date" id="pfFecha-' + k + '" max="' + hoy + '"></td></tr>';
+        }).join('') + '</tbody></table></div>' +
+        '<div class="nota" style="margin-top:6px">El documento anterior se conserva en Drive. Sin constancia de situación fiscal y carátula bancaria ' +
+          'no se registra un pago. Avisos: comprobante de domicilio con más de 3 meses y constancia con más de 12.</div>' +
+        '<div class="acciones"><button type="button" id="btnProvGuardar" class="btn" onclick="PROVEEDORES_F.guardar()">' +
+          (p ? 'Guardar cambios' : 'Dar de alta') + '</button>' + botonChico('Cerrar', 'PROVEEDORES_F.cerrar()') + '</div>';
+      const val = { pfRazon: x.razonSocial, pfRfc: x.rfc, pfContacto: x.contacto, pfCorreo: x.correo, pfTel: x.telefono, pfDireccion: x.direccion,
+        pfBanco: x.banco, pfClabe: x.clabe, pfCuenta: x.cuenta, pfTitular: x.titular, pfForma: x.formaPagoGuardada || '',
+        pfDias: x.diasCredito === '' || x.diasCredito == null ? '' : x.diasCredito, pfNotas: x.notas };
+      Object.keys(val).forEach(id => { $(id).value = val[id] == null ? '' : val[id]; });
+      $('pfActivo').checked = x.activo !== false;
+      ['pfBanco', 'pfClabe', 'pfCuenta'].forEach(id => $(id).addEventListener('input', revisarBanco));
+      revisarBanco();
+      if (caja.scrollIntoView) caja.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    /** ¿Cambió banco, CLABE o cuenta respecto a lo guardado? (el servidor exige la carátula nueva en el mismo guardado) */
+    function cambioBanco() {
+      const a = est.ficha || {}, n = s => String(s || '').trim().toLowerCase();
+      return n(a.banco) !== n($('pfBanco').value) || limpioNum(a.clabe) !== limpioNum($('pfClabe').value) ||
+        limpioNum(a.cuenta).toUpperCase() !== limpioNum($('pfCuenta').value).toUpperCase();
+    }
+    function revisarBanco() {
+      const c = limpioNum($('pfClabe').value), ok = c ? clabeValida(c) : '';
+      $('pfClabeNota').textContent = !c ? '' : ok === true ? 'CLABE válida' + (BANCOS[c.slice(0, 3)] ? ' · banco ' + BANCOS[c.slice(0, 3)] : '') : ok;
+      if (ok === true && !$('pfBanco').value.trim() && BANCOS[c.slice(0, 3)]) $('pfBanco').value = BANCOS[c.slice(0, 3)];
+      const cambio = cambioBanco() && !!($('pfBanco').value.trim() || c || $('pfCuenta').value.trim());
+      $('pfBancoAviso').classList.toggle('oculto', !cambio);
+    }
+    function guardar() {
+      const b = $('btnProvGuardar');
+      if (!b || b.disabled) return;
+      const v = id => String($(id).value || '').trim();
+      const datos = { id: est.id, razonSocial: v('pfRazon'), rfc: v('pfRfc'), contacto: v('pfContacto'), correo: v('pfCorreo'), telefono: v('pfTel'),
+        direccion: v('pfDireccion'), banco: v('pfBanco'), clabe: v('pfClabe'), cuenta: v('pfCuenta'), titular: v('pfTitular'),
+        formaPagoHabitual: v('pfForma'), diasCredito: v('pfDias'), notas: $('pfNotas').value, activo: !!$('pfActivo').checked, idSolicitud: est.idSol };
+      if (!datos.razonSocial) { mostrarError('Escribe la razón social del proveedor.'); return; }
+      if (datos.clabe && clabeValida(datos.clabe) !== true) { mostrarError(clabeValida(datos.clabe) + ' Revísala contra la carátula bancaria.'); return; }
+      const archivos = DOCS.map(([k, nombre]) => ({ k: k, nombre: nombre, f: $('pfArch-' + k).files && $('pfArch-' + k).files[0], fecha: $('pfFecha-' + k).value }))
+        .filter(a => a.f);
+      const grande = archivos.find(a => a.f.size > 10 * 1024 * 1024);
+      if (grande) { mostrarError(grande.nombre + ': pesa más de 10 MB. Reduce la imagen o el PDF.'); return; }
+      const sinFecha = archivos.find(a => !a.fecha);
+      if (sinFecha) { mostrarError('Escribe la fecha de ' + sinFecha.nombre.toLowerCase() + ' (la que dice el documento).'); return; }
+      const conDatos = !!(datos.banco || datos.clabe || datos.cuenta);
+      if (cambioBanco() && conDatos && !archivos.some(a => a.k === 'caratula')) {
+        mostrarError('Cambiaste los datos bancarios: sube la carátula bancaria nueva con su fecha (se le paga a la CLABE de la carátula).'); return;
+      }
+      b.disabled = true; b.textContent = 'Guardando…';
+      const listo = () => { b.disabled = false; b.textContent = est.id ? 'Guardar cambios' : 'Dar de alta'; };
+      Promise.all(archivos.map(a => leerArchivo(a.f).then(d => [a.k, { nombre: a.f.name, datos: d, fecha: a.fecha }]))).then(lista => {
+        datos.documentos = {};
+        lista.forEach(([k, d]) => { datos.documentos[k] = d; });
+        google.script.run.withSuccessHandler(r => {
+          listo();
+          pintarFicha(r.proveedor);
+          cargar();
+          aviso('ok', 'Proveedor <b>' + esc(r.proveedor.razonSocial) + '</b> ' + (r.nuevo ? 'dado de alta.' : 'guardado.') +
+            ((r.proveedor.avisos || []).length ? '<br><span class="aviso-moneda">' + r.proveedor.avisos.map(esc).join(' ') + '</span>' : ''));
+        }).withFailureHandler(err => { listo(); mostrarError(err); }).guardarProveedor(datos);
+      }, err => { listo(); mostrarError(err); });
+    }
+
+    // ---- Orden o propuesta: documentos que le faltan al proveedor elegido ----
+    function avisoProveedorOc() {
+      const caja = $('prvAviso');
+      const t = String($('prvRazon').value || '').trim().toLowerCase();
+      const p = t && REQC ? (REQC.proveedores || []).find(x => String(x.etiqueta || '').toLowerCase() === t ||
+        String(x.razonSocial || '').toLowerCase() === t) : null;
+      const avisos = p ? (p.avisos || []) : [];
+      caja.classList.toggle('oculto', !avisos.length);
+      caja.innerHTML = avisos.length ? 'Proveedor ' + esc(p.razonSocial) + ': ' + avisos.map(esc).join(' ') +
+        ((p.faltan || []).some(k => k === 'csf' || k === 'caratula') ? ' Sin constancia de situación fiscal y carátula no se le podrá pagar.' : '') +
+        ' ' + botonChico('Ver proveedor', 'PROVEEDORES_F.abrir(' + jsArg(p.id) + ')') : '';
+    }
+
+    // ---- Pago: banco y CLABE de la carátula, métodos del servidor, documentos que faltan ----
+    function pintarPago(v) {
+      const caja = $('ppProveedor');
+      if (v && Array.isArray(v.metodos) && v.metodos.length) {
+        const sel = $('ppMetodo'), antes = sel.value, html = v.metodos.map(m => '<option>' + esc(m) + '</option>').join('');
+        if (sel.innerHTML !== html) { sel.innerHTML = html; sel.value = v.metodos.indexOf(antes) !== -1 ? antes : v.metodos[0]; }
+      }
+      const pp = v && v.puedePagar ? v.proveedorPago : null;
+      if (!pp) { caja.classList.add('oculto'); caja.innerHTML = ''; return; }
+      const metodo = $('ppMetodo').value, partes = [];
+      const nombres = { csf: 'la constancia de situación fiscal', caratula: 'la carátula bancaria' };
+      partes.push('<b>' + esc(pp.razonSocial) + '</b>' + (pp.registrado && pp.id ? ' · ' + botonChico('Ver proveedor', 'PROVEEDORES_F.abrir(' + jsArg(pp.id) + ')') : ''));
+      if ((pp.faltanPago || []).length) {
+        partes.push('<span class="aviso-moneda">Falta ' + pp.faltanPago.map(k => nombres[k] || k).join(' y ') + ': no se registra el pago hasta ' +
+          'subirlas en Proveedores' + (PERMISOS.superadmin ? ' (como super admin puedes registrarlo escribiendo el motivo; queda en la bitácora).' : '.') + '</span>');
+      }
+      if (metodo === 'Transferencia') {
+        partes.push(pp.clabe ? 'Transfiere a la CLABE de la carátula: <b>' + esc(pp.banco) + '</b> · CLABE <b style="letter-spacing:1px">' + esc(pp.clabe) + '</b> ' +
+            botonChico('Copiar CLABE', 'PROVEEDORES_F.copiar(' + jsArg(pp.clabe) + ')') + (pp.titular ? ' · titular ' + esc(pp.titular) : '') +
+            (pp.caratulaUrl ? ' · <a href="' + esc(pp.caratulaUrl) + '" target="_blank" rel="noopener">Ver carátula</a>' : '')
+          : pp.cuenta ? 'Cuenta de la carátula: <b>' + esc(pp.banco) + '</b> · <b>' + esc(pp.cuenta) + '</b>' + (pp.titular ? ' · titular ' + esc(pp.titular) : '')
+          : '<span class="aviso-moneda">El proveedor no tiene CLABE registrada: captúrala en Proveedores con su carátula.</span>');
+      } else if (/^Tarjeta/.test(metodo)) {
+        partes.push('Referencia: el número de autorización o del ticket. <b>Nunca</b> escribas el número de la tarjeta.');
+      }
+      caja.innerHTML = '<div class="nota" style="border-left:3px solid var(--teal);padding:4px 10px;line-height:1.7">' + partes.join('<br>') + '</div>';
+      caja.classList.remove('oculto');
+    }
+    function copiar(texto) {
+      try {
+        navigator.clipboard.writeText(texto).then(() => aviso('ok', 'CLABE copiada.'), () => window.prompt('Copia la CLABE:', texto));
+      } catch (e) { window.prompt('Copia la CLABE:', texto); }
+    }
+
+    // ---- Detalle de la requisición (Compras): forma de pago de la orden y "Registrar que llegó" con crédito ----
+    function alVistaReqCom(v) {
+      ocultar();
+      const o = v.orden;
+      if (o && o.formaPago && $('rcOrden').insertAdjacentHTML) {
+        $('rcOrden').insertAdjacentHTML('beforeend', '<div class="tile"><span>Forma de pago</span><b style="font-size:13px">' + esc(o.formaPago) + '</b>' +
+          (o.estado === 'Emitida' && o.fechaRecepcion ? '<div class="nota">Recibida el ' + esc(fechaMx(o.fechaRecepcion)) + ' · falta pagar</div>' : '') + '</div>');
+      }
+      if (v.recibeAntesDePagar && !v.centroMando) {
+        $('rcCierreTitulo').textContent = 'Registrar que llegó, en lugar de quien la pidió (falta pagar)';
+        $('rcCierreNota').textContent = 'Orden con crédito del proveedor: quien pidió confirma con "Recibí el material" y la requisición queda ' +
+          'Recibida hasta que registres el pago. Hazlo tú solo si no puede (p. ej. ya no está en la obra).';
+        $('btnCerrarCom').textContent = 'Registrar que llegó (queda Recibida)';
+      } else {
+        $('btnCerrarCom').textContent = 'Cerrar requisición (material recibido)';
+      }
+      pintarPago(v);
+      if (!$('comModOc').classList.contains('oculto')) avisoProveedorOc();
+    }
+
+    // Las vistas de Compras de siempre esconden la de proveedores (sin editar su código)
+    ['verListaCom', 'verCxp'].forEach(n => {
+      const base = window[n];
+      if (typeof base === 'function') window[n] = function () { ocultar(); return base.apply(this, arguments); };
+    });
+    $('provBuscar').addEventListener('keydown', e => { if (e.key === 'Enter') cargar(); });
+    $('ppMetodo').addEventListener('change', () => { if (REQC) pintarPago(REQC); });
+    $('prvRazon').addEventListener('change', avisoProveedorOc);
+    $('prvRazon').addEventListener('input', avisoProveedorOc);
+    /** Liga del correo proveedor.banco: #proveedores abre la lista (solo compras). */
+    function seguirLiga() {
+      let h = '';
+      try { h = String((window.location && window.location.hash) || ''); } catch (e) { return; }
+      if (!/^#proveedores$/i.test(h)) return;
+      try { if (window.history && window.history.replaceState) window.history.replaceState(null, '', window.location.pathname + window.location.search); } catch (e) {}
+      if (PERMISOS.compras) verProveedores(); else aviso('error', 'Tu cuenta no tiene acceso a Proveedores (compras).');
+    }
+    if (typeof window.addEventListener === 'function') window.addEventListener('hashchange', () => { if (BOOT) seguirLiga(); });
+
+    window.verProveedores = verProveedores;
+    window.PROVEEDORES_F = { cargar: cargar, abrir: abrir, nuevo: nuevo, cerrar: cerrar, guardar: guardar, copiar: copiar, clabeValida: clabeValida };
+
+    registrarModulo({
+      nombre: 'Proveedores',
+      alBootstrap() { setTimeout(seguirLiga, 0); },
+      alPermisos(p) { if (!(p && p.compras)) { ocultar(); est.lista = null; cerrar(); } },
+      alVistaReqCom: alVistaReqCom,
+      // La sincronización manda la lista otra vez cuando alguien guarda un proveedor u orden (con el filtro de esta página)
+      contexto() { return visible() ? { comProveedores: true, provFiltro: filtro() } : {}; },
+      alSincronizar(r) { if (r && r.comProveedores && visible()) pintarLista(r.comProveedores); },
     });
   })();
 </script>

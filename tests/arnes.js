@@ -64,6 +64,9 @@ module.exports = function crearArnes(dir, opciones) {
     Object.assign(f, { getId: () => f.id, getName: () => f.nombre, getUrl: () => 'https://drive/' + f.id, isTrashed: () => f.trashed,
       setName: n => { f.nombre = n; return f; },
       getFoldersByName: n => { const l = f.hijos.filter(h => h.nombre === n); let i = 0; return { hasNext: () => i < l.length, next: () => l[i++] }; },
+      // Incremento 5 (F): archivos por nombre (documentos de proveedor: "(2)", "(3)"… sin borrar el anterior)
+      getFilesByName: n => { const l = f.archivos.filter(a => a.nombre === n); let i = 0;
+        return { hasNext: () => i < l.length, next: () => { const a = l[i++]; return { isTrashed: () => !!a.trashed, getId: () => a.id }; } }; },
       createFolder: n => { const h = carpeta(n, f); f.hijos.push(h); return h; },
       createFile: b => { const id = 'A' + (++nId); const a = compartible({ id, blob: b, padre: f, nombre: b && b.name });
         archivos[id] = a; f.archivos.push(a);

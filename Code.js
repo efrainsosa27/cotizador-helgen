@@ -2595,7 +2595,8 @@ function emitirOrdenCompra_(libro, d0, proyecto, reqFolio, firma) {
     (oc.diasCredito ? 'crédito ' + oc.diasCredito + ' días' : 'contado') + (oc.tipoCambio ? ' · TC ' + oc.tipoCambio + ' = ' +
     formatoMoneda(oc.subtotalProyecto) + ' ' + oc.monedaProyecto + ' sin IVA' : '') + ' · ' + (MARCAS[c.marca] || 'sin contrato'), '', HOJAS_COMPRAS);
   // avisoProveedor (F): documentos que le faltan al proveedor (no bloquea la orden; sin CSF y carátula no se le podrá pagar)
-  return { folio: folio, url: archivo.getUrl(), total: oc.total, moneda: oc.moneda, avisoProveedor: avisoDeProveedor_(libro, proveedor.id) };
+  return { folio: folio, url: archivo.getUrl(), total: oc.total, moneda: oc.moneda,
+    avisoProveedor: avisoDeProveedor_(libro, proveedor.id, proveedor.razonSocial) };
 }
 
 /** Compras/AAAA/<folio del proyecto>/ (restringidas de arriba abajo: un permiso heredado no se puede quitar en el hijo). */
@@ -3730,7 +3731,7 @@ function cotizarRequisicion(folioReq, p) {
       formatoMoneda(prop.total) + ' ' + prop.moneda + ' · ' + resumen + ' · recibe ' + prop.recibe, '', HOJAS_COMPRAS);
     SpreadsheetApp.flush();
     const resultado = { folio: req.folio, version: version, vista: vistaRequisicion_(libro, req.folio),
-      avisoProveedor: avisoDeProveedor_(libro, proveedorId(prop.proveedor)) }; // F: documentos que le faltan
+      avisoProveedor: avisoDeProveedor_(libro, proveedorId(prop.proveedor), prop.proveedor.razonSocial) }; // F: documentos que le faltan
     guardarIdempotencia_(cache, claveCache, resultado);
     return resultado;
   });
@@ -9755,6 +9756,8 @@ function recibirSinPagarPosible_(req, orden) {
  */
 function recibirSinPagar_(libro, hoja, req, nota, motivo) {
   if (!req.ocFolio || (req.estado !== REQ_AUTORIZADA && req.estado !== REQ_EN_CAMINO)) return false;
+  // Con aprobaciones se recibe renglón por renglón (registrarRecepcion), antes o después del pago: aquí no aplica
+  if (flujoOperaciones_()) return false;
   const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
   if (!recibirSinPagarPosible_(req, orden)) return false;
   const nuevo = transicionReq(req.estado, 'recibir');
@@ -9809,11 +9812,14 @@ function proveedorDePago_(libro, orden) {
     avisos: a.avisos };
 }
 
-/** Texto para avisoProveedor (orden o propuesta): lo que le falta o está viejo; '' si todo está bien o no se encuentra. */
-function avisoDeProveedor_(libro, id) {
+/**
+ * Texto para avisoProveedor (orden o propuesta): lo que le falta o está viejo; '' si todo está bien. Un proveedor que todavía no
+ * está en la lista (propuesta con un proveedor nuevo: se agrega al emitir la orden) no tiene ningún documento.
+ */
+function avisoDeProveedor_(libro, id, razonSocial) {
   try {
-    const p = proveedorPorId_(libro, id);
-    return p ? textoAvisoProveedor(p, avisosProveedor(p, hoyIso_())) : '';
+    const p = proveedorPorId_(libro, id) || { razonSocial: razonSocial || String(id || '') };
+    return textoAvisoProveedor(p, avisosProveedor(p, hoyIso_()));
   } catch (e) {
     return '';
   }
