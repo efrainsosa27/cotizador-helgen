@@ -442,6 +442,7 @@ assert.equal(ok('leo', 'bootstrap').permisos.superadmin, true);
 // La caché del conjunto anulado se invalida con la versión de 'anulaciones'
 const vAnt = Number(props.VER_anulaciones);
 assert(vAnt >= 10, 'anular sube la versión de anulaciones');
+
 // ===== 10. Cotización sin proyecto y proyecto con aceptada sin firmar =====
 const cs = cot(undefined, 'Cliente Seis', 100);
 const pdfCs = P.idDeUrlDrive(H(libros.DB, 'Cotizaciones').find(r => r[0] === cs)[11]);
@@ -462,5 +463,107 @@ assert.deepEqual(ok('ana', 'listarCotizaciones', ''), []);
 assert.deepEqual(ok('pedro', 'listarRequisiciones', '', ''), []);
 assert.deepEqual(ok('pedro', 'cuentasPorPagar').faltantes, []);
 assert.equal(H(LC, 'Contratos').filter(r => r[0] === p2 && r[7] === 'Anulada').length, 2, 'los dos contratos de p2 anulados');
+
+// ================= Interfaz: <script id="mod-anular"> con un DOM mínimo =================
+{
+  const fs = require('fs'), vm = require('vm'), path = require('path');
+  const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+  const src = html.match(/<script id="mod-anular">([\s\S]*?)<\/script>/)[1];
+  assert(/<div id="adminAnulados"><\/div>/.test(html), 'el bloque de Administración existe');
+  // Elementos por id; al cambiar innerHTML, los ids que trae se vuelven a crear (como un DOM nuevo)
+  const porId = {};
+  function el(idEl) {
+    const e = { id: idEl, value: '', textContent: '', disabled: false, oyentes: {}, clases: new Set(),
+      classList: { add: c => e.clases.add(c), remove: c => e.clases.delete(c), contains: c => e.clases.has(c) },
+      addEventListener: (t, f) => (e.oyentes[t] = e.oyentes[t] || []).push(f), focus() {},
+      disparar: (t, ev) => (e.oyentes[t] || []).forEach(f => f(Object.assign({ target: e }, ev || {}))),
+      querySelector: sel => obtener(sel.replace(/^#/, '')) };
+    let h = '';
+    Object.defineProperty(e, 'innerHTML', { get: () => h, set: v => { h = v; (String(v).match(/id="([^"]+)"/g) || []).forEach(x => delete porId[x.slice(4, -1)]); } });
+    if (idEl === 'anuVista') e.clases.add('oculto');
+    return e;
+  }
+  const obtener = x => porId[x] || (porId[x] = el(x));
+  const llamadas = [], avisos = [], modulos = [], dialogos = [];
+  const run = () => {
+    const c = {};
+    const p = new Proxy({}, { get: (t, k) => k === 'withSuccessHandler' ? f => (c.ok = f, p) : k === 'withFailureHandler' ? f => (c.mal = f, p)
+      : (...args) => { llamadas.push(Object.assign(c, { fn: k, args })); } });
+    return p;
+  };
+  const ctxUi = { console, JSON, Math, Date, String, Array, Object, Proxy, setTimeout: f => f(), clearTimeout() {},
+    $: obtener, esc: s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
+    aviso: (tipo, h) => avisos.push([tipo, h]), nuevoId: () => 'id-' + (++nId), registrarModulo: m => modulos.push(m),
+    PERMISOS: { superadmin: true }, TAB: 'admin', google: { script: { get run() { return run(); } } } };
+  ctxUi.window = { confirm: m => { dialogos.push(m); return true; } };
+  vm.createContext(ctxUi);
+  vm.runInContext(src, ctxUi);
+  const m = modulos[0];
+  assert.equal(m.nombre, 'Anular');
+  m.alVerTab('cat');
+  assert.equal(obtener('adminAnulados').innerHTML, '', 'nada hasta abrir Administración');
+  m.alVerTab('admin');
+  assert(/Anular un registro/.test(obtener('adminAnulados').innerHTML) && /Registros anulados/.test(obtener('adminAnulados').innerHTML));
+  assert.deepEqual(llamadas.map(c => c.fn), ['listarAnulados'], 'carga la lista al abrir');
+  llamadas[0].ok([{ fecha: '28/10/2026 10:00', correo: 'leo@helgen.tech', nombre: 'leo@helgen.tech', tipo: 'Proyecto', folio: 'PRY-2026-0001',
+    motivo: 'Proyecto <de prueba>', descripcion: '', registros: [{ tipo: 'Proyecto', folio: 'PRY-2026-0001' }, { tipo: 'Cotización', folio: 'HLG-2026-0001' }],
+    efectos: ['Algo cambió'], archivos: 2, carpeta: 'PRY-2026-0001 — X' }]);
+  let tabla = obtener('anuLista').innerHTML;
+  assert(/PRY-2026-0001/.test(tabla) && /2 registro\(s\) · 2 archivo\(s\)/.test(tabla) && /Proyecto &lt;de prueba&gt;/.test(tabla), 'lista con texto escapado');
+  assert.deepEqual(plain(m.contexto()), { anulados: true, anuladosBuscar: '' }, 'pide la lista en la sincronización');
+  // Vista previa → motivo → confirmar (una sola vez) → resultado
+  obtener('anuFolio').value = ' oc-2026-0002 ';
+  obtener('anuVer').disparar('click');
+  let c = llamadas.at(-1);
+  assert.deepEqual([c.fn, c.args[0]], ['previsualizarAnulacion', 'oc-2026-0002']);
+  c.ok({ folio: 'OC-2026-0002', tipo: 'Orden de compra', descripcion: 'OC-2026-0002 · Proveedor <x>', registros: [
+    { tipo: 'Orden de compra', folio: 'OC-2026-0002', descripcion: 'Proveedor', estado: 'Emitida' }, { tipo: 'Factura de proveedor', folio: 'FPR-2026-0002', descripcion: '', estado: 'Vigente' }],
+    efectos: ['REQ-2026-0002 (Autorizada) vuelve a Solicitada'], avisos: ['El material que el centro de mando ya recibió se queda ahí'], archivos: 2, carpeta: '', para: ['obrero@helgen.tech'] });
+  const vista = obtener('anuVista');
+  assert(!vista.classList.contains('oculto'));
+  assert(/FPR-2026-0002/.test(vista.innerHTML) && /vuelve a Solicitada/.test(vista.innerHTML) && /centro de mando/.test(vista.innerHTML) &&
+    /Se avisará a: obrero@helgen.tech/.test(vista.innerHTML) && /Proveedor &lt;x&gt;/.test(vista.innerHTML), 'muestra todo lo que arrastra');
+  assert(/Anular 2 registros/.test(vista.innerHTML));
+  const boton = obtener('anuConfirmar');
+  assert.equal(boton.disabled, true, 'sin motivo no se puede');
+  obtener('anuMotivo').value = 'corto';
+  obtener('anuMotivo').disparar('input');
+  assert.equal(boton.disabled, true);
+  assert(/Faltan 5 caracteres/.test(obtener('anuCuenta').textContent));
+  obtener('anuMotivo').value = 'Orden duplicada por error';
+  obtener('anuMotivo').disparar('input');
+  assert.equal(boton.disabled, false);
+  boton.disparar('click');
+  boton.disparar('click'); // doble clic
+  const anulaciones = llamadas.filter(x => x.fn === 'anular');
+  assert.equal(anulaciones.length, 1, 'un solo envío');
+  assert.deepEqual(anulaciones[0].args.slice(0, 2), ['OC-2026-0002', 'Orden duplicada por error']);
+  assert(/^id-/.test(anulaciones[0].args[2]), 'con idSolicitud');
+  assert(/¿Anular OC-2026-0002 y 1 registro\(s\) más\?/.test(dialogos[0]));
+  anulaciones[0].ok({ folio: 'OC-2026-0002', registros: [{ folio: 'OC-2026-0002' }, { folio: 'FPR-2026-0002' }], fallas: [],
+    anulados: [{ fecha: 'hoy', correo: 'leo@helgen.tech', nombre: 'Leo', tipo: 'Orden de compra', folio: 'OC-2026-0002', motivo: 'Orden duplicada por error',
+      registros: [{ tipo: 'Orden de compra', folio: 'OC-2026-0002' }], efectos: [], archivos: 0, carpeta: '' }] });
+  assert.deepEqual(avisos.at(-1)[0], 'ok');
+  assert(/Se anuló <b>OC-2026-0002<\/b> y 1 registro\(s\) más\./.test(avisos.at(-1)[1]) && !/Ojo/.test(avisos.at(-1)[1]));
+  assert(obtener('anuVista').classList.contains('oculto'), 'la vista previa se cierra');
+  assert(/Orden duplicada por error/.test(obtener('anuLista').innerHTML), 'la lista se pinta con lo que regresó');
+  // Un error del servidor se muestra y deja volver a intentar
+  obtener('anuFolio').value = 'PAG-2026-0099';
+  obtener('anuVer').disparar('click');
+  llamadas.at(-1).mal(new Error('No existe el pago PAG-2026-0099.'));
+  assert.deepEqual(avisos.at(-1), ['error', 'No existe el pago PAG-2026-0099.']);
+  // Sincronización y búsqueda
+  m.alSincronizar({ anulados: [] });
+  assert(/Todavía no se ha anulado nada/.test(obtener('anuLista').innerHTML));
+  obtener('anuBuscar').value = 'REQ-2026';
+  obtener('anuBuscar').disparar('input');
+  assert.deepEqual([llamadas.at(-1).fn, llamadas.at(-1).args[0]], ['listarAnulados', 'REQ-2026']);
+  assert.equal(m.contexto().anuladosBuscar, 'REQ-2026');
+  // Sin super admin: se vacía
+  m.alPermisos({ superadmin: false });
+  assert.equal(obtener('adminAnulados').innerHTML, '');
+  ctxUi.PERMISOS = { superadmin: false };
+  assert.deepEqual(plain(m.contexto()), {});
+}
 
 console.log('OK anular');

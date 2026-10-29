@@ -3094,6 +3094,167 @@
 
 <script id="mod-anular">
   // Anular: buscar un folio, ver lo que arrastra, anular con motivo; registros anulados
+  // Solo super admin (el servidor lo vuelve a revisar). Es la única entrada para anular en este incremento: una página central
+  // en Administración en lugar de un botón en cada pantalla. Todo se dibuja dentro de #adminAnulados.
+  (function () {
+    const MOTIVO_MIN = 10;
+    const est = { montado: false, vista: null, folio: '', id: '', enviando: false, lista: null, buscar: '', espera: null };
+    const caja = () => $('adminAnulados');
+    const q = sel => caja().querySelector(sel);
+    const esSuper = () => !!(PERMISOS && PERMISOS.superadmin);
+
+    function montar() {
+      if (est.montado || !caja()) return;
+      est.montado = true;
+      caja().innerHTML =
+        '<div class="modulo">' +
+          '<h2>Anular un registro</h2>' +
+          '<p class="nota">Escribe el folio (HLG-, PRY-, PAG-, REQ-, OC-, PGP-, FPR- o REC-AAAA-NNNN) o, para un contrato, ' +
+          '«CONTRATO PRY-AAAA-NNNN». Antes de confirmar verás todo lo que arrastra. Nada se borra: lo anulado sale de todas las ' +
+          'listas y los totales, los archivos se quedan en Drive con «ANULADA — » al inicio y los folios no se vuelven a usar.</p>' +
+          '<div class="proy-fila"><div><label for="anuFolio">Folio</label>' +
+            '<input id="anuFolio" autocomplete="off" placeholder="OC-2026-0001"></div>' +
+            '<button type="button" class="btn btn-sec" id="anuVer">Ver qué arrastra</button></div>' +
+          '<div id="anuVista" class="oculto" style="margin-top:16px"></div>' +
+        '</div>' +
+        '<div class="modulo">' +
+          '<h2>Registros anulados</h2>' +
+          '<div class="proy-fila"><div><label for="anuBuscar">Buscar</label>' +
+            '<input id="anuBuscar" autocomplete="off" placeholder="Folio, tipo, motivo o correo"></div></div>' +
+          '<div id="anuLista" style="margin-top:12px"><p class="nota">Cargando…</p></div>' +
+        '</div>';
+      q('#anuVer').addEventListener('click', verPrevia);
+      q('#anuFolio').addEventListener('keydown', e => { if (e.key === 'Enter') verPrevia(); });
+      q('#anuFolio').addEventListener('input', () => { if (est.vista) limpiarVista(); });
+      q('#anuBuscar').addEventListener('input', () => {
+        clearTimeout(est.espera);
+        est.espera = setTimeout(() => cargarLista(), 350);
+      });
+    }
+
+    function error(err) {
+      est.enviando = false;
+      const b = q('#anuConfirmar'); if (b) { b.disabled = false; }
+      aviso('error', esc(err && err.message ? err.message : err));
+    }
+
+    function limpiarVista() {
+      est.vista = null; est.folio = ''; est.id = '';
+      const v = q('#anuVista'); v.innerHTML = ''; v.classList.add('oculto');
+    }
+
+    function verPrevia() {
+      const folio = q('#anuFolio').value.trim();
+      if (!folio) { aviso('error', 'Escribe el folio que quieres anular.'); return; }
+      limpiarVista();
+      const v = q('#anuVista'); v.classList.remove('oculto'); v.innerHTML = '<p class="nota">Revisando lo que arrastra ' + esc(folio) + '…</p>';
+      google.script.run.withSuccessHandler(r => pintarVista(r, folio)).withFailureHandler(err => { limpiarVista(); error(err); })
+        .previsualizarAnulacion(folio);
+    }
+
+    const filaRegistro = (r, i) => '<tr' + (i === 0 ? ' style="font-weight:bold"' : '') + '><td>' + esc(r.tipo) + '</td><td>' + esc(r.folio) +
+      '</td><td>' + esc(r.descripcion) + '</td><td>' + (r.estado ? '<span class="chip">' + esc(r.estado) + '</span>' : '') + '</td></tr>';
+    const lista = (titulo, cosas) => cosas && cosas.length
+      ? '<p style="margin:12px 0 4px"><b>' + titulo + '</b></p><ul style="margin:0;padding-left:18px">' + cosas.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '';
+
+    function pintarVista(r, folio) {
+      $('aviso').className = 'aviso';
+      est.vista = r; est.folio = folio; est.id = nuevoId(); // un id por vista previa: un doble clic no anula dos veces
+      const n = r.registros.length;
+      q('#anuVista').innerHTML =
+        '<p><b>' + esc(r.tipo) + ' ' + esc(r.folio) + '</b> · ' + esc(r.descripcion) + '</p>' +
+        '<p class="nota">Se anula' + (n > 1 ? 'n estos ' + n + ' registros' : ' este registro') + ':</p>' +
+        '<table><thead><tr><th>Tipo</th><th>Folio</th><th>Detalle</th><th>Estado actual</th></tr></thead><tbody>' +
+          r.registros.map(filaRegistro).join('') + '</tbody></table>' +
+        lista('Lo que cambia en lo que sigue en pie', r.efectos) +
+        (r.carpeta ? '<p class="nota">Carpeta del proyecto: «' + esc(r.carpeta) + '» → «ANULADO — ' + esc(r.carpeta) + '».</p>' : '') +
+        lista('Ten en cuenta', r.avisos) +
+        (r.para && r.para.length ? '<p class="nota">Se avisará a: ' + r.para.map(esc).join(', ') + '.</p>' : '') +
+        '<div style="margin-top:14px"><label for="anuMotivo">Motivo de la anulación (al menos ' + MOTIVO_MIN + ' caracteres; queda en el registro)</label>' +
+          '<textarea id="anuMotivo" rows="2" maxlength="500"></textarea></div>' +
+        '<div class="acciones"><button type="button" class="btn" id="anuConfirmar" disabled>Anular ' + n + ' registro' + (n > 1 ? 's' : '') + '</button>' +
+          '<button type="button" class="btn btn-sec" id="anuCancelar">Cancelar</button><span class="nota" id="anuCuenta"></span></div>';
+      const motivo = q('#anuMotivo'), boton = q('#anuConfirmar');
+      const contar = () => {
+        const k = motivo.value.trim().length;
+        boton.disabled = est.enviando || k < MOTIVO_MIN;
+        q('#anuCuenta').textContent = k < MOTIVO_MIN ? 'Faltan ' + (MOTIVO_MIN - k) + ' caracteres del motivo.' : '';
+      };
+      motivo.addEventListener('input', contar);
+      boton.addEventListener('click', confirmar);
+      q('#anuCancelar').addEventListener('click', () => { limpiarVista(); q('#anuFolio').value = ''; });
+      contar();
+      motivo.focus();
+    }
+
+    function confirmar() {
+      if (!est.vista || est.enviando) return;
+      const motivo = q('#anuMotivo').value.trim();
+      if (motivo.length < MOTIVO_MIN) { aviso('error', 'Escribe el motivo de la anulación (al menos ' + MOTIVO_MIN + ' caracteres).'); return; }
+      const n = est.vista.registros.length;
+      if (!window.confirm('¿Anular ' + est.vista.folio + (n > 1 ? ' y ' + (n - 1) + ' registro(s) más' : '') +
+        '? Desaparecerán de las listas y los totales; esto no se deshace desde la app.')) return;
+      est.enviando = true;
+      q('#anuConfirmar').disabled = true; q('#anuConfirmar').textContent = 'Anulando…';
+      const previa = est.vista;
+      google.script.run.withSuccessHandler(r => {
+        est.enviando = false;
+        // Si otra persona cambió algo entre la vista previa y la confirmación, el servidor anuló lo de ese momento: se dice
+        const distinto = JSON.stringify(r.registros.map(x => x.folio)) !== JSON.stringify(previa.registros.map(x => x.folio));
+        aviso('ok', 'Se anuló <b>' + esc(r.folio) + '</b>' + (r.registros.length > 1 ? ' y ' + (r.registros.length - 1) + ' registro(s) más' : '') + '.' +
+          (distinto ? ' <br>Ojo: alguien cambió algo entre la vista previa y la confirmación; se anuló: ' + r.registros.map(x => esc(x.folio)).join(', ') + '.' : '') +
+          (r.fallas && r.fallas.length ? '<br>No se pudo renombrar en Drive: ' + r.fallas.map(esc).join(' · ') : ''));
+        limpiarVista(); q('#anuFolio').value = '';
+        if (r.anulados && !est.buscar) pintarLista(r.anulados); else cargarLista();
+      }).withFailureHandler(error).anular(previa.folio, motivo, est.id);
+    }
+
+    function cargarLista() {
+      if (!est.montado) return;
+      est.buscar = q('#anuBuscar').value.trim();
+      const pedido = est.buscar;
+      google.script.run.withSuccessHandler(l => { if (pedido === est.buscar) pintarLista(l); })
+        .withFailureHandler(err => { q('#anuLista').innerHTML = '<p class="nota">No se pudo cargar: ' + esc(err && err.message ? err.message : err) + '</p>'; })
+        .listarAnulados(pedido);
+    }
+
+    function pintarLista(l) {
+      est.lista = l || [];
+      if (!est.montado) return;
+      if (!est.lista.length) {
+        q('#anuLista').innerHTML = '<p class="nota">' + (est.buscar ? 'Nada anulado con «' + esc(est.buscar) + '».' : 'Todavía no se ha anulado nada.') + '</p>';
+        return;
+      }
+      q('#anuLista').innerHTML = '<table><thead><tr><th>Fecha</th><th>Anulado</th><th>Quién</th><th>Motivo</th><th>Lo que arrastró</th></tr></thead><tbody>' +
+        est.lista.map(x => '<tr style="vertical-align:top"><td style="white-space:nowrap">' + esc(x.fecha) + '</td>' +
+          '<td><b>' + esc(x.folio) + '</b><br><span class="nota">' + esc(x.tipo) + '</span>' +
+            (x.descripcion ? '<br><span class="nota">' + esc(x.descripcion) + '</span>' : '') + '</td>' +
+          '<td>' + esc(x.nombre || x.correo) + (x.nombre && x.nombre !== x.correo ? '<br><span class="nota">' + esc(x.correo) + '</span>' : '') + '</td>' +
+          '<td>' + esc(x.motivo) + '</td>' +
+          '<td><details><summary>' + x.registros.length + ' registro(s)' + (x.archivos ? ' · ' + x.archivos + ' archivo(s)' : '') + '</summary>' +
+            '<ul style="margin:6px 0 0;padding-left:18px">' + x.registros.map(y => '<li>' + esc(y.tipo) + ' <b>' + esc(y.folio) + '</b>' +
+              (y.descripcion && y.folio !== x.folio ? ' · ' + esc(y.descripcion) : '') + '</li>').join('') + '</ul>' +
+            (x.efectos && x.efectos.length ? '<p class="nota" style="margin:6px 0 0">' + x.efectos.map(esc).join('<br>') + '</p>' : '') +
+            (x.carpeta ? '<p class="nota" style="margin:6px 0 0">Carpeta: ANULADO — ' + esc(x.carpeta) + '</p>' : '') +
+          '</details></td></tr>').join('') +
+        '</tbody></table>' + (est.lista.length >= 200 ? '<p class="nota">Se muestran los 200 más recientes: busca para ver otros.</p>' : '');
+    }
+
+    registrarModulo({
+      nombre: 'Anular',
+      alPermisos(permisos) {
+        if (!permisos || !permisos.superadmin) { if (caja()) caja().innerHTML = ''; est.montado = false; est.vista = null; est.lista = null; }
+      },
+      alVerTab(t) {
+        if (t !== 'admin' || !esSuper()) return;
+        montar();
+        if (!est.lista) cargarLista();
+      },
+      // La sincronización manda la lista otra vez cuando alguien anula algo (con la búsqueda de esta página)
+      contexto() { return esSuper() && est.montado && TAB === 'admin' ? { anulados: true, anuladosBuscar: est.buscar } : {}; },
+      alSincronizar(r) { if (r && r.anulados && est.montado) pintarLista(r.anulados); },
+    });
+  })();
 </script>
 </body>
 </html>
