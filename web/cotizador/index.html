@@ -933,11 +933,11 @@
           <div id="ppProveedor" class="oculto" style="margin-bottom:10px"></div>
           <div class="grid">
             <div><label>Fecha del pago *</label><input id="ppFecha" type="date"></div>
-            <div><label>Monto *</label><input id="ppMonto" type="number" min="0" step="0.01" style="text-align:right"></div>
+            <div><label>Monto *</label><input id="ppMonto" type="number" min="0" step="0.01" style="text-align:right" oninput="pintarAplicadoPago()"></div>
             <div><label>Moneda del pago *</label>
               <select id="ppMoneda" onchange="pintarTcPago()"><option value="MXN">MXN</option><option value="USD">USD</option></select></div>
             <div id="ppTcCaja" class="oculto"><label>Tipo de cambio del día (pesos por dólar) *</label>
-              <input id="ppTc" type="number" min="0" step="0.0001" style="text-align:right"></div>
+              <input id="ppTc" type="number" min="0" step="0.0001" style="text-align:right" oninput="pintarAplicadoPago()"></div>
             <div><label>Método *</label>
               <select id="ppMetodo"><option>Transferencia</option><option>Tarjeta de crédito</option><option>Tarjeta de débito</option>
                 <option>Efectivo</option><option>Cheque</option></select></div>
@@ -945,6 +945,8 @@
             <div><label>Comprobante (PDF o imagen, máx. 10 MB) *</label>
               <input id="ppArchivo" type="file" accept="application/pdf,image/jpeg,image/png,image/heic,.heic"></div>
           </div>
+          <!-- Revisión del incremento 6: lo que se aplica a la orden con este pago (en su moneda) y lo que queda -->
+          <div id="ppAplicado" class="nota" style="margin:-4px 0 8px"></div>
           <div class="acciones"><button type="button" id="btnPagoProv" class="btn" onclick="registrarPagoProv()">Registrar pago</button>
             <span id="ppNota" class="nota">Se puede pagar en partes (anticipo, parciales y liquidación) hasta el total de la orden (±1.00).</span></div>
         </div>
@@ -2934,9 +2936,15 @@
     // Monto por omisión (P, incremento 6): lo que sigue según el plan o el saldo (el servidor ya descuenta lo devuelto sin reponer y
     // mide contra sus facturas si ya la cubren con retenciones). Con un servidor de antes (sin saldo): el total por pagar con
     // devoluciones, el total de sus facturas si ya la cubren o el de la orden
-    if (v.puedePagar && cambioFacturas) $('ppMonto').value = v.saldo && v.saldo.siguiente ? v.saldo.siguiente.monto
-      : v.porPagar ? v.porPagar.total : v.facturaCompleta ? v.totalFacturado : o.total;
+    if (v.puedePagar && cambioFacturas) {
+      $('ppMonto').value = v.saldo && v.saldo.siguiente ? v.saldo.siguiente.monto
+        : v.porPagar ? v.porPagar.total : v.facturaCompleta ? v.totalFacturado : o.total;
+      // Revisión del incremento 6: el monto precargado está en la moneda de la orden; la moneda del pago regresa a ella (si no, tras un
+      // pago en otra moneda el siguiente clic mandaba ese monto en la otra moneda: un "anticipo" de centavos)
+      $('ppMoneda').value = o.moneda; pintarTcPago();
+    }
     $('ppSaldo').innerHTML = v.puedePagar ? htmlSaldoPago(v) : '';
+    if (v.puedePagar) pintarAplicadoPago();
     const sr = v.saldo && v.saldo.vigentes && v.saldo.vigentes.length ? v.saldo : null;
     $('rcSaldoResumen').classList.toggle('oculto', !sr);
     if (sr) $('rcSaldoResumen').innerHTML = 'Pagado <b>' + dinero(sr.pagado, o.moneda) + '</b> de ' + dinero(sr.esperado, o.moneda) +
@@ -3310,13 +3318,41 @@
       (sig ? '<div class="acciones" style="margin:0 0 10px">' + (sig.etapa ? botonChico('Monto de ' + esc(sig.concepto) + ' · ' + dinero(sig.monto, m), 'montoPago(' + Number(sig.monto) + ')') : '') +
         (!sig.etapa || Math.abs(sig.monto - sd.saldo) > 0.004 ? botonChico('Todo el saldo · ' + dinero(sd.saldo, m), 'montoPago(' + Number(sd.saldo) + ')') : '') + '</div>' : '');
   }
-  function montoPago(n) { $('ppMonto').value = r2(n); }
+  /** Botones de monto (en la moneda de la orden): el pago también en esa moneda. */
+  function montoPago(n) {
+    $('ppMonto').value = r2(n);
+    if (REQC && REQC.orden) { $('ppMoneda').value = REQC.orden.moneda; pintarTcPago(); }
+  }
 
   /** Pago en otra moneda que la orden: tipo de cambio obligatorio. */
   function pintarTcPago() {
     const distinta = !!REQC && !!REQC.orden && $('ppMoneda').value !== REQC.orden.moneda;
     $('ppTcCaja').classList.toggle('oculto', !distinta);
     if (!distinta) $('ppTc').value = '';
+    pintarAplicadoPago();
+  }
+
+  /**
+   * Lo que el pago capturado aplica a la orden, en su moneda (vista previa; el servidor lo vuelve a calcular como convertirMoneda):
+   * {monto, otra (otra moneda), saldo (de la orden antes del pago)}; monto null si falta el tipo de cambio; null sin monto.
+   */
+  function aplicadoPago() {
+    const o = REQC && REQC.orden;
+    const monto = Number($('ppMonto').value), mp = $('ppMoneda').value, tc = Number($('ppTc').value);
+    if (!o || !(monto > 0)) return null;
+    const saldo = REQC.saldo ? Number(REQC.saldo.saldo) : null;
+    if (mp === o.moneda) return { monto: r2(monto), otra: false, saldo: saldo };
+    if (!(tc > 0)) return { monto: null, otra: true, saldo: saldo };
+    return { monto: r2(mp === 'MXN' ? monto / tc : monto * tc), otra: true, saldo: saldo };
+  }
+  function pintarAplicadoPago() {
+    const o = REQC && REQC.orden, a = aplicadoPago();
+    if (!a) { $('ppAplicado').innerHTML = ''; return; }
+    if (a.monto == null) { $('ppAplicado').innerHTML = 'Captura el tipo de cambio para ver cuánto se aplica a la orden (en ' + esc(o.moneda) + ').'; return; }
+    const queda = a.saldo == null ? null : r2(a.saldo - a.monto);
+    $('ppAplicado').innerHTML = (a.otra ? '= <b>' + dinero(a.monto, o.moneda) + '</b> aplicados a la orden' : 'Se aplican ' + dinero(a.monto, o.moneda)) +
+      (queda == null ? '' : queda < -1.0001 ? ' · <span class="aviso-moneda">pasa el saldo de ' + dinero(a.saldo, o.moneda) + '</span>'
+        : queda > 1.0001 ? ' · queda un saldo de ' + dinero(queda, o.moneda) : ' · liquida la orden');
   }
 
   function registrarPagoProv() {
@@ -3324,6 +3360,11 @@
     const archivo = $('ppArchivo').files && $('ppArchivo').files[0];
     if (!archivo) { mostrarError('Adjunta el comprobante de pago (PDF o imagen).'); return; }
     if (archivo.size > 10 * 1024 * 1024) { mostrarError('El comprobante pesa más de 10 MB. Reduce la imagen o el PDF.'); return; }
+    // Revisión del incremento 6: un pago en otra moneda que no completa la orden se confirma (lo que se aplica y lo que queda)
+    const a = aplicadoPago(), o = REQC.orden;
+    if (a && a.otra && a.monto != null && a.saldo != null && a.saldo - a.monto > 1.0001 &&
+      !window.confirm('El pago es en ' + $('ppMoneda').value + ' y la orden en ' + o.moneda + ': se aplican ' + dinero(a.monto, o.moneda) +
+        ' y queda un saldo de ' + dinero(r2(a.saldo - a.monto), o.moneda) + '. ¿Registrar este pago parcial?')) return;
     const folio = REQC.requisicion.folio;
     $('btnPagoProv').disabled = true; $('btnPagoProv').textContent = 'Subiendo comprobante…';
     const listo = () => { $('btnPagoProv').disabled = false; $('btnPagoProv').textContent = 'Registrar pago'; };
@@ -3339,6 +3380,8 @@
         ID_PGP = nuevoId();
         ['ppRef', 'ppArchivo', 'ppTc'].forEach(id => { $(id).value = ''; });
         pintarReqCom(r.vista);
+        // Revisión del incremento 6: la orden ya estaba cubierta (p. ej. por sus facturas): el servidor la cerró sin otro pago
+        if (r.sinPago) { aviso('ok', esc(r.mensaje || 'La orden ya estaba pagada: no se registró otro pago.') + extraPortal(r)); return; }
         const sd = r.vista && r.vista.saldo, m = r.vista && r.vista.orden ? r.vista.orden.moneda : '';
         aviso('ok', 'Pago <b>' + esc(r.folio) + '</b>' + (r.tipo ? ' (' + esc(r.tipo.toLowerCase()) + ')' : '') + ' registrado' +
           (sd && !sd.completo ? ' · queda un saldo de <b>' + dinero(sd.saldo, m) + '</b>' : sd ? ' · orden pagada por completo' : '') +

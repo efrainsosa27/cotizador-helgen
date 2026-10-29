@@ -7,6 +7,8 @@
 //     id_solicitud + huella) aunque se pierda el caché; el caché guarda poco y nunca falla después de escribir (el caché simulado
 //     del arnés, como el de Apps Script, no acepta valores de más de 100 KB); lo mismo al autorizar con muchos proveedores.
 //  3. El tope de un pago es el saldo contra el total de las facturas cuando ya la cubren con retenciones (antes, el total de la orden).
+//  4. (Interfaz) Pagos en otra moneda: al precargar un monto la moneda del pago vuelve a la de la orden; "= $X aplicados" en vivo;
+//     un pago en otra moneda que no completa la orden pide confirmación.
 // Uso: node tests/pagos-revision.test.js .
 'use strict';
 const assert = require('assert');
@@ -225,4 +227,62 @@ const aMano = () => ['requisiciones', 'oc', 'pagosProveedores'].forEach(c => { p
   assert.equal(P.normalizarPagoProveedor(datos(485), Object.assign({}, base, { porFacturas: 1484 })).montoAplicado, 485);
 }
 
-console.log('OK pagos-revision');
+// ================= Interfaz (al final: es asíncrona; DOM simulado conectado al servidor simulado) =================
+const UI = require('./montar-interfaz')(A, dir);
+(async () => {
+  const { esperar, comprobante } = UI;
+  const C = UI.montar('pedro', { compras: true, requisicion: true, ventas: true, superadmin: false });
+  await esperar();
+  const { $ } = C;
+  const pagosMandados = () => C.llamadas.filter(c => c.funcion === 'registrarPagoProveedor').length;
+
+  // ---- 4. Pagos en otra moneda (r11, r3) ----
+  {
+    // Orden en USD (87.79) de un proyecto en pesos
+    const u = siempre({ moneda: 'USD', tipoCambio: 18.5, renglones: [{ descripcion: 'Cable', unidad: 'M', cantidad: 1, costo: 75.68 }] });
+    C.run('abrirReqCom(' + JSON.stringify(u.req) + ')'); await esperar();
+    assert.deepEqual([$('ppMonto').value, $('ppMoneda').value], [87.79, 'USD']);
+    // Los botones de monto (en la moneda de la orden) regresan la moneda del pago a la de la orden
+    $('ppMoneda').value = 'MXN'; C.run('pintarTcPago()'); $('ppTc').value = '18.5';
+    C.run('montoPago(87.79)');
+    assert.deepEqual([$('ppMoneda').value, $('ppMonto').value, $('ppTc').value, $('ppTcCaja').classList.contains('oculto')], ['USD', 87.79, '', true]);
+    // Pago en pesos: "= $X USD aplicados" en vivo (sin tipo de cambio todavía no se sabe)
+    $('ppMoneda').value = 'MXN'; C.run('pintarTcPago()');
+    $('ppMonto').value = '600'; C.run('pintarAplicadoPago()');
+    assert(/tipo de cambio/.test($('ppAplicado').innerHTML), $('ppAplicado').innerHTML);
+    $('ppTc').value = '18.5'; C.run('pintarAplicadoPago()');
+    assert(/= <b>\$32\.43 USD<\/b> aplicados a la orden/.test($('ppAplicado').innerHTML) && /queda un saldo de \$55\.36 USD/.test($('ppAplicado').innerHTML),
+      $('ppAplicado').innerHTML);
+    // En otra moneda y sin completar la orden: pide confirmación; si dice que no, no se manda nada
+    $('ppRef').value = 'SPEI 1'; $('ppArchivo').files = [comprobante()];
+    C.dialogos.confirmar = false;
+    C.run('registrarPagoProv()'); await esperar();
+    assert(C.dialogos.mensajes.some(m => /El pago es en MXN y la orden en USD/.test(m) && /\$32\.43 USD/.test(m) && /\$55\.36 USD/.test(m)),
+      JSON.stringify(C.dialogos.mensajes));
+    assert.equal(pagosMandados(), 0, 'no se mandó');
+    C.dialogos.confirmar = true;
+    C.run('registrarPagoProv()'); await esperar();
+    assert.equal(pagosMandados(), 1);
+    // Después del pago parcial el formulario vuelve a la moneda de la orden con lo que falta (antes se quedaba en MXN con el
+    // monto en USD y el siguiente clic registraba un "anticipo" de centavos)
+    assert.deepEqual([$('ppMoneda').value, $('ppMonto').value, $('ppTc').value, $('ppTcCaja').classList.contains('oculto')], ['USD', 55.36, '', true]);
+    // Un pago en otra moneda que sí completa la orden no pregunta
+    C.dialogos.mensajes.length = 0;
+    $('ppMoneda').value = 'MXN'; C.run('pintarTcPago()'); $('ppTc').value = '18.5'; $('ppMonto').value = '1024.16'; C.run('pintarAplicadoPago()');
+    assert(/liquida la orden/.test($('ppAplicado').innerHTML), $('ppAplicado').innerHTML);
+    $('ppRef').value = 'SPEI 2'; $('ppArchivo').files = [comprobante('2.pdf')];
+    C.run('registrarPagoProv()'); await esperar();
+    assert.deepEqual([C.dialogos.mensajes.length, pagosMandados()], [0, 2]);
+    assert.deepEqual([vista(u.req).orden.estado, vista(u.req).saldo.pagado], ['Pagada', 87.79]);
+    // En la misma moneda no se pregunta aunque sea parcial
+    const m = siempre();
+    C.run('abrirReqCom(' + JSON.stringify(m.req) + ')'); await esperar();
+    $('ppMonto').value = '500'; C.run('pintarAplicadoPago()');
+    assert(/queda un saldo de \$1,124\.00 MXN/.test($('ppAplicado').innerHTML), $('ppAplicado').innerHTML);
+    $('ppRef').value = 'SPEI 3'; $('ppArchivo').files = [comprobante('3.pdf')];
+    C.run('registrarPagoProv()'); await esperar();
+    assert.deepEqual([C.dialogos.mensajes.length, pagosMandados()], [0, 3]);
+  }
+
+  console.log('OK pagos-revision');
+})().catch(e => { console.error(e); process.exit(1); });
