@@ -4729,10 +4729,12 @@
     // ---- Formulario de recepción con foto por renglón (registrar · cerrar = "Recibí el material" · recoger = "Lo recogí") ----
     const TITULO = { registrar: 'Registrar lo que llegó', cerrar: 'Recibí el material', recoger: 'Lo recogí' };
     const BOTON = { registrar: 'Registrar recepción', cerrar: 'Confirmar que llegó', recoger: 'Lo recogí: va en camino' };
-    function htmlProblema(p, l) {
+    function htmlProblema(p, l, modo) {
       const n = l.renglon;
       return '<tr id="' + p + 'PR' + n + '" class="oculto"><td colspan="4" style="background:#FFF7E6">' +
-        '<div class="grid"><div><label>¿Qué pasó? *</label><select id="' + p + 'PT' + n + '">' + TIPOS.map(t => '<option>' + t + '</option>').join('') + '</select></div>' +
+        '<div class="grid"><div><label>¿Qué pasó? *</label><select id="' + p + 'PT' + n + '">' +
+          // donde se escribe cuánto llegó, lo que faltó simplemente no se registra (queda por recibir)
+          TIPOS.filter(t => modo !== 'registrar' || t !== 'Faltante').map(t => '<option>' + t + '</option>').join('') + '</select></div>' +
         '<div><label>¿Cuántos ' + esc(l.unidad) + '? *</label><input id="' + p + 'PK' + n + '" type="number" min="0" step="any"></div>' +
         '<div><label>Foto del problema (salvo faltante)</label>' + inputFoto(p + 'PF' + n) + '</div>' +
         '<div style="grid-column:1/-1"><label>Describe el problema *</label><input id="' + p + 'PC' + n + '" maxlength="500" placeholder="Ej. Rollo aplastado, calibre equivocado"></div></div>' +
@@ -4752,7 +4754,7 @@
         lineas.map(l => '<tr><td>' + esc(l.descripcion) + (conProblema ? '<div><button type="button" class="btn btn-sec" style="padding:2px 8px;font-size:11px;margin-top:4px" ' +
           'onclick="RECEPCION.problema(\'' + p + '\',' + Number(l.renglon) + ')">Problema</button></div>' : '') + '</td><td class="num">' + esc(l.pendiente) + ' ' + esc(l.unidad) +
           '</td><td>' + (modo === 'registrar' ? '<input id="' + p + 'C' + l.renglon + '" type="number" min="0" step="any" value="' + esc(l.pendiente) +
-          '" style="text-align:right">' : '') + '</td><td>' + inputFoto(p + 'F' + l.renglon) + '</td></tr>' + (conProblema ? htmlProblema(p, l) : '')).join('') +
+          '" style="text-align:right">' : '') + '</td><td>' + inputFoto(p + 'F' + l.renglon) + '</td></tr>' + (conProblema ? htmlProblema(p, l, modo) : '')).join('') +
         '</tbody></table></div><div class="grid" style="margin-top:8px">' +
         (modo === 'registrar' ? '<div><label>Sitio donde se recibió *</label><select id="' + p + 'Sitio">' + SITIOS.map(x => '<option value="' + esc(x) + '"' +
           (x === sitio ? ' selected' : '') + '>' + esc(etiquetaSitio(x)) + '</option>').join('') + '</select></div>' +

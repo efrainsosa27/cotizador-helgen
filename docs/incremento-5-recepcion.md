@@ -108,6 +108,8 @@ contó como recibido no se descuenta):
 
 Un **Faltante reportado en CAPRI** es "se registró como recibido pero no llegó" (p. ej. "Recibí el material" registra todo lo
 pendiente): ese sí se descuenta, como un dañado.
+Por lo mismo, "Registrar lo que llegó" (donde se escribe cuánto llegó) no acepta un problema "Faltante": lo que no llegó no se
+registra y queda por recibir (o "Ya no llegará lo que falta"); la interfaz no ofrece esa opción ahí.
 
 Cierres bloqueados con una devolución Abierta: "Recibí el material" (queda Recibida), `cerrarRequisicionCompras` (error),
 `registrarRecepcion` completa y pagada (queda Recibida), el pago de una Recibida (sigue Recibida), el centro de mando

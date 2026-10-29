@@ -3921,7 +3921,7 @@ function registrarRecepcion(p) {
     }
     if (!propio && rec.notas.length < 5) throw new Error('Registras la recepción en lugar de quien la recibe: escribe en las notas por qué.');
     // H (incremento 5): una foto por renglón recibido y, si se reporta un problema al recibir, se revisa antes de escribir nada
-    const problemas = validarFotosYProblemas_(rec.renglones, fotos, avance.lineas);
+    const problemas = validarFotosYProblemas_(rec.renglones, fotos, avance.lineas, ocupadoEnDevoluciones_(libro, orden.folio), true, true);
     const hM = hojaCompras_(libro, 'MovimientosInventario');
     const folio = siguienteFolio_(PREFIJO_REC, hM, 'CONSECUTIVO_REC_');
     const archivo = bytes ? privado_(carpetaRequisiciones_(req.proyectoFolio).createFile(Utilities.newBlob(bytes, tipo.mime,
@@ -9873,10 +9873,10 @@ function avanceDeReq_(libro, req, orden) {
 /**
  * Antes de escribir: una foto por renglón recibido (exigir ≠ false) y los problemas reportados al recibir, validados contra lo
  * recibido de su renglón (lo de antes + lo de ahora − lo que ya está en devoluciones abiertas). recibidos = [{renglon, cantidad,
- * descripcion, unidad}]; lineas = avance antes de registrar. Devuelve [{renglon, descripcion, unidad, cantidad, tipo,
- * comentario, foto}].
+ * descripcion, unidad}]; lineas = avance antes de registrar; sinFaltante: donde se escribe cuánto llegó (registrarRecepcion) no
+ * se acepta "Faltante". Devuelve [{renglon, descripcion, unidad, cantidad, tipo, comentario, foto}].
  */
-function validarFotosYProblemas_(recibidos, fotos, lineas, ocupado, exigir) {
+function validarFotosYProblemas_(recibidos, fotos, lineas, ocupado, exigir, sinFaltante) {
   const lista = recibidos || [], problemas = [];
   lista.forEach(x => {
     const f = (fotos || {})[x.renglon] || {};
@@ -9887,6 +9887,11 @@ function validarFotosYProblemas_(recibidos, fotos, lineas, ocupado, exigir) {
     const l = (lineas || []).find(y => y.renglon === x.renglon) || {};
     const disponible = Math.round(((Number(l.recibido) || 0) + (Number(x.cantidad) || 0) - (Number((ocupado || {})[x.renglon]) || 0)) * 10000) / 10000;
     const p = normalizarProblema(f.problema, { descripcion: x.descripcion, unidad: x.unidad, disponible: disponible }, !!f.problema.foto);
+    // Donde se escribe cuánto llegó, lo que no llegó simplemente no se registra (queda por recibir): un "Faltante" ahí se contaría doble
+    if (sinFaltante && p.tipo === 'Faltante') {
+      throw new Error('Si faltó material de "' + String(x.descripcion).slice(0, 40) + '", escribe en "Llegó" solo lo que llegó: lo demás queda por recibir ' +
+        '(o marca "Ya no llegará lo que falta").');
+    }
     problemas.push(Object.assign(p, { renglon: x.renglon, descripcion: x.descripcion, unidad: x.unidad, foto: f.problema.foto }));
   });
   Object.keys(fotos || {}).forEach(n => {

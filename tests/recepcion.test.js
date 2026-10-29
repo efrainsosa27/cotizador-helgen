@@ -409,6 +409,8 @@ falla('rosa', 'registrarRecepcion', [{ reqFolio: o1.req, sitio: 'Querétaro', re
   problema: { tipo: 'Dañado', cantidad: 51, comentario: 'Rollo aplastado', foto: F } }] }], /solo hay 50 M recibidos/);
 falla('rosa', 'registrarRecepcion', [{ reqFolio: o1.req, sitio: 'Querétaro', renglones: [{ renglon: 1, cantidad: 50, foto: F },
   { renglon: 2, cantidad: 0, problema: { tipo: 'Dañado', cantidad: 1, comentario: 'Tubo doblado', foto: F } }] }], /no corresponde a lo que estás recibiendo/);
+falla('rosa', 'registrarRecepcion', [{ reqFolio: o1.req, sitio: 'Querétaro', renglones: [{ renglon: 1, cantidad: 70, foto: F,
+  problema: { tipo: 'Faltante', cantidad: 10, comentario: 'Faltaron 10 m' } }] }], /escribe en "Llegó" solo lo que llegó/); // se contaría doble
 let rr = recibir('rosa', [{ renglon: 1, cantidad: 50, foto: F }, { renglon: 2, cantidad: 0 }]);
 assert.deepEqual([rr.completo, rr.estado], [false, 'En camino'], 'un renglón con 0 no pide foto');
 const nRec = movsDe(o1.oc).filter(r => r[3] === 'Entrada por compra');
