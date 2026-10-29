@@ -159,6 +159,10 @@ module.exports = function crearArnes(dir, opciones) {
   const fmt = (d, tz, f) => f.replace('yyyy', d.getFullYear()).replace('MM', pad(d.getMonth() + 1)).replace('dd', pad(d.getDate()))
     .replace('HH', pad(d.getHours())).replace('mm', pad(d.getMinutes())).replace('ss', pad(d.getSeconds()));
   const firmados = b => [...b].map(x => x > 127 ? x - 256 : x);
+  const limiteCache = (k, v) => {
+    if (String(k).length > 250) throw new Error('Argument too large: key');
+    if (Buffer.byteLength(String(v), 'utf8') > 100 * 1024) throw new Error('Argument too large: value');
+  };
   const activadores = [];
   const ctx = { console: { ...console, warn() {}, log() {} }, Date, JSON, Math,
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => { anota('props', { que: 'get ' + k }); return props[k] ?? null; },
@@ -166,11 +170,13 @@ module.exports = function crearArnes(dir, opciones) {
       deleteProperty: k => { anota('props', { que: 'delete ' + k }); delete props[k]; },
       getProperties: () => { anota('props', { que: 'getProperties' }); return Object.assign({}, props); },
       setProperties: o => { anota('props', { que: 'setProperties' }); return Object.assign(props, o); } }) },
+    // Como el de Apps Script: una clave de más de 250 caracteres o un valor de más de 100 KB lanza "Argument too large" (revisión
+    // del incremento 6: un caché de idempotencia que lanzaba DESPUÉS de escribir dejaba duplicar un pago al reintentar)
     CacheService: { getScriptCache: () => ({ get: k => { anota('cache', { que: 'get', clave: k, acierto: k in cache }); return cache[k] ?? null; },
-      put: (k, v) => { anota('cache', { que: 'put', clave: k }); return cache[k] = v; },
+      put: (k, v) => { anota('cache', { que: 'put', clave: k }); limiteCache(k, v); return cache[k] = v; },
       remove: k => { anota('cache', { que: 'remove', clave: k }); delete cache[k]; },
       getAll: ks => { anota('cache', { que: 'getAll', clave: ks[0] }); return Object.fromEntries(ks.filter(k => k in cache).map(k => [k, cache[k]])); },
-      putAll: o => { anota('cache', { que: 'putAll', clave: Object.keys(o)[0] }); return Object.assign(cache, o); } }) },
+      putAll: o => { anota('cache', { que: 'putAll', clave: Object.keys(o)[0] }); Object.keys(o).forEach(k => limiteCache(k, o[k])); return Object.assign(cache, o); } }) },
     // El candado de script: el perfil lleva la cuenta de lo que se hace con él tomado
     LockService: { getScriptLock: () => ({ tomado: false,
       tryLock() { anota('candado'); if (!this.tomado) { this.tomado = true; perfil.enCandado++; } return true; },

@@ -84,7 +84,7 @@ const ctx={console:{...console,warn(){}},Date,JSON,
  Logger:{log(){}},
  Utilities:{formatDate:fmt,newBlob:(a,b,c)=>typeof a==='string'?{getAs:()=>({setName:n=>({name:n,html:a})})}:{bytes:a,mime:b,name:c},
   base64Encode:b=>Buffer.from(b).toString('base64'),base64Decode:s=>firmados(Buffer.from(s,'base64')),
-  DigestAlgorithm:{SHA_256:'sha256',MD5:'md5'},base64EncodeWebSafe:b=>Buffer.from(b).toString('base64url'),computeDigest:(a,s)=>[...require('crypto').createHash(a||'sha256').update(s).digest()]},
+  DigestAlgorithm:{SHA_256:'sha256',MD5:'md5'},base64EncodeWebSafe:b=>Buffer.from(b).toString('base64url'),computeDigest:(a,s)=>[...require('crypto').createHash(a||'sha256').update(typeof s==='string'?s:Buffer.from(s)).digest()]},
  ScriptApp:{getOAuthToken:()=>'TOKEN-SCRIPT'},
  UrlFetchApp:{fetch:(url,op)=>{if(/googleapis\.com\/drive\//.test(url))return apiDrive(url,op);const t=decodeURIComponent(url.split('id_token=')[1]);const c=tokens[t];
   return{getResponseCode:()=>c?200:400,getContentText:()=>JSON.stringify(c||{error:'invalid_token'})}}},
@@ -322,7 +322,10 @@ assert.equal(props['CONSECUTIVO_PGP_'+ANIO],undefined,'los rechazos no gastan fo
 // Desde la OC (mismo registro), en dólares con tipo de cambio: 75.25 × 18.5 = 1392.13 (dentro de ±1.00)
 r=ok('pedro','registrarPagoProveedor',pago({reqFolio:'',ocFolio:OC('0001'),monto:75.25,monedaPago:'USD',tipoCambio:18.5,idSolicitud:'pg-ok'}));
 assert.equal(r.folio,PGP('0001'));
-assert.equal(ok('pedro','registrarPagoProveedor',pago({idSolicitud:'pg-ok'})).folio,PGP('0001'),'idempotencia');
+assert.equal(ok('pedro','registrarPagoProveedor',pago({reqFolio:'',ocFolio:OC('0001'),monto:75.25,monedaPago:'USD',tipoCambio:18.5,idSolicitud:'pg-ok'})).folio,
+  PGP('0001'),'idempotencia');
+// Revisión del incremento 6: el mismo idSolicitud con otros datos ya no regresa el primer pago como si fuera este: se rechaza
+falla('pedro','registrarPagoProveedor',[pago({idSolicitud:'pg-ok'})],/ya se registró como PGP-\d{4}-0001 con otros datos/);
 assert.deepEqual([r.vista.requisicion.estado,r.vista.orden.estado,r.vista.pagos.length,r.vista.puedeCerrar,r.vista.puedeCancelarPago],['Pagada','Pagada',1,true,true]);
 let fp=H('PagosProveedores')[1];
 assert.deepEqual([fp[0],fp[1],fp[3],fp[4],fp[5],fp[6],fp[7],fp[8],fp[9],fp[10],fp[11],fp[12],fp[17]],

@@ -1537,7 +1537,7 @@ function guardarCotizacion(payload) {
 
     const resultado = { folio: folio, url: archivo.getUrl(), total: datos.total, moneda: datos.moneda,
       proyectoFolio: proyectoFolio };
-    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
+    guardarIdempotencia_(cache, claveCache, resultado); // 6 h; si no cabe no lanza (ya se escribió)
     return resultado;
   } finally {
     lock.releaseLock();
@@ -1713,7 +1713,7 @@ function crearProyecto(p) {
     const resultado = { folio: folio, clave: datos.clave, folioVisible: folioVisible(folio, datos.clave), nombre: datos.nombre,
       cliente: datos.cliente, clienteId: datos.clienteId, ubicacion: datos.ubicacion, estado: 'Activo',
       fecha: Utilities.formatDate(ahora, 'America/Mexico_City', 'dd/MM/yyyy'), url: carpeta.getUrl() };
-    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
+    guardarIdempotencia_(cache, claveCache, resultado); // 6 h; si no cabe no lanza (ya se escribió)
     return resultado;
   } finally {
     lock.releaseLock();
@@ -2520,7 +2520,7 @@ function registrarPago(p) {
     SpreadsheetApp.flush();
 
     const resultado = { folio: folio, url: archivo.getUrl(), vista: vistaCobranza_(libro, proyecto) };
-    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
+    guardarIdempotencia_(cache, claveCache, resultado); // 6 h; si no cabe no lanza (ya se escribió)
     return resultado;
   });
 }
@@ -2633,7 +2633,10 @@ const HOJAS_COMPRAS = {
       'tipo_cambio', 'monto_aplicado', 'moneda_oc', 'metodo', 'referencia', 'comprobante_id', 'comprobante_url',
       'registro_email', 'registro_nombre', 'estado', 'cancelado_por', 'fecha_cancelacion', 'motivo_cancelacion',
       // Incremento 6 (P): Anticipo · Parcial · Liquidación (vacía en pagos de antes: eran el pago completo de la orden)
-      'tipo'],
+      'tipo',
+      // Revisión del incremento 6: el idSolicitud del envío y la huella de su contenido (un reenvío no duplica el pago aunque se
+      // pierda el caché; el mismo id con otros datos se rechaza). Vacías en pagos de antes
+      'id_solicitud', 'huella_solicitud'],
     numeros: [7, 9, 10],
   },
   Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
@@ -3421,7 +3424,7 @@ function guardarRequisicion(p) {
     notificar_('req.solicitada', { req: folio, reenviada: reenvio }); // correo a quien la revisa (6.B)
     SpreadsheetApp.flush();
     const resultado = { folio: folio, requisiciones: misRequisiciones() };
-    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
+    guardarIdempotencia_(cache, claveCache, resultado); // 6 h; si no cabe no lanza (ya se escribió)
     return resultado;
   });
 }
@@ -3539,6 +3542,7 @@ function pagoProvDesdeFila_(r, fila) {
     comprobanteUrl: String(r[14] || ''), registro: String(r[16] || r[15] || ''), estado: String(r[17] || 'Vigente'),
     canceladoPor: String(r[18] || ''), fechaCancelacion: fechaTexto_(r[19]), motivoCancelacion: String(r[20] || ''), fila: fila,
     tipo: String(r[21] || ''), // P (incremento 6): Anticipo · Parcial · Liquidación ('' en pagos de antes)
+    idSolicitud: String(r[22] || ''), huellaSolicitud: String(r[23] || ''), // revisión del incremento 6 (idempotencia)
   };
 }
 
@@ -3659,7 +3663,8 @@ function autorizarRequisicion(folioReq, oc, motivoExcepcion) {
   return conAvisoPortal_(conCandado_(() => {
     if (claveCache) {
       const previo = cache.get(claveCache);
-      if (previo) return JSON.parse(previo);
+      // Revisión del incremento 6: en el caché va sin la vista (con todos los proveedores pasaba de 100 KB); se arma la de ahora
+      if (previo) { const r = JSON.parse(previo); return r.vista ? r : Object.assign(r, { vista: vistaRequisicion_(libro, r.folio) }); }
     }
     const { hoja, req } = buscarReq_(libro, folioReq);
     // Separación de funciones también en el flujo de siempre (decisión de Leo, 29/10/2026): nadie autoriza lo que pidió; solo
@@ -3679,10 +3684,9 @@ function autorizarRequisicion(folioReq, oc, motivoExcepcion) {
     bitacora_(libro, 'Autorizar requisición', proyecto.folio, req.folio + ' · ' + r.folio, '', HOJAS_COMPRAS);
     avisarPortal_('oc.autorizada', r.folio);
     SpreadsheetApp.flush();
-    const resultado = { folio: req.folio, ocFolio: r.folio, url: r.url, total: r.total, moneda: r.moneda,
-      avisoProveedor: r.avisoProveedor, vista: vistaRequisicion_(libro, req.folio) };
-    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
-    return resultado;
+    const resultado = { folio: req.folio, ocFolio: r.folio, url: r.url, total: r.total, moneda: r.moneda, avisoProveedor: r.avisoProveedor };
+    guardarIdempotencia_(cache, claveCache, resultado); // poco y sin lanzar: la orden ya se emitió
+    return Object.assign({}, resultado, { vista: vistaRequisicion_(libro, req.folio) });
   }));
 }
 
@@ -3738,12 +3742,13 @@ function registrarPagoProveedor(p, motivoExcepcion) {
   const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
   const cache = CacheService.getScriptCache();
   const claveCache = idSolicitud ? 'PGP_' + idSolicitud : '';
+  const huella = idSolicitud ? huellaPagoProv_(d0, bytes) : '';
 
   return conAvisoPortal_(conCandado_(() => {
-    if (claveCache) {
-      const previo = cache.get(claveCache);
-      if (previo) return JSON.parse(previo);
-    }
+    // Revisión del incremento 6: el mismo envío regresa el mismo pago (del caché o, si se perdió, de la hoja); el mismo id con otros
+    // datos se rechaza
+    const repetido = pagoYaRegistrado_(libro, cache, claveCache, idSolicitud, huella);
+    if (repetido) return repetido;
     let reqFolio = String(d0.reqFolio || '').trim();
     if (!reqFolio && d0.ocFolio) reqFolio = buscarOrden_(libro, d0.ocFolio).orden.reqFolio;
     if (!reqFolio) throw new Error('Esta orden no tiene requisición: no se puede registrar el pago.');
@@ -3768,8 +3773,10 @@ function registrarPagoProveedor(p, motivoExcepcion) {
         evento: 'Pagada: lo que ya se pagó cubre la orden.' });
       if (!cerrada) throw new Error('La orden ' + orden.folio + ' ya está pagada por completo: no tiene saldo por pagar.');
       SpreadsheetApp.flush();
-      return { folio: '', tipo: '', completo: true, sinPago: true, url: '', mensaje: 'La orden ' + orden.folio + ' ya estaba cubierta ' +
-        'por lo que se le pagó: quedó pagada y no se registró otro pago.', vista: vistaRequisicion_(libro, req.folio) };
+      const r0 = { folio: '', tipo: '', completo: true, sinPago: true, url: '', reqFolio: req.folio, huella: huella,
+        mensaje: 'La orden ' + orden.folio + ' ya estaba cubierta por lo que se le pagó: quedó pagada y no se registró otro pago.' };
+      guardarIdempotencia_(cache, claveCache, r0);
+      return Object.assign({}, r0, { vista: vistaRequisicion_(libro, req.folio) });
     }
     // Revisión (incremento 5): lo devuelto sin reponer no se paga (p. ej. crédito del proveedor: se recibió y se devolvió antes de pagar)
     const porPagar = totalPorPagarOrden(orden, devueltoSinReponer(movs));
@@ -3792,7 +3799,7 @@ function registrarPagoProveedor(p, motivoExcepcion) {
     escribe_(hP).appendRow([folio, textoFecha_(pago.fecha), Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'),
       orden.folio, req.folio, req.proyectoFolio, pago.monto, pago.monedaPago, pago.tipoCambio, pago.montoAplicado, orden.moneda,
       pago.metodo, t(pago.referencia), archivo.getId(), archivo.getUrl(), t(VENDEDOR_.email),
-      t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '', tipoPago]);
+      t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '', tipoPago, t(idSolicitud), huella]);
     olvidarPagosProv_();
     let nuevo = req.estado, retenida = '';
     if (completo) {
@@ -3823,10 +3830,51 @@ function registrarPagoProveedor(p, motivoExcepcion) {
       notificar_('req.pagoparcial', { req: req.folio });
     }
     SpreadsheetApp.flush();
-    const resultado = { folio: folio, tipo: tipoPago, completo: completo, url: archivo.getUrl(), vista: vistaRequisicion_(libro, req.folio) };
-    if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
-    return resultado;
+    // En el caché de idempotencia va poco (la vista, con todos los proveedores, puede pasar de los 100 KB que admite un valor) y
+    // nunca lanza: el pago ya está escrito. Si no se guarda, la columna id_solicitud de la hoja lo sigue sabiendo
+    const resultado = { folio: folio, tipo: tipoPago, completo: completo, url: archivo.getUrl(), reqFolio: req.folio, huella: huella };
+    guardarIdempotencia_(cache, claveCache, resultado);
+    return Object.assign({}, resultado, { vista: vistaRequisicion_(libro, req.folio) });
   }));
+}
+
+/**
+ * Huella del contenido de un envío de pago (revisión del incremento 6): requisición u orden, monto, moneda, tipo de cambio, método,
+ * referencia, fecha y el comprobante (sus bytes). Dos envíos con el mismo idSolicitud y la misma huella son el mismo pago.
+ */
+function huellaPagoProv_(d, bytes) {
+  const n = v => (v === '' || v == null ? '' : String(Number(v)));
+  const t = v => String(v == null ? '' : v).trim();
+  const md5 = x => Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, x));
+  return md5(JSON.stringify([t(d.reqFolio).toUpperCase(), t(d.ocFolio).toUpperCase(), n(d.monto), t(d.monedaPago).toUpperCase(),
+    n(d.tipoCambio), t(d.metodo), t(d.referencia), t(d.fecha), md5(bytes || [])])).replace(/=+$/, '');
+}
+
+/**
+ * Un envío de pago que ya se registró (mismo idSolicitud): del caché o, si se perdió (6 h, o no cupo), de la columna id_solicitud
+ * de PagosProveedores. Con la misma huella devuelve el mismo pago con la vista de ahora; con otra (otro monto, referencia, fecha o
+ * comprobante: interfaz vieja, otra pestaña, reintento a mano) se rechaza con un mensaje claro en lugar de regresar el primero como
+ * si fuera el segundo. null si ese envío no se ha registrado. Dentro del candado.
+ */
+function pagoYaRegistrado_(libro, cache, claveCache, idSolicitud, huella) {
+  if (!idSolicitud) return null;
+  let previo = null;
+  const enCache = claveCache ? cache.get(claveCache) : null;
+  if (enCache) { try { previo = JSON.parse(enCache); } catch (e) { previo = null; } }
+  if (!previo && libro.getSheetByName('PagosProveedores')) {
+    filasDeArea_(hojaCompras_(libro, 'PagosProveedores'), HOJAS_COMPRAS, 'PagosProveedores').forEach((r, i) => {
+      if (previo || String(r[22] || '') !== idSolicitud) return;
+      const x = pagoProvDesdeFila_(r, i + 2);
+      previo = { folio: x.folio, tipo: x.tipo, completo: x.tipo === TIPO_PAGO_LIQUIDACION, url: x.comprobanteUrl, reqFolio: x.reqFolio,
+        huella: x.huellaSolicitud };
+    });
+  }
+  if (!previo) return null;
+  if (previo.huella && huella && previo.huella !== huella) {
+    throw new Error('Este envío ya se ' + (previo.folio ? 'registró como ' + previo.folio : 'procesó') + ' con otros datos (monto, moneda, ' +
+      'referencia, fecha o comprobante). Si es otro pago, recarga la requisición y regístralo de nuevo.');
+  }
+  return Object.assign({}, previo, { vista: previo.reqFolio ? vistaRequisicion_(libro, previo.reqFolio) : null });
 }
 
 /**

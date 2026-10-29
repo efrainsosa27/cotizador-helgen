@@ -3,6 +3,9 @@
 //  1. Una factura con retenciones registrada después de pagos parciales cubre la orden: queda pagada (antes se quedaba Emitida
 //     "completa" y la requisición atorada); un pago a una orden ya cubierta la cierra en lugar de fallar; "Pagada parcial" es la
 //     misma regla para compras y para quien pidió.
+//  2. Idempotencia del pago: el mismo idSolicitud con otro contenido se rechaza; la hoja recuerda el idSolicitud (columna
+//     id_solicitud + huella) aunque se pierda el caché; el caché guarda poco y nunca falla después de escribir (el caché simulado
+//     del arnés, como el de Apps Script, no acepta valores de más de 100 KB); lo mismo al autorizar con muchos proveedores.
 // Uso: node tests/pagos-revision.test.js .
 'use strict';
 const assert = require('assert');
@@ -126,6 +129,73 @@ const aMano = () => ['requisiciones', 'oc', 'pagosProveedores'].forEach(c => { p
   assert.deepEqual([P.esPagoParcial_({ estado: 'Emitida' }, { completo: false, pagado: 1 }), P.esPagoParcial_({ estado: 'Emitida' }, { completo: true, pagado: 1 }),
     P.esPagoParcial_({ estado: 'Emitida' }, { completo: false, pagado: 0 }), P.esPagoParcial_({ estado: 'Pagada' }, { completo: false, pagado: 1 })],
   [true, false, false, false]);
+}
+
+// ================= 2. Idempotencia del pago (r2, r6) =================
+{
+  // El caché simulado es como el de Apps Script: un valor de más de 100 KB no se guarda (lanza)
+  const c = A.ctx.CacheService.getScriptCache();
+  assert.throws(() => c.put('GRANDE', 'x'.repeat(100 * 1024 + 1)), /Argument too large/);
+  assert.throws(() => c.putAll({ GRANDE: 'á'.repeat(60 * 1024) }), /Argument too large/, 'se mide en bytes (UTF-8)');
+  c.put('CHICO', 'x'.repeat(100 * 1024));
+  assert.equal(A.cache.GRANDE, undefined);
+
+  // a) El mismo idSolicitud con OTRO contenido (interfaz vieja, otra pestaña, reintento a mano) se rechaza: antes regresaba el
+  //    primer pago como si se hubiera registrado el segundo
+  const s = siempre();
+  const r1 = pagar(s.req, 500, { referencia: 'SPEI A', idSolicitud: 'MISMO' });
+  const r2 = post('pedro', 'registrarPagoProveedor', pago(s.req, { monto: 300, referencia: 'SPEI B', idSolicitud: 'MISMO' }));
+  assert.equal(r2.ok, false, 'otro contenido con el mismo idSolicitud');
+  assert(/ya se registró como PGP-\d{4}-\d{4} con otros datos/.test(r2.error), r2.error);
+  assert.equal(pagosDe(s.oc).length, 1);
+  // El mismo envío otra vez: el mismo pago (sin otra fila) y la vista de ahora
+  const r1b = pagar(s.req, 500, { referencia: 'SPEI A', idSolicitud: 'MISMO' });
+  assert.deepEqual([r1b.folio, r1b.tipo, r1b.vista.saldo.pagado], [r1.folio, r1.tipo, 500]);
+  assert.equal(pagosDe(s.oc).length, 1);
+  // El caché de idempotencia guarda poco (sin la vista ni la lista de proveedores)
+  const guardado = JSON.parse(String(A.cache['PGP_MISMO']).replace(/^V:/, ''));
+  assert.deepEqual(Object.keys(guardado).sort(), ['completo', 'folio', 'huella', 'reqFolio', 'tipo', 'url']);
+  // Sin el caché (se perdió o pasaron 6 h) la hoja lo sabe: columna id_solicitud (y su huella)
+  assert.equal(pagosDe(s.oc)[0][col('PagosProveedores', 'id_solicitud')], 'MISMO');
+  assert(pagosDe(s.oc)[0][col('PagosProveedores', 'huella_solicitud')]);
+  delete A.cache['PGP_MISMO'];
+  assert.equal(pagar(s.req, 500, { referencia: 'SPEI A', idSolicitud: 'MISMO' }).folio, r1.folio);
+  delete A.cache['PGP_MISMO'];
+  assert(/ya se registró como PGP-\d{4}-\d{4} con otros datos/.test(post('pedro', 'registrarPagoProveedor',
+    pago(s.req, { monto: 500, referencia: 'SPEI A', idSolicitud: 'MISMO', comprobante: { nombre: 'otro.png', datos: FOTO } })).error),
+  'otro comprobante = otro contenido');
+  assert.equal(pagosDe(s.oc).length, 1);
+  // Otro idSolicitud con los mismos datos sí es otro pago (dos anticipos iguales son posibles)
+  pagar(s.req, 500, { referencia: 'SPEI A', idSolicitud: 'OTRO' });
+  assert.equal(pagosDe(s.oc).length, 2);
+
+  // b) Con muchos proveedores la vista pasa de 100 KB: el pago se registra bien (antes: error DESPUÉS de escribir, y el reintento
+  //    con el mismo idSolicitud registraba un segundo pago)
+  const enc = H('Proveedores')[0];
+  for (let i = 0; i < 260; i++) {
+    const fila = enc.map(() => '');
+    Object.assign(fila, { 0: 'SIN-RFC:PROVEEDOR ' + i, 1: 'Proveedor de materiales eléctricos número ' + i + ' S.A. de C.V.', 3: 'Contacto ' + i,
+      4: 'ventas' + i + '@proveedor.mx', 5: '442 123 45' + String(i).padStart(2, '0'), 6: '2026-10-01', 7: 30, 8: 'Av. Industria ' + i + ', Querétaro',
+      13: 'Transferencia', 23: 'Notas del proveedor ' + i, 24: 'Sí' });
+    H('Proveedores').push(fila);
+  }
+  const t = siempre();
+  const p = pago(t.req, { monto: 487.2, idSolicitud: 'ENVIO-1' });
+  const e1 = post('pedro', 'registrarPagoProveedor', p);
+  assert(e1.ok, e1.error);
+  assert(JSON.stringify(e1.datos).length > 100 * 1024, 'la vista de verdad pasa de 100 KB');
+  const e2 = post('pedro', 'registrarPagoProveedor', p);
+  assert.deepEqual([e2.ok, e2.datos.folio], [true, e1.datos.folio], 'el reintento regresa el mismo pago');
+  assert.equal(pagosDe(t.oc).length, 1);
+  // Lo mismo al autorizar (la vista con todos los proveedores): la orden se emite una vez
+  const folio = ok('obrero', 'guardarRequisicion', { proyectoFolio: P2, sitio: 'Querétaro', renglones: RENGLONES,
+    cotizacion: { nombre: 'cot.pdf', datos: A.PDF }, idSolicitud: id('q') }).folio;
+  const datos = OCD({ idSolicitud: 'AUT-1' });
+  const a1 = post('efrain', 'autorizarRequisicion', folio, datos);
+  assert(a1.ok, a1.error);
+  const a2 = post('efrain', 'autorizarRequisicion', folio, datos);
+  assert.deepEqual([a2.ok, a2.datos.ocFolio], [true, a1.datos.ocFolio]);
+  assert.equal(H('OrdenesCompra').filter(r => r[col('OrdenesCompra', 'req_folio')] === folio).length, 1, 'una sola orden');
 }
 
 console.log('OK pagos-revision');
