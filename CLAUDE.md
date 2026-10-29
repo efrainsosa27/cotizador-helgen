@@ -40,6 +40,13 @@ comprobante de domicilio) que bloquea el pago **por transferencia** sin ellos; *
 centro de mando; se guarda en Drive) y **devoluciones** `DEV-AAAA-NNNN` cuando llega material equivocado o dañado. Detalle en §4.9,
 §5, §6.16 y `docs/incremento-5*.md`.
 
+**CAPRI — incremento 6 (pedido de Leo el 29/10/2026: "implementar todo lo que falta"; spec "CAPRI — what's missing: spec for
+increments 6–8", Claude Docs `https://claude.ai/artifact/KviP4AsDfjQof7F5qF31sz`).** **Pagos parciales a proveedores** (anticipos,
+varios pagos por orden, plan de pagos opcional, saldo, saldo a favor) y pestaña **Reportes** (antigüedad de CxC y de CxP, flujo de
+13 semanas, margen por proyecto, con CSV; fecha esperada por etapa de cobranza). Va junto con la **rapidez en Apps Script** (menos
+lecturas a Sheets por petición: 33–71 % menos segundos estimados en lo más usado). Detalle en §4.10, §5, §6.17 y `docs/incremento-6*.md`,
+`docs/rapidez-apps-script.md`.
+
 ## 2. Datos clave (IDs y URLs)
 
 | Qué | Valor |
@@ -442,6 +449,27 @@ Contrato entre módulos y con el centro de mando: `docs/incremento-5.md`; detall
   `traerRecepcionesPortal` baja las fotos (fuera del candado), las guarda en Drive y avisa `foto-archivada`; un problema del sitio crea
   una DEV (`origen_clave`); al resolver, aviso `oc.devolucion`. Correos `dev.reportada`, `dev.resuelta`, `req.pagada`.
 
+### 4.10 CAPRI — incremento 6 (`Code.js` §6.P y §6.R; interfaz `mod-reportes`)
+Contrato: `docs/incremento-6.md`; detalle: `docs/incremento-6-pagos.md` y `docs/incremento-6-reportes.md`.
+- **P · Pagos parciales.** `saldoOrdenCompra(orden, pagos, movimientos)` (pura; con `orden.facturas` mide contra lo facturado si las
+  facturas cubren la orden, p. ej. con retenciones: `porFacturas`) → `{esperado, pagado, saldo, completo, siguiente, etapas[].vence,
+  porFacturas, aFavor, cancelada}`; `saldoDeOrden_`. Una orden acepta varios `PGP-` hasta completar (tope `saldo + TOLERANCIA_PAGO`);
+  `tipo` Anticipo · Parcial · Liquidación (`retiparPagosProv` lo corrige al cancelar o anular). Sin estado nuevo: etiqueta derivada
+  "Pagada parcial" (`pagoParcialDe_`); con cualquier pago Vigente se puede recibir (`recibeAntesDePagar_`); `completarSiCubierta_`
+  cierra la orden cuando lo pagado ya la cubre (devolución, factura con retenciones). `plan_pago` opcional al autorizar
+  (`normalizarPlanPago`). Idempotencia del pago en la hoja (`id_solicitud` + `huella_solicitud`; mismo id con otro contenido se
+  rechaza). `oc.pagada` solo con el primer pago; `req.pagada` al completar; `req.pagoparcial` (sin montos). `antiguedadCxp` mide toda
+  orden por su saldo, parte lo no facturado por etapa (`tramosSinFactura`) y lista aparte el saldo a favor.
+- **R · Reportes.** `reporteCxc`, `reporteCxp`, `reporteFlujo`, `reporteMargen` (permisos por llamada: CxC y margen → cobranza;
+  CxP → compras; flujo → super admin), `guardarFechasEsperadas` (cobranza; también con contrato firmado; Bitácora). Puras:
+  `etapasPorCobrar`, `porPagarProveedores`/`tramosPorPagar`, `antiguedadEnGrupos`, `flujoSemanal` (13 semanas lunes–domingo, la 1 =
+  "Semana en curso"), `margenPorProyecto` (admite `costosExtra` para el incremento 7), `saldosAFavor`, `venceSinFactura` (regla
+  única de vencimiento sin factura, la comparten P y R). Fuera: proyectos de prueba por folio (`FOLIOS_PRUEBA_REPORTES` + Script
+  Property opcional `FOLIOS_PRUEBA`) y "Órdenes anteriores sin pago registrado" (sin requisición, pago ni factura) en un bloque aparte.
+  Diferencias con Cuentas por pagar y con el resumen de cobranza: §0.1 del doc de reportes.
+- **Rapidez** (§4.1.1, regla 18): memo por petición (`MEMO_.filas` + `MEMOS_DERIVADOS_`), `escribe_`/`candado_` (anidable),
+  versiones con valores únicos sin candado (`versionNueva_`), espacio de caché `VERSION_CODIGO_CACHE` en las claves.
+
 ## 5. Dónde se guardan los datos
 
 **Todo en la carpeta maestra "Cotizador Helgen"** de Mi unidad:
@@ -578,6 +606,10 @@ Sin `PORTAL_SECRETO` el enlace está apagado y todo funciona como antes.
 `Recogido en tienda`; "Recibí el material" y el cierre de compras ahora dejan `Entrada por compra`); pestaña **`Devoluciones`**
 (`DEV-AAAA-NNNN`, `CONSECUTIVO_DEV_AAAA`, con `origen_clave`). Drive: `Compras/Proveedores/<RFC> — <razón social>/` y
 `Compras/AAAA/<proyecto>/Recepciones/` (fotos `REC-… — r<n>.jpg`, `DEV-… — r<n>.jpg`), todo con `privado_`.
+
+**Incremento 6 (se crean solas, por nombre).** `PagosProveedores.tipo` (V; vacío en filas viejas = Liquidación), `id_solicitud`,
+`huella_solicitud`; `OrdenesCompra.plan_pago` (JSON `[{concepto, porcentaje}]`); cobranza `Esquemas.fecha_esperada`. Script Property
+opcional `FOLIOS_PRUEBA` (folios separados por coma que los reportes dejan fuera). Caché: claves con `@<VERSION_CODIGO_CACHE>`.
 
 ## 6. Decisiones tomadas (y por qué)
 
@@ -858,6 +890,21 @@ Spec: "CAPRI — increment 4 spec" (Claude Docs `https://claude.ai/artifact/2kb6
 - Nunca se guarda ni se pide un número de tarjeta; la referencia con tarjeta es la autorización o el ticket.
 - El centro de mando guarda la foto solo hasta que CAPRI la baja (cada 15 min) y la borra al recibir `foto-archivada`.
 
+### 6.17 CAPRI — incremento 6 y rapidez (29/10/2026)
+- Leo pidió "todo lo que falta" y más rapidez; eligió **las dos vías** (afinar Apps Script ya y mudar al servidor de Drogheda en
+  paralelo) y **las cuatro piezas** (pagos parciales, reportes, CFDI de clientes, costos por proyecto). Incremento 6 = las dos
+  primeras con los valores por omisión del spec (decisiones 1–5): con cualquier pago se puede recibir; `oc.pagada` en el primero;
+  plan opcional; fecha esperada opcional por etapa; CxC y margen → cobranza, CxP → compras, flujo → super admin. El incremento 7
+  (gastos, horas, nómina, adicionales) espera las decisiones 8–10; el 8 (CFDI) fase A importa XML, fase B necesita PAC y CSD.
+- Revisiones independientes (tres: pagos, reportes y permisos, caché de la rapidez) → arreglos con su prueba: factura con
+  retenciones que atoraba la requisición, idempotencia que dependía del caché (100 KB), tope contra lo facturado, moneda del pago
+  parcial en la interfaz, una sola cifra de CxP en Compras y Reportes, saldo a favor, órdenes anteriores sin pago, vencimiento por
+  recepción, contratos desbloqueados, memos derivados, carrera de `fuenteConHuella_`, caché viejo al publicar, versiones que se
+  saltaban, candado anidado. Fuzzers de pagos (600+ secuencias) sin hallazgos; prueba en vivo con el centro de mando 44 + 7 bien.
+- **Al publicar algo que cambie la forma de lo que va en caché, cambiar `VERSION_CODIGO_CACHE`** (§8).
+- Pendientes que quedaron: registrar el reembolso o la nota de crédito de un saldo a favor (hoy solo se ve como pendiente);
+  REP por pago parcial de facturas PPD; servidor (etapa 1) con prototipo en la rama `servidor-etapa-1` (`docs/servidor-etapa-1.md`).
+
 ## 7. Reglas del proyecto (no romper)
 1. Los totales SIEMPRE se recalculan en el servidor (`normalizarCotizacion`). El navegador solo muestra una vista previa.
 2. Redondeo a 2 decimales por renglón (`redondear`). IVA = subtotal × tasa.
@@ -997,6 +1044,12 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
   rechaza el cambio, decirlo y anotarlo en §9 como pendiente.
 
 ## 9. Pendientes e ideas
+- **CAPRI — incremento 6 + rapidez: construido, revisado e integrado el 29/10/2026 (rama `incremento-6-final`, sobre
+  `incremento-5`), SIN PUBLICAR.** Se publica **junto con el incremento 5** (o después de él): `clasp push`; como facilities@,
+  nueva versión del deployment (no hay permisos nuevos ni función que correr; las columnas se crean solas); `CLOUDFLARE_ACCOUNT_ID=…
+  wrangler deploy` (API e interfaz juntas: la interfaz usa `sinPago` y la línea de monto aplicado). `VERSION_CODIGO_CACHE` ya va
+  cambiado (`2026-10-29r`). Avisar a compras: varios pagos por orden, "Pagada parcial", plan de pagos, saldo a favor; a cobranza:
+  fechas esperadas de cobro y la pestaña Reportes. Manual del Cotizador sin actualizar (lo tiene Efrain).
 - **CAPRI — incremento 5: construido, integrado y revisado el 29/10/2026 (rama `incremento-5`), SIN PUBLICAR.** Dos revisiones
   independientes (flujos y dinero; seguridad + prueba en vivo del `Code.js` real contra el Flask real) → 14 arreglos con su prueba
   (`tests/revision5*.test.js`) en CAPRI y 5 en el centro de mando; prueba en vivo final 44 + 7 bien. El Manual del Cotizador
