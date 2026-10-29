@@ -3,6 +3,8 @@
 //  1. Órdenes anteriores sin pago registrado (sin requisición, sin pago Vigente y sin factura; Recibidas o Emitidas de antes de las
 //     requisiciones): no se pueden pagar ni cancelar, así que van en su propio bloque de la antigüedad de CxP (con cuántas son),
 //     fuera de los totales y del flujo; su costo sigue en el margen.
+//  3. Doc §0.1: todas las diferencias con Cuentas por pagar y con el resumen de cobranza, con su dirección. Cada renglón se
+//     comprueba aquí contra las funciones de verdad (antiguedadCxp, resumenGeneralCobranza), que R no cambia.
 //  4. Contratos desbloqueados (se firmaron, se desbloquearon y tienen pagos Vigentes): siguen en la antigüedad de CxC y en el flujo,
 //     marcados "Desbloqueado"; uno aceptado sin firmar y sin pagos sigue fuera.
 //  5. Flujo un domingo: la semana 1 es "Semana en curso" (parcial: un domingo solo queda hoy) en pantalla y en el CSV; siguen 13.
@@ -73,6 +75,67 @@ const filasR = d => plain(P.antiguedadPorPagar(d, P.saldoOrdenCompra)).grupos.re
   const copias = SRC.match(/fechaRecepcion\s*\|\|\s*\w+\.fechaEntrega\s*\|\|\s*\w+\.fecha\b/g) || [];
   assert.equal(copias.length, 1, 'la regla vive en venceSinFactura: ' + copias.length + ' copias');
   assert(!/function fechaEstimadaOrden/.test(SRC), 'sin la copia de R');
+}
+
+// ================= 3. Diferencias documentadas en §0.1 (cada una contra las funciones de verdad) =================
+{
+  const cxp = d => plain(P.antiguedadCxp({ hoy: d.hoy, facturas: d.facturas, ordenes: d.ordenes, pagos: d.pagosProv, movimientos: d.movimientos }));
+  const rr = d => plain(P.antiguedadPorPagar(d, P.saldoOrdenCompra));
+  const tot = r => r.totales.map(t => t.moneda + ' ' + t.total);
+  // CxP · proyecto de prueba: R fuera, Cuentas por pagar cuenta (R menor)
+  const dT = Object.assign(datos([OC('OC-T', 1160, { proyectoFolio: 'PRY-9-0009' })], [], [FPR('FPR-T', 'OC-T', 1160, masDias(5))]), { prueba: ['PRY-9-0009'] });
+  assert.deepEqual([tot(rr(dT)), tot(cxp(dT))], [[], ['MXN 1160']], 'prueba');
+  // CxP · sin pagos, con lo devuelto sin reponer: R descuenta lo devuelto, Cuentas por pagar la factura completa (R menor)
+  const dD = Object.assign(datos([OC('OC-D', 1624, { renglones: [{ cantidad: 80, costo: 10 }, { cantidad: 12, costo: 50 }] })], [],
+    [FPR('FPR-D', 'OC-D', 1624, masDias(5))]), { movimientos: { 'OC-D': [{ estado: 'Vigente', tipo: A.correr('TIPO_DEVOLUCION_CIERRA'), renglon: 2, cantidad: -2 }] } });
+  assert.deepEqual([tot(rr(dD)), tot(cxp(dD))], [['MXN 1508'], ['MXN 1624']], 'devuelto sin reponer: 1624 − 2 × 50 × 1.16');
+  // CxP · lo no facturado de una orden sin pagos: R en la antigüedad con IVA; Cuentas por pagar solo "Falta factura" sin IVA (R mayor)
+  const dS = datos([OC('OC-S', 1160), OC('OC-P', 2320)], [], [FPR('FPR-P', 'OC-P', 1160, masDias(5))]);
+  assert.deepEqual([tot(rr(dS)), tot(cxp(dS)), cxp(dS).faltantes.map(x => x.folio + ' ' + x.faltante)],
+    [['MXN 3480'], ['MXN 1160'], ['OC-S 1000', 'OC-P 1000']], 'no facturado');
+  // CxP · orden anterior sin pago registrado: ninguno la suma; R aparte (con cuántas son), Cuentas por pagar en "Falta factura"
+  const dV = datos([OC('OC-V', 1160, { reqFolio: '', estado: 'Recibida' })]);
+  assert.deepEqual([tot(rr(dV)), rr(dV).anteriores.n, tot(cxp(dV)), cxp(dV).faltantes.map(x => x.folio)], [[], 1, [], ['OC-V']], 'anterior sin pago');
+  // CxP · saldo sin factura de una orden sin ninguna fecha válida (a mano): R "Sin fecha", Cuentas por pagar vence hoy
+  const dN = datos([OC('OC-N', 1160, { fecha: '', fechaEntrega: '', fechaRecepcion: '' })], [PGP('OC-N', 100)]);
+  assert.deepEqual([filasR(dN), filasCxp(dN)], [[[1060, '', 'sinFecha']], [[1060, HOY_ISO, 'porVencer']]], 'sin fecha válida');
+  // CxP · factura en otra moneda que su orden (a mano): R la ignora (moneda de la orden), Cuentas por pagar en la de la factura
+  const dM = datos([OC('OC-M', 1160)], [], [FPR('FPR-M', 'OC-M', 60, masDias(5), { moneda: 'USD' })]);
+  assert.deepEqual([tot(rr(dM)), tot(cxp(dM))], [['MXN 1160'], ['USD 60']], 'otra moneda');
+  // CxP · iguales: retenciones (factura completa por menos) y pagos parciales con facturas
+  const dRt = datos([OC('OC-R', 1160), OC('OC-Q', 2320)], [PGP('OC-Q', 500)],
+    [FPR('FPR-R', 'OC-R', 1120, masDias(5), { subtotal: 1000 }), FPR('FPR-Q1', 'OC-Q', 1160, masDias(-3)), FPR('FPR-Q2', 'OC-Q', 1160, masDias(9))]);
+  assert.deepEqual(filasR(dRt), filasCxp(dRt), 'retenciones y pagos parciales: lo mismo');
+
+  // CxC · contra el resumen de cobranza (resumenGeneralCobranza)
+  const PRY = folio => ({ folio, folioVisible: folio, nombre: 'Proyecto ' + folio, cliente: 'Cliente', clienteId: 'C1', estado: 'Activo' });
+  const CON = (folio, estado) => ({ proyectoFolio: folio, cotizacion: 'HLG-' + folio, marca: 'helgen', moneda: 'MXN', subtotal: 1000, total: 1160, estado });
+  const PAG = (folio, montoAplicado) => ({ proyectoFolio: folio, montoAplicado, etapaOrden: 1, estado: 'Vigente', fecha: HOY_ISO });
+  const dc = { hoy: HOY_ISO, prueba: ['PRY-9-0023'], esquemas: [], ordenes: [],
+    proyectos: ['PRY-9-0021', 'PRY-9-0022', 'PRY-9-0023', 'PRY-9-0024', 'PRY-9-0025'].map(PRY),
+    contratos: [CON('PRY-9-0021', 'Firmado'), CON('PRY-9-0022', 'Aceptada'), CON('PRY-9-0023', 'Firmado'), CON('PRY-9-0024', 'Firmado'),
+      CON('PRY-9-0025', 'Aceptada')],
+    pagos: [PAG('PRY-9-0021', 1000), PAG('PRY-9-0022', 500), PAG('PRY-9-0024', 1160.5)] };
+  const rg = plain(P.resumenGeneralCobranza(dc)), ar = plain(P.antiguedadCxc(dc));
+  const saldoRes = f => rg.proyectos.find(x => x.folio === f), saldoR = f => (ar.grupos[0].detalle.find(x => x.folio === f) || {}).total;
+  assert.deepEqual([saldoRes('PRY-9-0021').saldo, saldoR('PRY-9-0021')], [160, 160], 'mismo saldo por proyecto');
+  assert.deepEqual([saldoRes('PRY-9-0023').saldo, saldoR('PRY-9-0023')], [1160, undefined], 'prueba: el resumen cuenta, R no (R menor)');
+  assert.deepEqual([saldoRes('PRY-9-0022').estadoContrato, saldoR('PRY-9-0022')], ['Por firmar', 660], 'desbloqueado: R cuenta (R mayor)');
+  assert.deepEqual([saldoRes('PRY-9-0024').saldo, saldoR('PRY-9-0024')], [-0.5, undefined], 'pago de más en la tolerancia (R mayor ≤ 1.00)');
+  assert.deepEqual([saldoRes('PRY-9-0025').estadoContrato, saldoR('PRY-9-0025')], ['Por firmar', undefined], 'por firmar sin pagos: fuera en los dos');
+  assert.deepEqual([rg.totales[0].porCobrar, ar.totales[0].total], [160 + 1160 - 0.5, 160 + 660]);
+  // Margen · totales: el reporte sin los de prueba (el resumen con ellos); por proyecto, lo mismo
+  const mg = plain(P.margenPorProyecto(dc));
+  assert.deepEqual([mg.totales[0].contratado, rg.totales[0].contratadoSinIva], [2000, 3000], 'margen: prueba fuera del reporte');
+  assert.deepEqual([mg.totales[0].porFirmar, rg.totales[0].porFirmar], [2, 2], 'desbloqueado: "Por firmar" en los dos');
+
+  // El doc lista cada caso (antes de la revisión 6b, §0.1 solo hablaba de lo no facturado)
+  const doc = fs.readFileSync(path.join(dir, 'docs/incremento-6-reportes.md'), 'utf8');
+  const s01 = doc.slice(doc.indexOf('## 0.'), doc.indexOf('2. **Las órdenes de un proyecto Cancelado')).toLowerCase();
+  ['de un proyecto de prueba', 'con lo devuelto sin reponer', 'lo **no facturado**', 'orden anterior sin pago registrado', 'sin ninguna fecha válida',
+    'factura en otra moneda que su orden', 'contrato desbloqueado con pagos', 'pago de más dentro de la tolerancia', 'etapa sin fecha esperada',
+    'proyecto o cotización aceptada de prueba', 'no cambia lo que hacen', 'tarjeta de margen']
+    .forEach(k => assert(s01.includes(k.toLowerCase()), 'el §0.1 del doc no menciona: ' + k));
 }
 
 // ================= Servidor e interfaz: datos sembrados por la API (doPost) =================

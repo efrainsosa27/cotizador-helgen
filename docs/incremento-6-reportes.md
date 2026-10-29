@@ -7,13 +7,44 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
 
 ## 0. Desviaciones y decisiones que hay que revisar (léelas primero)
 
-1. **La antigüedad de CxP no llama a `antiguedadCxp`.** Es **por orden y por saldo** (como dice el spec: "open balance per supplier
-   and order"): `porPagarProveedores` toma el saldo de cada orden vigente con `saldoOrdenCompra` (lo único que P publica para R,
-   contrato §1) y le pone fecha con las mismas reglas de Cuentas por pagar (emisión + días de crédito, mismas claves de rangos que
-   `RANGOS_CXP`). Hoy (con la función provisional) es lo que muestra Cuentas por pagar en "facturas abiertas" **más** lo que todavía
-   no se factura de las órdenes sin pagar (que Cuentas por pagar solo lista como "falta factura", sin antigüedad). Por eso **los
-   totales de CxP del reporte pueden ser mayores que los de Cuentas por pagar**. Razón: la función de hoy devuelve facturas y deja
-   fuera toda orden con un pago; no puede expresar saldos, y sus cambios son de P. Así R no depende de cómo quede `antiguedadCxp`.
+1. **Diferencias esperadas con Cuentas por pagar y con el resumen de cobranza** (revisión 6b: todas, con su dirección). R no
+   llama a `antiguedadCxp` ni a `resumenGeneralCobranza` y **no cambia lo que hacen** `cuentasPorPagar` ni
+   `resumenCobranzaGeneral`. La antigüedad de CxP es **por orden y por saldo** (spec: "open balance per supplier and order"): el
+   saldo de `saldoOrdenCompra` (P) con las fechas de Cuentas por pagar (decisión 10: la misma `venceSinFactura`, las mismas claves
+   de rangos que `RANGOS_CXP`). Al revisar después de publicar, estas son **todas** las diferencias que deben salir; cualquier otra
+   es un error. `tests/revision6-reportes.test.js` §3 comprueba cada renglón contra las funciones de verdad.
+
+   **Antigüedad de CxP (R) contra Cuentas por pagar**
+
+   | Caso | Reporte de CxP (R) | Cuentas por pagar | Total de R |
+   |---|---|---|---|
+   | Orden de un proyecto de prueba (`FOLIOS_PRUEBA_REPORTES` + `FOLIOS_PRUEBA`, decisión 4) | fuera | cuenta | **menor** |
+   | Orden **sin pagos** con lo devuelto sin reponer | su saldo: descuenta lo devuelto (`saldoOrdenCompra` con los movimientos) | sus facturas completas | **menor** |
+   | Lo **no facturado** de una orden sin pagos (sin factura, o facturas por menos que la orden) | en la antigüedad, con IVA, en la fecha de su siguiente pago (plan, o recepción/entrega + crédito) | solo en "Falta factura" (sin IVA, sin antigüedad), fuera de los totales | **mayor** |
+   | Orden anterior sin pago registrado (decisión 11) | bloque aparte con cuántas son, fuera de los totales y del flujo | en "Falta factura", fuera de los totales | igual (ninguno la suma) |
+   | Saldo sin factura de una orden sin ninguna fecha válida (solo editando la hoja a mano) | "Sin fecha" | vence hoy ("Por vencer") | mismo monto, otro rango |
+   | Factura en otra moneda que su orden (solo a mano: `validarFacturaProveedor` lo rechaza) | se ignora: el saldo va en la moneda de la orden, "Sin factura" | en la moneda de la factura | otra moneda |
+
+   Iguales en los dos: órdenes con pagos parciales (facturas en orden de vencimiento con lo pagado + fila "Saldo" en la fecha del
+   siguiente pago de P), plan de pagos, retenciones, órdenes de proyectos Cancelados (cuentan, decisión 2), canceladas y anuladas
+   (fuera), lo pagado dentro de la tolerancia (no se lista).
+
+   **Antigüedad de CxC y flujo (R) contra el resumen de cobranza**
+
+   | Caso | CxC y flujo (R) | Resumen de cobranza ("Por cobrar") | Total de R |
+   |---|---|---|---|
+   | Proyecto o cotización aceptada de prueba (decisión 4) | fuera | cuenta | **menor** |
+   | Contrato desbloqueado con pagos (decisión 5) | cuenta, marcado "Desbloqueado" | "Por firmar": su saldo no entra a "Por cobrar" | **mayor** |
+   | Pago de más dentro de la tolerancia (≤ 1.00) | la etapa que queda negativa no se lista (cuenta 0) | el saldo del proyecto queda negativo y resta | **mayor** (≤ 1.00 por proyecto) |
+   | Etapa sin fecha esperada | CxC: "Sin fecha"; flujo: aparte, fuera del neto | (no usa fechas) | igual en CxC |
+
+   Iguales en los dos: el saldo de cada proyecto (mismo `resumenCobranza`: la suma de sus etapas es su saldo), proyectos Cancelados
+   y contratos por firmar sin pagos (fuera), Cerrados con saldo (cuentan), lo anulado (fuera).
+
+   **Margen (R) contra la tarjeta de margen del proyecto y el resumen de cobranza:** por proyecto, la misma cifra que la tarjeta
+   (`margenProyecto`; las órdenes anteriores sin pago también cuentan). En los totales por línea y moneda: los proyectos de prueba no
+   entran (en el resumen sí: **menor**); con un costo en otra moneda, el reporte suma los demás y dice cuántos quedaron fuera (el
+   resumen deja en blanco el margen de esa moneda; decisión 6). Desbloqueado: "Por firmar" y no suma en los dos.
 2. **Las órdenes de un proyecto Cancelado siguen en CxP y en el flujo** (marcadas con el estado del proyecto). Se le sigue debiendo
    al proveedor mientras la orden no se cancele; esconderlas haría ver menos deuda de la real. Cuentas por pagar ya hace lo mismo.
    En CxC, flujo (cobros) y margen los proyectos cancelados sí quedan fuera (igual que el resumen de cobranza).
@@ -191,7 +222,7 @@ Esquemas: `F_esquemas_<versión de contratos>`, `H_esquemas`, `R_esquemas` (deci
 
 ## 6. Pruebas
 
-`tests/reportes.test.js` (174 aserciones; corre en `bash tests/todas.sh`):
+`tests/reportes.test.js` (176 aserciones; corre en `bash tests/todas.sh`):
 - **Lógica pura:** fechas y lunes de la semana; folios de prueba (con clave, lista extra); rangos en sus bordes (hoy, 1, 30, 31, 60,
   61, 90, 91; sin fecha; fecha que no existe); validación de lo que manda la interfaz. CxC: cobro parcial, excedente que pasa a la
   siguiente etapa, pago cancelado, proyecto USD pagado en MXN, etapa sin fecha, etapa que vence hoy, proyecto cancelado, por firmar,
@@ -212,9 +243,10 @@ Esquemas: `F_esquemas_<versión de contratos>`, `H_esquemas`, `R_esquemas` (deci
   de sincronización, bloque de fechas en Cobranza (valores, estado, solo manda lo que cambió, sin cambios no llama, sin contrato no
   se ve).
 
-`tests/revision6-reportes.test.js` (revisión 6b): cada hallazgo de la revisión con el escenario que fallaba antes del arreglo —
+`tests/revision6-reportes.test.js` (revisión 6b, 83 aserciones): cada hallazgo de la revisión con el escenario que fallaba antes del arreglo —
 fecha de lo que no tiene factura igual a Cuentas por pagar (sección 2), órdenes anteriores sin pago registrado (sección 1: pura,
-sembradas por la API como las de la fase 3, interfaz y CSV), contratos desbloqueados con pagos (sección 4: pura, firmado → pago →
+sembradas por la API como las de la fase 3, interfaz y CSV), cada diferencia de §0.1 con su dirección contra `antiguedadCxp`,
+`resumenGeneralCobranza` y el margen (sección 3; también revisa que el doc la liste), contratos desbloqueados con pagos (sección 4: pura, firmado → pago →
 desbloqueo por la API, CxC, flujo, chip y CSV; por firmar sin pagos sigue fuera), semana en curso del flujo (sección 5: domingo,
 lunes y jueves; pantalla y CSV), apóstrofo con tabulador y CR al inicio (sección 6: cliente y proyecto editados a mano en la
 hoja), fecha esperada editada a mano en Esquemas (sección 7: antes de la revisión nada; vencida la marca, sube `contratos`, manda el
