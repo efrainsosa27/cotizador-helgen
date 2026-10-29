@@ -1053,7 +1053,7 @@ function hojaCatalogo_() {
   }
   const ss = abrirLibro_(idGuardado_('CATALOGO_ID'));
   const hoja = ss.getSheetByName('Catalogo') || ss.getSheets()[0];
-  asegurarColumnasSat_(hoja);
+  asegurarColumnasSat_(hoja, ss);
   // Precio en USD: dato extra; si falla, el catálogo funciona igual (en USD el precio se captura a mano)
   try { asegurarPrecioUsd_(hoja); } catch (e) { console.warn('Sin columna de precio USD: ' + e.message); }
   return hoja;
@@ -1094,13 +1094,18 @@ function asegurarPrecioUsd_(hoja) {
     // GOOGLEFINANCE se recalcula cada hora aunque nadie abra el archivo
     ss.setRecalculationInterval(SpreadsheetApp.RecalculationInterval.HOUR);
   }
-  if (hoja.getRange(1, COL_PRECIO_USD).getValue() !== ENC_PRECIO_USD) {
-    escribe_(hoja).getRange(1, COL_PRECIO_USD).setValue(ENC_PRECIO_USD)
-      .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
-    hoja.getRange('I:I').setNumberFormat('$#,##0.00');
-    hoja.setColumnWidth(COL_PRECIO_USD, 210);
-    hoja.getRange('I:I').protect().setDescription('Precio USD automático: no escribir aquí (cambia el precio en pesos ' +
-      'o el tipo de cambio)').setWarningOnly(true);
+  // Rapidez: el encabezado de la columna I se lee solo si no se revisó hace poco (encabezadosRevisados_)
+  const claveUsd = claveEncabezados_(ss, hoja, 'Catalogo/USD', [ENC_PRECIO_USD]);
+  if (!encabezadosRevisados_(claveUsd)) {
+    if (hoja.getRange(1, COL_PRECIO_USD).getValue() !== ENC_PRECIO_USD) {
+      escribe_(hoja).getRange(1, COL_PRECIO_USD).setValue(ENC_PRECIO_USD)
+        .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+      hoja.getRange('I:I').setNumberFormat('$#,##0.00');
+      hoja.setColumnWidth(COL_PRECIO_USD, 210);
+      hoja.getRange('I:I').protect().setDescription('Precio USD automático: no escribir aquí (cambia el precio en pesos ' +
+        'o el tipo de cambio)').setWarningOnly(true);
+    }
+    anotarEncabezados_(claveUsd);
   }
   // Renglones con producto y sin fórmula en I: se les pone (incluye los dados de alta a mano en Sheets)
   const n = hoja.getLastRow() - 1;
@@ -1126,14 +1131,19 @@ function tipoCambioCatalogo_(hoja) {
 }
 
 /** Catálogos creados antes de las columnas SAT: agrega los encabezados G:H con formato texto. */
-function asegurarColumnasSat_(hoja) {
+function asegurarColumnasSat_(hoja, ss) {
   const n = ENCABEZADOS_CATALOGO.length;
+  // Rapidez: G1:H1 se leen solo si no se revisaron hace poco (encabezadosRevisados_; ss = el libro del catálogo)
+  const clave = ss ? claveEncabezados_(ss, hoja, 'Catalogo/SAT', ENCABEZADOS_CATALOGO.slice(6, n)) : '';
+  if (clave && encabezadosRevisados_(clave)) return;
   const enc = hoja.getRange(1, 7, 1, 2).getValues()[0];
-  if (enc[0] === ENCABEZADOS_CATALOGO[6] && enc[1] === ENCABEZADOS_CATALOGO[7]) return;
-  hoja.getRange('G:H').setNumberFormat('@'); // "01010101" no pierde el cero inicial
-  escribe_(hoja).getRange(1, 7, 1, 2).setValues([ENCABEZADOS_CATALOGO.slice(6, n)])
-    .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
-  hoja.setColumnWidth(7, 110); hoja.setColumnWidth(8, 100);
+  if (!(enc[0] === ENCABEZADOS_CATALOGO[6] && enc[1] === ENCABEZADOS_CATALOGO[7])) {
+    hoja.getRange('G:H').setNumberFormat('@'); // "01010101" no pierde el cero inicial
+    escribe_(hoja).getRange(1, 7, 1, 2).setValues([ENCABEZADOS_CATALOGO.slice(6, n)])
+      .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+    hoja.setColumnWidth(7, 110); hoja.setColumnWidth(8, 100);
+  }
+  if (clave) anotarEncabezados_(clave);
 }
 
 function crearCatalogo_() {
@@ -1472,10 +1482,15 @@ function guardarCotizacion(payload) {
     // Registro (Marca, Dirección, vendedor_* y proyecto_folio se agregaron después: se reescribe solo la fila 1
     // de encabezados; las filas de datos no se mueven y las viejas quedan vacías en las columnas nuevas)
     const nCols = ENCABEZADOS_COTIZACIONES.length;
-    const actuales = hojaCot.getRange(1, 1, 1, nCols).getValues()[0];
-    if (ENCABEZADOS_COTIZACIONES.some((h, i) => actuales[i] !== h)) {
-      escribe_(hojaCot).getRange(1, 1, 1, nCols).setValues([ENCABEZADOS_COTIZACIONES])
-        .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+    // Rapidez: la fila 1 se lee solo si no se revisó hace poco (encabezadosRevisados_)
+    const claveEnc = claveEncabezados_(db_(), hojaCot, 'Cotizaciones', ENCABEZADOS_COTIZACIONES);
+    if (!encabezadosRevisados_(claveEnc)) {
+      const actuales = hojaCot.getRange(1, 1, 1, nCols).getValues()[0];
+      if (ENCABEZADOS_COTIZACIONES.some((h, i) => actuales[i] !== h)) {
+        escribe_(hojaCot).getRange(1, 1, 1, nCols).setValues([ENCABEZADOS_COTIZACIONES])
+          .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+      }
+      anotarEncabezados_(claveEnc);
     }
     const t = textoCelda;
     escribe_(hojaCot).appendRow([

@@ -14,6 +14,7 @@
 //     borrar una pestaña) o en algo que no es una pestaña olvida todo.
 //  6. Las vistas de compras (requisición y órdenes del proyecto) toman moneda y línea del caché de contratos: sin leer Contratos
 //     si nada cambió y con la moneda nueva en cuanto cobranza marca otra cotización aceptada.
+//  7. Encabezados de Cotizaciones y del catálogo (columnas SAT): revisados una vez en 6 h, y repuestos si faltan.
 // Uso: node tests/rapidez.test.js .
 'use strict';
 const assert = require('assert');
@@ -265,6 +266,32 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   ok('efrain', 'marcarAceptada', P1, cMxn);
   assert.equal(ok('pedro', 'getRequisicion', folio).moneda, 'MXN');
   assert.equal(ok('pedro', 'getComprasProyecto', P1).moneda, 'MXN', 'órdenes por proyecto: igual');
+}
+
+// ================= 7. Encabezados de Cotizaciones y del catálogo =================
+{
+  const A = crear({ perfil: true });
+  const { ok, perfil, cache } = A;
+  perfil.pila = true;
+  const guardar = n => ok('ana', 'guardarCotizacion', { cliente: { nombre: 'Luis' }, items: [{ descripcion: 'Servicio', cantidad: 1, precio: 100 }],
+    idSolicitud: 'c' + n }).folio;
+  const filas1 = () => perfil.ops.filter(o => o.tipo === 'lee' && ((/\/Cotizaciones$/.test(o.hoja) && (o.pila || [])[0] === 'guardarCotizacion') ||
+    (/\/Catalogo$/.test(o.hoja) && (o.pila || [])[0] === 'asegurarColumnasSat_'))).length;
+  perfil.ops = [];
+  guardar(1);
+  assert.equal(filas1(), 2, 'la primera vez se revisan los dos encabezados');
+  const cot = A.libros.DB.pest.Cotizaciones.m, cat = A.libros.CAT.pest.Catalogo.m;
+  assert.equal(cot[0][19], 'proyecto_folio', 'encabezados de Cotizaciones escritos');
+  perfil.ops = [];
+  guardar(2);
+  assert.equal(filas1(), 0, 'después, ninguno');
+  // Vencida la anotación (6 h) se revisan y se reponen
+  cat[0][6] = ''; cot[0][19] = 'x';
+  const ok6 = JSON.parse(cache.ENCABEZADOS_OK);
+  Object.keys(ok6).forEach(k => { ok6[k] = Date.now() - 6 * 3600 * 1000 - 1; });
+  cache.ENCABEZADOS_OK = JSON.stringify(ok6);
+  guardar(3);
+  assert.deepEqual([cat[0][6], cot[0][19]], ['Clave SAT', 'proyecto_folio'], 'repuestos');
 }
 
 console.log('rapidez: todo bien');
