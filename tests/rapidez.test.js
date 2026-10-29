@@ -31,6 +31,8 @@
 //     subirla (lleva el proyecto que otra ejecución creó mientras tanto).
 // 13. Un cambio a mano en Contratos (moneda) vuelve a mandar la requisición abierta en Compras; mientras no se detecta,
 //     autorizar con la moneda vieja se rechaza (el servidor lee la hoja al escribir).
+// 14. Candados anidados: soltar un candado_ de adentro no suelta el de afuera (el arnés simula un solo candado por ejecución,
+//     que se suelta completo).
 // Uso: node tests/rapidez.test.js .
 'use strict';
 const assert = require('assert');
@@ -413,10 +415,13 @@ const compras = A => {
     referencia: 'SPEI ' + id(''), comprobante: { nombre: 'c.pdf', datos: A.PDF }, idSolicitud: id('pg') });
   // Apps Script aísla cada ejecución; aquí comparten el contexto de vm: se guardan las globales de la ejecución en curso, la otra
   // corre por doPost y se restauran
+  const tieneCuenta = A.correr("typeof CANDADO_TOMADO_ === 'number'"); // (sin el arreglo de la revisión 6 no existe)
   const otraEjecucion = fn => {
-    A.correr('globalThis.__g = { MEMO_: MEMO_, VERSIONES_: VERSIONES_, SIN_CACHE_: SIN_CACHE_, VENDEDOR_: VENDEDOR_ };');
+    A.correr('globalThis.__g = { MEMO_: MEMO_, VERSIONES_: VERSIONES_, SIN_CACHE_: SIN_CACHE_, VENDEDOR_: VENDEDOR_' +
+      (tieneCuenta ? ', CANDADO_TOMADO_: CANDADO_TOMADO_ }; CANDADO_TOMADO_ = 0;' : ' };'));
     try { return fn(); } finally {
-      A.correr('MEMO_ = __g.MEMO_; VERSIONES_ = __g.VERSIONES_; SIN_CACHE_ = __g.SIN_CACHE_; VENDEDOR_ = __g.VENDEDOR_;');
+      A.correr('MEMO_ = __g.MEMO_; VERSIONES_ = __g.VERSIONES_; SIN_CACHE_ = __g.SIN_CACHE_; VENDEDOR_ = __g.VENDEDOR_;' +
+        (tieneCuenta ? ' CANDADO_TOMADO_ = __g.CANDADO_TOMADO_;' : ''));
     }
   };
   return { id, proyecto, pedir, autorizar, pagar, otraEjecucion, LC: () => A.libros[A.props.COMPRAS_DB_ID] };
@@ -532,6 +537,38 @@ const compras = A => {
   assert(s.cambios.indexOf('contratos') !== -1, 'la consulta detecta el cambio a mano');
   assert(s.requisicion, 'y vuelve a mandar la requisición abierta');
   assert.equal(s.requisicion.moneda, 'USD');
+}
+
+// ================= 14. Candados anidados =================
+{
+  const A = crear({ perfil: true });
+  const { correr, perfil } = A;
+  // El arnés modela Apps Script: un solo candado por ejecución; soltarlo una vez lo suelta aunque se haya tomado dos veces
+  const L = A.ctx.LockService, a = L.getScriptLock(), b = L.getScriptLock();
+  a.tryLock(1000); b.tryLock(1000); b.releaseLock();
+  assert.equal(A.candadoTomado(), false, 'el simulacro suelta el candado completo');
+  // Un candado_ dentro de otro (p. ej. el libro del área que se crea la primera vez, o migrarConfig_, con el candado tomado): al
+  // soltar el de adentro, el de afuera sigue con el candado
+  assert.equal(correr('conCandado_(() => { conCandado_(() => 1); return LockService.getScriptLock().hasLock(); })'), true,
+    'soltar el de adentro no suelta el de afuera');
+  assert.equal(A.candadoTomado(), false, 'el de afuera sí lo suelta');
+  // El caso real: crear el libro de compras (primera vez) dentro de una escritura; lo que sigue se escribe con el candado tomado
+  assert.equal(A.props.COMPRAS_DB_ID, undefined);
+  perfil.ops = [];
+  correr(`conCandado_(() => { libroCompras_(); escribe_(hojaCompras_(libroCompras_(), 'Bitacora')).appendRow(['x']); })`);
+  assert(A.props.COMPRAS_DB_ID, 'se creó el libro');
+  const fuera = perfil.ops.filter(o => o.tipo === 'escribe' && /\/Bitacora$/.test(o.hoja) && !o.candado);
+  assert.deepEqual(fuera, [], 'nada se escribe sin candado');
+  // Un error adentro no deja la cuenta mal: el de afuera lo sigue teniendo y al final queda suelto
+  assert.throws(() => correr(`conCandado_(() => {
+    try { conCandado_(() => { throw new Error('adentro'); }); } catch (e) { /* sigue */ }
+    if (!LockService.getScriptLock().hasLock()) throw new Error('se perdió el candado');
+    throw new Error('afuera');
+  })`), /afuera/);
+  assert.equal(A.candadoTomado(), false);
+  perfil.ops = [];
+  correr('conCandado_(() => 1)');
+  assert.equal(perfil.ops.filter(o => o.tipo === 'candado').length, 1, 'el siguiente toma el candado de verdad');
 }
 
 console.log('rapidez: todo bien');

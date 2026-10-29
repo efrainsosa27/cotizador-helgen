@@ -182,7 +182,7 @@ const FUNCIONES_VENTAS = ['getClientes', 'listarCotizaciones', 'getCatalogo', 'g
  */
 function doPost(e) {
   let respuesta;
-  VENDEDOR_ = null; VERSIONES_ = null; SIN_CACHE_ = false; MEMO_ = {};
+  VENDEDOR_ = null; VERSIONES_ = null; SIN_CACHE_ = false; MEMO_ = {}; CANDADO_TOMADO_ = 0;
   try {
     let cuerpo;
     try {
@@ -554,12 +554,34 @@ function escribe_(hoja) {
   return hoja;
 }
 
-/** El candado de script. Al tomarlo o soltarlo se olvidan las filas leídas en la petición (filasEnPeticion_). */
+/**
+ * El candado de script. Al tomarlo o soltarlo se olvidan las filas leídas en la petición (filasEnPeticion_).
+ * Se puede anidar: un candado_ dentro de otro (el libro del área que se crea la primera vez, migrarConfig_, db_… con el candado
+ * ya tomado) no vuelve a pedirlo y al soltarse no lo suelta; solo el de afuera lo suelta. El candado de Apps Script es uno por
+ * ejecución y releaseLock lo suelta completo aunque se haya tomado dos veces: sin esta cuenta, lo que el de afuera hace después
+ * del de adentro (folio, escritura) correría sin candado.
+ */
+let CANDADO_TOMADO_ = 0; // cuántos candado_ de esta ejecución lo tienen tomado (doPost y el activador empiezan en 0)
 function candado_() {
   const lock = LockService.getScriptLock();
+  let mio = false;
   return {
-    tryLock: ms => { const ok = lock.tryLock(ms); if (ok) olvidarFilas_(true); return ok; },
-    releaseLock: () => { lock.releaseLock(); olvidarFilas_(true); },
+    tryLock: ms => {
+      if (mio) return true;
+      if (CANDADO_TOMADO_ > 0) { CANDADO_TOMADO_++; mio = true; return true; } // anidado: esta ejecución ya lo tiene
+      if (!lock.tryLock(ms)) return false;
+      CANDADO_TOMADO_ = 1; mio = true;
+      olvidarFilas_(true);
+      return true;
+    },
+    releaseLock: () => {
+      if (!mio) return;
+      mio = false;
+      if (--CANDADO_TOMADO_ > 0) return; // el de afuera sigue con él
+      CANDADO_TOMADO_ = 0;
+      lock.releaseLock();
+      olvidarFilas_(true);
+    },
   };
 }
 

@@ -174,6 +174,12 @@ tabla se midieron al hacer cada commit (con el perfil de ese momento); la tabla 
     las nuevas que se agreguen).
   - Todo candado pasa por `candado_()`, que olvida todo al tomarlo y al soltarlo (adentro se relee lo que otra persona pudo
     cambiar mientras se esperaba). La misma prueba exige que solo `candado_` llame a `LockService.getScriptLock()`.
+  - **Revisión 6 · candados anidados.** El candado de Apps Script es uno por ejecución y `releaseLock` lo suelta completo aunque
+    se haya tomado dos veces. Un `candado_` dentro de otro (el libro del área o la base de datos que se crean la primera vez,
+    `migrarConfig_`, con el candado ya tomado) lo soltaba al terminar y lo que seguía en el de afuera (folio, escritura) corría
+    sin candado. Ahora `candado_` lleva la cuenta (`CANDADO_TOMADO_`, en 0 al empezar cada `doPost`): el de adentro no lo pide
+    otra vez ni lo suelta (tampoco olvida las filas: nadie más pudo escribir); solo el de afuera lo suelta. El arnés simula un
+    solo candado por ejecución que se suelta completo. Prueba: §14.
   - Cada vez que se leen las versiones (`versiones_`) se olvida todo: una lista que se guarda con una versión se arma con filas
     leídas después de esa versión.
   - El arnés **falla cualquier prueba** que escriba en una pestaña mientras el código guarda filas de esa pestaña (comprobado:

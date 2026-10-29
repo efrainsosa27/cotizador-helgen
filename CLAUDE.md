@@ -890,7 +890,8 @@ Spec: "CAPRI — increment 4 spec" (Claude Docs `https://claude.ai/artifact/2kb6
 18. (Rapidez) Toda escritura a una hoja va como `escribe_(hoja).getRange(…).setValues(…)` / `escribe_(hoja).appendRow(…)`, y todo
     candado se toma con `candado_()` (nunca `LockService.getScriptLock()` directo). Si no, una lectura posterior en la misma
     petición vería filas viejas (`MEMO_.filas`). `tests/rapidez.test.js` revisa el código y el arnés falla la prueba que escriba en
-    una pestaña con sus filas guardadas.
+    una pestaña con sus filas guardadas (o con un memo derivado de ella, `MEMOS_DERIVADOS_`). `candado_` se puede anidar: solo el
+    de afuera suelta el candado de Apps Script (que se suelta completo con un solo `releaseLock`).
 
 ## 8. Cómo trabajar
 
