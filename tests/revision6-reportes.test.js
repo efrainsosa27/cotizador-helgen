@@ -16,6 +16,9 @@
 //     por pagar (facturas primero; sin plan, el resto completo en la fecha del "siguiente" de P sin facturas; con plan, por etapa).
 //  8. Plan de pagos (decisión del coordinador después de la revisión): lo que ninguna factura cubre se parte por etapa; el anticipo
 //     en la fecha de la orden y las demás etapas en venceSinFactura (recepción, o entrega, o la orden + días de crédito).
+//  9. Saldo a favor con proveedores (integración: saldoOrdenCompra(…).aFavor de P): lo pagado de más en una orden va en su propio
+//     bloque de la antigüedad de CxP, por orden y por moneda, y en su propia sección del CSV; nunca se resta de lo que se debe, no se
+//     compensa con otra orden y no entra al flujo.
 // Uso: node tests/revision6-reportes.test.js .
 'use strict';
 const assert = require('assert');
@@ -189,6 +192,35 @@ const filasR = d => plain(P.antiguedadPorPagar(d, P.saldoOrdenCompra)).grupos.re
     .forEach(k => assert(s01.includes(k.toLowerCase()), 'el §0.1 del doc no menciona: ' + k));
 }
 
+// ================= 9. Saldo a favor con proveedores (lógica pura) =================
+{
+  const DEV = A.correr('TIPO_DEVOLUCION_CIERRA');
+  const ren = [{ renglon: 1, cantidad: 80, costo: 10 }, { renglon: 2, cantidad: 12, costo: 50 }]; // 1,400 + IVA = 1,624
+  const devuelto = (renglon, cantidad) => [{ estado: 'Vigente', tipo: DEV, renglon, cantidad: -cantidad }];
+  // OC-AF: pagada completa (1,624) y luego se devolvieron 40 m sin reponer (40 × 10 × 1.16 = 464): se debía 1,160 → 464 a favor.
+  // OC-DB: del mismo proveedor, sin pagar (1,160): se sigue debiendo completa (no se compensa). OC-US: USD, 58 a favor.
+  // OC-TP: de un proyecto de prueba (fuera). OC-OK: pagada justo (sin saldo a favor).
+  const d = Object.assign(datos([
+    OC('OC-AF', 1624, { renglones: ren, estado: 'Recibida' }), OC('OC-DB', 1160),
+    OC('OC-US', 116, { moneda: 'USD', renglones: [{ renglon: 1, cantidad: 2, costo: 50 }], estado: 'Recibida' }),
+    OC('OC-TP', 1624, { renglones: ren, estado: 'Recibida', proyectoFolio: 'PRY-9-0009' }), OC('OC-OK', 1160, { estado: 'Pagada' })],
+    [PGP('OC-AF', 1624), PGP('OC-US', 116), PGP('OC-TP', 1624), PGP('OC-OK', 1160)]),
+    { prueba: ['PRY-9-0009'], movimientos: { 'OC-AF': devuelto(1, 40), 'OC-US': devuelto(1, 1), 'OC-TP': devuelto(1, 40) } });
+  const r = plain(P.antiguedadPorPagar(d, P.saldoOrdenCompra));
+  assert(r.aFavor && r.aFavor.n === 2, 'la antigüedad de CxP trae el saldo a favor aparte: ' + JSON.stringify(r.aFavor));
+  assert.deepEqual(r.aFavor.ordenes.map(o => [o.ocFolio, o.moneda, o.esperado, o.pagado, o.aFavor]),
+    [['OC-AF', 'MXN', 1160, 1624, 464], ['OC-US', 'USD', 58, 116, 58]], 'por orden; MXN primero');
+  assert.deepEqual(r.aFavor.totales, [{ moneda: 'MXN', ordenes: 1, total: 464 }, { moneda: 'USD', ordenes: 1, total: 58 }], 'por moneda, nunca juntas');
+  assert.deepEqual(r.totales.map(t => t.moneda + ' ' + t.total), ['MXN 1160'], 'lo que se debe no baja (no se resta ni se compensa)');
+  assert.deepEqual(plain(P.porPagarProveedores(d, P.saldoOrdenCompra)).map(x => x.ocFolio + ' ' + x.monto), ['OC-DB 1160']);
+  const fl = plain(P.flujoSemanal({ hoy: HOY_ISO, cobros: [], pagos: P.porPagarProveedores(d, P.saldoOrdenCompra) }));
+  assert.deepEqual(fl.partidas.map(p => p.folio), ['OC-DB'], 'fuera del flujo (ni como cobro ni como pago)');
+  // Mismas cifras por orden que Cuentas por pagar (que sí lista el proyecto de prueba: decisión 4)
+  const c = plain(P.antiguedadCxp({ hoy: HOY_ISO, ordenes: d.ordenes, facturas: [], pagos: d.pagosProv, movimientos: d.movimientos }));
+  assert.deepEqual(c.aFavor.filter(x => x.ocFolio !== 'OC-TP').map(x => [x.ocFolio, x.aFavor]).sort(), r.aFavor.ordenes.map(o => [o.ocFolio, o.aFavor]).sort());
+  assert.equal(P.saldosAFavor(d, P.saldoOrdenCompraProvisional).n, 0, 'con la función provisional (sin aFavor) no hay');
+}
+
 // ================= Servidor e interfaz: datos sembrados por la API (doPost) =================
 const B = require('./arnes')(dir, { props: {
   ROL_COBRANZA: 'tania@helgen.tech, efrain@helgen.tech', ADMIN_DESBLOQUEO: 'efrain@helgen.tech', ROL_COMPRAS: 'pedro@helgen.tech',
@@ -343,6 +375,31 @@ const L1 = 'OC-' + B.ANIO + '-0900', L2 = 'OC-' + B.ANIO + '-0901'; // órdenes 
   assert.deepEqual(ok('tania', 'sincronizar', r.versiones, { reporte: 'cxc' }).cambios, [], 'sin otra edición, revisar no sube nada');
 }
 
+// ================= 9. Saldo a favor por la API: pagada completa, material dañado devuelto al proveedor =================
+const AF = {};
+{
+  const p9 = pry('Bodega Sur', UNO); // sin contrato (MXN): no toca CxC ni margen de las otras secciones
+  const r9 = ok('obrero', 'guardarRequisicion', { proyectoFolio: p9, renglones: [{ descripcion: 'Cable THW 10', cantidad: 80, unidad: 'm' },
+    { descripcion: 'Tubo conduit 3/4', cantidad: 12, unidad: 'pza' }], cotizacion: { nombre: 'c.pdf', datos: B.PDF }, idSolicitud: id('r') }).folio;
+  const oc9 = autorizar(r9, 0, { renglones: [{ descripcion: 'Cable THW 10', unidad: 'M', cantidad: 80, costo: 10 },
+    { descripcion: 'Tubo conduit 3/4', unidad: 'PZA', cantidad: 12, costo: 50 }] });
+  ok('pedro', 'registrarPagoProveedor', { reqFolio: r9, fecha: HOY_ISO, monto: 1624, monedaPago: 'MXN', metodo: 'Transferencia', referencia: 'SPEI AF',
+    comprobante: { nombre: 'c.pdf', datos: B.PDF }, idSolicitud: id('pg') });
+  const F = { nombre: 'foto.jpg', datos: B.FOTO, mime: 'image/jpeg' };
+  ok('obrero', 'cerrarRequisicion', r9, '', { renglones: [{ renglon: 1, foto: F, problema: { tipo: 'Dañado', cantidad: 80, comentario: 'Mojado', foto: F } },
+    { renglon: 2, foto: F }] });
+  const devs = B.libros[B.props.COMPRAS_DB_ID].pest.Devoluciones.m;
+  ok('pedro', 'resolverDevolucion', devs[devs.length - 1][0], { resolucion: 'Devolver al proveedor', nota: 'Nos devuelven el dinero' });
+  const rp = ok('pedro', 'reporteCxp');
+  assert(rp.aFavor && rp.aFavor.n === 1, 'reporteCxp trae el saldo a favor');
+  assert.deepEqual(rp.aFavor.ordenes.map(o => [o.ocFolio, o.esperado, o.pagado, o.aFavor, o.reqFolio]), [[oc9, 696, 1624, 928, r9]], '1,624 − 80 × 10 × 1.16');
+  assert(!detalleDe(rp).some(x => x.ocFolio === oc9), 'no está en lo que se debe');
+  assert.deepEqual(rp.totales.map(t => t.moneda + ' ' + t.total), ['MXN 1160'], 'lo que se debe a Eléctrica del Centro no baja');
+  assert.equal(ok('pedro', 'cuentasPorPagar').aFavor.find(x => x.ocFolio === oc9).aFavor, 928, 'la misma cifra que Cuentas por pagar');
+  assert(!ok('leo', 'reporteFlujo').partidas.some(p => p.folio === oc9), 'fuera del flujo');
+  AF.oc = oc9;
+}
+
 // ================= Interfaz (mod-reportes sobre la app, conectada al servidor simulado) =================
 const vm = require('vm');
 const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
@@ -387,6 +444,13 @@ const esperar = async (k = 30) => { for (let i = 0; i < k; i++) await new Promis
   const csv = C.run("REPORTES.csv('cxp')").split('\r\n');
   assert(/"Nota"$/.test(csv[0]), 'columna Nota');
   assert.equal(csv.filter(l => /Orden anterior sin pago registrado \(fuera de los totales\)/.test(l)).length, 2);
+  // 9. Saldo a favor: su propio bloque (por orden y por moneda) y su propia sección en el CSV, después de una línea en blanco
+  assert(/Saldo a favor \(nota de crédito o reembolso\)/.test(h) && /MXN: 1 orden · [^<]*928\.00[^<]* a favor/.test(h), 'bloque de saldo a favor');
+  const iAF = csv.indexOf('"Saldo a favor (nota de crédito o reembolso)"');
+  assert(iAF > 0 && csv[iAF - 1] === '', 'sección propia, separada por una línea en blanco');
+  assert.equal(csv[iAF + 1], '"Proveedor","Orden de compra","Requisición","Proyecto","Moneda","Lo que se debía","Pagado","A favor"');
+  assert(csv[iAF + 2].includes('"' + AF.oc + '"') && /,"MXN",696\.00,1624\.00,928\.00$/.test(csv[iAF + 2]), csv[iAF + 2]);
+  assert(!csv.slice(0, iAF).some(l => l.includes(AF.oc)), 'no está en las filas de lo que se debe');
   const L = montar('leo'); await esperar();
   L.run("verTab('rep')"); await esperar();
   L.run("REPORTES.ver('flujo')"); await esperar();

@@ -5787,8 +5787,24 @@
           (o.fechaRecepcion ? ' <span class="nota">(' + esc(fechaMx(o.fechaRecepcion)) + ')</span>' : '') + '</td><td style="white-space:nowrap">' +
           esc(fechaMx(o.fecha)) + '</td><td class="num">' + dinero(o.total, o.moneda) + '</td></tr>').join('')) + '</div>';
     }
+    /** Integración: saldo a favor con proveedores (lo pagado de más, por orden), aparte: nunca se resta de lo que se debe. */
+    function htmlAFavor(a) {
+      if (!a || !a.n) return '';
+      return '<div class="sat" style="margin-top:14px"><div class="sat-titulo">Saldo a favor (nota de crédito o reembolso)</div>' +
+        '<div class="nota" style="margin-bottom:8px">Lo pagado de más en una orden (por ejemplo, se pagó completa y después se devolvió ' +
+        'material sin reponer): el proveedor le debe a Helgen una nota de crédito o un reembolso. Va por orden: no se resta de lo que se ' +
+        'debe ni se compensa con otra orden, y no entra al flujo de efectivo.</div>' +
+        '<div class="nota">' + a.totales.map(t => esc(t.moneda) + ': ' + plural(t.ordenes, 'orden', 'órdenes') + ' · ' + dinero(t.total, t.moneda) +
+          ' a favor').join(' — ') + '</div>' +
+        tabla('<th>Orden</th><th>Proveedor</th><th>Proyecto</th><th class="num">Lo que se debía</th><th class="num">Pagado</th><th class="num">A favor</th>',
+          a.ordenes.map(o => '<tr><td style="white-space:nowrap"><b>' + esc(o.ocFolio) + '</b>' + (o.reqFolio ? ' <span class="nota">· ' + esc(o.reqFolio) +
+          '</span>' : '') + '</td><td>' + esc(o.proveedor) + '</td><td>' + esc(o.proyectoVisible) + (o.proyectoNombre ? ' <span class="nota">· ' +
+          esc(o.proyectoNombre) + '</span>' : '') + (o.estadoProyecto && o.estadoProyecto !== 'Activo' ? ' <span class="nota">· ' + esc(o.estadoProyecto) +
+          '</span>' : '') + '</td><td class="num">' + dinero(o.esperado, o.moneda) + '</td><td class="num">' + dinero(o.pagado, o.moneda) +
+          '</td><td class="num"><b>' + dinero(o.aFavor, o.moneda) + '</b></td></tr>').join('')) + '</div>';
+    }
     function htmlCxp(d) {
-      return htmlAntiguedadCxp(d) + htmlAnteriores(d.anteriores);
+      return htmlAntiguedadCxp(d) + htmlAFavor(d.aFavor) + htmlAnteriores(d.anteriores);
     }
     function htmlAntiguedadCxp(d) {
       return htmlAntiguedad(d, { columna: 'Proveedor / orden', quien: ['proveedor', 'proveedores'], vacio: 'No hay saldos por pagar a proveedores.',
@@ -5802,7 +5818,7 @@
           'el vencimiento de sus facturas (emisión + días de crédito; lo pagado cubre primero la que vence antes); lo que no tiene factura, en la ' +
           'recepción —o entrega— + días de crédito; con plan de pagos, por etapa: el anticipo en la fecha de la orden y las demás etapas en la ' +
           'recepción —o entrega— + días de crédito. Fuera: órdenes canceladas o anuladas, ' +
-          'registros de prueba y las órdenes anteriores sin pago registrado (abajo, aparte).' });
+          'registros de prueba, el saldo a favor (lo pagado de más) y las órdenes anteriores sin pago registrado (los dos, abajo, aparte).' });
     }
     /** Revisión 6b: la semana 1 es la semana en curso; si hoy no es lunes, parcial (un domingo solo queda hoy). */
     const parcialTexto = s => !s.parcial ? '' : s.diasRestantes === 1 ? 'parcial: solo queda hoy' : 'parcial: quedan ' + s.diasRestantes + ' días con hoy';
@@ -5885,10 +5901,16 @@
         const anteriores = ((d.anteriores || {}).ordenes || []).map(o => [texto(o.proveedor), texto(o.ocFolio), texto(''), texto(o.proyectoVisible),
           texto(o.moneda)].concat(rangos.map(() => ''), ['', texto(''), texto('Orden anterior sin pago registrado (fuera de los totales) · ' +
           o.estado + ' · total de la orden ' + num(o.total))]));
+        // Integración: el saldo a favor (lo pagado de más) va en su propia sección, después de una línea en blanco, con sus columnas
+        const af = (d.aFavor || {}).ordenes || [];
+        const seccionAFavor = !af.length ? '' : '\r\n\r\n' + [[texto('Saldo a favor (nota de crédito o reembolso)')],
+          ['Proveedor', 'Orden de compra', 'Requisición', 'Proyecto', 'Moneda', 'Lo que se debía', 'Pagado', 'A favor'].map(texto)]
+          .concat(af.map(o => [texto(o.proveedor), texto(o.ocFolio), texto(o.reqFolio), texto(o.proyectoVisible), texto(o.moneda), num(o.esperado),
+            num(o.pagado), num(o.aFavor)])).map(f => f.join(',')).join('\r\n');
         return armarCsv(['Proveedor', 'Orden de compra', 'Requisición', 'Proyecto', 'Moneda'].concat(rangos.map(r => r.etiqueta), ['Total', 'Vencimientos', 'Nota']),
           d.grupos.reduce((acc, g) => acc.concat(g.detalle.map(x => [texto(g.proveedor), texto(x.ocFolio), texto(x.reqFolio), texto(x.proyectoVisible),
             texto(x.moneda)].concat(rangos.map(r => num(x[r.clave])), [num(x.total), texto(x.partidas.map(p => (FUENTES[p.fuente] || p.fuente) + ' ' +
-            num(p.monto) + ' ' + (p.fecha || 'sin fecha')).join(' | ')), texto('')]))), []).concat(anteriores));
+            num(p.monto) + ' ' + (p.fecha || 'sin fecha')).join(' | ')), texto('')]))), []).concat(anteriores)) + seccionAFavor;
       }
       if (tipo === 'flujo') {
         return armarCsv(['Moneda', 'Semana', 'Desde', 'Hasta', 'Cobros esperados', 'Pagos esperados', 'Neto', 'Acumulado', 'Cobros vencidos', 'Pagos vencidos'],

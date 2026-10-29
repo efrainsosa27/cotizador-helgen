@@ -12830,6 +12830,43 @@ function ordenesAnterioresSinPago(d) {
 }
 
 /**
+ * (Lógica pura, integración del incremento 6) Saldos a favor con proveedores: lo pagado de más en una orden (p. ej. se pagó completa
+ * y luego se devolvió material sin reponer), que el proveedor le debe a Helgen como nota de crédito o reembolso. Es saldoFn(…).aFavor
+ * (P) de cada orden vigente que no sea de un proyecto de prueba; con la función provisional (sin aFavor) no hay ninguno. Nunca se
+ * resta de lo que se debe ni se compensa con otra orden (ni del mismo proveedor), y no entra al flujo de efectivo: una orden con saldo
+ * a favor está completa, así que porPagarProveedores no la lista. d como en porPagarProveedores. Devuelve {n, ordenes [{ocFolio,
+ * reqFolio, proyectoFolio, proyectoVisible, proyectoNombre, estadoProyecto, proveedorId, proveedor, moneda, esperado (lo que se
+ * debía: lo facturado si las facturas la cubren con retenciones), pagado, aFavor}] (MXN primero, del mayor al menor), totales
+ * [{moneda, ordenes, total}]}.
+ */
+function saldosAFavor(d, saldoFn) {
+  const may = s => String(s || '').trim().toUpperCase();
+  const prueba = d.prueba || FOLIOS_PRUEBA_REPORTES, fn = saldoFn || saldoOrdenCompraProvisional;
+  const proyectos = {}, pagos = {}, facturas = {};
+  (d.proyectos || []).forEach(p => { proyectos[may(p.folio)] = p; });
+  (d.pagosProv || []).forEach(p => { (pagos[may(p.ocFolio)] = pagos[may(p.ocFolio)] || []).push(p); });
+  (d.facturas || []).filter(f => f.estado === FPR_VIGENTE).forEach(f => { (facturas[may(f.ocFolio)] = facturas[may(f.ocFolio)] || []).push(f); });
+  const movs = d.movimientos || {};
+  const ordenes = [];
+  (d.ordenes || []).forEach(o => {
+    if (!ocVigente(o) || esFolioPrueba(o.proyectoFolio, prueba)) return;
+    const k = may(o.folio);
+    const s = fn(Object.assign({}, o, { facturas: facturas[k] || [] }), pagos[k] || [], movs[k] || []);
+    const cts = s ? aCentavos(s.aFavor) : 0;
+    if (!(cts > 0)) return;
+    const p = proyectos[may(o.proyectoFolio)] || {};
+    ordenes.push({ ocFolio: o.folio, reqFolio: o.reqFolio || '', proyectoFolio: o.proyectoFolio, proyectoVisible: p.folioVisible || o.proyectoFolio,
+      proyectoNombre: p.nombre || '', estadoProyecto: p.estado || '', proveedorId: o.proveedorId || '', proveedor: o.proveedor || '',
+      moneda: o.moneda, esperado: redondear(s.porFacturas || s.esperado), pagado: redondear(s.pagado), aFavor: cts / 100 });
+  });
+  ordenes.sort((a, b) => ordenMonedas(a.moneda, b.moneda) || b.aFavor - a.aFavor || (a.ocFolio < b.ocFolio ? -1 : 1));
+  const tot = {};
+  ordenes.forEach(o => { const t = tot[o.moneda] || (tot[o.moneda] = { ordenes: 0, cts: 0 }); t.ordenes++; t.cts += aCentavos(o.aFavor); });
+  return { n: ordenes.length, ordenes: ordenes,
+    totales: Object.keys(tot).sort(ordenMonedas).map(m => ({ moneda: m, ordenes: tot[m].ordenes, total: tot[m].cts / 100 })) };
+}
+
+/**
  * (Lógica pura) Tramos {cts, fecha, fuente, referencia} del saldo s de una orden (reglas en porPagarProveedores). sigResto = el
  * "siguiente" de P sin facturas (fecha de lo que ninguna factura cubre en una orden sin plan); sin él (o sin fecha),
  * venceSinFactura(o). Con plan de pagos, lo que ninguna factura cubre se parte por etapa (revisión 6b): los pagos y las facturas
@@ -12975,7 +13012,8 @@ function antiguedadCxc(d) {
 /**
  * (Lógica pura) Antigüedad de cuentas por pagar: porPagarProveedores agrupadas por proveedor (su id o, sin él, su nombre) y orden.
  * d = {hoy, ordenes, pagosProv, movimientos, facturas, proyectos, prueba}; saldoFn = saldoOrdenCompra (P) o la provisional. Trae
- * además anteriores (ordenesAnterioresSinPago): las órdenes anteriores sin pago registrado, aparte y fuera de los totales.
+ * además anteriores (ordenesAnterioresSinPago): las órdenes anteriores sin pago registrado, aparte y fuera de los totales, y aFavor
+ * (saldosAFavor): lo pagado de más por orden (nota de crédito o reembolso), aparte, sin restarse de lo que se debe.
  */
 function antiguedadPorPagar(d, saldoFn) {
   const r = antiguedadEnGrupos(porPagarProveedores(d, saldoFn), d.hoy,
@@ -12984,6 +13022,7 @@ function antiguedadPorPagar(d, saldoFn) {
     x => ({ clave: x.ocFolio, datos: { ocFolio: x.ocFolio, reqFolio: x.reqFolio, proyectoFolio: x.proyectoFolio, proyectoVisible: x.proyectoVisible,
       proyectoNombre: x.proyectoNombre, estadoProyecto: x.estadoProyecto, esperado: x.esperado, pagado: x.pagado } }));
   r.anteriores = ordenesAnterioresSinPago(d); // revisión 6b: bloque aparte, fuera de los totales
+  r.aFavor = saldosAFavor(d, saldoFn); // integración: lo pagado de más, aparte por orden (nunca se resta de lo que se debe)
   return r;
 }
 

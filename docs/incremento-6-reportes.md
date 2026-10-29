@@ -28,7 +28,8 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
    descuentan), lo no facturado de una orden con facturas (fila "Saldo" por etapa del plan en las dos), plan con el
    anticipo pagado en parte (por etapa en las dos), órdenes con pagos parciales (facturas en orden de vencimiento con lo pagado + fila "Saldo" en la fecha del
    siguiente pago de P), plan de pagos con el anticipo ya pagado (el resto en recepción/entrega + crédito), retenciones, órdenes de proyectos Cancelados (cuentan, decisión 2), canceladas y anuladas
-   (fuera), lo pagado dentro de la tolerancia (no se lista).
+   (fuera), lo pagado dentro de la tolerancia (no se lista), el **saldo a favor** por orden (aparte en las dos, decisión 13; R sin
+   los proyectos de prueba).
 
    **Antigüedad de CxC y flujo (R) contra el resumen de cobranza**
 
@@ -114,6 +115,14 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
     que es justo lo que la rapidez quitó. Consecuencia: si nadie con cobranza tiene la app abierta, una edición a mano se ve
     cuando el caché del reporte vence o al día siguiente (los reportes de CxC y flujo dependen del día), como pasa con las demás
     hojas.
+13. **Saldo a favor con proveedores** (integración del incremento 6, con `saldoOrdenCompra(…).aFavor` de P): lo pagado de más en una
+    orden (p. ej. se pagó completa y después se devolvió material sin reponer) es dinero que el proveedor le debe a Helgen, como
+    nota de crédito o reembolso. La antigüedad de CxP lo muestra en su propio bloque, **"Saldo a favor (nota de crédito o
+    reembolso)"**, por orden (orden, requisición, proveedor, proyecto, lo que se debía, pagado, a favor) y con el total por moneda;
+    en el CSV va en su **propia sección**, después de una línea en blanco, con sus columnas. **Nunca se resta de lo que se debe** ni
+    se compensa con otra orden (ni del mismo proveedor), las monedas nunca se juntan y **no entra al flujo de 13 semanas** (una
+    orden con saldo a favor está completa, así que no tiene partidas). Mismas cifras por orden que Cuentas por pagar; como en todo
+    R, sin los proyectos de prueba. Con la función provisional de saldo (sin `aFavor`) el bloque no sale.
 
 ## 1. Qué hace
 
@@ -131,7 +140,8 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
      desbloqueado con pagos va marcado "Desbloqueado" (decisión 5).
    - **Antigüedad de cuentas por pagar** (compras, super admin): por proveedor y orden, mismos rangos; cada orden dice de dónde sale
      la fecha (factura, plan de pagos o sin factura). Abajo, aparte y fuera de los totales, las **órdenes anteriores sin pago
-     registrado** (decisión 11) con cuántas son. Sin datos de contrato ni margen. En el CSV van al final con la columna "Nota".
+     registrado** (decisión 11) con cuántas son, y el **saldo a favor** con proveedores (decisión 13). Sin datos de contrato ni
+     margen. En el CSV, las anteriores van al final con la columna "Nota" y el saldo a favor en su propia sección.
    - **Flujo de efectivo · 13 semanas** (solo super admin): cobros esperados contra pagos esperados por semana, neto y acumulado; la
      semana 1 es la "Semana en curso" (parcial si hoy no es lunes) y dice cuánto de lo suyo está vencido; aparte sin fecha y después de la semana 13; lista de partidas. Dice cuántas
      órdenes anteriores sin pago registrado no incluye.
@@ -162,14 +172,14 @@ Esquemas: `F_esquemas_<versión de contratos>`, `H_esquemas`, `R_esquemas` (deci
 | `REPORTES_` | Por reporte: colecciones de su caché y sincronización, si depende del día y su función |
 | `reporteEnCache_(tipo, calcular)` | `enCache_` con día (si aplica) y huella de `foliosPrueba_()`; TTL 6 h |
 | `reporteCxc()` *(API)* | `antiguedadCxc(datosReportes_({cobranza}))` |
-| `reporteCxp()` *(API)* | `antiguedadPorPagar(datosReportes_({compras}), saldoOrdenCompra_())` (con `anteriores`: decisión 11) |
+| `reporteCxp()` *(API)* | `antiguedadPorPagar(datosReportes_({compras}), saldoOrdenCompra_())` (con `anteriores`: decisión 11, y `aFavor`: decisión 13) |
 | `reporteFlujo()` *(API)* | `flujoSemanal({hoy, semanas: 13, cobros: etapasPorCobrar, pagos: porPagarProveedores})` + `ordenesAnteriores` (cuántas quedaron fuera) |
 | `reporteMargen()` *(API)* | `margenPorProyecto(datosReportes_({cobranza, compras}))` |
 | `saldoOrdenCompra_()` | **Punto de integración con P** (ver §5) |
 | `foliosPrueba_()` | `FOLIOS_PRUEBA_REPORTES` + Script Property `FOLIOS_PRUEBA` |
 | `datosReportes_(que)` | Lee contratos, esquemas (con fecha), pagos de clientes; órdenes, pagos a proveedores, movimientos y facturas; proyectos visibles. Sin lo anulado (estado `Anulada` o `esAnulado_`). No crea nada |
 | `guardarFechasEsperadas(proyecto, fechas)` *(API)* | Ver §1.1. `fechas = [{orden, etapa, fecha}]`; si la etapa en ese número ya no se llama igual (el esquema cambió), error y no escribe nada. Con candado; escribe solo la celda de cada etapa que cambió; devuelve `vistaCobranza_` |
-| Puras | `fechaIsoValida`, `esFolioPrueba`, `normalizarFechasEsperadas`, `rangoAntiguedad`, `ordenMonedas`, `contratoDesbloqueado`, `etapasPorCobrar`, `porPagarProveedores`, `tramosPorPagar`, `esOrdenAnteriorSinPago`, `ordenesAnterioresSinPago`, `saldoOrdenCompraProvisional`, `antiguedadEnGrupos`, `antiguedadCxc`, `antiguedadPorPagar`, `lunesDe`, `flujoSemanal`, `margenPorProyecto`; constantes `FOLIOS_PRUEBA_REPORTES`, `SEMANAS_FLUJO`, `RANGOS_REPORTE`, `RANGO_SIN_FECHA`, `FUENTES_VENCE` |
+| Puras | `fechaIsoValida`, `esFolioPrueba`, `normalizarFechasEsperadas`, `rangoAntiguedad`, `ordenMonedas`, `contratoDesbloqueado`, `etapasPorCobrar`, `porPagarProveedores`, `tramosPorPagar`, `esOrdenAnteriorSinPago`, `ordenesAnterioresSinPago`, `saldosAFavor`, `saldoOrdenCompraProvisional`, `antiguedadEnGrupos`, `antiguedadCxc`, `antiguedadPorPagar`, `lunesDe`, `flujoSemanal`, `margenPorProyecto`; constantes `FOLIOS_PRUEBA_REPORTES`, `SEMANAS_FLUJO`, `RANGOS_REPORTE`, `RANGO_SIN_FECHA`, `FUENTES_VENCE` |
 
 ### Cambios fuera de §6.R (marcados "R (incremento 6)")
 - `MODULOS_` (+ `modReportes_()`).
@@ -200,7 +210,8 @@ Esquemas: `F_esquemas_<versión de contratos>`, `H_esquemas`, `R_esquemas` (deci
   aparte. Vencido = todo menos No vencido y Sin fecha.
 - **CxP (`porPagarProveedores` / `tramosPorPagar`):** órdenes vigentes (`ocVigente`: ni Cancelada ni Anulada; tampoco `esAnulado_`),
   no de proyectos de prueba, **sin las órdenes anteriores sin pago registrado** (`esOrdenAnteriorSinPago`: sin `req_folio`, sin pago
-  Vigente y sin factura Vigente; van en `anteriores`, decisión 11). Saldo con `saldoOrdenCompra` (P, con las facturas de la orden: retenciones); nada si `completo`.
+  Vigente y sin factura Vigente; van en `anteriores`, decisión 11). Lo pagado de más (`aFavor` de P) va aparte en `aFavor`
+  (`saldosAFavor`, decisión 13), nunca contra lo que se debe. Saldo con `saldoOrdenCompra` (P, con las facturas de la orden: retenciones); nada si `completo`.
   Fecha (decisión 10): (1) facturas Vigentes de la orden en su moneda, de la que vence antes a la última, y lo pagado cubre primero
   las que vencen antes; (2) lo que ninguna factura cubre (más de 1.00): sin plan, completo en la fecha del "siguiente" de P sin
   facturas o, si no la da, `venceSinFactura` ('estimada' = "Sin factura"); con plan, el final de la orden partido en sus etapas, el
@@ -255,7 +266,7 @@ Esquemas: `F_esquemas_<versión de contratos>`, `H_esquemas`, `R_esquemas` (deci
   de sincronización, bloque de fechas en Cobranza (valores, estado, solo manda lo que cambió, sin cambios no llama, sin contrato no
   se ve).
 
-`tests/revision6-reportes.test.js` (revisión 6b, 96 aserciones): cada hallazgo de la revisión con el escenario que fallaba antes del arreglo —
+`tests/revision6-reportes.test.js` (revisión 6b, 117 aserciones): cada hallazgo de la revisión con el escenario que fallaba antes del arreglo —
 fecha de lo que no tiene factura igual a Cuentas por pagar (sección 2), órdenes anteriores sin pago registrado (sección 1: pura,
 sembradas por la API como las de la fase 3, interfaz y CSV), cada diferencia de §0.1 con su dirección contra `antiguedadCxp`,
 `resumenGeneralCobranza` y el margen (sección 3; también revisa que el doc la liste), contratos desbloqueados con pagos (sección 4: pura, firmado → pago →
@@ -264,9 +275,11 @@ lunes y jueves; pantalla y CSV), apóstrofo con tabulador y CR al inicio (secci�
 hoja), fecha esperada editada a mano en Esquemas (sección 7: antes de la revisión nada; vencida la marca, sube `contratos`, manda el
 reporte abierto, CxC y flujo con la fecha nueva, una sola vez), plan de pagos por etapa (sección 8: la orden OC-B de la revisión,
 recibida antes, anticipo pagado en parte, anticipo facturado, factura por más que el anticipo, tres etapas, plan de una etapa,
-función provisional, suma = saldo de P y flujo)—.
+función provisional, suma = saldo de P y flujo), saldo a favor con proveedores (sección 9: pura —no baja lo que se debe ni se
+compensa, monedas aparte, sin proyectos de prueba, fuera del flujo, igual a Cuentas por pagar— y por la API: pagada completa,
+material dañado devuelto al proveedor, bloque en pantalla y sección propia del CSV)—.
 
-`bash tests/todas.sh`: 25 archivos + sintaxis de la interfaz, todo en verde.
+`bash tests/todas.sh`: 26 archivos + sintaxis de la interfaz, todo en verde.
 
 ## 7. Publicación
 
@@ -283,6 +296,7 @@ función provisional, suma = saldo de P y flujo)—.
 - Avisar a cobranza: dónde se capturan las fechas; a compras: el reporte de CxP incluye lo que falta facturar, en su fecha
   (recepción o entrega + días de crédito; con plan de pagos, el anticipo en la fecha de la orden y cada etapa siguiente en
   recepción o entrega + días de crédito), y que las órdenes de antes de las requisiciones que nunca se
-  pagaron en CAPRI salen aparte (no se pueden pagar; si ya se pagaron fuera, basta saberlo; si no, decidir qué hacer con ellas).
+  pagaron en CAPRI salen aparte (no se pueden pagar; si ya se pagaron fuera, basta saberlo; si no, decidir qué hacer con ellas), y
+  que lo pagado de más sale como "Saldo a favor" para pedir la nota de crédito o el reembolso (no baja lo que se debe).
 - Al integrar: pasar a `CLAUDE.md` §4.5.2 (fecha esperada), §4.6 (puras), §4.7 (pestaña Reportes), §4.8 (módulo R), §5 (columna y
   `FOLIOS_PRUEBA`), §6 (decisiones de §0), §7 (regla: reportes solo lectura, monedas aparte) y §9; y el Manual (regla 14).
