@@ -702,6 +702,20 @@ function contratosCache_(revisar) {
   }, revisar);
 }
 
+/**
+ * Revisión 6b (R): huella de la pestaña Esquemas de cobranza (etapas, porcentajes, fecha_esperada), para que una edición a mano
+ * —típicamente la fecha esperada— llegue a la antigüedad de CxC, al flujo y a la vista de cobranza en la misma ventana que las
+ * demás hojas: si cambió con la misma versión, fuenteConHuella_ sube la versión de 'contratos' (la colección de Esquemas). Solo
+ * guarda un MD5 de las filas (no las filas). Se revisa solo desde sincronizar (segundo plano, cada 10 min como Contratos); a
+ * propósito no está en REVISAR_A_MANO_: ahí se leería la hoja en una petición normal después de cada escritura de contratos.
+ */
+function esquemasCache_(revisar) {
+  return fuenteConHuella_('esquemas', 'contratos', 600, () => {
+    const filas = filasSiHay_(libroCobranzaSiExiste_(), HOJAS_COBRANZA, 'Esquemas');
+    return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(filas)));
+  }, revisar);
+}
+
 /** Catálogo de productos con su tipo de cambio (los precios también se editan en la hoja). */
 function catalogoCache_(revisar) {
   return fuenteConHuella_('catalogo', 'catalogo', 600, () => {
@@ -817,6 +831,7 @@ function sincronizar(vc, ctx) {
   intentar_(errores, 'Proyectos', () => proyectosCache_(true));
   intentar_(errores, 'Permisos', () => { usuariosCapri_(true); delegacionesCapri_(true); });
   if (permisos.cobranza || permisos.compras) intentar_(errores, 'Contratos', () => contratosCache_(true));
+  if (permisos.cobranza) intentar_(errores, 'Esquemas', () => esquemasCache_(true)); // revisión 6b: fecha esperada a mano (CxC, flujo)
   intentar_(errores, 'Catálogo', () => catalogoCache_(true));
   if (!solo) intentar_(errores, 'Clientes', () => clientesCache_(true));
   const v = versiones_(true);

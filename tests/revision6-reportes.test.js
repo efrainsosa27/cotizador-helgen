@@ -7,6 +7,8 @@
 //     marcados "Desbloqueado"; uno aceptado sin firmar y sin pagos sigue fuera.
 //  5. Flujo un domingo: la semana 1 es "Semana en curso" (parcial: un domingo solo queda hoy) en pantalla y en el CSV; siguen 13.
 //  6. CSV de reportes: un texto que empieza con tabulador o retorno de carro (solo editando la hoja a mano) también va con apóstrofo.
+//  7. Fecha esperada editada a mano en Esquemas: la sincronización la detecta en la misma ventana que las demás hojas (sube la
+//     versión de contratos) y la antigüedad de CxC y el flujo se recalculan.
 //  2. Fecha base de lo que se debe sin factura: UNA regla para P (vista de la orden), Cuentas por pagar y R (venceSinFactura:
 //     recepción, o entrega, o la orden + días de crédito); el mismo saldo cae en el mismo rango y la misma semana que en Cuentas
 //     por pagar (facturas primero; el resto completo en la fecha del "siguiente" de P sin facturas, también con plan de pagos).
@@ -201,6 +203,30 @@ const L1 = 'OC-' + B.ANIO + '-0900', L2 = 'OC-' + B.ANIO + '-0901'; // órdenes 
   const g = plain(P.flujoSemanal({ hoy: LUN, cobros: [], pagos: [] }));
   assert.deepEqual([g.semanas[0].desde, g.semanas[0].parcial, g.semanas[0].diasRestantes], [LUN, false, 7], 'un lunes la semana en curso está completa');
   assert.equal(plain(P.flujoSemanal({ hoy: '2026-10-29', cobros: [], pagos: [] })).semanas[0].diasRestantes, 4, 'un jueves quedan 4 días con hoy');
+}
+
+// ================= 7. Esquemas.fecha_esperada editada a mano =================
+{
+  let vers = ok('tania', 'sincronizar', {}, { reporte: 'cxc' }).versiones; // revisa las hojas y deja las marcas R_
+  vers = ok('tania', 'sincronizar', vers, { reporte: 'cxc' }).versiones;
+  const etapa2 = (r, folio) => detalleDe(r).find(x => x.folio === folio).partidas.find(p => p.orden === 2);
+  assert.equal(etapa2(ok('tania', 'reporteCxc'), p1).fecha, '', 'sin fecha (queda en caché)');
+  // Alguien escribe la fecha esperada de la etapa 2 directo en la hoja Esquemas
+  const ESQ = B.libros[B.props.COBRANZA_DB_ID].pest.Esquemas.m, cF = ESQ[0].indexOf('fecha_esperada');
+  ESQ.find(r => r[0] === p1 && Number(r[1]) === 2)[cF] = masDias(-45);
+  assert.deepEqual(ok('tania', 'sincronizar', vers, { reporte: 'cxc' }).cambios, [], 'antes de que toque revisar, nada (como las demás hojas)');
+  delete B.cache.R_esquemas; // pasaron los 10 minutos de la marca de revisión
+  const r = ok('tania', 'sincronizar', vers, { reporte: 'cxc' });
+  assert(r.cambios.indexOf('contratos') !== -1, 'la edición a mano sube la versión de contratos');
+  assert(r.reporte && r.reporte.tipo === 'cxc', 'manda el reporte abierto');
+  assert.deepEqual([etapa2(r.reporte.datos, p1).fecha, etapa2(r.reporte.datos, p1).rango], [masDias(-45), 'd31a60'], 'con la fecha nueva');
+  assert.equal(etapa2(ok('tania', 'reporteCxc'), p1).fecha, masDias(-45), 'el caché del reporte ya es otro');
+  const vis = ok('tania', 'getCobranzaProyecto', p1).proyecto.folioVisible;
+  assert(ok('leo', 'reporteFlujo').partidas.some(p => p.tipo === 'cobro' && p.folio === vis && p.fecha === masDias(-45) && p.vencido && p.semana === 1),
+    'y el flujo (vencido, en la semana en curso)');
+  assert.deepEqual(ok('tania', 'sincronizar', r.versiones, { reporte: 'cxc' }).cambios, [], 'una sola vez');
+  delete B.cache.R_esquemas;
+  assert.deepEqual(ok('tania', 'sincronizar', r.versiones, { reporte: 'cxc' }).cambios, [], 'sin otra edición, revisar no sube nada');
 }
 
 // ================= Interfaz (mod-reportes sobre la app, conectada al servidor simulado) =================

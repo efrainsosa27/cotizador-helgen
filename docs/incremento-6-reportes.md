@@ -63,6 +63,16 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
     **"Órdenes anteriores sin pago registrado (n)"** (orden, proveedor, proyecto, estado, fecha, total de la orden y total por
     moneda) y el flujo dice cuántas dejó fuera. **Su costo sigue en el margen** (igual que la tarjeta de margen). Con un pago
     Vigente, una factura Vigente o una requisición deja de ser "anterior" y vuelve a la antigüedad normal.
+12. **Fecha esperada editada a mano en `Esquemas`** (revisión 6b): llega a la antigüedad de CxC y al flujo **en la misma ventana
+    que las demás hojas editadas a mano** (Contratos: 10 min). `esquemasCache_` es una fuente con huella (`fuenteConHuella_`) de la
+    pestaña Esquemas sobre la colección `contratos`: guarda solo un MD5 de las filas y, si cambió con la misma versión, sube
+    `contratos`; con eso cambia la clave de caché de los reportes y `sincronizar` manda el reporte abierto (y la vista y el resumen
+    de cobranza, que también dependen de `contratos`). Se revisa **solo desde `sincronizar`** (en segundo plano, con permiso de
+    cobranza —el super admin lo tiene—), cada 10 min y después de cada escritura de contratos. **No está en `REVISAR_A_MANO_`** a
+    propósito: ahí se leería la hoja Esquemas en peticiones normales (no en segundo plano) después de cada escritura de contratos,
+    que es justo lo que la rapidez quitó. Consecuencia: si nadie con cobranza tiene la app abierta, una edición a mano se ve
+    cuando el caché del reporte vence o al día siguiente (los reportes de CxC y flujo dependen del día), como pasa con las demás
+    hojas.
 
 ## 1. Qué hace
 
@@ -97,7 +107,8 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
 | Cobranza | `Bitacora` | Acción nueva "Fechas esperadas de cobro" (detalle antes → después). |
 | Script Properties | `FOLIOS_PRUEBA` | Opcional: folios de prueba extra que no van en los reportes. |
 
-Nada en la Base de datos ni en el libro de compras. Caché (CacheService): `K_REP_<tipo>_<día>_<huella de pruebas>_<versiones>`.
+Nada en la Base de datos ni en el libro de compras. Caché (CacheService): `K_REP_<tipo>_<día>_<huella de pruebas>_<versiones>`; huella de
+Esquemas: `F_esquemas_<versión de contratos>`, `H_esquemas`, `R_esquemas` (decisión 12).
 
 ## 3. Funciones
 
@@ -125,6 +136,7 @@ Nada en la Base de datos ni en el libro de compras. Caché (CacheService): `K_RE
 - `datosCobranza_`: cada etapa trae `fechaEsperada`.
 - `escribirEsquema_`: conserva la fecha por nombre de etapa (lo usan `marcarAceptada`, `guardarEsquema` y `firmarContrato`).
 - `vistaCobranza_`: `fechasEditables` (con aceptada o firmado, con etapas, proyecto no Cancelado); `esquema[i].fechaEsperada`.
+- `esquemasCache_` (junto a `contratosCache_`) y una línea en `sincronizar` (revisión 6b, decisión 12): huella de la hoja Esquemas.
 - §6.P (revisión 6b): `venceSinFactura(o)` = recepción, o entrega, o la orden + días de crédito; `saldoOrdenCompra` la usa para el
   "siguiente" (antes tenía la regla escrita ahí; mismo resultado).
 
@@ -205,7 +217,8 @@ fecha de lo que no tiene factura igual a Cuentas por pagar (sección 2), órdene
 sembradas por la API como las de la fase 3, interfaz y CSV), contratos desbloqueados con pagos (sección 4: pura, firmado → pago →
 desbloqueo por la API, CxC, flujo, chip y CSV; por firmar sin pagos sigue fuera), semana en curso del flujo (sección 5: domingo,
 lunes y jueves; pantalla y CSV), apóstrofo con tabulador y CR al inicio (sección 6: cliente y proyecto editados a mano en la
-hoja)—.
+hoja), fecha esperada editada a mano en Esquemas (sección 7: antes de la revisión nada; vencida la marca, sube `contratos`, manda el
+reporte abierto, CxC y flujo con la fecha nueva, una sola vez)—.
 
 `bash tests/todas.sh`: 25 archivos + sintaxis de la interfaz, todo en verde.
 
@@ -217,6 +230,8 @@ hoja)—.
   `Esquemas`) → `npx clasp push --force` → nueva versión del deployment como **facilities@** → `CLOUDFLARE_ACCOUNT_ID=… npx --yes
   wrangler@4 deploy` (la interfaz nueva con la API vieja: la pestaña Reportes aparece y sus llamadas responden "Función no permitida";
   por eso API primero).
+- Si alguien captura fechas esperadas directo en la hoja Esquemas, los reportes las toman en la siguiente revisión (≤ 10 min con la
+  app abierta por alguien de cobranza; decisión 12).
 - Después de publicar: abrir Reportes como leo@ (super admin) y revisar contra el resumen de cobranza y Cuentas por pagar (las
   diferencias esperadas están en §0.1). Capturar las fechas esperadas de los contratos firmados (sin ellas todo cae en "Sin fecha").
 - Avisar a cobranza: dónde se capturan las fechas; a compras: el reporte de CxP incluye lo que falta facturar, en la fecha de su
