@@ -15,6 +15,8 @@
 //  6. Las vistas de compras (requisición y órdenes del proyecto) toman moneda y línea del caché de contratos: sin leer Contratos
 //     si nada cambió y con la moneda nueva en cuanto cobranza marca otra cotización aceptada.
 //  7. Encabezados de Cotizaciones y del catálogo (columnas SAT): revisados una vez en 6 h, y repuestos si faltan.
+//  8. Caché: un valor que cabe en un trozo va en la misma entrada (una lectura); uno grande, en trozos; lo guardado con el
+//     formato de antes (N:n + trozos) se sigue leyendo; null y valores con acentos regresan iguales.
 // Uso: node tests/rapidez.test.js .
 'use strict';
 const assert = require('assert');
@@ -292,6 +294,30 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   cache.ENCABEZADOS_OK = JSON.stringify(ok6);
   guardar(3);
   assert.deepEqual([cat[0][6], cot[0][19]], ['Clave SAT', 'proyecto_folio'], 'repuestos');
+}
+
+// ================= 8. Formato del caché =================
+{
+  const A = crear({ perfil: true });
+  const { correr, cache, perfil, plain } = A;
+  const chico = { a: 'Señalización — ñ', n: [1, 2, 3] };
+  correr(`guardarCache_('K_prueba_chico', ${JSON.stringify(chico)}, 600)`);
+  assert.equal(cache.K_prueba_chico.slice(0, 2), 'V:', 'en la misma entrada');
+  perfil.ops = [];
+  assert.deepEqual(plain(correr(`leerCache_('K_prueba_chico')`)), chico);
+  assert.equal(perfil.ops.filter(o => o.tipo === 'cache').length, 1, 'una lectura');
+  correr(`guardarCache_('K_prueba_nulo', null, 600)`);
+  assert.equal(correr(`leerCache_('K_prueba_nulo')`), null, 'null se guarda (no es "no está")');
+  assert.equal(correr(`leerCache_('K_no_existe')`), undefined);
+  const grande = Array.from({ length: 3000 }, (_, i) => 'renglón ' + i + ' con acentos áéíóú');
+  correr(`guardarCache_('K_prueba_grande', ${JSON.stringify(grande)}, 600)`);
+  assert(/^N:\d+$/.test(cache.K_prueba_grande) && cache['K_prueba_grande#1'], 'en trozos');
+  assert.deepEqual(plain(correr(`leerCache_('K_prueba_grande')`)), grande);
+  // Formato de antes (lo dejó la versión publicada): se sigue leyendo
+  cache.K_viejo = 'N:1'; cache['K_viejo#0'] = JSON.stringify({ viejo: true });
+  assert.deepEqual(plain(correr(`leerCache_('K_viejo')`)), { viejo: true });
+  cache.K_roto = 'N:2'; cache['K_roto#0'] = '{"a"';
+  assert.equal(correr(`leerCache_('K_roto')`), undefined, 'falta un trozo: no está');
 }
 
 console.log('rapidez: todo bien');

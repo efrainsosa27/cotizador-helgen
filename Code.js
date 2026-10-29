@@ -563,10 +563,16 @@ function subirVersiones_(colecciones) {
 
 const TROZO_CACHE = 30000; // caracteres por entrada (CacheService admite 100 KB por valor; un acento ocupa 2 bytes)
 
-/** Lee un valor JSON guardado en trozos por guardarCache_; undefined si no está o le falta un trozo. */
+/**
+ * Lee un valor JSON guardado por guardarCache_; undefined si no está o le falta un trozo. Rapidez (30/10/2026): un valor que
+ * cabe en un trozo va en la misma entrada ("V:<json>", una lectura); uno más grande, en trozos ("N:<n>" + <clave>#0…).
+ */
 function leerCache_(clave) {
   const cache = CacheService.getScriptCache();
   const meta = cache.get(clave);
+  if (meta && meta.slice(0, 2) === 'V:') {
+    try { return JSON.parse(meta.slice(2)); } catch (e) { return undefined; }
+  }
   if (!meta || !/^N:\d+$/.test(meta)) return undefined;
   const claves = [];
   for (let i = 0; i < Number(meta.slice(2)); i++) claves.push(clave + '#' + i);
@@ -582,6 +588,8 @@ function leerCache_(clave) {
 function guardarCache_(clave, valor, ttl) {
   try {
     const texto = JSON.stringify(valor), datos = {};
+    // Rapidez: lo que cabe en un trozo va en la misma entrada (al leerlo, un viaje a CacheService en lugar de dos)
+    if (texto.length <= TROZO_CACHE) { CacheService.getScriptCache().put(clave, 'V:' + texto, ttl); return; }
     let n = 0;
     for (let i = 0; i < texto.length; i += TROZO_CACHE) datos[clave + '#' + (n++)] = texto.slice(i, i + TROZO_CACHE);
     if (n > 30) return; // demasiado grande: se seguirá leyendo de la hoja
