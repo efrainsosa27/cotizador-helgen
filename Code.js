@@ -2612,6 +2612,7 @@ function cancelarOrdenCompra(folioOc, motivo, confirmado) {
   exigirCompras_();
   const m = motivoObligatorio_(motivo, 'Escribe el motivo de la cancelación.');
   const libro = libroCompras_();
+  const sinRevisar = recepcionesAntesDeCancelar_(folioOc); // lo que ya se recibió en el sitio cuenta (y frena la cancelación)
   return conAvisoPortal_(conCandado_(() => {
     const { hoja, orden } = buscarOrden_(libro, folioOc);
     if (orden.estado === OC_CANCELADA) throw new Error('La orden ' + orden.folio + ' ya está cancelada.');
@@ -2624,7 +2625,9 @@ function cancelarOrdenCompra(folioOc, motivo, confirmado) {
       }
       if (confirmado !== true) {
         return { confirmar: true, mensaje: 'El material de la orden ' + orden.folio + ' ya va en camino (' + textoEnCamino(orden) +
-          '). Si la cancelas, el centro de mando quita lo que está en tránsito. ¿Cancelar la orden?' };
+          '). Si la cancelas, el centro de mando quita lo que está en tránsito.' + (sinRevisar ? ' Ojo: no se pudo revisar si ya ' +
+          'llegó algo al sitio (' + sinRevisar + '); si llegó, aparecerá como alerta en el estado del centro de mando.' : '') +
+          ' ¿Cancelar la orden?' };
       }
     }
     const conFactura = facturasDelLibro_(libro).filter(f => f.estado === FPR_VIGENTE &&
@@ -2713,9 +2716,11 @@ function exigirOperaciones_() {
  * la propiedad vacía todo sigue como antes (se puede publicar el código sin cambiar el proceso).
  */
 function flujoOperaciones_() {
-  // Alguien activo con el rol aprobaciones propio (un super admin solo no lo enciende)
+  // Alguien en Permisos con el rol aprobaciones propio (un super admin solo no lo enciende). Cuenta también a quien está
+  // desactivado: desactivar al único que aprueba no debe apagar el flujo sin avisar (revisión de seguridad, 28/10/2026); para
+  // apagarlo hay que quitar el rol en Permisos a propósito.
   const u = contextoRoles_().usuarios;
-  return Object.keys(u).some(c => u[c].activo && u[c].roles.indexOf('aprobaciones') !== -1);
+  return Object.keys(u).some(c => u[c].roles.indexOf('aprobaciones') !== -1);
 }
 
 /** Sitios donde se recibe material (Config → SITIOS). */
@@ -3263,6 +3268,8 @@ function vistaRequisicion_(libro, folioReq) {
     version: vigente.version, // versión de los renglones (separar la exige)
     renglones: renglonesConDecision_(renglones, req.aprobacion),
     aprobados: aprobados,
+    // Lo que va en una solicitud de cotización al proveedor: lo aprobado o, en el flujo de siempre (sin aprobación), lo pedido
+    paraCotizar: renglonesParaCotizar(renglones, req.aprobacion),
     eventos: eventosDeReqs_(libro)[f] || [],
     proyecto: proyecto ? datosProyectoCompras_(proyecto)
       : { folio: req.proyectoFolio, clave: '', folioVisible: req.proyectoFolio, nombre: '', cliente: '', estado: '', ubicacion: '' },
@@ -3306,7 +3313,7 @@ function getRequisicion(folioReq) {
  * Autoriza una requisición Solicitada: emite su orden de compra (mismo flujo y PDF, con la línea "Requisición: REQ-…") y la
  * requisición pasa a Autorizada con su oc_folio. oc = datos de la orden (ver emitirOrdenCompra_) + idSolicitud.
  */
-function autorizarRequisicion(folioReq, oc) {
+function autorizarRequisicion(folioReq, oc, motivoExcepcion) {
   exigirCompras_();
   if (flujoOperaciones_()) {
     throw new Error('Con el flujo de operaciones la orden se emite con el visto bueno de operaciones: manda la propuesta de compra.');
@@ -3323,9 +3330,16 @@ function autorizarRequisicion(folioReq, oc) {
       if (previo) return JSON.parse(previo);
     }
     const { hoja, req } = buscarReq_(libro, folioReq);
+    // Flujo de siempre: compras autoriza, también lo que pidió (como antes de CAPRI). Script Property AUTORIZAR_OTRO = '1':
+    // lo autoriza otra persona de compras, o un super admin con motivo (la interfaz ya lo pide). Decisión pendiente (§9).
+    const propia = String(propiedades_().AUTORIZAR_OTRO || '') === '1' && req.solicitanteEmail === yo_();
+    if (propia && !excepcionPosible_(motivoExcepcion)) {
+      throw errorPermiso_('No puedes autorizar tu propia requisición: la autoriza otra persona de compras.' + textoExcepcion_());
+    }
     const nuevo = transicionReq(req.estado, 'autorizar');
     if (proyectoLigado_(req.proyectoFolio)) sitioConCodigo_(req.sitio, req.folio);
     const proyecto = proyectoParaCompras_(req.proyectoFolio);
+    if (propia) excepcionSuperAdmin_('autorizar su propia requisición', req.folio, motivoExcepcion); // ya validado: antes de escribir
     const r = emitirOrdenCompra_(libro, d0, proyecto, req.folio);
     cambiarReq_(hoja, req, nuevo, { motivo: '', ocFolio: r.folio, revisar: true });
     eventoReq_(libro, req.folio, nuevo, '');
@@ -3424,6 +3438,9 @@ function registrarPagoProveedor(p) {
       formatoMoneda(pago.monto) + ' ' + pago.monedaPago + (pago.tipoCambio ? ' · TC ' + pago.tipoCambio + ' = ' +
       formatoMoneda(pago.montoAplicado) + ' ' + orden.moneda : '') + ' · ' + pago.metodo, '', HOJAS_COMPRAS);
     avisarPortal_('oc.pagada', orden.folio);
+    // Flujo de siempre: el pago abre la confirmación de quien recibe (con aprobaciones ya se le avisó al autorizar; en un
+    // proyecto ligado se recibe en el centro de mando)
+    if (!yaRecibida && !flujoOperaciones_() && !proyectoLigado_(req.proyectoFolio)) notificar_('req.pagada', { req: req.folio });
     SpreadsheetApp.flush();
     const resultado = { folio: folio, url: archivo.getUrl(), vista: vistaRequisicion_(libro, req.folio) };
     if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
@@ -5156,6 +5173,16 @@ function normalizarAprobacion(d, renglones) {
   return { prioridad: prioridad, nota: nota, renglones: lista };
 }
 
+/** Para cotizar: los aprobados si hubo aprobación; si no (flujo de siempre), todos con la cantidad pedida (pura). */
+function renglonesParaCotizar(renglones, aprobacion) {
+  if (aprobacion && aprobacion.renglones) return renglonesAprobados(renglones, aprobacion);
+  return (renglones || []).map(r => {
+    const x = { renglon: r.renglon, descripcion: r.descripcion, unidad: r.unidad, notas: r.notas, cantidad: r.cantidad, pedida: r.cantidad };
+    if (r.item) x.item = r.item;
+    return x;
+  });
+}
+
 /** Renglones aprobados: [{renglon, descripcion, unidad, notas, cantidad (la aprobada), pedida}]. */
 function renglonesAprobados(renglones, aprobacion) {
   const dec = {};
@@ -6363,11 +6390,14 @@ function rolesPropios_(correo, ctx) {
   const c = correoCapri(correo);
   if (!c) return { activo: false, listado: false, roles: [] };
   const todos = ROLES_CAPRI.filter(r => r !== 'solo_requisicion');
-  if ((ctx.superAdmins || []).indexOf(c) !== -1) return { activo: true, listado: true, roles: todos };
+  // Super admin solo para @helgen.tech (entra con Google): una cuenta de código nunca, aunque la hoja o SUPER_ADMIN lo digan
+  const tech = dominioDe(c) === DOMINIO_HELGEN;
+  if (tech && (ctx.superAdmins || []).indexOf(c) !== -1) return { activo: true, listado: true, roles: todos };
   const u = (ctx.usuarios || {})[c];
   if (u) {
     if (!u.activo) return { activo: false, listado: true, roles: [] };
-    return { activo: true, listado: true, roles: u.roles.indexOf('superadmin') !== -1 ? todos : u.roles.slice() };
+    const propios = u.roles.filter(r => tech || r !== 'superadmin');
+    return { activo: true, listado: true, roles: propios.indexOf('superadmin') !== -1 ? todos : propios };
   }
   if (dominioDe(c) === DOMINIO_HELGEN && !ctx.soloListados) return { activo: true, listado: false, roles: ['ventas'] };
   return { activo: false, listado: false, roles: [] };
@@ -6471,10 +6501,10 @@ function modIdentidad_() {
   return { nombre: 'Identidad',
     api: { listarUsuarios: listarUsuarios, guardarUsuario: guardarUsuario, listarDelegaciones: listarDelegaciones,
       crearDelegacion: crearDelegacion, cancelarDelegacion: cancelarDelegacion, solicitarCodigo: solicitarCodigo,
-      verificarCodigo: verificarCodigo },
+      verificarCodigo: verificarCodigo, cerrarSesionCapri: cerrarSesionCapri },
     cambios: { guardarUsuario: ['permisos'], crearDelegacion: ['permisos'], cancelarDelegacion: ['permisos'] },
     // Quien aprueba puede ser una cuenta de solo requisiciones: también delega (cada función revisa sus reglas)
-    solo: ['listarDelegaciones', 'crearDelegacion', 'cancelarDelegacion'],
+    solo: ['listarDelegaciones', 'crearDelegacion', 'cancelarDelegacion', 'cerrarSesionCapri'],
     publicas: ['solicitarCodigo', 'verificarCodigo'],
     bootstrap: function () {
       const s = renovarSesionCapri_();
@@ -6495,9 +6525,15 @@ function modIdentidad_() {
 
 const DIAS_SESION_CAPRI = 30;        // la sesión de CAPRI dura 30 días (pedido de Leo, 28/10/2026: "que no se cierre")
 const DIAS_RENOVAR_SESION_CAPRI = 15; // si le quedan menos, bootstrap / sincronizar mandan una nueva (sesionCapri)
+const MAX_DIAS_ANTICIPO_DELEGACION = 30; // y empieza a más tardar en 30 días
 const MAX_DIAS_DELEGACION = 90;       // una delegación dura como máximo 90 días (contando el primero y el último)
 const CODIGO_VIGENCIA_MS = 10 * 60000, CODIGO_MAX_POR_HORA = 5, CODIGO_MAX_ERRORES = 5, CODIGO_BLOQUEO_MS = 15 * 60000;
 const MENSAJE_CODIGO_ENVIADO = 'Si el correo está dado de alta, te llegó un código.';
+const CLAVE_SESION_DESDE = 'SESION_DESDE_';
+// Límites globales (todas las cuentas juntas; revisión de seguridad 28/10/2026): códigos por hora, intentos fallidos por hora,
+// correos que se guardan para los avisos del día y tiempo mínimo de respuesta (no deja medir si el correo existe)
+const CODIGO_MAX_GLOBAL_HORA = 30, CODIGO_MAX_ERRORES_GLOBAL_HORA = 60, CODIGO_RESERVA_CUOTA = 40, CODIGO_RESPUESTA_MIN_MS = 1500;
+const MENSAJE_CODIGO_GLOBAL = 'Se pidieron muchos códigos en la última hora. Espera un rato y vuelve a intentarlo.';
 const MENSAJE_CODIGO_BLOQUEO = 'Demasiados intentos con este correo. Espera 15 minutos y pide un código nuevo.';
 
 // ---- Permisos (solo super admin) ----
@@ -6592,6 +6628,9 @@ function guardarUsuario(p) {
     if (i === -1) hoja.appendRow(fila);
     else hoja.getRange(i + 2, 1, 1, fila.length).setValues([fila]);
     const cambio = cambioDeUsuario(antes, u);
+    // Mientras está desactivado, exigirAcceso_ lo frena (ACCESO). Al reactivarlo, sus sesiones viejas ya no valen: entra con
+    // un código nuevo (una sesión robada antes de desactivarlo no revive)
+    if (antes && !antes.activo && u.activo && dominioDe(u.correo) === DOMINIO_SERVICIOS) revocarSesionesCapri_(u.correo);
     bitacoraAdmin_(cambio.accion, u.correo, cambio.detalle, '');
     if (!antes && u.activo) {
       notificar_('usuario.alta', { para: [u.correo], correo: u.correo, nombre: u.nombre, metodo: u.metodo, sitio: u.sitio,
@@ -6772,7 +6811,9 @@ function firmaSesion_(datos, secreto) {
 /** Sesión de CAPRI: capri.<base64url de {e: correo, x: vence (epoch s), n: nombre}>.<firma>. */
 function emitirSesionCapri_(correo, nombre) {
   const secreto = secretoSesion_(true);
-  const datos = { e: correo, x: Math.floor(Date.now() / 1000) + DIAS_SESION_CAPRI * 86400, n: String(nombre || '').slice(0, 80) };
+  // i = cuándo se emitió (ms): una sesión emitida antes de SESION_DESDE_<huella> ya no vale (cerrar sesión, desactivar)
+  const datos = { e: correo, x: Math.floor(Date.now() / 1000) + DIAS_SESION_CAPRI * 86400, n: String(nombre || '').slice(0, 80),
+    i: Date.now() };
   const carga = Utilities.base64EncodeWebSafe(JSON.stringify(datos), Utilities.Charset.UTF_8).replace(/=+$/, '');
   return PREFIJO_SESION_CAPRI + carga + '.' + firmaSesion_(carga, secreto);
 }
@@ -6802,8 +6843,25 @@ function verificarSesionCapri_(token) {
   if (!correo || dominioDe(correo) !== DOMINIO_SERVICIOS || !Number.isFinite(vence)) throw invalida();
   if (vence > ahora + (DIAS_SESION_CAPRI + 1) * 86400) throw invalida();
   if (vence <= ahora) throw errorSesion_('Tu sesión expiró. Pide un código nuevo para entrar.');
+  const desde = Number(propiedades_()[CLAVE_SESION_DESDE + huellaCorreo_(correo)]) || 0;
+  if (desde && (Number(d.i) || 0) <= desde) throw errorSesion_('Tu sesión se cerró. Pide un código nuevo para entrar.');
   MEMO_.sesionCapri = { email: correo, x: vence };
   return { email: correo, nombre: String(d.n || '') || correo, apellido: '' };
+}
+
+/**
+ * Cierra todas las sesiones de CAPRI de un correo emitidas hasta ahora (Script Property SESION_DESDE_<huella del correo>, en ms).
+ * Lo usan "Cerrar sesión" y desactivar a alguien en Permisos (al reactivarlo, su sesión vieja ya no sirve).
+ */
+function revocarSesionesCapri_(correo) {
+  PropertiesService.getScriptProperties().setProperty(CLAVE_SESION_DESDE + huellaCorreo_(correo), String(Date.now()));
+  MEMO_.props = null;
+}
+
+/** API: "Cerrar sesión" de una cuenta @helgen.services: la sesión deja de valer también en el servidor. Con Google, nada. */
+function cerrarSesionCapri() {
+  if (MEMO_.sesionCapri && VENDEDOR_ && MEMO_.sesionCapri.email === VENDEDOR_.email) revocarSesionesCapri_(VENDEDOR_.email);
+  return { cerrada: true };
 }
 
 /** Sesión nueva si a la de esta petición (CAPRI) le quedan menos de 15 días; null si no hace falta o si es de Google. */
@@ -6856,6 +6914,11 @@ function solicitarCodigo(correo) {
   const envio = candadoCodigo_(() => {
     const bloqueo = jsonCache_(cache.get('CAPRI_BLQ_' + h));
     if (bloqueo && bloqueo.hasta > ahora) throw new Error(MENSAJE_CODIGO_BLOQUEO);
+    // Tope de todas las cuentas juntas: nadie agota la cuota de correo del día pidiendo códigos (los avisos van primero)
+    const todos = recientes_(cache.get('CAPRI_PED_TODOS'), ahora - 3600000);
+    if (todos.length >= CODIGO_MAX_GLOBAL_HORA) throw new Error(MENSAJE_CODIGO_GLOBAL);
+    todos.push(ahora);
+    cache.put('CAPRI_PED_TODOS', JSON.stringify(todos), 3600);
     // Se cuentan todos los pedidos (con o sin alta): el límite no revela quién existe
     const pedidos = recientes_(cache.get('CAPRI_PED_' + h), ahora - 3600000);
     if (pedidos.length >= CODIGO_MAX_POR_HORA) {
@@ -6871,11 +6934,15 @@ function solicitarCodigo(correo) {
   });
   if (envio) {
     try {
+      if (Number(MailApp.getRemainingDailyQuota()) <= CODIGO_RESERVA_CUOTA) throw new Error('cuota de correo reservada para los avisos');
       MailApp.sendEmail(correoCodigo(envio.u.nombre, envio.codigo, c));
     } catch (e) {
       console.warn('No se mandó el código de CAPRI: ' + e.message); // la respuesta es la misma (no revela si existe)
     }
   }
+  // Mismo tiempo de respuesta exista o no la cuenta (mandar el correo tarda): no se puede medir quién está dado de alta
+  const falta = CODIGO_RESPUESTA_MIN_MS - (Date.now() - ahora);
+  if (falta > 0) Utilities.sleep(falta);
   return { mensaje: MENSAJE_CODIGO_ENVIADO };
 }
 
@@ -6892,9 +6959,14 @@ function verificarCodigo(correo, codigo) {
   candadoCodigo_(() => {
     const bloqueo = jsonCache_(cache.get('CAPRI_BLQ_' + h));
     if (bloqueo && bloqueo.hasta > ahora) throw new Error(MENSAJE_CODIGO_BLOQUEO);
+    // Intentos fallidos de todas las cuentas juntas: un intento repartido entre muchos correos también se frena
+    const fallosTodos = recientes_(cache.get('CAPRI_ERR_TODOS'), ahora - 3600000);
+    if (fallosTodos.length >= CODIGO_MAX_ERRORES_GLOBAL_HORA) throw new Error(MENSAJE_CODIGO_GLOBAL);
     const guardado = jsonCache_(cache.get('CAPRI_COD_' + h));
     const bueno = !!secreto && !!guardado && Number(guardado.x) > ahora && mismoTexto_(guardado.h, huellaCodigo_(secreto, c, cod));
     if (!bueno) {
+      fallosTodos.push(ahora);
+      cache.put('CAPRI_ERR_TODOS', JSON.stringify(fallosTodos), 3600);
       const errores = recientes_(cache.get('CAPRI_ERR_' + h), ahora - CODIGO_BLOQUEO_MS);
       errores.push(ahora);
       if (errores.length >= CODIGO_MAX_ERRORES) {
@@ -6968,6 +7040,9 @@ function normalizarDelegacion(p, ctx) {
   validarFechaIso(desde, null, 'La fecha de inicio');
   validarFechaIso(hasta, null, 'La fecha de fin');
   if (desde < c.hoy) throw new Error('La fecha de inicio no puede ser anterior a hoy.');
+  if (desde > sumarDias(c.hoy, MAX_DIAS_ANTICIPO_DELEGACION)) {
+    throw new Error('Una delegación empieza a más tardar en ' + MAX_DIAS_ANTICIPO_DELEGACION + ' días.');
+  }
   if (hasta < desde) throw new Error('La fecha de fin no puede ser anterior a la de inicio.');
   if (diasDeDelegacion(desde, hasta) > MAX_DIAS_DELEGACION) {
     throw new Error('Una delegación dura como máximo ' + MAX_DIAS_DELEGACION + ' días.');
@@ -6986,10 +7061,12 @@ function normalizarDelegacion(p, ctx) {
   if (roles.indexOf('compras') !== -1 && u.roles.indexOf('solo_requisicion') !== -1) {
     throw new Error(nombre(a) + ' tiene "Solo requisiciones": no puede recibir Compras.');
   }
+  // Una a la vez por persona y rol (vigente o programada): encadenar varias de 90 días haría una delegación sin fin
   const choca = (c.delegaciones || []).find(d => d.estado === 'Activa' && d.de === de && d.a === a && d.hasta >= c.hoy &&
-    !(d.hasta < desde || d.desde > hasta) && d.roles.some(r => roles.indexOf(r) !== -1));
+    d.roles.some(r => roles.indexOf(r) !== -1));
   if (choca) {
-    throw new Error('Ya hay una delegación de ' + nombre(de) + ' a ' + nombre(a) + ' en esas fechas (' + choca.id + '). Cancélala antes de crear otra.');
+    throw new Error('Ya hay una delegación de ' + nombre(de) + ' a ' + nombre(a) + ' vigente o programada (' + choca.id + ', hasta el ' +
+      choca.hasta + '). Cancélala o espera a que termine.');
   }
   return { de: de, a: a, roles: roles, desde: desde, hasta: hasta };
 }
@@ -7066,7 +7143,8 @@ function modCorreos_() {
 
 /** Eventos de aviso (tipo de notificar_). Quién recibe cada uno lo decide el módulo de correos (tabla del spec, sección 5). */
 const EVENTOS_CORREO = ['req.solicitada', 'req.aprobada', 'req.devuelta', 'req.rechazada', 'req.cotizada', 'req.regresada',
-  'req.autorizada', 'req.encamino', 'req.recibida', 'req.cancelada', 'oc.cancelada', 'delegacion', 'usuario.alta', 'anulado'];
+  'req.autorizada', 'req.encamino', 'req.pagada', 'req.recibida', 'req.cancelada', 'oc.cancelada', 'delegacion', 'usuario.alta',
+  'anulado'];
 
 /** Dirección de CAPRI (la liga de cada aviso abre la requisición con #req=REQ-…). */
 const URL_AVISOS_CAPRI = 'https://cotizador-helgen.cotizador-helgen.workers.dev/cotizador/';
@@ -7231,7 +7309,7 @@ function infoDeAviso_(tipo, d, actor, memo) {
   const limpiar = t => limpiarTextoAviso(t, proveedores);
   info.nota = limpiar(d.nota);
   info.notaAprobacion = limpiar(info.notaAprobacion);
-  ['reenviada', 'parcial'].forEach(k => { info[k] = !!d[k]; });
+  ['reenviada', 'parcial', 'centroMando'].forEach(k => { info[k] = !!d[k]; });
   info.version = Number(d.version) || 0;
   info.antes = String(d.antes || '');
   info.sitioRecepcion = String(d.sitio || '');
@@ -7272,12 +7350,14 @@ function solicitudCotizacion(reqFolio, opciones) {
   const libro = libroComprasSiExiste_();
   if (!libro) throw new Error('Todavía no hay requisiciones.');
   const { req } = buscarReq_(libro, reqFolio);
-  if (ESTADOS_SOLICITUD_COTIZACION.indexOf(req.estado) === -1) {
+  // Flujo de siempre (sin aprobaciones): también desde Solicitada, con lo pedido (revisión 28/10/2026)
+  const sinAprobacion = !req.aprobacion && !flujoOperaciones_();
+  if (ESTADOS_SOLICITUD_COTIZACION.indexOf(req.estado) === -1 && !(sinAprobacion && req.estado === REQ_SOLICITADA)) {
     throw new Error('La requisición ' + req.folio + ' está ' + String(req.estado).toLowerCase() +
-      ': la solicitud de cotización se hace desde que está aprobada.');
+      ': la solicitud de cotización se hace desde que está ' + (sinAprobacion ? 'solicitada.' : 'aprobada.'));
   }
   const vigente = renglonesDeReqs_(libro)[req.folio.toUpperCase()] || { renglones: [] };
-  const aprobados = renglonesAprobados(vigente.renglones, req.aprobacion);
+  const aprobados = renglonesParaCotizar(vigente.renglones, req.aprobacion);
   if (!aprobados.length) throw new Error('La requisición ' + req.folio + ' no tiene renglones aprobados.');
   const sol = normalizarSolicitudCotizacion(opciones, aprobados);
   const cfg = getConfig_();
@@ -7427,7 +7507,11 @@ function destinatariosAviso(tipo, d, info, roles) {
     case 'req.regresada': return [{ quien: 'compras', para: co }];
     case 'req.autorizada': return [{ quien: 'solicitante', para: [sol] }, { quien: 'recibe', para: [rec] }, { quien: 'compras', para: co }];
     case 'req.encamino': return [{ quien: 'solicitante', para: [sol] }, { quien: 'recibe', para: [rec] }];
+    // Flujo de siempre: con la orden pagada, quien recibe ya puede confirmar que llegó (revisión 28/10/2026)
+    case 'req.pagada': return [{ quien: 'recibe', para: [rec] }].concat(rec !== sol ? [{ quien: 'solicitante', para: [sol] }] : []);
     case 'req.recibida': {
+      // Recibido en el sitio (centro de mando): compras y, con su propio texto, quien pidió y quien recibe
+      if (i.centroMando) return [{ quien: 'compras', para: co }, { quien: 'sitio', para: [sol, rec] }];
       const enSuLugar = !!i.actorCorreo && i.actorCorreo !== sol && i.actorCorreo !== rec;
       return [{ quien: 'compras', para: co }].concat(enSuLugar
         ? [{ quien: 'solicitante', para: [sol] }, { quien: 'recibe', para: [rec] }] : []);
@@ -7514,9 +7598,16 @@ function contenidoAviso(tipo, quien, info) {
         fechaCorreo(i.fechaEsperada) : '') + '.' + (quien === 'recibe' || recibeEsSol ? registrar : ''), i.nota);
       x.filas.splice(2, 0, ['Paquetería', i.paqueteria], ['Guía', i.guia]);
       break;
+    case 'req.pagada':
+      req('Pagada, por recibir', 'Compras pagó al proveedor. ' + (quien === 'recibe' ? 'Cuando llegue el material, confirma en CAPRI ' +
+        'que lo recibiste.' : 'Lo recibe ' + (i.recibeNombre || i.recibeEmail) + '; cuando llegue, lo confirma en CAPRI.'));
+      break;
     case 'req.recibida': {
       const donde = i.sitioRecepcion || i.sitio;
-      if (quien === 'compras') {
+      if (quien === 'sitio') {
+        req('Recibido en el sitio', 'El material se recibió' + (donde ? ' en ' + donde : '') + ' en el centro de mando y ya está en ' +
+          'el inventario del sitio. No tienes que hacer nada.');
+      } else if (quien === 'compras') {
         req(i.parcial ? 'Recepción parcial' : 'Material recibido', 'Se registró la recepción ' + (i.parcial ? 'parcial' : 'completa') +
           ' del material' + (donde ? ' en ' + donde : '') + '.' + (i.estado === REQ_RECIBIDA ? ' Falta registrar el pago.' :
           i.estado === REQ_CERRADA ? ' La requisición quedó cerrada.' : ''), i.nota);
@@ -7578,8 +7669,13 @@ function contenidoAviso(tipo, quien, info) {
     }
   }
   x.filas = x.filas.filter(f => f && f[1]);
+  // El texto libre de una nota nunca va en el correo (puede traer montos, proveedores o folios que ningún filtro detecta):
+  // solo se avisa que hay una y se lee en CAPRI. Lo anulado solo lo ve el super admin: ahí no se menciona.
+  x.nota = x.nota && tipo !== 'anulado' ? NOTA_EN_CAPRI : '';
   return x;
 }
+
+const NOTA_EN_CAPRI = 'Hay una nota: ábrela en CAPRI para leerla (los correos no llevan el texto de las notas).';
 
 /** HTML del aviso (tablas e inline CSS, como el PDF; el botón también tiene borde por si el correo quita el fondo). */
 function construirHtmlAviso(x) {
@@ -7883,9 +7979,11 @@ function sitioConCodigo_(sitio, folioReq) {
     : 'El proyecto está ligado al centro de mando: ';
   if (!s) throw new Error(de + 'elige el sitio donde se recibe el material' + (folioReq ? ' (devuélvela para que lo elijan).' : '.'));
   const codigo = codigoDeSitio(s, sitiosDetalle_());
-  if (!codigo) {
-    throw new Error(de + 'el sitio "' + s.slice(0, 60) + '" no tiene código del centro de mando (VER, ZLO, ESE, LZC, QRO). ' +
-      'Corrige Config → SITIOS.');
+  // Solo los sitios que conoce el centro de mando (D-27-3): otro código lo rechazaría (400) y detendría los avisos de la orden
+  const conocidos = CODIGOS_SITIO_CONOCIDOS.map(x => x[0]);
+  if (!codigo || conocidos.indexOf(codigo) === -1) {
+    throw new Error(de + 'el sitio "' + s.slice(0, 60) + '"' + (codigo ? ' (' + codigo + ')' : '') + ' no es un sitio del centro de mando (' +
+      conocidos.join(', ') + '). Elige uno de esos o corrige Config → SITIOS.');
   }
   return codigo;
 }
@@ -7974,6 +8072,13 @@ function avisarPortal_(tipo, folioOc) {
     if (!clave) return '';
     // Lo anulado ya no se avisa, salvo el propio aviso de cancelación que manda el módulo de anular
     if (tipo !== 'oc.cancelada' && (anuladoCentro_(orden.folio) || anuladoCentro_(orden.reqFolio))) return '';
+    // Una orden que ya iba en curso cuando se ligó el proyecto: el centro de mando nunca recibió su oc.autorizada. Se forma
+    // primero (así nunca ve un pago o un envío antes de la autorización); si lo que se avisa es la cancelación, no hay nada que
+    // cancelar allá.
+    if (tipo !== 'oc.autorizada' && !avisoPortalExiste_(libro, orden.folio + ':oc.autorizada:')) {
+      if (tipo === 'oc.cancelada') return '';
+      if (orden.estado !== OC_CANCELADA && orden.estado !== ESTADO_ANULADA) avisarPortal_('oc.autorizada', orden.folio);
+    }
     const req = orden.reqFolio ? buscarReq_(libro, orden.reqFolio, cancelacion).req : null;
     const hoja = hojaCompras_(libro, 'PortalPendientes');
     const prefijo = (orden.folio + ':' + tipo + ':').toUpperCase();
@@ -7995,6 +8100,14 @@ function avisarPortal_(tipo, folioOc) {
     console.warn('Aviso al centro de mando no formado (' + tipo + ' ' + folioOc + '): ' + e.message);
     return '';
   }
+}
+
+/** ¿Ya hay en PortalPendientes un aviso cuyo evento_id empieza con prefijo (p. ej. "OC-2026-0012:oc.autorizada:")? */
+function avisoPortalExiste_(libro, prefijo) {
+  if (!libro.getSheetByName('PortalPendientes')) return false;
+  const p = String(prefijo).toUpperCase();
+  return filasDeArea_(hojaCompras_(libro, 'PortalPendientes'), HOJAS_COMPRAS, 'PortalPendientes')
+    .some(r => String(r[0] || '').toUpperCase().indexOf(p) === 0);
 }
 
 /**
@@ -8046,6 +8159,12 @@ function enviarPendientesPortal_(soloOcs) {
       hoja.getRange(fila, 3, 1, 2).setValues([[intentos, envio.repetido ? 'ya lo tenía (repetido)' : '']]);
       hoja.getRange(fila, 6, 1, 2).setValues([['Enviado', ahoraTexto_()]]);
       res.enviados[id] = true;
+    } else if (rechazoDefinitivo(envio.codigo, intentos)) {
+      // El centro de mando lo rechaza por su contenido (4xx) varias veces: se aparta como Rechazado para que no detenga los
+      // demás avisos de la orden (p. ej. oc.cancelada); compras lo ve en el estado del enlace
+      hoja.getRange(fila, 3, 1, 2).setValues([[intentos, textoCelda(String(envio.error).slice(0, 300))]]);
+      hoja.getRange(fila, 6, 1, 2).setValues([['Rechazado', ahoraTexto_()]]);
+      res.fallidos++;
     } else {
       hoja.getRange(fila, 3, 1, 2).setValues([[intentos, textoCelda(String(envio.error).slice(0, 300))]]);
       detenidas[oc] = true;
@@ -8054,6 +8173,16 @@ function enviarPendientesPortal_(soloOcs) {
   });
   return res;
 }
+
+/**
+ * ¿Se deja de reintentar un aviso? Solo si el centro de mando lo rechazó por su contenido (400–499, salvo 401/403 de firma o
+ * secreto, 408 y 429, que se arreglan solos o con la configuración) en MAX_INTENTOS_RECHAZO intentos o más (pura).
+ */
+function rechazoDefinitivo(codigo, intentos) {
+  const c = Number(codigo) || 0;
+  return c >= 400 && c < 500 && [401, 403, 408, 429].indexOf(c) === -1 && Number(intentos) >= MAX_INTENTOS_RECHAZO;
+}
+const MAX_INTENTOS_RECHAZO = 4;
 
 /**
  * En camino (solicitante, compras o quien recibe; idempotente). d = {paqueteria, guia, fechaEstimada, traeProveedor, recogido,
@@ -8169,6 +8298,30 @@ function itemsInventario_(soloCache, refrescarSiViejo) {
 }
 
 /** Corre fn como el centro de mando (historial y Bitacora dicen "centro de mando"). */
+/**
+ * Antes de cancelar o anular (fuera del candado): con el enlace encendido trae las recepciones del centro de mando, para que el
+ * material que ya llegó al sitio quede en CAPRI (y frene la cancelación) antes de que la orden deje de contar; si no, se
+ * volvería a comprar. folioOc: solo si esa orden es de un proyecto ligado; null: siempre (anular arrastra varias órdenes).
+ * Nunca impide cancelar: si el centro de mando no contesta devuelve el error (cancelar lo pone en su confirmación) y, si
+ * después llega material de esa orden, traerRecepcionesPortal lo marca como alerta para compras. '' = revisado o no aplica.
+ */
+function recepcionesAntesDeCancelar_(folioOc) {
+  try {
+    const cfg = configPortal_();
+    if (!cfg.activo) return '';
+    if (folioOc) {
+      const libro = libroComprasSiExiste_();
+      let orden = null;
+      try { orden = libro ? buscarOrden_(libro, folioOc).orden : null; } catch (e) { orden = null; }
+      if (!orden || !proyectoLigado_(orden.proyectoFolio)) return '';
+    }
+    const r = traerRecepcionesPortal();
+    return r.ok ? '' : String(r.errores[0] || 'sin respuesta').slice(0, 160);
+  } catch (e) {
+    return String(e.message || e).slice(0, 160);
+  }
+}
+
 function comoCentroMando_(fn) {
   const antes = VENDEDOR_;
   VENDEDOR_ = { email: CORREO_CENTRO_MANDO, nombre: 'Centro de mando', apellido: '' };
@@ -8217,6 +8370,7 @@ function traerRecepcionesPortal() {
     }));
   }
   if (res.cerradas.length || res.parciales.length) subirVersiones_(['requisiciones', 'oc']);
+  if (res.alertas && res.alertas.length) props.setProperty('PORTAL_ALERTA', ahoraTexto_() + ' · ' + res.alertas.join(' · ').slice(0, 450));
   if (!res.errores.length) {
     props.setProperty('PORTAL_ULTIMA_CONSULTA', String(r.datos.hasta || inicio));
     props.setProperty('PORTAL_ULTIMO_OK', ahoraTexto_());
@@ -8233,14 +8387,25 @@ function aplicarRecepcionPortal_(libro, x, det, res) {
   const ocFolio = String(x.oc_folio || '').trim().toUpperCase();
   let encontrada;
   try {
-    encontrada = buscarOrden_(libro, ocFolio);
+    encontrada = buscarOrden_(libro, ocFolio, true); // también anulada: se avisa (huerfana), no se ignora en silencio
   } catch (e) {
     res.ignoradas.push(ocFolio + ' (no existe)');
     return;
   }
   const { hoja: hO, orden } = encontrada;
-  if (orden.estado === OC_CANCELADA || !orden.reqFolio) { res.ignoradas.push(ocFolio + ' (cancelada o sin requisición)'); return; }
-  if (anuladoCentro_(orden.folio) || anuladoCentro_(orden.reqFolio)) { res.ignoradas.push(ocFolio + ' (anulada)'); return; }
+  if (!proyectoLigado_(orden.proyectoFolio)) { res.ignoradas.push(ocFolio + ' (proyecto no ligado)'); return; }
+  const huerfana = motivo => {
+    res.ignoradas.push(ocFolio + ' (' + motivo + ')');
+    // Llegó material al sitio de una orden que ya no cuenta: nunca en silencio (compras lo ve en el estado del enlace)
+    const llego = (Array.isArray(x.renglones) ? x.renglones : []).some(y => Number(y && y.recibido) > 0);
+    if (!llego) return;
+    const texto = 'El centro de mando registró material de ' + ocFolio + ' (' + motivo + ') en ' + String(x.sitio || '?').slice(0, 10) +
+      ': revisar con el sitio si hay que devolverlo o volver a registrar la compra.';
+    (res.alertas = res.alertas || []).push(texto);
+    bitacora_(libro, 'Recepción del centro de mando en una orden ' + motivo, orden.proyectoFolio, texto, '', HOJAS_COMPRAS);
+  };
+  if (orden.estado === OC_CANCELADA || !orden.reqFolio) { huerfana(orden.reqFolio ? 'cancelada' : 'sin requisición'); return; }
+  if (anuladoCentro_(orden.folio) || anuladoCentro_(orden.reqFolio)) { huerfana('anulada'); return; }
   const { hoja, req } = buscarReq_(libro, orden.reqFolio);
   if ([REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO, REQ_RECIBIDA].indexOf(req.estado) === -1 ||
       req.ocFolio.toUpperCase() !== orden.folio.toUpperCase()) {
@@ -8336,7 +8501,9 @@ function calentarCache_() {
   como(primero('compras'), 'compras', () => { listarRequisiciones('', ''); cuentasPorPagar(); });
   como(primero('aprobaciones'), 'aprobaciones', () => listarOperaciones());
   como(primero('cobranza'), 'cobranza', () => resumenCobranzaGeneral());
-  correosConRol_('requisicion').forEach(c => como(c, 'requisiciones de ' + c, () => { misRequisiciones(); misArticulos(); }));
+  // Quien pide suele tener "Solo requisiciones" (incluye pedir): también se le calienta su lista
+  correosConRol_('requisicion').concat(correosConRol_('solo_requisicion')).filter((c, i, a) => a.indexOf(c) === i)
+    .forEach(c => como(c, 'requisiciones de ' + c, () => { misRequisiciones(); misArticulos(); }));
   return { hechos: hechos.length, segundos: Math.round((Date.now() - inicio) / 1000) };
 }
 
@@ -8359,7 +8526,8 @@ function estadoCentroMando_() {
   const cfg = configPortal_(), p = propiedades_();
   const r = { activo: cfg.activo, servidor: cfg.url.replace(/^https?:\/\//i, ''), prueba: cfg.prueba,
     ligados: Object.keys(cfg.proyectos).map(f => ({ folio: f, proyecto: cfg.proyectos[f] })),
-    pendientes: 0, masAntiguo: '', ultimoError: '', enviados: 0,
+    pendientes: 0, masAntiguo: '', ultimoError: '', enviados: 0, rechazados: 0, ultimoRechazo: '',
+    alerta: String(p.PORTAL_ALERTA || ''),
     ultimaConsulta: String(p.PORTAL_ULTIMA_CONSULTA || ''), ultimoOk: String(p.PORTAL_ULTIMO_OK || ''),
     errorConsulta: String(p.PORTAL_ERROR_CONSULTA || '') };
   const libro = libroComprasSiExiste_();
@@ -8371,6 +8539,9 @@ function estadoCentroMando_() {
         if (x[3]) r.ultimoError = String(x[3]);
       } else if (String(x[5]) === 'Enviado') {
         r.enviados++;
+      } else if (String(x[5]) === 'Rechazado') {
+        r.rechazados++;
+        r.ultimoRechazo = String(x[0]) + ': ' + String(x[3] || '');
       }
     });
   }
@@ -8768,7 +8939,9 @@ function itemsPendientes(base, o) {
       }
       const porRecibir = flujo ? [REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO] : [REQ_PAGADA, REQ_EN_CAMINO];
       const mia = suya || recibe === yo;
-      if (porRecibir.indexOf(q.estado) !== -1 && (todos || mia)) {
+      // Flujo de siempre: En camino sin pagar todavía no se puede confirmar (el servidor pide la orden pagada)
+      const sinPagar = !flujo && q.estado === REQ_EN_CAMINO && !(q.oc && q.oc.estado === OC_PAGADA);
+      if (porRecibir.indexOf(q.estado) !== -1 && !sinPagar && (todos || mia)) {
         const enCentro = ligado(q.proyectoFolio);
         agregar(q, 'mias', { tipo: 'recibir', titulo: q.estado === REQ_EN_CAMINO ? 'En camino' : 'Por recibir',
           accion: enCentro ? 'Recibir en el centro de mando' : flujo ? 'Registrar lo que llegó' : 'Confirmar que llegó',
@@ -9269,6 +9442,7 @@ function anular(folio, motivo, idSolicitud) {
   const id = String(idSolicitud || '').slice(0, 64);
   const cache = CacheService.getScriptCache();
   const claveCache = id ? 'ANU_' + id : '';
+  recepcionesAntesDeCancelar_(null); // con el enlace encendido: lo recibido en el sitio entra antes de anular
   // conAvisoPortal_: el oc.cancelada de las órdenes anuladas sale al terminar (si falla, el activador lo reintenta)
   return conAvisoPortal_(conCandado_(() => {
     if (claveCache) {

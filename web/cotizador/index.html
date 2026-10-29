@@ -1026,6 +1026,8 @@
 
     window.cerrarSesion = function () {
       if (gisListo) google.accounts.id.disableAutoSelect();
+      // Sesión de CAPRI (@helgen.services): también deja de valer en el servidor (sin esperar la respuesta)
+      if (tipo === 'capri' && token) { try { enviar({ funcion: 'cerrarSesionCapri', args: [], token: token }); } catch (e) {} }
       terminarSilencio();
       pedirSesion('Cerraste sesión.');
     };
@@ -1211,6 +1213,8 @@
     .replace(/^(-?)/, '$1$') + ' ' + esc(moneda || 'MXN'); // la moneda puede venir de un archivo (XML del proveedor): siempre escapada
   const monedaActual = () => $('moneda').value === 'USD' ? 'USD' : 'MXN';
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  /** Argumento de texto para un onclick="f(…)": JSON (seguro como texto de JS) y luego escapado para el atributo HTML. */
+  const jsArg = s => esc(JSON.stringify(String(s ?? '')));
 
   // ---- Arranque: una sola llamada (bootstrap) ----
   // Las pestañas se dibujan al instante con los roles de la última sesión de este correo (localStorage) y se corrigen al
@@ -2649,17 +2653,19 @@
    * Como accionCob, para aprobar y dar el visto bueno (incremento 4): si el servidor lo niega por separación de funciones (es tuya
    * o tú preparaste la propuesta) y eres super admin, pide el motivo (≥ 10 caracteres) y repite con él como último argumento.
    */
-  function accionConExcepcion(boton, funcion, args, alExito, conMotivo) {
+  function accionConExcepcion(boton, funcion, args, alExito, conMotivo, ocupado) {
     const b = $(boton);
     if (b) { if (b.disabled) return; b.disabled = true; }
-    const listo = () => { if (b) b.disabled = false; };
+    const texto = b ? b.textContent : '';
+    if (b && ocupado) b.textContent = ocupado;
+    const listo = () => { if (b) { b.disabled = false; if (ocupado) b.textContent = texto; } };
     google.script.run.withSuccessHandler(x => { listo(); alExito(x); }).withFailureHandler(err => {
       listo();
       if (!conMotivo && err && err.codigo === 'PERMISO' && PERMISOS.superadmin) {
         const motivo = window.prompt(err.message + '\n\nMotivo de la excepción (mínimo 10 caracteres; queda en la bitácora):');
         if (motivo == null) return;
         if (motivo.trim().length < 10) { mostrarError('Escribe el motivo de la excepción (mínimo 10 caracteres).'); return; }
-        accionConExcepcion(boton, funcion, args.concat([motivo.trim()]), alExito, true);
+        accionConExcepcion(boton, funcion, args.concat([motivo.trim()]), alExito, true, ocupado);
         return;
       }
       mostrarError(err);
@@ -3041,16 +3047,12 @@
       fechaEntrega: $('ocEntrega').value, lugarEntrega: $('ocLugar').value, diasCredito: $('ocDias').value,
       condicionesPago: $('ocCondiciones').value, notas: $('ocNotas').value, idSolicitud: ID_OC,
     };
-    $('btnOc').disabled = true; $('btnOc').textContent = 'Generando PDF…';
-    const listo = () => { $('btnOc').disabled = false; $('btnOc').textContent = 'Autorizar y emitir orden (PDF)'; };
-    google.script.run
-      .withSuccessHandler(r => {
-        pintarReqCom(r.vista);
-        aviso('ok', 'Requisición <b>' + esc(r.folio) + '</b> autorizada · Orden de compra <b>' + esc(r.ocFolio) + '</b> · Total ' +
-              dinero(r.total, r.moneda) + ' · <a href="' + esc(r.url) + '" target="_blank">Abrir PDF</a>' + extraPortal(r));
-      })
-      .withFailureHandler(err => { listo(); mostrarError(err); })
-      .autorizarRequisicion(folio, payload);
+    // Con excepción de super admin: si autoriza lo que él pidió, se le pide el motivo y se reintenta
+    accionConExcepcion('btnOc', 'autorizarRequisicion', [folio, payload], r => {
+      pintarReqCom(r.vista);
+      aviso('ok', 'Requisición <b>' + esc(r.folio) + '</b> autorizada · Orden de compra <b>' + esc(r.ocFolio) + '</b> · Total ' +
+            dinero(r.total, r.moneda) + ' · <a href="' + esc(r.url) + '" target="_blank">Abrir PDF</a>' + extraPortal(r));
+    }, false, 'Generando PDF…');
   }
 
   /** Con operaciones: la propuesta (disponibilidad por renglón, proveedor, costos, quién recibe y cotización opcional). */
@@ -3595,8 +3597,8 @@
         u.roles.filter(r => !(u.raiz && r === 'superadmin')).map(r => '<span class="chip">' + esc(nombreRol(r)) + '</span>').join(' ') +
         '</td><td>' + esc(u.sitio || '—') + '</td><td>' + (u.activo ? '<span class="chip firmado">Activo</span>' : '<span class="chip cancelado">Desactivado</span>') +
         (u.actualizo ? '<div class="nota">' + esc(u.actualizo) + (u.actualizado ? ' · ' + esc(fecha(u.actualizado)) : '') + '</div>' : '') +
-        '</td><td>' + (VP.libro ? '<button type="button" class="btn btn-sec" style="padding:6px 12px;font-size:12px" onclick="identidad.editarUsuario(\'' +
-        esc(u.correo) + '\')">' + (u.enLista ? 'Editar' : 'Agregar a la lista') + '</button>' : '') + '</td></tr>').join('')
+        '</td><td>' + (VP.libro ? '<button type="button" class="btn btn-sec" style="padding:6px 12px;font-size:12px" onclick="identidad.editarUsuario(' +
+        jsArg(u.correo) + ')">' + (u.enLista ? 'Editar' : 'Agregar a la lista') + '</button>' : '') + '</td></tr>').join('')
         : '<tr><td colspan="5" class="nota">' + (q ? 'Nadie coincide con la búsqueda.' : 'Todavía no hay usuarios.') + '</td></tr>';
     }
     function pintarRoles() {
@@ -3713,8 +3715,8 @@
         esc(d.id) + '</div></td><td>' + esc(d.aNombre) + '</td><td>' + d.rolesNombres.map(esc).join(', ') + '</td><td>' + esc(fecha(d.desde)) +
         ' – ' + esc(fecha(d.hasta)) + '</td><td><span class="chip ' + (chip[d.estado] || '') + '">' + esc(d.estado) + '</span>' +
         (d.estado === 'Cancelada' && d.motivo ? '<div class="nota">' + esc(d.motivo) + '</div>' : '') + '</td><td>' +
-        (d.puedeCancelar ? '<button type="button" class="btn btn-sec" style="padding:6px 12px;font-size:12px" onclick="identidad.cancelarDelegacion(\'' +
-          esc(d.id) + '\')">Cancelar</button>' : '') + '</td></tr>').join('')
+        (d.puedeCancelar ? '<button type="button" class="btn btn-sec" style="padding:6px 12px;font-size:12px" onclick="identidad.cancelarDelegacion(' +
+          jsArg(d.id) + ')">Cancelar</button>' : '') + '</td></tr>').join('')
         : '<tr><td colspan="6" class="nota">No hay delegaciones.</td></tr>';
     }
     function crearDelegacion() {
@@ -3843,8 +3845,11 @@
     function pintarSolicitud(v) {
       const caja = $('rcSolicitud');
       if (!caja) return;
-      const rq = v.requisicion || {}, aprob = v.aprobados || [];
-      const visible = !!(PERMISOS.compras && aprob.length && ESTADOS_SOLICITUD.indexOf(rq.estado) !== -1);
+      // Lo aprobado o, sin aprobación (flujo de siempre), lo pedido: también se cotiza desde Solicitada
+      const rq = v.requisicion || {}, aprob = v.paraCotizar || v.aprobados || [];
+      const sinAprobacion = !rq.aprobacion && !v.flujoOperaciones;
+      const visible = !!(PERMISOS.compras && aprob.length && (ESTADOS_SOLICITUD.indexOf(rq.estado) !== -1 ||
+        (sinAprobacion && rq.estado === 'Solicitada')));
       caja.classList.toggle('oculto', !visible);
       if (!visible) { SOL = null; caja.innerHTML = ''; return; }
       const huella = rq.folio + '|' + JSON.stringify(aprob.map(a => [a.renglon, a.cantidad, a.unidad, a.descripcion, a.notas]));
@@ -4278,6 +4283,9 @@
             (e.ultimoError ? ' · ' + esc(e.ultimoError) : '') + '</span>' : 'Sin avisos pendientes') +
           ' · Última consulta de recepciones: ' + esc(e.ultimoOk || 'nunca') +
           (e.errorConsulta ? '<br><span class="aviso-moneda">Falló la última consulta: ' + esc(e.errorConsulta) + '</span>' : '') +
+          (e.rechazados ? '<br><span class="aviso-moneda">' + esc(e.rechazados) + ' aviso(s) rechazado(s) por el centro de mando (no se ' +
+            'reintentan): ' + esc(e.ultimoRechazo) + '</span>' : '') +
+          (e.alerta ? '<br><span class="aviso-moneda">Atención: ' + esc(e.alerta) + '</span>' : '') +
           (e.activador === false ? '<br><span class="aviso-moneda">Falta el activador de 15 minutos: corre prepararCapri() desde el editor.</span>' : '') +
           '</div><div class="acciones" style="margin-top:6px">' + botonChico('Consultar ahora', 'centroConsultar()') + '</div>');
     }

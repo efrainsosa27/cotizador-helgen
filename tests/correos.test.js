@@ -75,6 +75,13 @@ assert.equal(C.boton.url, URL_APP + '#req=REQ-2026-0005');
 assert.deepEqual(plain(C.filas.map(f => f[0])), ['Proyecto', 'Sitio', 'Pidió', 'Lo hizo', 'Cuándo'], 'sin filas vacías');
 assert(/<a href="https:\/\/cotizador-helgen[^"]*#req=REQ-2026-0005"/.test(P.construirHtmlAviso(C)));
 assert(!/<script/i.test(P.construirHtmlAviso(Object.assign({}, C, { nota: '<script>x</script>' }))), 'la nota va escapada');
+// Revisión de seguridad: el texto libre de una nota nunca va en el correo (montos, proveedores y folios que no detecta un filtro)
+const fuga = 'Ferreteria Lopez cotizo 15,000 + IVA (USD 820); con Grupo Acme sale en 12 mil pesos. OC 2026-0004';
+for (const [tipo, quien] of [['req.devuelta', 'solicitante'], ['req.rechazada', 'solicitante'], ['req.recibida', 'compras'], ['req.cancelada', 'aprobaciones']]) {
+  const x = P.contenidoAviso(tipo, quien, { folio: 'REQ-2026-0001', nota: fuga });
+  const todo = P.textoAviso(x) + P.construirHtmlAviso(x);
+  assert(!/Lopez|Acme|15,000|820|12 mil|2026-0004/.test(todo) && /ábrela en CAPRI/.test(todo), tipo);
+}
 assert(/Abrir REQ-2026-0005 en CAPRI: https:/.test(P.textoAviso(C)));
 
 // Ligas de correo: tope de largo con acentos y muchas partidas
@@ -143,13 +150,13 @@ ok('adri', 'aprobarRequisicion', r1, { version: 1, prioridad: 'Urgente', nota: '
 m = nuevos();
 assert.equal(m.length, 1);
 assert.deepEqual(para(m[0]), COMPRAS, 'compras + delegada + super admin');
-assert(/ · Aprobada, por cotizar · /.test(m[0].subject) && /Nota: Urgente, presupuesto de \[monto\]/.test(m[0].body) && /Prioridad: Urgente/.test(m[0].body));
+assert(/ · Aprobada, por cotizar · /.test(m[0].subject) && /Nota: Hay una nota: ábrela en CAPRI/.test(m[0].body) && !/Urgente, presupuesto|5,000/.test(m[0].body) && /Prioridad: Urgente/.test(m[0].body));
 
 // Compras pide aclaración → quien pidió; reenvío → aprobaciones ("Corregida")
 ok('pedro', 'devolverRequisicion', r1, '¿El cable es THW o THHW?');
 m = nuevos();
 assert.deepEqual([m.length, para(m[0]), m[0].replyTo], [1, ['obrero@helgen.tech'], 'pedro@helgen.tech']);
-assert(/ · Devuelta para corregir · /.test(m[0].subject) && /Nota: ¿El cable es THW o THHW\?/.test(m[0].body));
+assert(/ · Devuelta para corregir · /.test(m[0].subject) && /Nota: Hay una nota: ábrela en CAPRI/.test(m[0].body) && !/THHW/.test(m[0].body));
 ok('obrero', 'guardarRequisicion', nuevaReq({ folio: r1 }));
 m = nuevos();
 assert(/ · Corregida, por aprobar · /.test(m[0].subject) && para(m[0]).join() === 'adri@helgen.tech');
@@ -169,7 +176,7 @@ assert(/ · Propuesta por revisar · /.test(m[0].subject));
 ok('adri', 'regresarACompras', r1, 'Ferretera del Puerto cobra $1,856.00 por todo; busca otro');
 m = nuevos();
 assert.deepEqual(para(m[0]), sinQuien(COMPRAS, 'adri@helgen.tech'));
-assert(/ · Propuesta regresada · /.test(m[0].subject) && /Nota: \[proveedor\] cobra \[monto\] por todo; busca otro/.test(m[0].body), m[0].body);
+assert(/ · Propuesta regresada · /.test(m[0].subject) && /Nota: Hay una nota: ábrela en CAPRI/.test(m[0].body) && !/busca otro/.test(m[0].body), m[0].body);
 ok('pedro', 'cotizarRequisicion', r1, PROP());
 m = nuevos();
 assert(/versión 2/.test(m[0].body));
@@ -190,7 +197,7 @@ assert(/ · Autorizada, enviar orden · /.test(aCompras.subject) && /Enviar orde
 ok('rosa', 'registrarRecepcion', { reqFolio: r1, sitio: 'Manzanillo (TIMSA)', renglones: [{ renglon: 1, cantidad: 50 }], notas: 'Faltan 30 m', idSolicitud: 'rc1' });
 m = nuevos();
 assert.deepEqual([m.length, para(m[0])], [1, COMPRAS]);
-assert(/ · Recepción parcial · /.test(m[0].subject) && /Nota: Faltan 30 m/.test(m[0].body) && /recepción parcial del material en Manzanillo/.test(m[0].body));
+assert(/ · Recepción parcial · /.test(m[0].subject) && /Nota: Hay una nota: ábrela en CAPRI/.test(m[0].body) && !/Faltan 30/.test(m[0].body) && /recepción parcial del material en Manzanillo/.test(m[0].body));
 ok('pedro', 'registrarRecepcion', { reqFolio: r1, sitio: 'Manzanillo (TIMSA)', renglones: [{ renglon: 1, cantidad: 30 }, { renglon: 2, cantidad: 12 }],
   notas: 'Llegó al almacén de compras', idSolicitud: 'rc2' });
 m = nuevos();
@@ -227,7 +234,7 @@ nuevos();
 ok('obrero', 'cancelarRequisicion', r2, 'Ya no se necesita');
 m = nuevos();
 assert.deepEqual([m.length, para(m[0])], [1, ['adri@helgen.tech']]);
-assert(/ · Cancelada · /.test(m[0].subject) && /Nota: Ya no se necesita/.test(m[0].body));
+assert(/ · Cancelada · /.test(m[0].subject) && /Nota: Hay una nota: ábrela en CAPRI/.test(m[0].body) && !/Ya no se necesita/.test(m[0].body));
 const r3 = ok('obrero', 'guardarRequisicion', nuevaReq()).folio;
 nuevos();
 ok('obrero', 'cancelarRequisicion', r3, 'Me equivoqué de proyecto');
@@ -253,7 +260,7 @@ assert.equal(m.length, 2);
 const ocObrero = porPara(m, 'obrero@helgen.tech'), ocCompras = porPara(m, 'efrain@helgen.tech');
 assert(/ · Orden cancelada · /.test(ocObrero.subject) && !/Nota:/.test(ocObrero.body) && /comprar de nuevo/.test(ocObrero.body));
 assert.deepEqual(para(ocCompras), sinQuien(COMPRAS, 'pedro@helgen.tech'));
-assert(/Nota: El proveedor \[proveedor\] subió \[monto\] el precio/.test(ocCompras.body) && /cotizarla de nuevo/.test(ocCompras.body), ocCompras.body);
+assert(/Nota: Hay una nota: ábrela en CAPRI/.test(ocCompras.body) && !/subió/.test(ocCompras.body) && /cotizarla de nuevo/.test(ocCompras.body), ocCompras.body);
 assert.deepEqual(ultimoLog().slice(3, 6), ['oc.cancelada', r5, 'Enviado']);
 
 // Eventos de otros módulos (alta, delegación, anulado, en camino) y del centro de mando (sin sesión)
@@ -274,7 +281,7 @@ assert(/Acceder con Google/.test(porPara(m, 'nuevo@helgen.tech').body));
 assert.equal(porPara(m, 'ana@helgen.tech').subject, '[CAPRI] Te delegaron Compras del ' + fmx(HOY_ISO) + ' al ' + fmx(masDias(3)));
 const anul = porPara(m, 'pedro@helgen.tech');
 assert.deepEqual(para(anul), ['obrero@helgen.tech', 'pedro@helgen.tech'], 'sin cuentas de fuera');
-assert(anul.subject.indexOf(r5 + ' · Orden de compra anulada') !== -1 && /Nota: Duplicada por error/.test(anul.body));
+assert(anul.subject.indexOf(r5 + ' · Orden de compra anulada') !== -1 && !/Nota:|Duplicada por error/.test(anul.body));
 const enc = porPara(m, 'rosa@helgen.tech');
 assert.deepEqual(para(enc), ['rosa@helgen.tech']);
 assert(/ · En camino · /.test(enc.subject) && /Paquetería: Estafeta/.test(enc.body) && /Guía: 123456/.test(enc.body) && enc.body.indexOf(fmx(masDias(2))) !== -1);
@@ -389,6 +396,9 @@ const rB = B.ok('obrero', 'guardarRequisicion', { proyectoFolio: pB, renglones: 
   idSolicitud: 'rb' }).folio;
 assert.equal(B.correos.length, 1);
 assert.deepEqual([para(B.correos[0]), B.correos[0].subject], [['efrain@helgen.tech', 'pedro@helgen.tech'], '[CAPRI] ' + rB + ' · Por autorizar · Casa del Lago']);
+// Revisión 28/10/2026: sin aprobaciones, la solicitud de cotización sale desde Solicitada con lo pedido
+const solB = B.ok('pedro', 'solicitudCotizacion', rB, {});
+assert.equal(solB.renglones, 1, 'lo pedido');
 const ocB = B.ok('pedro', 'autorizarRequisicion', rB, { proveedor: { razonSocial: 'Eléctrica del Centro' }, fechaEntrega: B.masDias(2), condicionesPago: 'Contado',
   diasCredito: 0, ivaTasa: 0.16, renglones: [{ descripcion: 'Brida', unidad: 'PZA', cantidad: 4, costo: 100 }], idSolicitud: 'ob' }).ocFolio;
 assert.equal(B.correos.length, 3);
@@ -396,13 +406,17 @@ assert(/ · Autorizada · /.test(porPara(B.correos.slice(1), 'obrero@helgen.tech
 assert.deepEqual(para(porPara(B.correos.slice(1), 'efrain@helgen.tech')), ['efrain@helgen.tech'], 'compras, sin quien autorizó');
 B.ok('pedro', 'registrarPagoProveedor', { reqFolio: rB, fecha: B.HOY_ISO, monto: 464, monedaPago: 'MXN', metodo: 'Transferencia', referencia: 'SPEI 1',
   comprobante: { nombre: 's.pdf', datos: B.PDF }, idSolicitud: 'pgb' });
-assert.equal(B.correos.length, 3, 'pagar no avisa');
+// Revisión 28/10/2026: en el flujo de siempre el pago abre la confirmación: aviso a quien recibe
+assert.equal(B.correos.length, 4, 'pagar avisa a quien recibe');
+assert.deepEqual([para(B.correos[3]), / · Pagada, por recibir · /.test(B.correos[3].subject), /confirma en CAPRI/.test(B.correos[3].body)],
+  [['obrero@helgen.tech'], true, true]);
+assert(!/464|Eléctrica|OC-/.test(B.correos[3].body + B.correos[3].subject), 'sin monto, proveedor ni orden');
 B.ok('obrero', 'cerrarRequisicion', rB, 'Todo bien');
-const cierre = B.correos[3];
+const cierre = B.correos[4];
 assert.deepEqual([para(cierre), / · Material recibido · /.test(cierre.subject), /La requisición quedó cerrada/.test(cierre.body)],
   [['efrain@helgen.tech', 'pedro@helgen.tech'], true, true]);
 assert.equal(B.props.ADMIN_DB_ID, undefined, 'sin libro de Administración no hay bitácora, pero los correos salen');
-B.falla('pedro', 'solicitudCotizacion', [rB, {}], /está cerrada: la solicitud de cotización se hace desde que está aprobada/);
+B.falla('pedro', 'solicitudCotizacion', [rB, {}], /está cerrada: la solicitud de cotización se hace desde que está solicitada/);
 B.correos.forEach(revisarCorreo);
 assert(/^OC-/.test(ocB));
 

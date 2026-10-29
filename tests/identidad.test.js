@@ -186,7 +186,14 @@ n0 = A.correos.length;
 assert.deepEqual(pedir('jesus@helgen.services'), { mensaje: GENERICO });
 assert.equal(A.correos.length, n0, 'desactivado: sin código');
 ok('leo', 'guardarUsuario', Object.assign({}, jesusV, { activo: true }));
-assert.equal(ok(tJ, 'bootstrap').permisos.requisicion, true);
+// Revisión de seguridad: al reactivarlo, la sesión de antes ya no vale (entra con un código nuevo)
+falla(tJ, 'bootstrap', [], /se cerró/, 'SESION');
+pedir('jesus@helgen.services');
+const tJ2 = ok('', 'verificarCodigo', 'jesus@helgen.services', codigoDe(A.correos[A.correos.length - 1])).token;
+assert.equal(ok(tJ2, 'bootstrap').permisos.requisicion, true);
+// "Cerrar sesión" la invalida también en el servidor
+assert.deepEqual(ok(tJ2, 'cerrarSesionCapri'), { cerrada: true });
+falla(tJ2, 'bootstrap', [], /se cerró/, 'SESION');
 // Desactivado entre pedir y comprobar: el código bueno no basta
 pedir('rio@helgen.services');
 const cRio = codigoDe(A.correos[A.correos.length - 1]);

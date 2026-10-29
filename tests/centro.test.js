@@ -220,7 +220,7 @@ assert.equal(CM.llamadasItems, 1, 'una sola consulta: después sale del caché')
 assert.deepEqual(ok('obrero', 'bootstrap').centro.items.map(x => x.codigo), ['CAB-THW-10', 'TUB-1'], 'ya en caché: va en la carga inicial');
 
 // Sitio obligatorio y con código en proyectos ligados (con operaciones el sitio ya es obligatorio para todos)
-falla('obrero', 'guardarRequisicion', [nuevaReq(P1, { sitio: 'Monterrey' })], /no tiene código del centro de mando/);
+falla('obrero', 'guardarRequisicion', [nuevaReq(P1, { sitio: 'Monterrey' })], /no es un sitio del centro de mando/);
 assert(ok('obrero', 'guardarRequisicion', nuevaReq(P2, { sitio: 'Monterrey' })).folio, 'sin ligar: cualquier sitio de la lista');
 falla('obrero', 'guardarRequisicion', [nuevaReq(P1, { renglones: [{ descripcion: 'Cable', cantidad: 1, item: 'CAB THW' }] })], /no es un código del inventario/);
 
@@ -466,7 +466,7 @@ props.ROL_OPERACIONES = '';
 const conCot = x => Object.assign(nuevaReq(x.proyectoFolio, x), { cotizacion: { nombre: 'cot.pdf', datos: PDF } });
 assert(ok('obrero', 'guardarRequisicion', conCot({ proyectoFolio: P2, sitio: '' })).folio, 'sin ligar: el sitio sigue opcional');
 falla('obrero', 'guardarRequisicion', [conCot({ proyectoFolio: P1, sitio: '' })], /elige el sitio donde se recibe el material/);
-falla('obrero', 'guardarRequisicion', [conCot({ proyectoFolio: P1, sitio: 'Monterrey' })], /no tiene código/);
+falla('obrero', 'guardarRequisicion', [conCot({ proyectoFolio: P1, sitio: 'Monterrey' })], /no es un sitio del centro de mando/);
 const r7 = ok('obrero', 'guardarRequisicion', conCot({ proyectoFolio: P1 + '-DRO', sitio: 'Querétaro' })).folio;
 const oc7 = ok('efrain', 'autorizarRequisicion', r7, { proveedor: { razonSocial: 'Eléctrica del Bajío' }, fechaEntrega: MANANA, lugarEntrega: 'Querétaro',
   condicionesPago: 'Contado', diasCredito: 0, idSolicitud: id('oc'),
