@@ -800,6 +800,11 @@ Sin `PORTAL_SECRETO` el enlace está apagado y todo funciona como antes.
   proyecto, precios del catálogo, filas borradas) en ≤ ~5–10 min + 20 s (medido: 85 s), porque la consulta de fondo relee esas hojas
   cada pocos minutos y compara su huella. El tipo de cambio de Google Finance también cambia la huella del catálogo (se vuelve a
   mandar el catálogo; es pequeño).
+- **Moneda del contrato cambiada a mano** (rama `rapidez-apps-script`): la requisición y las órdenes que Compras tiene abiertas
+  toman la moneda y la línea del caché de contratos, así que muestran la de antes **hasta ~10 min** (luego la consulta de fondo
+  detecta el cambio y vuelve a mandar la vista, también la requisición abierta). Mientras tanto, autorizar con la moneda vieja se
+  rechaza (al escribir, el servidor lee la hoja): no se emite una orden con la moneda equivocada. Quien edite la hoja a mano debe
+  avisar a compras o esperar esos minutos.
 - Una vista con captura en curso no se repinta sola: aparece "Otra persona cambió esta información. Actualizar".
 - La consulta corre como el dueño (cuota de efrain@): ~3 llamadas por minuto por navegador visible. La verificación del token sigue
   en caché (10 min).

@@ -29,6 +29,8 @@
 //     el memo guardado; el activador ya no guarda «mis requisiciones» con una devolución resuelta como Abierta.
 // 12. Huella cambiada y una escritura en medio: lo que la consulta de fondo guarda con la versión que subió se lee después de
 //     subirla (lleva el proyecto que otra ejecución creó mientras tanto).
+// 13. Un cambio a mano en Contratos (moneda) vuelve a mandar la requisición abierta en Compras; mientras no se detecta,
+//     autorizar con la moneda vieja se rechaza (el servidor lee la hoja al escribir).
 // Uso: node tests/rapidez.test.js .
 'use strict';
 const assert = require('assert');
@@ -501,6 +503,35 @@ const compras = A => {
   assert(folios(ok('rosa', 'listarProyectosRequisicion', '')).indexOf(P3) !== -1, 'otra persona, del caché, también');
   assert.equal(ok('rosa', 'listarProyectosRequisicion', '').find(p => p.folio === P2).estado, 'Cerrado');
   assert.equal(String(props.VER_proyectos), String(s.versiones.proyectos), 'la versión que vio es la de la propiedad');
+}
+
+// ================= 13. Cambio a mano en Contratos y la requisición abierta en Compras =================
+{
+  const A = crear();
+  const { ok, post, cache } = A;
+  const C = compras(A);
+  const P1 = C.proyecto('Uno'), req = C.pedir(P1);
+  const cot = ok('ana', 'guardarCotizacion', { cliente: { nombre: 'Luis' }, items: [{ descripcion: 'Servicio', cantidad: 1, precio: 100 }],
+    proyectoFolio: P1, moneda: 'MXN', idSolicitud: 'c1' }).folio;
+  ok('efrain', 'marcarAceptada', P1, cot);
+  const vers = ok('pedro', 'bootstrap').versiones;
+  ok('pedro', 'sincronizar', vers, { req: req });
+  assert.equal(ok('pedro', 'getRequisicion', req).moneda, 'MXN');
+  // Cobranza corrige a mano la moneda del contrato (ninguna versión sube); vence la marca y la consulta de fondo relee Contratos
+  const con = A.libros[A.props.COBRANZA_DB_ID].pest.Contratos.m;
+  con[con.findIndex(r => r[0] === P1)][3] = 'USD';
+  // Mientras tanto la vista sale del caché de contratos (≤ 10 min): autorizar con esa moneda vieja no pasa (se lee la hoja)
+  const vieja = ok('pedro', 'getRequisicion', req);
+  assert.equal(vieja.moneda, 'MXN', 'la vista sigue con el caché de contratos hasta la siguiente revisión');
+  const r = post('pedro', 'autorizarRequisicion', req, { proveedor: { razonSocial: 'Ferretera' }, fechaEntrega: A.masDias(1),
+    lugarEntrega: 'Querétaro', formaPago: 'Transferencia', condicionesPago: 'Contado', diasCredito: 0, moneda: vieja.moneda,
+    tipoCambio: '', renglones: [{ descripcion: 'Cable', unidad: 'PZA', cantidad: 1, costo: 100 }], idSolicitud: 'oc-vieja' });
+  assert(!r.ok && /USD/.test(r.error), 'autorizar con la moneda vieja se rechaza: ' + (r.error || 'aceptada'));
+  Object.keys(cache).filter(k => /^R_contratos/.test(k)).forEach(k => delete cache[k]);
+  const s = ok('pedro', 'sincronizar', vers, { req: req });
+  assert(s.cambios.indexOf('contratos') !== -1, 'la consulta detecta el cambio a mano');
+  assert(s.requisicion, 'y vuelve a mandar la requisición abierta');
+  assert.equal(s.requisicion.moneda, 'USD');
 }
 
 console.log('rapidez: todo bien');

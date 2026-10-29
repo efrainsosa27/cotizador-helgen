@@ -885,7 +885,8 @@ function sincronizar(vc, ctx) {
     if (algo('requisiciones', 'oc', 'pagosProveedores', 'proyectos')) {
       r.comRequisiciones = intentar_(errores, 'Requisiciones', () => listarRequisiciones(ctx.rcBuscar || '', ctx.rcEstado || ''));
     }
-    if (ctx.req && algo('requisiciones', 'oc', 'pagosProveedores', 'proyectos', 'facturasProveedor')) {
+    // contratos: la vista lleva la moneda y la línea del proyecto (contratosCache_, Rapidez 7)
+    if (ctx.req && algo('requisiciones', 'oc', 'pagosProveedores', 'proyectos', 'facturasProveedor', 'contratos')) {
       r.requisicion = intentar_(errores, 'Requisición', () => getRequisicion(ctx.req));
     }
     if (ctx.comProyecto && algo('oc', 'contratos', 'proyectos', 'facturasProveedor', 'pagosProveedores')) {

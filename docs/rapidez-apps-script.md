@@ -160,6 +160,10 @@ tabla se midieron al hacer cada commit (con el perfil de ese momento); la tabla 
 - **Rapidez 7 · vistas de compras con `contratosCache_()`.** En una consulta: caché por versión de contratos (marcar aceptada,
   firmar o desbloquear suben la versión). Un cambio **a mano** en Contratos lo detecta la sincronización en ≤ 10 min, igual que en
   las listas (`listarProyectosCompras` ya lo hacía así). En una escritura se lee la hoja (como antes).
+  **Revisión 4:** al detectarlo, `sincronizar` ahora también vuelve a mandar la requisición abierta (`ctx.req`; antes solo las
+  órdenes del proyecto). Los ≤ 10 min se quedan (es el costo de no leer Contratos en cada vista) y se avisan en CLAUDE.md §6.14:
+  en ese rato la vista muestra la moneda de antes, pero autorizar con ella se rechaza («El proyecto es en USD y la orden en MXN:
+  captura el tipo de cambio…»), así que no hay monto equivocado. Prueba: §13.
 
 ### 5.2 Dentro de una petición (`MEMO_`)
 
