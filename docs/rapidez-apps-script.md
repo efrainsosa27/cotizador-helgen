@@ -1,4 +1,4 @@
-# CAPRI más rápido en Apps Script (30/10/2026)
+# CAPRI más rápido en Apps Script (29/10/2026)
 
 Rama `rapidez-apps-script` (sobre `incremento-5`, que todavía no se publica). **Nada se publicó**: ni `clasp push` ni `wrangler`.
 Objetivo: que CAPRI responda más rápido **sin cambiar lo que hace**, mientras la API siga en Google Apps Script. Casi todo el

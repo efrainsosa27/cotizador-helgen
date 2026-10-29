@@ -155,7 +155,7 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
   exista; §4.8).
 - En caché por versión: `listarProyectos`, `listarProyectosCobranza/Compras/Requisicion`, `misRequisiciones` (por correo),
   `listarRequisiciones` (por filtro), `resumenCobranzaGeneral`, historial (folio con clave). Las vistas de detalle no.
-- **Rapidez (30/10/2026, rama `rapidez-apps-script`, sin publicar; detalle y mediciones en `docs/rapidez-apps-script.md`).** Por
+- **Rapidez (29/10/2026, rama `rapidez-apps-script`, sin publicar; detalle y mediciones en `docs/rapidez-apps-script.md`).** Por
   petición: IDs de Script Properties (`idGuardado_`), libros abiertos (`abrirLibro_`), una sola `getLastRow` por lectura
   (`filasDatos_`), filas de cada pestaña (`filasEnPeticion_` → `MEMO_.filas`, también Proyectos), Config (`configLigera_`) y la
   carpeta del área (`carpetaArea_`). Lo guardado en `MEMO_.filas` se olvida: al escribir en esa pestaña (`escribe_`), al tomar

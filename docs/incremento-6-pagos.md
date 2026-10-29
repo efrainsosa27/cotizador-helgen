@@ -262,7 +262,7 @@ más por orden) y `totalesAFavor` por moneda: aparte, nunca se restan de lo que 
   orden tenga algún pago.
 - Pasar a `CLAUDE.md` y al Manual al integrar.
 
-## 11. Revisión independiente (30/10/2026, rama `incremento-6-fixp`)
+## 11. Revisión independiente (29/10/2026, rama `incremento-6-fixp`)
 
 Hallazgos de la revisión y su arreglo (un commit y una prueba de regresión por cada uno, en `tests/pagos-revision.test.js`; los
 fuzzers de la revisión ya no encuentran nada).
