@@ -188,7 +188,7 @@ function imprimirDetalle(nombre, ops) {
   Object.keys(otros).sort().forEach(k => console.log(String(otros[k]).padStart(3) + '  ' + k));
   const cache = {};
   ops.filter(o => o.tipo === 'cache').forEach(o => {
-    const k = o.que + ' ' + String(o.clave || '').replace(/_[\d.]+(#\d+)?$/, '_v$1').replace(/TOK_.*/, 'TOK_…') + (o.que === 'get' ? (o.acierto ? ' (sí)' : ' (no)') : '');
+    const k = o.que + ' ' + String(o.clave || '').replace(/@[^@#]*(#\d+)?$/, '$1').replace(/_[\d.]+(#\d+)?$/, '_v$1').replace(/TOK_.*/, 'TOK_…') + (o.que === 'get' ? (o.acierto ? ' (sí)' : ' (no)') : '');
     cache[k] = (cache[k] || 0) + 1;
   });
   Object.keys(cache).sort().forEach(k => console.log(String(cache[k]).padStart(3) + '  cache ' + k));

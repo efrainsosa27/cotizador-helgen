@@ -134,9 +134,11 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
   `requisicion` (`ctx.req`), `comprasProyecto` (`ctx.comProyecto`), `cobProyectos`, `cobranzaProyecto` (`ctx.cobProyecto`), `resumen`
   (`ctx.cobResumen`). Con `SOLO_REQUISICION` nunca manda lo demás aunque el contexto lo pida.
 - Versiones: `COLECCIONES` (proyectos, contratos, cotizaciones, catalogo, requisiciones, oc, pagosCobranza, pagosProveedores) en
-  Script Properties `VER_<colección>`; `CAMBIOS_API` dice qué sube cada función; `doPost` llama `subirVersiones_` (con el candado de
-  script) **después** de que la escritura terminó bien (no si devolvió `{confirmar}`). Durante una escritura `SIN_CACHE_` = lo que
-  devuelve sale de la hoja. **Toda función nueva que escriba debe agregarse a `CAMBIOS_API`.**
+  Script Properties `VER_<colección>`; `CAMBIOS_API` dice qué sube cada función; `doPost` llama `subirVersiones_` **después** de que
+  la escritura terminó bien (no si devolvió `{confirmar}`). Durante una escritura `SIN_CACHE_` = lo que devuelve sale de la hoja.
+  **Toda función nueva que escriba debe agregarse a `CAMBIOS_API`.** Desde la revisión de rapidez (rama `rapidez-apps-script`) la
+  versión no es un contador: `versionNueva_` = segundos × 1 000 000 + 6 cifras al azar, sin candado (antes, con el candado
+  ocupado más de 10 s no subía). **Las versiones solo se comparan por igualdad**: nunca restarlas ni usar su orden.
 - Caché: `enCache_(base, colecciones, ttl, fn)` (clave = base + versiones; sin `fn` solo lee), `leerCache_`/`guardarCache_` (JSON en trozos
   de 30 000 caracteres), `TTL_CACHE` = 6 h. `fuenteConHuella_(nombre, colección, cadaSeg, leer, revisar)` para hojas editables a mano:
   dato 6 h; con `revisar` (solo `sincronizar`) relee la hoja si pasaron `cadaSeg` (marca `R_<nombre>`) y si la huella MD5 cambió con la
@@ -155,6 +157,9 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
   la primera escritura: `confiarEncabezados_`); un valor chico del caché va en una entrada (`V:<json>`; los grandes, en
   trozos `N:n`). Una fuente en `MEMO_` solo se reusa con la misma versión. Las vistas de compras toman moneda y línea de
   `contratosCache_()`. Perfil: `tests/perfil.js` (operaciones con Google por escenario, `--detalle`, `--respuestas`, `--estado`).
+  Revisión independiente de la rapidez (`tests/rapidez.test.js` §11–§16): memos derivados (`MEMOS_DERIVADOS_`) que se olvidan como
+  las filas; versiones que no se repiten y suben sin candado (`versionNueva_`); `candado_` anidable; y **`VERSION_CODIGO_CACHE`**:
+  espacio del caché del código publicado, al final de toda clave de datos (`claveNs_`; no en idempotencia, `CAPRI_*` ni `FOTOCM_`).
 
 ### 4.2 Catálogo de productos
 - `hojaCatalogo_()` — abre "Catálogo Helgen"; si no existe, `crearCatalogo_()` (bajo candado). Llama `asegurarColumnasSat_()`.
@@ -547,7 +552,8 @@ en los usuarios de prueba de OAuth (§10.1; agregadas por el usuario el 23/10/20
 por coma, nombre exacto sin acento: `SOLO_REQUISICION`, no `SOLO_REQUISICIÓN`) y a los usuarios de prueba de OAuth. El servidor
 relee las propiedades en cada llamada (comprobado el 28/10/2026 al agregar a alan@ y daniel@).
 Versiones (23/10/2026, §6.14): `VER_proyectos`, `VER_contratos`, `VER_cotizaciones`, `VER_catalogo`, `VER_requisiciones`, `VER_oc`,
-`VER_pagosCobranza`, `VER_pagosProveedores` (se crean y suben solas; no editarlas: si se borran, solo se recalcula el caché).
+`VER_pagosCobranza`, `VER_pagosProveedores` (se crean y suben solas; no editarlas: si se borran, solo se recalcula el caché;
+desde la revisión de rapidez son números largos —hora + cifras al azar—, no contadores).
 **Un cambio de rol (`ROL_*`, `SOLO_REQUISICION`) se aplica sin recargar la página** en la siguiente consulta (≤ 20 s).
 
 **CAPRI (incremento 4; aún sin publicar).** Libro privado **"CAPRI — Administración"** (`ADMIN_DB_ID`, carpeta `ADMIN_FOLDER_ID`;
@@ -800,6 +806,11 @@ Sin `PORTAL_SECRETO` el enlace está apagado y todo funciona como antes.
   proyecto, precios del catálogo, filas borradas) en ≤ ~5–10 min + 20 s (medido: 85 s), porque la consulta de fondo relee esas hojas
   cada pocos minutos y compara su huella. El tipo de cambio de Google Finance también cambia la huella del catálogo (se vuelve a
   mandar el catálogo; es pequeño).
+- **Moneda del contrato cambiada a mano** (rama `rapidez-apps-script`): la requisición y las órdenes que Compras tiene abiertas
+  toman la moneda y la línea del caché de contratos, así que muestran la de antes **hasta ~10 min** (luego la consulta de fondo
+  detecta el cambio y vuelve a mandar la vista, también la requisición abierta). Mientras tanto, autorizar con la moneda vieja se
+  rechaza (al escribir, el servidor lee la hoja): no se emite una orden con la moneda equivocada. Quien edite la hoja a mano debe
+  avisar a compras o esperar esos minutos.
 - Una vista con captura en curso no se repinta sola: aparece "Otra persona cambió esta información. Actualizar".
 - La consulta corre como el dueño (cuota de efrain@): ~3 llamadas por minuto por navegador visible. La verificación del token sigue
   en caché (10 min).
@@ -885,7 +896,8 @@ Spec: "CAPRI — increment 4 spec" (Claude Docs `https://claude.ai/artifact/2kb6
 18. (Rapidez) Toda escritura a una hoja va como `escribe_(hoja).getRange(…).setValues(…)` / `escribe_(hoja).appendRow(…)`, y todo
     candado se toma con `candado_()` (nunca `LockService.getScriptLock()` directo). Si no, una lectura posterior en la misma
     petición vería filas viejas (`MEMO_.filas`). `tests/rapidez.test.js` revisa el código y el arnés falla la prueba que escriba en
-    una pestaña con sus filas guardadas.
+    una pestaña con sus filas guardadas (o con un memo derivado de ella, `MEMOS_DERIVADOS_`). `candado_` se puede anidar: solo el
+    de afuera suelta el candado de Apps Script (que se suelta completo con un solo `releaseLock`).
 
 ## 8. Cómo trabajar
 
@@ -917,6 +929,11 @@ npx --yes wrangler@4 deploy
 
 - Antes de `push`, confirmar que `.clasp.json` apunta a `1GsH8Dja…` y que nadie cambió el proyecto en el editor
   (clonar en una carpeta temporal y comparar).
+- **Antes de publicar la API, cambiar `VERSION_CODIGO_CACHE` en `Code.js`** (p. ej. a la fecha + una letra: `2026-10-29r` →
+  `2026-11-03a`) en toda publicación que cambie la forma de algo que se guarda en caché (listas, fuentes, vistas: un campo nuevo,
+  quitado o renombrado). Si no, el código nuevo sirve hasta 6 h las listas que armó el anterior (sin los campos nuevos) mientras
+  no suba la versión de su colección. En la duda, cambiarlo: el costo es que la primera carga de cada lista después de publicar
+  se arma de las hojas (como con el caché vacío) y cada sesión vuelve a verificar su token una vez. No toca la idempotencia.
 - Las pruebas de cotización y SAT simulan un vendedor (`VENDEDOR_`), porque `guardarCotizacion` exige sesión.
 - Revisar sintaxis del JS de la interfaz: extraer los `<script>` de `web/cotizador/index.html` y `node --check`.
 - Comprobar la API con `curl` usando `-d` sin `-X POST` (con `-X POST -L` curl repite el POST en la redirección de Google y

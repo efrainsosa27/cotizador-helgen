@@ -361,7 +361,7 @@ const L1 = 'OC-' + B.ANIO + '-0900', L2 = 'OC-' + B.ANIO + '-0901'; // órdenes 
   const ESQ = B.libros[B.props.COBRANZA_DB_ID].pest.Esquemas.m, cF = ESQ[0].indexOf('fecha_esperada');
   ESQ.find(r => r[0] === p1 && Number(r[1]) === 2)[cF] = masDias(-45);
   assert.deepEqual(ok('tania', 'sincronizar', vers, { reporte: 'cxc' }).cambios, [], 'antes de que toque revisar, nada (como las demás hojas)');
-  delete B.cache.R_esquemas; // pasaron los 10 minutos de la marca de revisión
+  Object.keys(B.cache).filter(k => k.startsWith('R_esquemas')).forEach(k => delete B.cache[k]); // pasaron los 10 minutos de la marca de revisión
   const r = ok('tania', 'sincronizar', vers, { reporte: 'cxc' });
   assert(r.cambios.indexOf('contratos') !== -1, 'la edición a mano sube la versión de contratos');
   assert(r.reporte && r.reporte.tipo === 'cxc', 'manda el reporte abierto');
@@ -371,7 +371,7 @@ const L1 = 'OC-' + B.ANIO + '-0900', L2 = 'OC-' + B.ANIO + '-0901'; // órdenes 
   assert(ok('leo', 'reporteFlujo').partidas.some(p => p.tipo === 'cobro' && p.folio === vis && p.fecha === masDias(-45) && p.vencido && p.semana === 1),
     'y el flujo (vencido, en la semana en curso)');
   assert.deepEqual(ok('tania', 'sincronizar', r.versiones, { reporte: 'cxc' }).cambios, [], 'una sola vez');
-  delete B.cache.R_esquemas;
+  Object.keys(B.cache).filter(k => k.startsWith('R_esquemas')).forEach(k => delete B.cache[k]);
   assert.deepEqual(ok('tania', 'sincronizar', r.versiones, { reporte: 'cxc' }).cambios, [], 'sin otra edición, revisar no sube nada');
 }
 

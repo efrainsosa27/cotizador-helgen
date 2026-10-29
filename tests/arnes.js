@@ -42,14 +42,18 @@ module.exports = function crearArnes(dir, opciones) {
   const an = (tipo, m, celdas) => perfil.activo && anota(tipo, { hoja: quien(m), celdas: celdas || 0 });
   // Rapidez (filas leídas en la petición, MEMO_.filas): en cada escritura, el código no puede tener guardadas filas de esa misma
   // pestaña (toda escritura pasa por escribe_, que las olvida). Si las tiene, la siguiente lectura devolvería algo viejo: falla.
+  // Lo mismo con los memos derivados (MEMOS_DERIVADOS_: MEMO_.devs, pagosProv, anulados, ctxRoles, rolesYo, cfgLigera): una
+  // escritura en una pestaña de donde sale uno que sigue guardado falla.
   let leerMemo = null;
   const revisarMemo = (m, idHoja) => {
     if (!leerMemo) return;
-    const claves = leerMemo.runInContext(ctx);
-    if (!claves.length) return;
+    const { filas, derivados } = leerMemo.runInContext(ctx);
+    if (!filas.length && !derivados.length) return;
     const nombre = quien(m).split('/').slice(-1)[0];
-    const mala = claves.find(k => k.endsWith('/' + nombre + '/' + idHoja));
+    const mala = filas.find(k => k.endsWith('/' + nombre + '/' + idHoja));
     if (mala) throw new Error('Rapidez: escritura en ' + quien(m) + ' con sus filas guardadas en MEMO_.filas (' + mala + '): falta escribe_');
+    const derivado = derivados.find(d => d.de.indexOf(nombre) !== -1);
+    if (derivado) throw new Error('Rapidez: escritura en ' + quien(m) + ' con MEMO_.' + derivado.k + ' guardado (sale de esa pestaña): falta escribe_');
   };
   let nHoja = 0; // getSheetId: cada pestaña tiene su id (una pestaña borrada y vuelta a crear tiene otro)
   function hoja(m) {
@@ -164,6 +168,7 @@ module.exports = function crearArnes(dir, opciones) {
     if (Buffer.byteLength(String(v), 'utf8') > 100 * 1024) throw new Error('Argument too large: value');
   };
   const activadores = [];
+  const candado = { tomado: false };
   const ctx = { console: { ...console, warn() {}, log() {} }, Date, JSON, Math,
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => { anota('props', { que: 'get ' + k }); return props[k] ?? null; },
       setProperty: (k, v) => { anota('props', { que: 'set ' + k }); return props[k] = String(v); },
@@ -177,10 +182,13 @@ module.exports = function crearArnes(dir, opciones) {
       remove: k => { anota('cache', { que: 'remove', clave: k }); delete cache[k]; },
       getAll: ks => { anota('cache', { que: 'getAll', clave: ks[0] }); return Object.fromEntries(ks.filter(k => k in cache).map(k => [k, cache[k]])); },
       putAll: o => { anota('cache', { que: 'putAll', clave: Object.keys(o)[0] }); Object.keys(o).forEach(k => limiteCache(k, o[k])); return Object.assign(cache, o); } }) },
-    // El candado de script: el perfil lleva la cuenta de lo que se hace con él tomado
-    LockService: { getScriptLock: () => ({ tomado: false,
-      tryLock() { anota('candado'); if (!this.tomado) { this.tomado = true; perfil.enCandado++; } return true; },
-      releaseLock() { if (this.tomado) { this.tomado = false; perfil.enCandado--; } } }) },
+    // El candado de script: uno por ejecución, como en Apps Script (cada getScriptLock() es el mismo candado: tomarlo otra vez
+    // estando tomado regresa true y soltarlo una vez lo suelta completo, aunque se haya tomado dos veces). El perfil lleva la
+    // cuenta de lo que se hace con él tomado; A.candadoTomado() dice si está tomado.
+    LockService: { getScriptLock: () => ({
+      tryLock() { anota('candado'); if (!candado.tomado) { candado.tomado = true; perfil.enCandado = 1; } return true; },
+      releaseLock() { candado.tomado = false; perfil.enCandado = 0; },
+      hasLock() { return candado.tomado; } }) },
     Session: { getActiveUser: () => ({ getEmail: () => '' }) },
     Logger: { log() {} },
     Utilities: { formatDate: fmt, newBlob: (a, b, c) => typeof a === 'string'
@@ -217,7 +225,9 @@ module.exports = function crearArnes(dir, opciones) {
   if (op.ctxExtra) Object.assign(ctx, op.ctxExtra);
   vm.createContext(ctx);
   vm.runInContext(src, ctx, perfil.activo ? { filename: 'capri.js' } : undefined);
-  leerMemo = new vm.Script("typeof MEMO_ === 'object' && MEMO_ && MEMO_.filas ? Object.keys(MEMO_.filas) : []");
+  leerMemo = new vm.Script("(() => { const m = typeof MEMO_ === 'object' && MEMO_ ? MEMO_ : {}; " +
+    "const d = typeof MEMOS_DERIVADOS_ === 'object' ? MEMOS_DERIVADOS_ : {}; " +
+    "return { filas: m.filas ? Object.keys(m.filas) : [], derivados: Object.keys(d).filter(k => m[k] != null).map(k => ({ k: k, de: d[k] })) }; })()");
 
   // ultimaRespuesta = bytes (UTF-8) del JSON que devolvió doPost en la última llamada (perfil)
   const post = (quien, funcion, ...args) => {
@@ -242,7 +252,7 @@ module.exports = function crearArnes(dir, opciones) {
   const FOTO = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0, 16, 0x4A, 0x46, 0x49, 0x46, 0, 1]).toString('base64');
   const conFotos = rs => rs.map(r => Object.assign({ foto: { nombre: 'foto.jpg', datos: FOTO, mime: 'image/jpeg' } }, r));
   const FOTOS = { renglones: conFotos(Array.from({ length: 20 }, (_, i) => ({ renglon: i + 1 }))) };
-  return Object.assign(A, { perfil, urlArchivo, urlCarpeta, ctx, P: ctx, correr, como, post, ok, falla, plain, props, cache, libros, carpetas, archivos, correos, llamadas, rutas,
+  return Object.assign(A, { perfil, candadoTomado: () => candado.tomado, urlArchivo, urlCarpeta, ctx, P: ctx, correr, como, post, ok, falla, plain, props, cache, libros, carpetas, archivos, correos, llamadas, rutas,
     tokens, claims, activadores, HOY, HOY_ISO, masDias, ANIO: String(HOY.getFullYear()), miUnidad, maestra, hoja, libro,
     PDF: Buffer.from('%PDF-1.4 cotizacion del proveedor').toString('base64'), FOTO, conFotos, FOTOS });
 };

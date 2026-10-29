@@ -60,7 +60,7 @@ function verificarTokenGoogle_(idToken) {
 
   const cache = CacheService.getScriptCache();
   const huella = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, token));
-  const claveCache = 'TOK_' + huella;
+  const claveCache = claveNs_('TOK_' + huella); // con el espacio del caché del código (VERSION_CODIGO_CACHE)
   const previo = cache.get(claveCache);
   if (previo) return JSON.parse(previo);
 
@@ -182,7 +182,7 @@ const FUNCIONES_VENTAS = ['getClientes', 'listarCotizaciones', 'getCatalogo', 'g
  */
 function doPost(e) {
   let respuesta;
-  VENDEDOR_ = null; VERSIONES_ = null; SIN_CACHE_ = false; MEMO_ = {};
+  VENDEDOR_ = null; VERSIONES_ = null; SIN_CACHE_ = false; MEMO_ = {}; CANDADO_TOMADO_ = 0;
   try {
     let cuerpo;
     try {
@@ -500,10 +500,32 @@ function filasEnPeticion_(clave, leer) {
   return memo[clave].map(r => r.slice()); // copias: quien las recibe puede cambiarlas sin tocar las de los demás
 }
 
-function olvidarFilas_() {
+/**
+ * Memos derivados: lo que la petición arma con filas de una pestaña y guarda en MEMO_.<campo> (campo → pestañas de donde sale).
+ * olvidarFilas_ los borra todos y escribe_(hoja) los que salen de esa pestaña: si no, al tomar el candado o al releer las versiones
+ * seguirían los de antes (y una lista que se guarda en caché con la versión nueva llevaría el dato viejo). Quien agregue un memo
+ * armado con filas de una hoja lo registra aquí; el arnés de pruebas falla una escritura en su pestaña mientras siga guardado.
+ * Las fuentes (MEMO_['F_…'], fuenteConHuella_) no van aquí: se reusan solo con la misma versión.
+ */
+const MEMOS_DERIVADOS_ = {
+  devs: ['Devoluciones'],                 // devolucionesDelLibro_
+  pagosProv: ['PagosProveedores'],        // pagosProvPorOc_
+  anulados: ['Anulaciones'],              // foliosAnulados_
+  ctxRoles: ['Permisos', 'Delegaciones'], // contextoRoles_
+  rolesYo: ['Permisos', 'Delegaciones'],  // rolesYo_ (sale de ctxRoles)
+  cfgLigera: ['Config'],                  // configLigera_
+};
+// Los roles se calculan una vez por llamada (como siempre: cada función revisa el permiso al entrar) y se conservan al tomar
+// el candado: dentro de una escritura no hay caché (SIN_CACHE_) y recalcularlos releería Permisos y Delegaciones (~1 s más en
+// cada escritura). Sí se olvidan al releer las versiones y al escribir en Permisos o Delegaciones.
+const MEMOS_DE_LA_LLAMADA_ = ['ctxRoles', 'rolesYo'];
+
+/** Olvida las filas leídas y los memos derivados. alCandado = lo llama candado_ (conserva los de MEMOS_DE_LA_LLAMADA_). */
+function olvidarFilas_(alCandado) {
   MEMO_.filas = null;
-  MEMO_.cfgLigera = null; // Config ya leída en la petición (configLigera_)
-  MEMO_.pagosProv = null; // pagos a proveedores por orden (pagosProvPorOc_): se arman con esas filas
+  Object.keys(MEMOS_DERIVADOS_).forEach(k => {
+    if (!alCandado || MEMOS_DE_LA_LLAMADA_.indexOf(k) === -1) MEMO_[k] = null;
+  });
 }
 
 /** Sufijo de las claves de MEMO_.filas de una pestaña ("/Requisiciones/123"); '' si no se sabe. */
@@ -528,16 +550,39 @@ function escribe_(hoja) {
   }
   const memo = MEMO_.filas || {};
   Object.keys(memo).forEach(k => { if (k.slice(-sufijo.length) === sufijo) delete memo[k]; });
-  if (/^\/Config\//.test(sufijo)) MEMO_.cfgLigera = null;
+  const pestana = sufijo.slice(1, sufijo.lastIndexOf('/')); // sufijo = '/<pestaña>/<id>' (el nombre puede llevar '/')
+  Object.keys(MEMOS_DERIVADOS_).forEach(k => { if (MEMOS_DERIVADOS_[k].indexOf(pestana) !== -1) MEMO_[k] = null; });
   return hoja;
 }
 
-/** El candado de script. Al tomarlo o soltarlo se olvidan las filas leídas en la petición (filasEnPeticion_). */
+/**
+ * El candado de script. Al tomarlo o soltarlo se olvidan las filas leídas en la petición (filasEnPeticion_).
+ * Se puede anidar: un candado_ dentro de otro (el libro del área que se crea la primera vez, migrarConfig_, db_… con el candado
+ * ya tomado) no vuelve a pedirlo y al soltarse no lo suelta; solo el de afuera lo suelta. El candado de Apps Script es uno por
+ * ejecución y releaseLock lo suelta completo aunque se haya tomado dos veces: sin esta cuenta, lo que el de afuera hace después
+ * del de adentro (folio, escritura) correría sin candado.
+ */
+let CANDADO_TOMADO_ = 0; // cuántos candado_ de esta ejecución lo tienen tomado (doPost y el activador empiezan en 0)
 function candado_() {
   const lock = LockService.getScriptLock();
+  let mio = false;
   return {
-    tryLock: ms => { const ok = lock.tryLock(ms); if (ok) olvidarFilas_(); return ok; },
-    releaseLock: () => { lock.releaseLock(); olvidarFilas_(); },
+    tryLock: ms => {
+      if (mio) return true;
+      if (CANDADO_TOMADO_ > 0) { CANDADO_TOMADO_++; mio = true; return true; } // anidado: esta ejecución ya lo tiene
+      if (!lock.tryLock(ms)) return false;
+      CANDADO_TOMADO_ = 1; mio = true;
+      olvidarFilas_(true);
+      return true;
+    },
+    releaseLock: () => {
+      if (!mio) return;
+      mio = false;
+      if (--CANDADO_TOMADO_ > 0) return; // el de afuera sigue con él
+      CANDADO_TOMADO_ = 0;
+      lock.releaseLock();
+      olvidarFilas_(true);
+    },
   };
 }
 
@@ -553,31 +598,54 @@ function versiones_(releer) {
 }
 
 /**
- * Sube la versión de las colecciones con el candado de script (nunca se pierde un aumento). Se llama después de escribir,
- * así quien lea la versión nueva ya encuentra los datos nuevos. No llamarla con el candado tomado.
+ * Valor nuevo para la versión de una colección: segundos × 1 000 000 + seis cifras al azar. No se lee-suma-escribe, así que no
+ * necesita candado: dos ejecuciones que suben la misma colección a la vez sacan valores distintos (salvo una en un millón si es
+ * en el mismo segundo). Sale mayor que la anterior que se conoce (si esa ya va adelantada, se sigue desde ella), aunque nada
+ * depende del orden: las versiones solo se comparan por igualdad (claves de caché, sincronizar, la huella de fuenteConHuella_).
+ * Es un entero exacto de JavaScript (viaja como número a la interfaz) hasta el año 2255.
+ */
+function versionNueva_(anterior) {
+  const seg = Math.max(Math.floor(Date.now() / 1000), Math.floor((Number(anterior) || 0) / 1e6) + 1);
+  return seg * 1e6 + Math.floor(Math.random() * 1e6);
+}
+
+/**
+ * Sube la versión de las colecciones (versionNueva_). Nunca se salta: antes era leer-sumar-escribir con el candado de script y,
+ * si otra ejecución lo tenía más de 10 s (un PDF, una orden), no subía y los demás navegadores no se enteraban del cambio hasta
+ * la siguiente escritura (hasta 6 h). Se llama después de escribir, así quien lea la versión nueva ya encuentra los datos nuevos.
  */
 function subirVersiones_(colecciones) {
   if (!colecciones || !colecciones.length) return;
-  const lock = candado_();
-  if (!lock.tryLock(10000)) { console.warn('Sin candado: no subió la versión de ' + colecciones.join(', ')); return; }
   try {
-    const props = PropertiesService.getScriptProperties();
+    const actuales = propiedades_(); // solo para que la nueva salga mayor; la unicidad no depende de esto
     const nuevas = {};
-    colecciones.forEach(c => { nuevas['VER_' + c] = String((Number(props.getProperty('VER_' + c)) || 0) + 1); });
-    props.setProperties(nuevas);
+    colecciones.forEach(c => { nuevas['VER_' + c] = String(versionNueva_(actuales['VER_' + c])); });
+    PropertiesService.getScriptProperties().setProperties(nuevas);
   } finally {
-    lock.releaseLock();
-    VERSIONES_ = null; MEMO_.props = null;
+    VERSIONES_ = null; MEMO_.props = null; // la siguiente lectura de versiones las relee (y olvida las filas: versiones_)
   }
 }
 
 const TROZO_CACHE = 30000; // caracteres por entrada (CacheService admite 100 KB por valor; un acento ocupa 2 bytes)
 
 /**
+ * Espacio del caché del código publicado. Va al final de toda clave de datos entre peticiones (claveNs_): leerCache_ /
+ * guardarCache_ (listas K_…, fuentes F_…, PORTAL_ITEMS), huellas H_ y marcas R_ de fuenteConHuella_, ENCABEZADOS_OK,
+ * ACCESO_FOTOS, tokens verificados TOK_ y sugerencias SAT. **Se cambia en cada publicación que cambie la forma de algo que se
+ * guarda en caché** (CLAUDE.md §8): así el código nuevo no sirve listas armadas por el anterior (les faltarían campos hasta que
+ * subiera la versión de su colección, hasta 6 h). Al publicar, la primera carga de cada lista se arma de las hojas (como con el
+ * caché vacío). No va en las claves de idempotencia (REQ_, OC_, PGP_…: un reintento justo al publicar no debe duplicar), ni en las
+ * de la entrada con código (CAPRI_*: bloqueos y códigos vigentes) ni en FOTOCM_ (fotos ya archivadas en Drive).
+ */
+const VERSION_CODIGO_CACHE = '2026-10-29r';
+function claveNs_(clave) { return clave + '@' + VERSION_CODIGO_CACHE; }
+
+/**
  * Lee un valor JSON guardado por guardarCache_; undefined si no está o le falta un trozo. Rapidez (30/10/2026): un valor que
  * cabe en un trozo va en la misma entrada ("V:<json>", una lectura); uno más grande, en trozos ("N:<n>" + <clave>#0…).
  */
 function leerCache_(clave) {
+  clave = claveNs_(clave);
   const cache = CacheService.getScriptCache();
   const meta = cache.get(clave);
   if (meta && meta.slice(0, 2) === 'V:') {
@@ -596,6 +664,7 @@ function leerCache_(clave) {
 }
 
 function guardarCache_(clave, valor, ttl) {
+  clave = claveNs_(clave);
   try {
     const texto = JSON.stringify(valor), datos = {};
     // Rapidez: lo que cabe en un trozo va en la misma entrada (al leerlo, un viaje a CacheService en lugar de dos)
@@ -653,26 +722,31 @@ function fuenteConHuella_(nombre, coleccion, cadaSeg, leer, revisar) {
   const cache = CacheService.getScriptCache();
   // Rapidez: ya está en la petición con esta versión (p. ej. Permisos, que se leen para los roles): para revisarla basta
   // saber si ya toca releer la hoja (marca R_); no se vuelve a traer el valor del caché
-  if (memo && memo.version === v && cache.get('R_' + nombre)) {
+  if (memo && memo.version === v && cache.get(claveNs_('R_' + nombre))) {
     memo.revisado = true;
     return memo.valor;
   }
   const previo = leerCache_('F_' + nombre + '_' + v);
-  if (previo !== undefined && (!revisar || cache.get('R_' + nombre))) {
+  if (previo !== undefined && (!revisar || cache.get(claveNs_('R_' + nombre)))) {
     MEMO_['F_' + nombre] = { valor: previo, revisado: !!revisar, version: v };
     return previo;
   }
-  const valor = leer();
-  const huella = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(valor)));
-  const anterior = String(cache.get('H_' + nombre) || '').split('|');
+  const firma = x => Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(x)));
+  let valor = leer();
+  let huella = firma(valor);
+  const anterior = String(cache.get(claveNs_('H_' + nombre)) || '').split('|');
   let version = v;
   if (anterior.length === 2 && Number(anterior[0]) === v && anterior[1] !== huella) {
     subirVersiones_([coleccion]); // alguien la editó directo en la hoja
     version = versiones_()[coleccion];
+    // Otra ejecución pudo escribir (y subir la versión) entre la lectura y la subida: lo leído antes no se guarda con la versión
+    // de después. Se relee después de leer la versión (versiones_ ya olvidó las filas de la petición).
+    valor = leer();
+    huella = firma(valor);
   }
   guardarCache_('F_' + nombre + '_' + version, valor, TTL_CACHE);
-  cache.put('H_' + nombre, version + '|' + huella, TTL_CACHE);
-  cache.put('R_' + nombre, '1', cadaSeg);
+  cache.put(claveNs_('H_' + nombre), version + '|' + huella, TTL_CACHE);
+  cache.put(claveNs_('R_' + nombre), '1', cadaSeg);
   MEMO_['F_' + nombre] = { valor: valor, revisado: true, version: version };
   return valor;
 }
@@ -873,7 +947,8 @@ function sincronizar(vc, ctx) {
     if (algo('requisiciones', 'oc', 'pagosProveedores', 'proyectos')) {
       r.comRequisiciones = intentar_(errores, 'Requisiciones', () => listarRequisiciones(ctx.rcBuscar || '', ctx.rcEstado || ''));
     }
-    if (ctx.req && algo('requisiciones', 'oc', 'pagosProveedores', 'proyectos', 'facturasProveedor')) {
+    // contratos: la vista lleva la moneda y la línea del proyecto (contratosCache_, Rapidez 7)
+    if (ctx.req && algo('requisiciones', 'oc', 'pagosProveedores', 'proyectos', 'facturasProveedor', 'contratos')) {
       r.requisicion = intentar_(errores, 'Requisición', () => getRequisicion(ctx.req));
     }
     if (ctx.comProyecto && algo('oc', 'contratos', 'proyectos', 'facturasProveedor', 'pagosProveedores')) {
@@ -1345,7 +1420,7 @@ function ordenarConIaSat_(texto, candidatos) {
   const cache = CacheService.getScriptCache();
   const llave = 'satIA:' + Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5,
     palabrasSat(texto).join(' ') + '|' + candidatos.map(c => c.clave).join(','), Utilities.Charset.UTF_8));
-  const guardada = cache.get(llave);
+  const guardada = cache.get(claveNs_(llave));
   if (guardada) return JSON.parse(guardada);
   try {
     const r = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
@@ -1358,7 +1433,7 @@ function ordenarConIaSat_(texto, candidatos) {
       return null;
     }
     const lista = leerRespuestaIaSat(r.getContentText(), candidatos);
-    cache.put(llave, JSON.stringify(lista), 21600); // 6 h: la misma búsqueda no se vuelve a cobrar
+    cache.put(claveNs_(llave), JSON.stringify(lista), 21600); // 6 h: la misma búsqueda no se vuelve a cobrar
     return lista;
   } catch (e) {
     console.warn('IA claves SAT: ' + (e && e.message ? e.message : e));
@@ -2041,7 +2116,7 @@ function claveEncabezados_(libro, hoja, nombre, enc) {
 function encabezadosOk_() {
   if (!MEMO_.enc) {
     let previo = {};
-    try { previo = JSON.parse(CacheService.getScriptCache().get(CACHE_ENCABEZADOS) || '{}') || {}; } catch (e) { previo = {}; }
+    try { previo = JSON.parse(CacheService.getScriptCache().get(claveNs_(CACHE_ENCABEZADOS)) || '{}') || {}; } catch (e) { previo = {}; }
     MEMO_.enc = previo;
   }
   return MEMO_.enc;
@@ -2057,7 +2132,7 @@ function anotarEncabezados_(clave) {
   ok[clave] = ahora;
   // Solo las revisiones vigentes (cada una vence 6 h después de hecha, aunque el mapa se vuelva a guardar)
   Object.keys(ok).forEach(k => { if (!(ahora - Number(ok[k]) < TTL_CACHE * 1000)) delete ok[k]; });
-  try { CacheService.getScriptCache().put(CACHE_ENCABEZADOS, JSON.stringify(ok), TTL_CACHE); } catch (e) { /* solo se pierde el ahorro */ }
+  try { CacheService.getScriptCache().put(claveNs_(CACHE_ENCABEZADOS), JSON.stringify(ok), TTL_CACHE); } catch (e) { /* solo se pierde el ahorro */ }
 }
 
 /**
@@ -11771,13 +11846,13 @@ function accesoFotos_(correo) {
   if (!MEMO_.accesoFotos) {
     const cache = CacheService.getScriptCache();
     let lista = null;
-    try { lista = JSON.parse(cache.get('ACCESO_FOTOS') || 'null'); } catch (e) { lista = null; }
+    try { lista = JSON.parse(cache.get(claveNs_('ACCESO_FOTOS')) || 'null'); } catch (e) { lista = null; }
     if (!Array.isArray(lista)) {
       try {
         const f = carpetaCompras_();
         lista = f.getEditors().concat(f.getViewers()).map(u => String(u.getEmail()).toLowerCase());
         try { lista.push(String(f.getOwner().getEmail()).toLowerCase()); } catch (e) { /* sin dueño visible */ }
-        cache.put('ACCESO_FOTOS', JSON.stringify(lista), 3600);
+        cache.put(claveNs_('ACCESO_FOTOS'), JSON.stringify(lista), 3600);
       } catch (e) {
         lista = [];
       }

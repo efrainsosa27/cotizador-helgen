@@ -155,11 +155,37 @@ tabla se midieron al hacer cada commit (con el perfil de ese momento); la tabla 
   lo que se lee. Si alguien **vacía** a mano la pestaña completa (con encabezados) sin borrarla, Rapidez 12 lo cubre: cuando la
   fila 1 se dio por buena sin leerla, la primera escritura de la petición en esa pestaña revisa con `getLastRow` que no esté
   vacía y, si lo está, repone los encabezados antes de escribir (como antes; sin eso, el siguiente renglón caía en la fila 1).
-- **Rapidez 9 · formato del caché.** Mismas claves, versiones y tiempos de vida; cambia cómo se guarda un valor chico. Las dos
-  versiones del código conviven: la nueva lee el formato viejo; la vieja toma `V:` como «no está» y lo vuelve a armar.
+- **Rapidez 9 · formato del caché.** Mismas versiones y tiempos de vida; cambia cómo se guarda un valor chico. `leerCache_` sigue
+  leyendo el formato en trozos (`N:n`), que es el de los valores grandes. Lo que dejó el código publicado antes ya no se lee
+  (revisión 3, abajo).
+- **Revisión 3 · espacio del caché por publicación (`VERSION_CODIGO_CACHE`, hoy `2026-10-29r`).** Antes, al publicar, el código
+  nuevo servía las listas que había guardado el anterior (mismas claves) mientras no subiera la versión de su colección: hasta 6 h
+  sin los campos nuevos (con esta rama: devoluciones, pago parcial, fotos…). Ahora toda clave de datos entre peticiones lleva al
+  final `@<VERSION_CODIGO_CACHE>` (`claveNs_`): `leerCache_`/`guardarCache_` (listas `K_`, fuentes `F_`, `PORTAL_ITEMS`), huellas
+  `H_` y marcas `R_`, `ENCABEZADOS_OK`, `ACCESO_FOTOS`, tokens verificados `TOK_` y sugerencias SAT. No lo llevan las claves de
+  idempotencia (`REQ_`, `OC_`, `PGP_`…: un reintento justo al publicar devuelve el mismo folio), las de la entrada con código
+  (`CAPRI_*`: bloqueos y códigos vigentes) ni `FOTOCM_` (fotos ya archivadas). Se cambia en cada publicación que cambie la forma
+  de algo en caché (CLAUDE.md §8). Costo al publicar: la primera carga de cada lista se arma de las hojas y cada sesión verifica su
+  token otra vez. Prueba: §16 (también revisa que toda clave de datos que escribe el código lleve el espacio).
 - **Rapidez 7 · vistas de compras con `contratosCache_()`.** En una consulta: caché por versión de contratos (marcar aceptada,
   firmar o desbloquear suben la versión). Un cambio **a mano** en Contratos lo detecta la sincronización en ≤ 10 min, igual que en
   las listas (`listarProyectosCompras` ya lo hacía así). En una escritura se lee la hoja (como antes).
+  **Revisión 4:** al detectarlo, `sincronizar` ahora también vuelve a mandar la requisición abierta (`ctx.req`; antes solo las
+  órdenes del proyecto). Los ≤ 10 min se quedan (es el costo de no leer Contratos en cada vista) y se avisan en CLAUDE.md §6.14:
+  en ese rato la vista muestra la moneda de antes, pero autorizar con ella se rechaza («El proyecto es en USD y la orden en MXN:
+  captura el tipo de cambio…»), así que no hay monto equivocado. Prueba: §13.
+
+- **Revisión 5 · la versión siempre sube.** `subirVersiones_` era leer-sumar-escribir con el candado de script y, si no lo
+  conseguía en 10 s, **no subía** (solo un aviso en el registro). El candado se queda 9–19 s con un PDF, así que pasaba en horas de
+  trabajo, y Rapidez 6 depende de la subida (tras guardar una cotización la interfaz pide `sincronizar` en lugar de `getClientes`):
+  sin ella, ni quien guardó ni los demás veían al cliente nuevo hasta otra escritura. Se eligió quitar el candado en lugar de
+  reintentar: cada colección toma un valor que no se repite (`versionNueva_`: segundos × 10⁶ + 6 cifras al azar; mayor que el
+  anterior conocido) y se escribe sin leer-sumar-escribir, así que dos subidas a la vez dan valores distintos y ninguna se pierde
+  (con reintentos, un PDF largo todavía podía agotarlos y además se alargaba cada llamada). Se revisaron todos los usos: las
+  versiones solo se comparan por igualdad (clave de caché `K_…`, `sincronizar`, la huella `H_` de `fuenteConHuella_`; la interfaz
+  solo las guarda y las regresa) y siguen siendo enteros exactos (≈1.8 × 10¹⁵), así que nada más cambia; las pruebas que piden
+  «subió» (`>`) siguen valiendo porque una subida seguida sale mayor. Riesgo que queda: dos subidas de la misma colección en el
+  mismo segundo con las mismas 6 cifras (1 en un millón) darían la misma versión. Prueba: §15.
 
 ### 5.2 Dentro de una petición (`MEMO_`)
 
@@ -170,6 +196,12 @@ tabla se midieron al hacer cada commit (con el perfil de ese momento); la tabla 
     las nuevas que se agreguen).
   - Todo candado pasa por `candado_()`, que olvida todo al tomarlo y al soltarlo (adentro se relee lo que otra persona pudo
     cambiar mientras se esperaba). La misma prueba exige que solo `candado_` llame a `LockService.getScriptLock()`.
+  - **Revisión 6 · candados anidados.** El candado de Apps Script es uno por ejecución y `releaseLock` lo suelta completo aunque
+    se haya tomado dos veces. Un `candado_` dentro de otro (el libro del área o la base de datos que se crean la primera vez,
+    `migrarConfig_`, con el candado ya tomado) lo soltaba al terminar y lo que seguía en el de afuera (folio, escritura) corría
+    sin candado. Ahora `candado_` lleva la cuenta (`CANDADO_TOMADO_`, en 0 al empezar cada `doPost`): el de adentro no lo pide
+    otra vez ni lo suelta (tampoco olvida las filas: nadie más pudo escribir); solo el de afuera lo suelta. El arnés simula un
+    solo candado por ejecución que se suelta completo. Prueba: §14.
   - Cada vez que se leen las versiones (`versiones_`) se olvida todo: una lista que se guarda con una versión se arma con filas
     leídas después de esa versión.
   - El arnés **falla cualquier prueba** que escriba en una pestaña mientras el código guarda filas de esa pestaña (comprobado:
@@ -181,6 +213,13 @@ tabla se midieron al hacer cada commit (con el perfil de ese momento); la tabla 
   al tomar o soltar el candado y al leer las versiones; la carpeta del área se vuelve a buscar y revisar en cada petición.
 - **Rapidez 10 · revisar fuentes.** Si la fuente ya está en la petición con la misma versión, basta la marca `R_` para saber si
   toca releer la hoja; si toca, se relee como antes.
+- **Revisión 1 · memos derivados (`MEMOS_DERIVADOS_`).** Lo que se arma con filas de una pestaña y se guarda en `MEMO_`
+  (`devs` ← Devoluciones, `pagosProv` ← PagosProveedores, `anulados` ← Anulaciones, `ctxRoles`/`rolesYo` ← Permisos y
+  Delegaciones, `cfgLigera` ← Config) se olvida como las filas: al leer las versiones, al tomar o soltar el candado y al escribir
+  en su pestaña (`escribe_`). Antes solo `cfgLigera`: el activador guardaba «mis requisiciones» con la versión nueva y una
+  devolución ya resuelta como Abierta. Excepción a propósito: los roles se conservan al tomar el candado (una vez por llamada,
+  como siempre; recalcularlos dentro de una escritura releería Permisos y Delegaciones, ~1 s). El arnés también falla una
+  escritura en la pestaña de un memo derivado que sigue guardado. Prueba: §11.
 
 ### 5.3 Rapidez 11: corrección de una carrera que ya existía
 
@@ -189,6 +228,12 @@ tabla se midieron al hacer cada commit (con el perfil de ese momento); la tabla 
 usan esa fuente (mis requisiciones, Compras, Pendientes, operaciones, resumen de cobranza, devoluciones) se armaban con el valor
 de antes **y se guardaban con la versión nueva**, hasta 6 h. Reproducido también con la versión publicada. Ahora el valor solo se
 reusa con la misma versión. Sin carrera, nada cambia. Prueba: §10 (falla sin el arreglo).
+
+**Revisión 2 (la misma carrera, dentro de `fuenteConHuella_`).** Cuando la consulta de fondo relee una hoja y ve otra huella, sube
+la versión y guardaba lo que había leído **antes** de subirla. Si otra ejecución escribía en medio (por ejemplo, creaba un
+proyecto y subía ella la versión), ese dato viejo quedaba con la versión de después: todos dejaban de ver el proyecto nuevo hasta
+la siguiente revisión de la hoja. Ahora, después de subir y leer la versión, se vuelven a leer la hoja y la huella (una lectura
+más, solo cuando alguien editó la hoja a mano). Prueba: §12.
 
 ## 6. Ruta del PDF (guardar cotización y emitir orden)
 
@@ -277,9 +322,12 @@ reusa con la misma versión. Sin carrera, nada cambia. Prueba: §10 (falla sin e
 
 ## 10. Pruebas y cómo publicar
 
-- `bash tests/todas.sh` en verde (incluye `tests/rapidez.test.js`, 10 secciones, una por mejora con comportamiento sutil).
+- `bash tests/todas.sh` en verde (incluye `tests/rapidez.test.js`: 10 secciones, una por mejora con comportamiento sutil, y una
+  por cada hallazgo de la revisión independiente).
 - Simulacros extendidos con métodos que existen en Apps Script: `getSheetId`/`getName` (arnés), `getId` (cotizacion, sesion).
 - **No publicado.** Esta rama sale de `incremento-5` (sin publicar): publicar las dos juntas o `incremento-5` primero. API:
   `npx clasp push --force` y nueva versión del deployment como facilities@ (§8 de CLAUDE.md). Interfaz (solo Rapidez 6):
   `CLOUDFLARE_ACCOUNT_ID=… npx --yes wrangler@4 deploy`. No hace falta correr nada desde el editor ni permisos nuevos.
-- Al publicar, el caché que dejó la versión anterior se sigue usando (Rapidez 9 lee los dos formatos).
+- Al publicar, el caché que dejó la versión anterior **no** se usa: `VERSION_CODIGO_CACHE` = `2026-10-29r` (revisión 3). La primera
+  carga de cada lista se arma de las hojas (como con el caché vacío: ~5 s el bootstrap, 9 s la primera ejecución). Si se publica
+  otra vez con cambios en algo que se guarda en caché, cambiar el valor antes (CLAUDE.md §8).

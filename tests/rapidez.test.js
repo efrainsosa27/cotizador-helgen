@@ -16,20 +16,36 @@
 //  6. Las vistas de compras (requisición y órdenes del proyecto) toman moneda y línea del caché de contratos: sin leer Contratos
 //     si nada cambió y con la moneda nueva en cuanto cobranza marca otra cotización aceptada.
 //  7. Encabezados de Cotizaciones y del catálogo (columnas SAT): revisados una vez en 6 h, y repuestos si faltan.
-//  8. Caché: un valor que cabe en un trozo va en la misma entrada (una lectura); uno grande, en trozos; lo guardado con el
-//     formato de antes (N:n + trozos) se sigue leyendo; null y valores con acentos regresan iguales.
+//  8. Caché: un valor que cabe en un trozo va en la misma entrada (una lectura); uno grande, en trozos; lo guardado en trozos
+//     aunque quepa en uno se sigue leyendo; lo que dejó el código publicado antes no; null y acentos regresan iguales.
 //  9. La sincronización revisa Permisos con lo que ya trajo para los roles (sin pedirlo otra vez al caché) y, cuando toca
 //     releer la hoja, un cambio a mano en Permisos sí se detecta (sube la versión; la siguiente consulta y cada función ya
 //     usan los permisos nuevos, como antes).
 // 10. Una fuente ya leída en la petición (proyectos) no se reusa si la versión cambió a media petición: una lista que se guarda
 //     en caché con la versión nueva no lleva el dato de antes (antes quedaba así hasta 6 h).
+// Revisión independiente de la rapidez (una sección por hallazgo):
+// 11. Memos derivados (MEMOS_DERIVADOS_: devoluciones, pagos a proveedor, anulados, roles, Config ligera): se olvidan al releer
+//     las versiones, con el candado (menos los roles) y al escribir en su pestaña; el arnés falla una escritura en su pestaña con
+//     el memo guardado; el activador ya no guarda «mis requisiciones» con una devolución resuelta como Abierta.
+// 12. Huella cambiada y una escritura en medio: lo que la consulta de fondo guarda con la versión que subió se lee después de
+//     subirla (lleva el proyecto que otra ejecución creó mientras tanto).
+// 13. Un cambio a mano en Contratos (moneda) vuelve a mandar la requisición abierta en Compras; mientras no se detecta,
+//     autorizar con la moneda vieja se rechaza (el servidor lee la hoja al escribir).
+// 14. Candados anidados: soltar un candado_ de adentro no suelta el de afuera (el arnés simula un solo candado por ejecución,
+//     que se suelta completo).
+// 15. La versión siempre sube: aunque otra ejecución tenga el candado (subirVersiones_ ya no lo usa), y dos subidas a la vez
+//     de la misma colección dan valores distintos.
+// 16. Publicar: el código nuevo no sirve listas que dejó en caché el anterior (VERSION_CODIGO_CACHE en toda clave de datos), y
+//     la idempotencia sí sobrevive (un reintento justo al publicar no duplica).
 // Uso: node tests/rapidez.test.js .
 'use strict';
 const assert = require('assert');
 const dir = process.argv[2] || '.';
-const crear = extra => require('./arnes')(dir, Object.assign({ props: {
+const crear = (extra, otroDir) => require('./arnes')(otroDir || dir, Object.assign({ props: {
   ROL_COMPRAS: 'pedro@helgen.tech', ROL_COBRANZA: 'efrain@helgen.tech', ROL_REQUISICION: 'obrero@helgen.tech',
   SOLO_REQUISICION: 'rosa@helgen.tech', ROL_OPERACIONES: '', SUPER_ADMIN: 'leo@helgen.tech' } }, extra || {}));
+// Clave real en CacheService de una clave de datos (con el espacio del código publicado, VERSION_CODIGO_CACHE)
+const ns = (A, k) => A.correr('claveNs_(' + JSON.stringify(k) + ')');
 
 // ================= 1. IDs y libros por petición =================
 {
@@ -80,7 +96,7 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   assert.equal(perfil.ops.filter(o => o.tipo === 'lee' && (o.pila || []).some(f => f === 'hojaDeArea_' || f === 'hojaProyectos_')).length, 0,
     'sin lecturas de encabezados de pestañas ya revisadas');
   // Una vez por petición aunque el caché esté vacío (antes: una por cada uso de la pestaña)
-  Object.keys(cache).filter(k => k === 'ENCABEZADOS_OK').forEach(k => delete cache[k]);
+  delete cache[ns(A, 'ENCABEZADOS_OK')];
   perfil.ops = [];
   ok('pedro', 'getRequisicion', r2);
   for (const n of ['Requisiciones', 'RequisicionesRenglones', 'Proveedores']) assert(lecturasFila1(n) <= 1, n + ': ' + lecturasFila1(n));
@@ -109,13 +125,13 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   LC().pest.Bitacora.m[0][0] = 'xx';
   pedir();
   assert.equal(LC().pest.Bitacora.m[0][0], 'xx', 'anotada: no se relee (se repara a más tardar 6 h después)');
-  const ok6 = JSON.parse(cache.ENCABEZADOS_OK);
+  const ok6 = JSON.parse(cache[ns(A, 'ENCABEZADOS_OK')]);
   Object.keys(ok6).forEach(k => { if (/\/Bitacora\//.test(k)) ok6[k] = Date.now() - 6 * 3600 * 1000 - 1; });
-  cache.ENCABEZADOS_OK = JSON.stringify(ok6);
+  cache[ns(A, 'ENCABEZADOS_OK')] = JSON.stringify(ok6);
   pedir();
   assert.equal(LC().pest.Bitacora.m[0][0], 'fecha', 'vencida: se revisa y se repara');
   // Una anotación vencida no se queda en el caché al guardar otras
-  assert(Object.values(JSON.parse(cache.ENCABEZADOS_OK)).every(t => Date.now() - t < 6 * 3600 * 1000));
+  assert(Object.values(JSON.parse(cache[ns(A, 'ENCABEZADOS_OK')])).every(t => Date.now() - t < 6 * 3600 * 1000));
   // Alguien vacía a mano la pestaña (con todo y encabezados) sin borrarla: la anotación sigue vigente, pero antes de la primera
   // escritura se ve que está vacía y se reponen los encabezados; el renglón nuevo queda en la fila 2 (como antes)
   for (const n of ['Bitacora', 'RequisicionesEventos', 'Requisiciones']) LC().pest[n].m.length = 0;
@@ -313,9 +329,9 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   assert.equal(filas1(), 0, 'después, ninguno');
   // Vencida la anotación (6 h) se revisan y se reponen
   cat[0][6] = ''; cot[0][19] = 'x';
-  const ok6 = JSON.parse(cache.ENCABEZADOS_OK);
+  const ok6 = JSON.parse(cache[ns(A, 'ENCABEZADOS_OK')]);
   Object.keys(ok6).forEach(k => { ok6[k] = Date.now() - 6 * 3600 * 1000 - 1; });
-  cache.ENCABEZADOS_OK = JSON.stringify(ok6);
+  cache[ns(A, 'ENCABEZADOS_OK')] = JSON.stringify(ok6);
   guardar(3);
   assert.deepEqual([cat[0][6], cot[0][19]], ['Clave SAT', 'proyecto_folio'], 'repuestos');
 }
@@ -326,7 +342,7 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   const { correr, cache, perfil, plain } = A;
   const chico = { a: 'Señalización — ñ', n: [1, 2, 3] };
   correr(`guardarCache_('K_prueba_chico', ${JSON.stringify(chico)}, 600)`);
-  assert.equal(cache.K_prueba_chico.slice(0, 2), 'V:', 'en la misma entrada');
+  assert.equal(cache[ns(A, 'K_prueba_chico')].slice(0, 2), 'V:', 'en la misma entrada');
   perfil.ops = [];
   assert.deepEqual(plain(correr(`leerCache_('K_prueba_chico')`)), chico);
   assert.equal(perfil.ops.filter(o => o.tipo === 'cache').length, 1, 'una lectura');
@@ -335,13 +351,16 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   assert.equal(correr(`leerCache_('K_no_existe')`), undefined);
   const grande = Array.from({ length: 3000 }, (_, i) => 'renglón ' + i + ' con acentos áéíóú');
   correr(`guardarCache_('K_prueba_grande', ${JSON.stringify(grande)}, 600)`);
-  assert(/^N:\d+$/.test(cache.K_prueba_grande) && cache['K_prueba_grande#1'], 'en trozos');
+  assert(/^N:\d+$/.test(cache[ns(A, 'K_prueba_grande')]) && cache[ns(A, 'K_prueba_grande') + '#1'], 'en trozos');
   assert.deepEqual(plain(correr(`leerCache_('K_prueba_grande')`)), grande);
-  // Formato de antes (lo dejó la versión publicada): se sigue leyendo
-  cache.K_viejo = 'N:1'; cache['K_viejo#0'] = JSON.stringify({ viejo: true });
+  // En trozos aunque quepa en uno (formato de antes de Rapidez 9): se sigue leyendo
+  cache[ns(A, 'K_viejo')] = 'N:1'; cache[ns(A, 'K_viejo') + '#0'] = JSON.stringify({ viejo: true });
   assert.deepEqual(plain(correr(`leerCache_('K_viejo')`)), { viejo: true });
-  cache.K_roto = 'N:2'; cache['K_roto#0'] = '{"a"';
+  cache[ns(A, 'K_roto')] = 'N:2'; cache[ns(A, 'K_roto') + '#0'] = '{"a"';
   assert.equal(correr(`leerCache_('K_roto')`), undefined, 'falta un trozo: no está');
+  // Lo que dejó el código publicado antes (otra clave: sin el espacio de este código) no se lee
+  cache.K_publicado = 'V:' + JSON.stringify({ viejo: true });
+  assert.equal(correr(`leerCache_('K_publicado')`), undefined, 'lo del código anterior no se sirve');
 }
 
 // ================= 9. Revisar Permisos en la sincronización =================
@@ -360,7 +379,7 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   const per = A.libros[props.ADMIN_DB_ID].pest.Permisos.m;
   const fila = per.find(x => x[0] === 'pedro@helgen.tech');
   fila[3] = 'requisicion';
-  delete cache.R_usuarios;
+  delete cache[ns(A, 'R_usuarios')];
   r = ok('pedro', 'sincronizar', vers, {});
   assert(r.cambios.indexOf('permisos') !== -1, 'sube la versión de permisos');
   // Como en la versión publicada: los permisos de esa misma respuesta se calcularon antes de revisar; la siguiente ya los trae
@@ -386,6 +405,264 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   correr('versiones_(true)');
   assert.equal(correr("listarRequisiciones('', '')")[0].proyectoNombre, 'Nombre nuevo', 'en la misma petición');
   assert.equal(ok('pedro', 'listarRequisiciones', '', '')[0].proyectoNombre, 'Nombre nuevo', 'lo que quedó en caché');
+}
+
+// Para las pruebas de la revisión (11 en adelante): el flujo de compras de punta a punta y "otra ejecución" en medio de esta
+const compras = A => {
+  const { ok } = A;
+  A.P.exigirDocumentosParaPagar_ = function () {};
+  let n = 0;
+  const id = p => p + (++n);
+  const proyecto = nombre => ok('ana', 'crearProyecto', { nombre: nombre || 'Uno', cliente: { nombre: 'Luis' }, idSolicitud: id('p') }).folio;
+  const pedir = pry => ok('obrero', 'guardarRequisicion', { proyectoFolio: pry, sitio: 'Querétaro', cotizacion: { nombre: 'c.pdf', datos: A.PDF },
+    renglones: [{ descripcion: 'Cable THW 10', cantidad: 80, unidad: 'm' }, { descripcion: 'Tubo conduit 3/4', cantidad: 12, unidad: 'pza' }],
+    idSolicitud: id('q') }).folio;
+  const autorizar = req => ok('pedro', 'autorizarRequisicion', req, { proveedor: { razonSocial: 'Ferretera del Puerto' }, fechaEntrega: A.masDias(1),
+    lugarEntrega: 'Querétaro', condicionesPago: 'Contado', diasCredito: 0, formaPago: 'Transferencia', idSolicitud: id('oc'),
+    renglones: [{ descripcion: 'Cable THW 10', unidad: 'M', cantidad: 80, costo: 10 }, { descripcion: 'Tubo conduit 3/4', unidad: 'PZA', cantidad: 12, costo: 50 }] }).ocFolio;
+  const pagar = req => ok('pedro', 'registrarPagoProveedor', { reqFolio: req, fecha: A.HOY_ISO, monto: 1624, monedaPago: 'MXN', metodo: 'Transferencia',
+    referencia: 'SPEI ' + id(''), comprobante: { nombre: 'c.pdf', datos: A.PDF }, idSolicitud: id('pg') });
+  // Apps Script aísla cada ejecución; aquí comparten el contexto de vm: se guardan las globales de la ejecución en curso, la otra
+  // corre por doPost y se restauran
+  const tieneCuenta = A.correr("typeof CANDADO_TOMADO_ === 'number'"); // (sin el arreglo de la revisión 6 no existe)
+  const otraEjecucion = fn => {
+    A.correr('globalThis.__g = { MEMO_: MEMO_, VERSIONES_: VERSIONES_, SIN_CACHE_: SIN_CACHE_, VENDEDOR_: VENDEDOR_' +
+      (tieneCuenta ? ', CANDADO_TOMADO_: CANDADO_TOMADO_ }; CANDADO_TOMADO_ = 0;' : ' };'));
+    try { return fn(); } finally {
+      A.correr('MEMO_ = __g.MEMO_; VERSIONES_ = __g.VERSIONES_; SIN_CACHE_ = __g.SIN_CACHE_; VENDEDOR_ = __g.VENDEDOR_;' +
+        (tieneCuenta ? ' CANDADO_TOMADO_ = __g.CANDADO_TOMADO_;' : ''));
+    }
+  };
+  return { id, proyecto, pedir, autorizar, pagar, otraEjecucion, LC: () => A.libros[A.props.COMPRAS_DB_ID] };
+};
+
+// ================= 11. Memos derivados (devoluciones, pagos, anulados, roles, Config ligera) =================
+{
+  const A = crear();
+  const { ok, correr, plain } = A;
+  const C = compras(A);
+  // a) Todos se olvidan al tomar el candado y al releer las versiones; escribir en una pestaña olvida los que salen de ella
+  const derivados = plain(correr('MEMOS_DERIVADOS_'));
+  ['devs', 'pagosProv', 'anulados', 'ctxRoles', 'rolesYo', 'cfgLigera'].forEach(k => assert(derivados[k], 'MEMOS_DERIVADOS_.' + k));
+  const llenar = () => correr(`Object.keys(MEMOS_DERIVADOS_).forEach(k => { MEMO_[k] = { de: 'antes' }; })`);
+  const vivos = () => plain(correr(`Object.keys(MEMOS_DERIVADOS_).filter(k => MEMO_[k] != null)`));
+  const P1 = C.proyecto('Uno');
+  const req = C.pedir(P1);
+  C.autorizar(req);
+  C.pagar(req);
+  llenar(); correr('versiones_(true)');
+  assert.deepEqual(vivos(), [], 'releer las versiones los olvida');
+  llenar(); correr('conCandado_(() => null)');
+  assert.deepEqual(vivos(), plain(correr('MEMOS_DE_LA_LLAMADA_')), 'el candado los olvida (menos los roles: una vez por llamada)');
+  llenar(); correr(`escribe_({ getName: () => 'Permisos', getSheetId: () => 999, getLastRow: () => 1 })`);
+  assert.deepEqual(vivos().filter(k => k === 'ctxRoles' || k === 'rolesYo'), [], 'escribir en Permisos olvida los roles');
+  llenar();
+  correr(`escribe_(libroCompras_().getSheetByName('PagosProveedores'))`);
+  assert.equal(vivos().indexOf('pagosProv'), -1, 'escribir en PagosProveedores olvida los pagos');
+  assert.notEqual(vivos().indexOf('devs'), -1, '…y no las devoluciones');
+  // b) El arnés falla una escritura en la pestaña de un memo derivado que sigue guardado (no pasó por escribe_)
+  correr(`hojaCompras_(libroCompras_(), 'Devoluciones')`);
+  correr('MEMO_.devs = []');
+  assert.throws(() => correr(`libroCompras_().getSheetByName('Devoluciones').appendRow(['x'])`), /MEMO_\.devs/);
+  correr('MEMO_ = {}');
+  // c) El activador (cadaQuinceMinutos) paso a paso: lee las devoluciones bajo candado, otra ejecución resuelve una, el activador
+  //    sube las versiones y calienta el caché con la lista de quien pidió: esa lista no puede llevar la devolución de antes
+  ok('obrero', 'cerrarRequisicion', req, 'Llegó', { renglones: A.conFotos([{ renglon: 1 }, { renglon: 2 }]) });
+  const dev = ok('obrero', 'reportarProblema', req, { renglon: 1, cantidad: 10, tipo: 'Dañado', comentario: 'Rollo aplastado',
+    foto: { nombre: 'foto.jpg', datos: A.FOTO, mime: 'image/jpeg' }, idSolicitud: 'd1' }).folio;
+  const enHoja = () => C.LC().pest.Devoluciones.m.find(r => r[0] === dev)[14];
+  ok('obrero', 'misRequisiciones');
+  correr('VENDEDOR_ = null; VERSIONES_ = null; SIN_CACHE_ = false; MEMO_ = {};');
+  correr(`conCandado_(() => { const l = libroCompras_(); devolucionAbiertaDe_(l, buscarReq_(l, ${JSON.stringify(req)}).req); })`);
+  C.otraEjecucion(() => ok('pedro', 'resolverDevolucion', dev, { resolucion: 'Conservar', nota: 'Se queda así', idSolicitud: 'rs1' }));
+  assert.notEqual(enHoja(), 'Abierta', 'la otra ejecución la resolvió');
+  correr("subirVersiones_(['requisiciones', 'oc'])");
+  correr(`(() => { VENDEDOR_ = { email: 'obrero@helgen.tech', nombre: '', apellido: '' }; misRequisiciones(); })()`);
+  correr('VENDEDOR_ = null; MEMO_ = {};');
+  const mia = ok('obrero', 'misRequisiciones').find(x => x.folio === req);
+  assert.deepEqual(mia.devoluciones.map(d => d.estado), [enHoja()], 'lo que quedó en caché trae la devolución como está en la hoja');
+}
+
+// ================= 12. Huella cambiada y una escritura en medio =================
+{
+  const A = crear();
+  const { ok, cache, props } = A;
+  const C = compras(A);
+  // gancho: corre una vez cuando fuenteConHuella_ va a comparar la huella de proyectos (después de leer la hoja y antes de
+  // subir la versión)
+  let gancho = null;
+  const original = A.ctx.CacheService.getScriptCache;
+  A.ctx.CacheService.getScriptCache = () => {
+    const c = original(), get = c.get;
+    c.get = k => { if (gancho && /^H_proyectos/.test(k)) { const g = gancho; gancho = null; g(); } return get(k); };
+    return c;
+  };
+  C.proyecto('Uno');
+  const P2 = C.proyecto('Dos');
+  const vers = ok('obrero', 'bootstrap').versiones;
+  ok('obrero', 'sincronizar', vers, {});
+  // Alguien cierra "Dos" a mano (otra huella) y vence la marca: la consulta de fondo relee la hoja; mientras compara la huella,
+  // otra ejecución crea "Tres" y sube la versión
+  const pry = A.libros.DB.pest.Proyectos.m;
+  pry[pry.findIndex(r => r[0] === P2)][6] = 'Cerrado';
+  Object.keys(cache).filter(k => /^R_proyectos/.test(k)).forEach(k => delete cache[k]);
+  let P3 = '';
+  gancho = () => C.otraEjecucion(() => { P3 = C.proyecto('Tres'); });
+  const s = ok('obrero', 'sincronizar', vers, {});
+  assert(P3 && !gancho, 'la otra ejecución corrió en medio');
+  assert.notEqual(s.versiones.proyectos, vers.proyectos, 'subió la versión');
+  // Lo que se guardó con la versión nueva ya lleva el proyecto que la otra ejecución creó (y "Dos" cerrado)
+  const folios = l => l.map(p => p.folio);
+  assert(folios(s.reqProyectos).indexOf(P3) !== -1, 'la consulta lo trae: ' + folios(s.reqProyectos));
+  assert(folios(ok('rosa', 'listarProyectosRequisicion', '')).indexOf(P3) !== -1, 'otra persona, del caché, también');
+  assert.equal(ok('rosa', 'listarProyectosRequisicion', '').find(p => p.folio === P2).estado, 'Cerrado');
+  assert.equal(String(props.VER_proyectos), String(s.versiones.proyectos), 'la versión que vio es la de la propiedad');
+}
+
+// ================= 13. Cambio a mano en Contratos y la requisición abierta en Compras =================
+{
+  const A = crear();
+  const { ok, post, cache } = A;
+  const C = compras(A);
+  const P1 = C.proyecto('Uno'), req = C.pedir(P1);
+  const cot = ok('ana', 'guardarCotizacion', { cliente: { nombre: 'Luis' }, items: [{ descripcion: 'Servicio', cantidad: 1, precio: 100 }],
+    proyectoFolio: P1, moneda: 'MXN', idSolicitud: 'c1' }).folio;
+  ok('efrain', 'marcarAceptada', P1, cot);
+  const vers = ok('pedro', 'bootstrap').versiones;
+  ok('pedro', 'sincronizar', vers, { req: req });
+  assert.equal(ok('pedro', 'getRequisicion', req).moneda, 'MXN');
+  // Cobranza corrige a mano la moneda del contrato (ninguna versión sube); vence la marca y la consulta de fondo relee Contratos
+  const con = A.libros[A.props.COBRANZA_DB_ID].pest.Contratos.m;
+  con[con.findIndex(r => r[0] === P1)][3] = 'USD';
+  // Mientras tanto la vista sale del caché de contratos (≤ 10 min): autorizar con esa moneda vieja no pasa (se lee la hoja)
+  const vieja = ok('pedro', 'getRequisicion', req);
+  assert.equal(vieja.moneda, 'MXN', 'la vista sigue con el caché de contratos hasta la siguiente revisión');
+  const r = post('pedro', 'autorizarRequisicion', req, { proveedor: { razonSocial: 'Ferretera' }, fechaEntrega: A.masDias(1),
+    lugarEntrega: 'Querétaro', formaPago: 'Transferencia', condicionesPago: 'Contado', diasCredito: 0, moneda: vieja.moneda,
+    tipoCambio: '', renglones: [{ descripcion: 'Cable', unidad: 'PZA', cantidad: 1, costo: 100 }], idSolicitud: 'oc-vieja' });
+  assert(!r.ok && /USD/.test(r.error), 'autorizar con la moneda vieja se rechaza: ' + (r.error || 'aceptada'));
+  Object.keys(cache).filter(k => /^R_contratos/.test(k)).forEach(k => delete cache[k]);
+  const s = ok('pedro', 'sincronizar', vers, { req: req });
+  assert(s.cambios.indexOf('contratos') !== -1, 'la consulta detecta el cambio a mano');
+  assert(s.requisicion, 'y vuelve a mandar la requisición abierta');
+  assert.equal(s.requisicion.moneda, 'USD');
+}
+
+// ================= 14. Candados anidados =================
+{
+  const A = crear({ perfil: true });
+  const { correr, perfil } = A;
+  // El arnés modela Apps Script: un solo candado por ejecución; soltarlo una vez lo suelta aunque se haya tomado dos veces
+  const L = A.ctx.LockService, a = L.getScriptLock(), b = L.getScriptLock();
+  a.tryLock(1000); b.tryLock(1000); b.releaseLock();
+  assert.equal(A.candadoTomado(), false, 'el simulacro suelta el candado completo');
+  // Un candado_ dentro de otro (p. ej. el libro del área que se crea la primera vez, o migrarConfig_, con el candado tomado): al
+  // soltar el de adentro, el de afuera sigue con el candado
+  assert.equal(correr('conCandado_(() => { conCandado_(() => 1); return LockService.getScriptLock().hasLock(); })'), true,
+    'soltar el de adentro no suelta el de afuera');
+  assert.equal(A.candadoTomado(), false, 'el de afuera sí lo suelta');
+  // El caso real: crear el libro de compras (primera vez) dentro de una escritura; lo que sigue se escribe con el candado tomado
+  assert.equal(A.props.COMPRAS_DB_ID, undefined);
+  perfil.ops = [];
+  correr(`conCandado_(() => { libroCompras_(); escribe_(hojaCompras_(libroCompras_(), 'Bitacora')).appendRow(['x']); })`);
+  assert(A.props.COMPRAS_DB_ID, 'se creó el libro');
+  const fuera = perfil.ops.filter(o => o.tipo === 'escribe' && /\/Bitacora$/.test(o.hoja) && !o.candado);
+  assert.deepEqual(fuera, [], 'nada se escribe sin candado');
+  // Un error adentro no deja la cuenta mal: el de afuera lo sigue teniendo y al final queda suelto
+  assert.throws(() => correr(`conCandado_(() => {
+    try { conCandado_(() => { throw new Error('adentro'); }); } catch (e) { /* sigue */ }
+    if (!LockService.getScriptLock().hasLock()) throw new Error('se perdió el candado');
+    throw new Error('afuera');
+  })`), /afuera/);
+  assert.equal(A.candadoTomado(), false);
+  perfil.ops = [];
+  correr('conCandado_(() => 1)');
+  assert.equal(perfil.ops.filter(o => o.tipo === 'candado').length, 1, 'el siguiente toma el candado de verdad');
+}
+
+// ================= 15. La versión siempre sube (aunque otra ejecución tenga el candado) =================
+{
+  const A = crear();
+  const { ok, correr, props, plain } = A;
+  // Otra ejecución tiene el candado más de 10 s (un PDF, una orden): antes subirVersiones_ se rendía y no subía la versión
+  let ocupado = false;
+  const original = A.ctx.LockService.getScriptLock;
+  A.ctx.LockService.getScriptLock = () => {
+    const l = original(), tryLock = l.tryLock;
+    l.tryLock = ms => (ocupado && ms === 10000 ? false : tryLock.call(l, ms));
+    return l;
+  };
+  const vers = ok('ana', 'bootstrap').versiones;
+  ocupado = true;
+  ok('ana', 'guardarCotizacion', { cliente: { nombre: 'Cliente Nuevo SA', empresa: 'Nueva' }, items: [{ descripcion: 'S', cantidad: 1, precio: 100 }],
+    idSolicitud: 'c1' });
+  ocupado = false;
+  assert.notEqual(String(props.VER_cotizaciones || 0), String(vers.cotizaciones), 'subió la versión de cotizaciones');
+  const s = ok('ana', 'sincronizar', vers, {});
+  assert(s.cambios.indexOf('cotizaciones') !== -1 && s.clientes.some(c => /Cliente Nuevo SA/.test(c.etiqueta || c.nombre)),
+    'la consulta (lo que pide la interfaz tras guardar) trae al cliente nuevo');
+  assert(ok('efrain', 'bootstrap').clientes.some(c => /Cliente Nuevo SA/.test(c.etiqueta || c.nombre)), 'y otra persona también');
+  // Sin leer-sumar-escribir: dos ejecuciones que suben la misma colección en el mismo segundo y con la misma versión leída sacan
+  // valores distintos (la lista que alguien guardó entre las dos no se reusa); seguidas, cada una es mayor que la anterior
+  const DateReal = A.ctx.Date, fijo = DateReal.now();
+  A.ctx.Date = class extends DateReal { static now() { return fijo; } };
+  try {
+    correr('MEMO_ = {}; VERSIONES_ = null;');
+    const leida = plain(correr('propiedades_()'));
+    const sube = () => { correr('MEMO_ = { props: ' + JSON.stringify(leida) + " }; subirVersiones_(['oc'])"); return props.VER_oc; };
+    const x = sube(), y = sube();
+    assert(x !== y && x !== leida.VER_oc && y !== leida.VER_oc, 'distintas: ' + [leida.VER_oc, x, y]);
+    correr('MEMO_ = {};');
+    const vs = [1, 2, 3].map(() => { correr("subirVersiones_(['oc'])"); return Number(props.VER_oc); });
+    assert(vs[0] > Number(y) && vs[1] > vs[0] && vs[2] > vs[1], 'seguidas, crecen: ' + vs);
+    assert(vs.every(Number.isSafeInteger), 'enteros exactos (viajan como número a la interfaz)');
+  } finally {
+    A.ctx.Date = DateReal;
+  }
+}
+
+// ================= 16. Publicar: el código nuevo no sirve lo que dejó en caché el anterior =================
+{
+  const fs = require('fs'), os = require('os'), path = require('path');
+  // "Publicada" = este mismo código con otro espacio de caché (lo que había antes de publicar); sin la constante, las mismas claves
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'capri-publicada-'));
+  fs.copyFileSync(path.join(dir, 'Logo.js'), path.join(tmp, 'Logo.js'));
+  fs.writeFileSync(path.join(tmp, 'Code.js'), fs.readFileSync(path.join(dir, 'Code.js'), 'utf8')
+    .replace(/const VERSION_CODIGO_CACHE = '[^']*';/, "const VERSION_CODIGO_CACHE = 'publicada-anterior';"));
+  const V = crear({}, tmp), CV = compras(V);
+  const req = CV.pedir(CV.proyecto('Uno'));
+  const pedido = { proyectoFolio: V.libros.DB.pest.Proyectos.m[1][0], sitio: 'Querétaro', renglones: [{ descripcion: 'Tubo', cantidad: 1 }],
+    cotizacion: { nombre: 'c.pdf', datos: V.PDF }, idSolicitud: 'q-al-publicar' };
+  const folioAntes = V.ok('obrero', 'guardarRequisicion', pedido).folio;
+  V.ok('obrero', 'misRequisiciones');
+  // Lo que guardó la publicada tenía otra forma (le falta un campo que el código nuevo sí arma)
+  const deMisReq = Object.keys(V.cache).filter(k => /^K_misReq_/.test(k) && !/#/.test(k));
+  assert(deMisReq.length, 'la publicada dejó su lista en caché');
+  deMisReq.forEach(k => {
+    const lista = JSON.parse(V.cache[k].slice(2));
+    lista.forEach(x => { delete x.devoluciones; x.dePublicada = true; });
+    V.cache[k] = 'V:' + JSON.stringify(lista);
+  });
+  // Se publica el código nuevo: mismas hojas, propiedades, archivos y caché
+  const N = crear();
+  Object.assign(N.props, V.props); Object.assign(N.cache, V.cache);
+  Object.assign(N.carpetas, V.carpetas); Object.assign(N.archivos, V.archivos);
+  for (const id in V.libros) { const L = V.libros[id], pest = {}; for (const n in L.pest) pest[n] = N.hoja(L.pest[n].m); N.libro(id, L.nombre, pest); }
+  const antes = new Set(Object.keys(N.cache));
+  const mia = N.ok('obrero', 'misRequisiciones').find(x => x.folio === req);
+  assert(!mia.dePublicada && Array.isArray(mia.devoluciones), 'la lista se arma con el código nuevo (no la de la publicada)');
+  assert(!(N.ok('obrero', 'bootstrap').req.mias || []).some(x => x.dePublicada), 'tampoco en la carga inicial');
+  // Un reintento justo al publicar no duplica (la idempotencia no lleva el espacio del código)
+  assert.equal(N.ok('obrero', 'guardarRequisicion', pedido).folio, folioAntes, 'mismo folio');
+  assert.equal(N.libros[N.props.COMPRAS_DB_ID].pest.Requisiciones.m.filter(r => r[0] === folioAntes).length, 1, 'sin duplicado');
+  // Toda clave de datos que escribe el código nuevo lleva su espacio (las de idempotencia, CAPRI_* y FOTOCM_ no)
+  const v = N.correr('VERSION_CODIGO_CACHE');
+  N.ok('pedro', 'bootstrap'); N.ok('pedro', 'sincronizar', {}, { req: req }); N.ok('leo', 'bootstrap');
+  const sinEspacio = Object.keys(N.cache).filter(k => !antes.has(k) && !k.endsWith('@' + v) && !/@[^@#]+#\d+$/.test(k) &&
+    !/^(REQ|PRY|PAG|OC|PGP|PROP|VOBO|SEP|REC|FPR|ENC|ANU|PRV|DEV|DVR)_/.test(k) && !/^(CAPRI_|FOTOCM_)/.test(k));
+  assert.deepEqual(sinEspacio, [], 'claves de datos sin el espacio del código');
+  assert(Object.keys(N.cache).some(k => /^K_/.test(k) && k.endsWith('@' + v)), 'las listas sí lo llevan');
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 console.log('rapidez: todo bien');

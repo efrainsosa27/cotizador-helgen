@@ -1,6 +1,7 @@
 // Compara dos corridas de tests/perfil.js (docs/rapidez-apps-script.md): las respuestas de cada llamada medida (--respuestas) o
 // cómo quedaron todas las pestañas (--estado). Ignora solo lo que depende del reloj: fechas con hora (las dos corridas no son en
-// el mismo segundo) y huellas MD5 (la de una propuesta incluye su hora).
+// el mismo segundo), huellas MD5 (la de una propuesta incluye su hora) y el valor de cada versión (desde la revisión 5 es la hora
+// más unas cifras al azar; se compara qué colecciones trae, no su número).
 // Uso: node tests/perfil-comparar.js antes.json despues.json
 'use strict';
 const fs = require('fs');
@@ -10,7 +11,8 @@ const norm = t => t
   .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})/g, 'ISO')
   .replace(/\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}/g, 'DD/MM/AAAA HH:MM')
   .replace(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?/g, 'AAAA-MM-DD HH:MM')
-  .replace(/[0-9a-f]{32}/g, 'H32');
+  .replace(/[0-9a-f]{32}/g, 'H32')
+  .replace(/"versiones":\{[^{}]*\}/g, m => m.replace(/:"?\d+"?/g, ':V'));
 const a = JSON.parse(fs.readFileSync(pa, 'utf8')), b = JSON.parse(fs.readFileSync(pb, 'utf8'));
 // --estado: [{libro, pestanas: [{n, filas}]}] → un renglón por fila; --respuestas: [{escenario, funcion, datos}]
 const renglones = x => x.length && x[0].pestanas
