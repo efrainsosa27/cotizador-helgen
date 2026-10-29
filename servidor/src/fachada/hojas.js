@@ -63,14 +63,16 @@ function crearSpreadsheetApp(amb) {
   }
 
   class Rango {
-    constructor(libroId, hojaId, r, c, nr, nc, columnas) {
+    /** abierta: {columnas: columna completa desde la fila 1 ("B:B"), abierto: hasta el final de la hoja ("A2:A")} */
+    constructor(libroId, hojaId, r, c, nr, nc, abierta) {
       if (!(r >= 1) || !(c >= 1)) throw new Error('Las coordenadas del rango no son válidas (' + r + ', ' + c + ').');
       if (!(nr >= 1)) throw new Error('The number of rows in the range must be at least 1.');
       if (!(nc >= 1)) throw new Error('The number of columns in the range must be at least 1.');
-      Object.assign(this, { libroId, hojaId, r, c, nr, nc, columnas: !!columnas });
+      const a = abierta || {};
+      Object.assign(this, { libroId, hojaId, r, c, nr, nc, columnas: !!a.columnas, abierto: !!(a.abierto || a.columnas) });
     }
     get h() { return M.hojaPorId(libroDe(this.libroId), this.hojaId); }
-    coords() { return { r: this.r, c: this.c, nr: this.nr, nc: this.nc, columnas: this.columnas }; }
+    coords() { return { r: this.r, c: this.c, nr: this.nr, nc: this.nc, columnas: this.columnas, abierto: this.abierto }; }
     getRow() { return this.r; }
     getColumn() { return this.c; }
     getLastRow() { return this.r + this.nr - 1; }
@@ -83,7 +85,7 @@ function crearSpreadsheetApp(amb) {
       return this.nr === 1 && this.nc === 1 ? a : a + ':' + M.numeroAColumna(this.c + this.nc - 1) + (this.r + this.nr - 1);
     }
     /** Para leer, un rango abierto hacia abajo llega hasta la última fila con datos (no hasta las 1000 vacías). */
-    filasLeibles() { return this.columnas ? Math.max(1, Math.min(this.nr, M.ultimaFila(this.h) - this.r + 1)) : this.nr; }
+    filasLeibles() { return this.abierto ? Math.max(1, Math.min(this.nr, M.ultimaFila(this.h) - this.r + 1)) : this.nr; }
     getValues() { return M.leer(this.h, this.r, this.c, this.filasLeibles(), this.nc); }
     getValue() { return M.leer(this.h, this.r, this.c, 1, 1)[0][0]; }
     getDisplayValues() { return M.leerVisibles(this.h, this.r, this.c, this.filasLeibles(), this.nc); }
@@ -160,7 +162,7 @@ function crearSpreadsheetApp(amb) {
     getRange(a, b, c, d) {
       if (typeof a === 'string') {
         const x = M.rangoA1(a.replace(/^.*!/, ''), this.h.filasMax);
-        return new Rango(this.libroId, this.hojaId, x.r, x.c, x.nr, x.nc, x.abierto);
+        return new Rango(this.libroId, this.hojaId, x.r, x.c, x.nr, x.nc, { columnas: x.columnas, abierto: x.abierto });
       }
       return new Rango(this.libroId, this.hojaId, Number(a), Number(b == null ? 1 : b), Number(c == null ? 1 : c), Number(d == null ? 1 : d));
     }
@@ -177,6 +179,7 @@ function crearSpreadsheetApp(amb) {
       escribir(this.libroId, { op: 'insertarFilas', hoja: this.hojaId, despues: Number(despues), n: Number(n) });
       return this;
     }
+    createTextFinder(t) { return this.getDataRange().createTextFinder(t); }
     setFrozenRows(n) { escribir(this.libroId, { op: 'congelar', hoja: this.hojaId, filas: Number(n) || 0 }); return this; }
     setColumnWidth(c, px) { escribir(this.libroId, { op: 'anchoColumna', hoja: this.hojaId, c: Number(c), px: Number(px) }); return this; }
     setColumnWidths(c, n, px) { for (let i = 0; i < n; i++) this.setColumnWidth(c + i, px); return this; }

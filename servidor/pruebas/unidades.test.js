@@ -183,6 +183,35 @@ caso('PDF con Chromium (puppeteer-core, navegador falso): sin JavaScript, sin re
   assert.equal(registro.lanzamientos, 2, 'si Chromium se cae, se vuelve a abrir');
 });
 
+caso('fachada de hojas: rangos A1 abiertos ("A2:A" no incluye el encabezado), setValue en rango, dimensiones y diario', () => {
+  const M2 = require('../src/espejo/modelo');
+  const { crearSpreadsheetApp } = require('../src/fachada/hojas');
+  const libro = M2.nuevoLibro({ id: 'L', hojas: [{ id: 5, titulo: 'Catalogo', valores: [['Clave', 'Precio'], ['A', 1], ['B', 2]] }] });
+  const diario = [];
+  const amb = { espejo: new Map([['L', libro]]), plantillas: { libro: 'x/{id}' }, rpc: () => { throw new Error('sin red'); },
+    aplicarLibro: () => {}, nuevoIdHoja: () => 99, escribirHoja: (id, op) => { M2.aplicar(amb.espejo.get(id), op); diario.push(op); } };
+  const ss = crearSpreadsheetApp(amb).openById('L');
+  const h = ss.getSheetByName('Catalogo');
+  h.getRange('A2:A').setDataValidation({ condicion: { tipo: 'CUSTOM_FORMULA', valores: ['=1'] } });
+  h.getRange('B:B').setNumberFormat('@');
+  assert.deepEqual(diario[0].rango, { r: 2, c: 1, nr: 999, nc: 1, columnas: false, abierto: true }, 'desde la fila 2');
+  assert.deepEqual(diario[1].rango, { r: 1, c: 2, nr: 1000, nc: 1, columnas: true, abierto: true }, 'columna completa');
+  assert.deepEqual(h.getRange('A2:A').getValues(), [['A'], ['B']], 'leer un rango abierto llega a la última fila con datos');
+  h.getRange(2, 2, 2, 1).setValue(0);
+  assert.deepEqual(h.getRange('B2:B3').getValues(), [[0], [0]], 'setValue llena todo el rango (como Apps Script)');
+  assert.throws(() => h.getRange(1, 1, 1, 2).setValues([['x']]), /number of columns in the data does not match/);
+  assert.throws(() => h.getRange(2, 1, 0, 1), /at least 1/);
+  h.appendRow(['C', '2026-10-29', "'0012", '=B4*2']);
+  const f = M2.leer(libro.hojas[0], 4, 1, 1, 4)[0];
+  assert(f[1] instanceof Date && f[2] === '0012' && f[3] === '' && libro.hojas[0].formulas['3,3'] === '=B4*2');
+  assert.equal(diario[diario.length - 1].celdas[1].p, 'yyyy-mm-dd', 'la fecha escrita como texto lleva su formato');
+  const nueva = ss.insertSheet('Tipo de cambio');
+  assert.equal(nueva.getName(), 'Tipo de cambio');
+  assert.throws(() => ss.insertSheet('Tipo de cambio'), /Ya existe/);
+  assert.equal(h.createTextFinder('b').matchEntireCell(true).findNext().getRow(), 3);
+  assert.equal(h.createTextFinder('zzz').findNext(), null);
+});
+
 (async () => {
   let fallas = 0;
   for (const [n, f] of casos) {

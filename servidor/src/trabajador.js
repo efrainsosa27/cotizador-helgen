@@ -36,8 +36,9 @@ amb.aplicarPendientes = () => {
   lista.forEach(amb.aplicarLibro);
 };
 amb.escribirHoja = (libroId, op) => {
+  // Si la copia local se tiró (un parche que no correspondía), se trae la canónica antes de escribir
+  if (!amb.espejo.has(libroId)) amb.aplicarLibro(amb.rpc('hojas.abrir', { id: libroId }));
   const libro = amb.espejo.get(libroId);
-  if (!libro) throw new Error('El libro ' + libroId + ' no está en el espejo.');
   M.aplicar(libro, op);
   amb.tx.anotar(libroId, op);
   // Solo para medir la estrategia (a) "escribir en cada llamada": cada operación va a Google en el momento
