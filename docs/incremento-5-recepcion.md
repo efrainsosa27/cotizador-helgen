@@ -143,7 +143,8 @@ requisición en Compras (`#rcDevoluciones`) va dentro de `.tabla-desliza` (telé
   centro de mando la vuelve a mandar cuando cambia su foto): no se copia ni cuenta su `completa`; (c) cada movimiento nuevo con
   foto no archivada lleva `foto_id = centro:<id>`; (d) `fotosYProblemasPortal_` anota en `res.fotos` cada foto no archivada
   (renglón y problema) y crea la DEV de cada problema una sola vez (`origen_clave` = OC:renglón:f:<id de la foto> o, sin foto,
-  OC:renglón:c:<hash de tipo|cantidad|comentario>), con `origen` Centro de mando y `reporto_email` = `recibio` (la cantidad de un
+  OC:renglón:c:<hash de tipo|cantidad|comentario>), con `origen` Centro de mando y `reporto_email` = `problema.por` o, si no
+  viene, `recibio` (revisión 5b; la cantidad de un
   faltante o sobrante no se recorta a lo recibido). También para una requisición ya **Cerrada** (fotos por archivar y problemas
   reportados después) y, solo las fotos, para una orden **cancelada o anulada** (el centro de mando ofrece una foto sin archivar
   en cada consulta: si no se archivara, la alerta de "material en una orden cancelada" se repetiría cada 15 minutos). (e)
@@ -159,7 +160,8 @@ requisición en Compras (`#rcDevoluciones`) va dentro de `.tabla-desliza` (telé
   caché 6 h (`FOTOCM_<id>`) y la siguiente corrida solo vuelve a avisar.
 - `oc.devolucion` (`avisarPortal_('oc.devolucion', oc, {devolucion})` dentro del candado de `resolverDevolucion`; lo manda
   `conAvisoPortal_`): el cuerpo de siempre (sin montos) + `devolucion: {folio, renglon, cantidad, tipo, resolucion, nota}`; la nota
-  pasa por `limpiarTextoAviso` (sin montos ni folios de orden). Solo proyectos ligados; `buscarMontos` lo revisa.
+  pasa por `limpiarTextoAviso` (sin montos ni folios de orden). Solo proyectos ligados; `buscarMontos` lo revisa. Desde la
+  revisión 5b lleva `devolucion.origen`: `'centro'` (la DEV tiene `origen_clave`) o `'capri'` (contrato §5d).
 
 ## 6. Correos (6.B)
 

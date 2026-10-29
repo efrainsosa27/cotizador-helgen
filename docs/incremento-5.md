@@ -106,9 +106,11 @@ cuerpo vacío. Sin secreto: 503 y todo sigue igual.
 ```json
 {"n": 1, "pedido": 80, "recibido": 80,
  "foto": {"id": "OC-2026-0012-r1-20261029T1131", "archivada": false, "url": ""},
- "problema": {"tipo": "Dañado", "comentario": "Rollo aplastado", "cantidad": 10,
+ "problema": {"tipo": "Dañado", "comentario": "Rollo aplastado", "cantidad": 10, "por": "miguel",
               "foto": {"id": "OC-2026-0012-r1-p-20261029T1132", "archivada": false, "url": ""}}}
 ```
+
+`problema.por` (agregado en la revisión 5b, 29/10/2026): el usuario del sitio que reportó el problema (opcional).
 
 `foto` y `problema` son opcionales (`null` si no hay). `id` solo usa `[A-Za-z0-9._-]`, ≤ 80. Una recepción con un renglón cuya
 foto cambió (otra recepción del mismo renglón, o se archivó) vuelve a aparecer en la consulta aunque `recibido_en` sea anterior a
@@ -125,7 +127,8 @@ foto cambió (otra recepción del mismo renglón, o se archivó) vuelve a aparec
   vuelve a ofrecer hasta archivarse).
 
 **c) Problema reportado en el sitio.** Un renglón con `problema` → CAPRI crea su `DEV` con `origen = Centro de mando`,
-`reporto_email` = `recibio` (o `centro de mando`) — una sola vez por (OC, renglón, foto del problema o comentario).
+`reporto_email` = `problema.por` (revisión 5b; si no viene, `recibio`, o `centro de mando`) — una sola vez por (OC, renglón, foto
+del problema o comentario: `por` no cuenta para la llave).
 
 **d) Aviso nuevo CAPRI → centro de mando: `oc.devolucion`** (al resolver una devolución de un proyecto ligado; `evento_id`
 `<OC>:oc.devolucion:<n>` como los demás):
@@ -133,8 +136,13 @@ foto cambió (otra recepción del mismo renglón, o se archivó) vuelve a aparec
 ```json
 {"evento_id": "OC-2026-0012:oc.devolucion:1", "tipo": "oc.devolucion", "oc": {"folio": "OC-2026-0012", "...": "lo de siempre, sin montos"},
  "devolucion": {"folio": "DEV-2026-0003", "renglon": 1, "cantidad": 10, "tipo": "Dañado",
-                "resolucion": "Reponer|Devolver al proveedor|Cancelar renglón|Conservar", "nota": "…"}}
+                "resolucion": "Reponer|Devolver al proveedor|Cancelar renglón|Conservar", "nota": "…", "origen": "centro|capri"}}
 ```
+
+`devolucion.origen` (agregado en la revisión 5b, 29/10/2026): `"centro"` si la devolución nació de un problema reportado en el sitio
+(la DEV tiene `origen_clave`), `"capri"` si se reportó en CAPRI. Sin `origen` = `"centro"` (lo de antes). El servidor trata un
+**Faltante con origen `"capri"`** como material que **sale** del stock del sitio (se contó como recibido, como un Dañado); un
+Faltante del sitio no mueve existencias (allá nunca entró).
 
 Efecto en el centro de mando: `Reponer` → sale del stock del sitio lo devuelto (movimiento `devolucion`) y el renglón vuelve a
 "en camino" por esa cantidad (pendiente de la OC reabierto); `Devolver al proveedor` / `Cancelar renglón` → sale del stock y el

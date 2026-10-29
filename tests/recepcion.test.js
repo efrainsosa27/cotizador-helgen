@@ -150,7 +150,7 @@ const cu = plain(P.cuerpoEventoPortal('oc.devolucion', 1, { cuando: '2026-10-29T
   orden: { folio: 'OC-1', proveedor: 'Ferretera', total: 1856, moneda: 'MXN', renglones: [{ descripcion: 'Cable', unidad: 'M', cantidad: 80, costo: 10 }] },
   devolucion: { folio: 'DEV-2026-0003', renglon: 1, cantidad: 10, tipo: 'Dañado', resolucion: 'Reponer', nota: 'Nota de crédito por $1,200.00 MXN', costo: 99 } }));
 assert.deepEqual([cu.evento_id, cu.tipo, cu.devolucion], ['OC-1:oc.devolucion:1', 'oc.devolucion',
-  { folio: 'DEV-2026-0003', renglon: 1, cantidad: 10, tipo: 'Dañado', resolucion: 'Reponer', nota: 'Nota de crédito por [monto]' }]);
+  { folio: 'DEV-2026-0003', renglon: 1, cantidad: 10, tipo: 'Dañado', resolucion: 'Reponer', nota: 'Nota de crédito por [monto]', origen: 'centro' }]); // sin origen = centro (revisión 5b)
 assert.deepEqual(plain(P.buscarMontos(cu)), [], 'nunca montos');
 assert(!/1856|1,200|MXN/.test(JSON.stringify(cu)));
 assert.equal(P.cuerpoEventoPortal('oc.pagada', 1, { orden: { folio: 'OC-1', renglones: [] }, devolucion: { folio: 'x' } }).devolucion, undefined, 'solo en oc.devolucion');
@@ -487,7 +487,7 @@ rs = ok('pedro', 'resolverDevolucion', DEV('0009'), { resolucion: 'Reponer', not
 const ev = Object.values(CM.eventos).find(e => e.tipo === 'oc.devolucion');
 assert(ev, 'aviso oc.devolucion: ' + JSON.stringify(Object.keys(CM.eventos)));
 assert.deepEqual([ev.evento_id, ev.oc.folio, ev.oc.sitio, ev.devolucion], [c1.oc + ':oc.devolucion:1', c1.oc, 'ZLO',
-  { folio: DEV('0009'), renglon: 1, cantidad: 10, tipo: 'Dañado', resolucion: 'Reponer', nota: 'Reembolso de [monto] si no llega' }]);
+  { folio: DEV('0009'), renglon: 1, cantidad: 10, tipo: 'Dañado', resolucion: 'Reponer', nota: 'Reembolso de [monto] si no llega', origen: 'centro' }]);
 assert.deepEqual(llaves(ev).filter(k => MONTOS.test(k)), [], 'sin montos');
 assert(!/1,200|1624|MXN/.test(JSON.stringify(ev)));
 assert.deepEqual([rs.vista.requisicion.estado, rs.vista.avance[0].pendiente], ['Pagada', 10]);

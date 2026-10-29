@@ -8888,7 +8888,8 @@ function cuerpoEventoPortal(tipo, n, d, maxDesc) {
         .filter(r => sin.indexOf(r.n) === -1),
     },
   }, dv ? { devolucion: { folio: String(dv.folio || ''), renglon: Number(dv.renglon) || 0, cantidad: Number(dv.cantidad) || 0,
-    tipo: String(dv.tipo || ''), resolucion: String(dv.resolucion || ''), nota: limpiarTextoAviso(dv.nota, []) } } : {});
+    tipo: String(dv.tipo || ''), resolucion: String(dv.resolucion || ''), nota: limpiarTextoAviso(dv.nota, []),
+    origen: dv.origen === 'capri' ? 'capri' : 'centro' } } : {}); // revisión 5b: sin origen = 'centro' (lo de antes)
 }
 
 /** Rutas de las llaves con montos en un objeto (un aviso al centro de mando nunca debe tener ninguna). */
@@ -11107,8 +11108,10 @@ function resolverDevolucion(folioDev, d) {
     notificar_('dev.resuelta', { req: req.folio, nota: r.nota, dev: { folio: dev.folio, renglon: dev.renglon, descripcion: dev.descripcion,
       cantidad: dev.cantidad, unidad: linea ? linea.unidad : '', tipo: dev.tipo, resolucion: r.resolucion, origen: dev.origen, reporto: dev.reportoEmail } });
     if (proyectoLigado_(req.proyectoFolio)) {
+      // origen (contrato §5d, revisión 5b): 'centro' = problema reportado en el sitio (tiene origen_clave); 'capri' = reportado aquí.
+      // El centro de mando saca de su stock un Faltante de CAPRI (se contó como recibido) y no uno del sitio (allá nunca entró)
       avisarPortal_('oc.devolucion', orden.folio, { devolucion: { folio: dev.folio, renglon: dev.renglon, cantidad: dev.cantidad, tipo: dev.tipo,
-        resolucion: r.resolucion, nota: r.nota } });
+        resolucion: r.resolucion, nota: r.nota, origen: dev.origenClave ? 'centro' : 'capri' } });
     }
     nuevo = cerrarRetenida_(libro, hoja, req, hO, orden) || completarTrasDevolucion_(libro, hoja, req, hO, orden, dev.folio) || nuevo;
     SpreadsheetApp.flush();
@@ -11266,7 +11269,9 @@ function fotosYProblemasPortal_(libro, x, orden, req, res, folioRec, movs, soloF
     const clave = claveProblemaPortal(orden.folio, n, p);
     let dev = devolucionesDelLibro_(libro).find(d => d.origenClave === clave);
     if (!dev) {
-      const folio = crearDevolucionPortal_(libro, req, orden, n, p, pf, recibio, clave);
+      // Contrato §5 (revisión 5b): problema.por = quien lo reportó en el sitio; si no viene, quien recibió el renglón
+      const por = String(p.por == null ? '' : p.por).trim().replace(/\s+/g, ' ').slice(0, 60);
+      const folio = crearDevolucionPortal_(libro, req, orden, n, p, pf, por || recibio, clave);
       if (!folio) return;
       (res.devoluciones = res.devoluciones || []).push(folio);
       dev = { folio: folio };
@@ -11275,7 +11280,7 @@ function fotosYProblemasPortal_(libro, x, orden, req, res, folioRec, movs, soloF
   });
 }
 
-/** DEV de un problema reportado en el sitio (origen Centro de mando, reportó = quien recibió). '' si el renglón no existe. */
+/** DEV de un problema reportado en el sitio (origen Centro de mando, reportó = problema.por o quien recibió). '' si el renglón no existe. */
 function crearDevolucionPortal_(libro, req, orden, n, p, pf, recibio, clave) {
   const linea = avanceDeReq_(libro, req, orden).lineas.find(l => l.renglon === n);
   if (!linea) return '';
