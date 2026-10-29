@@ -3447,6 +3447,7 @@ function vistaOperaciones_(libro, folioReq) {
     archivos: (actual.archivos || []).map(a => ({ id: a.id, nombre: a.nombre || '' })) }) : null;
   const esPropia = req.solicitanteEmail === yo;
   const preparo = !!prop && String(prop.elaboroEmail || '').toLowerCase() === yo;
+  const sa = esSuperAdmin_(); // un super admin puede, con motivo por escrito (la interfaz lo pide al responder el servidor)
   return {
     requisicion: { folio: req.folio, fecha: req.fecha, proyectoFolio: req.proyectoFolio, solicitante: req.solicitante,
       solicitanteEmail: req.solicitanteEmail, estado: req.estado, motivo: req.motivo, sitio: req.sitio,
@@ -3459,11 +3460,11 @@ function vistaOperaciones_(libro, folioReq) {
     renglones: renglonesConDecision_(renglones, req.aprobacion), aprobacion: req.aprobacion, propuesta: prop,
     eventos: eventosDeReqs_(libro)[f] || [], orden: orden, avance: avance ? avance.lineas : null,
     recepciones: recepcionesDe_(movs, false), hoy: hoyIso_(),
-    esPropia: esPropia, preparoPropuesta: preparo,
-    puedeAprobar: req.estado === REQ_SOLICITADA && !esPropia,
+    esPropia: esPropia, preparoPropuesta: preparo, excepcionSuperAdmin: sa && (esPropia || preparo),
+    puedeAprobar: req.estado === REQ_SOLICITADA && (!esPropia || sa),
     puedeDevolver: req.estado === REQ_SOLICITADA,
     puedeRechazar: [REQ_SOLICITADA, REQ_APROBADA, REQ_COTIZADA].indexOf(req.estado) !== -1,
-    puedeVisto: req.estado === REQ_COTIZADA && !!prop && !esPropia && !preparo,
+    puedeVisto: req.estado === REQ_COTIZADA && !!prop && ((!esPropia && !preparo) || sa),
     puedeRegresar: req.estado === REQ_COTIZADA,
   };
 }
@@ -3476,15 +3477,17 @@ function getRequisicionOperaciones(folioReq) {
 /**
  * Operaciones aprueba una requisición Solicitada renglón por renglón (ver normalizarAprobacion): puede bajar cantidades y
  * rechazar renglones con comentario; pone la prioridad. d.version = la versión de los renglones que vio (si quien pidió la
- * corrigió después, se rechaza). Queda Aprobada y pasa a compras. Nadie aprueba lo que pidió.
+ * corrigió después, se rechaza). Queda Aprobada y pasa a compras. Nadie aprueba lo que pidió (también vale para un delegado),
+ * salvo un super admin con motivoExcepcion ≥ 10 caracteres (incremento 4; queda en la Bitacora de Administración).
  */
-function aprobarRequisicion(folioReq, d) {
+function aprobarRequisicion(folioReq, d, motivoExcepcion) {
   exigirOperaciones_();
   const libro = libroCompras_();
   return conCandado_(() => {
     const { hoja, req } = buscarReq_(libro, folioReq);
-    if (req.solicitanteEmail === yo_()) {
-      throw errorPermiso_('No puedes aprobar tu propia requisición: la aprueba otra persona de operaciones.');
+    const propia = req.solicitanteEmail === yo_();
+    if (propia && !excepcionPosible_(motivoExcepcion)) {
+      throw errorPermiso_('No puedes aprobar tu propia requisición: la aprueba otra persona de operaciones.' + textoExcepcion_());
     }
     const nuevo = transicionReq(req.estado, 'aprobar');
     const vigente = renglonesDeReqs_(libro)[req.folio.toUpperCase()] || { version: 1, renglones: [] };
@@ -3492,6 +3495,7 @@ function aprobarRequisicion(folioReq, d) {
       throw new Error('La requisición ' + req.folio + ' cambió después de que la abriste (versión ' + vigente.version + '): vuelve a abrirla.');
     }
     const a = normalizarAprobacion(d, vigente.renglones);
+    if (propia) excepcionSuperAdmin_('aprobar su propia requisición', req.folio, motivoExcepcion); // ya validado: se registra antes de escribir
     const ahora = ahoraTexto_();
     cambiarReq_(hoja, req, nuevo, { motivo: '', revisar: true });
     camposReq_(hoja, req, { prioridad: a.prioridad, aprobacion: { version: vigente.version, renglones: a.renglones, nota: a.nota,
@@ -3580,9 +3584,10 @@ function cotizarRequisicion(folioReq, p) {
  * Visto bueno de operaciones a la propuesta (versión que vio: si compras la cambió después, se rechaza): emite la orden con
  * el PDF ("Elaboró" = quien preparó la propuesta; "Autorizó" = quien da el visto bueno) y la requisición queda Autorizada.
  * huella = la de la propuesta que vio (vistaOperaciones_): ata el visto bueno al contenido, no solo al número de versión.
- * No sobre una requisición propia ni sobre una propuesta que uno mismo preparó.
+ * No sobre una requisición propia ni sobre una propuesta que uno mismo preparó, salvo un super admin con motivoExcepcion ≥ 10
+ * caracteres (incremento 4; queda en la Bitacora de Administración).
  */
-function autorizarPropuesta(folioReq, version, idSolicitud, huella) {
+function autorizarPropuesta(folioReq, version, idSolicitud, huella, motivoExcepcion) {
   exigirOperaciones_();
   const libro = libroCompras_();
   const id = String(idSolicitud || '').slice(0, 64);
@@ -3598,9 +3603,11 @@ function autorizarPropuesta(folioReq, version, idSolicitud, huella) {
     const prop = propuestaVigente_(req);
     if (!prop) throw new Error('La requisición ' + req.folio + ' no tiene propuesta de compra.');
     const yo = yo_();
-    if (req.solicitanteEmail === yo) throw errorPermiso_('No puedes dar el visto bueno a tu propia requisición.');
-    if (String(prop.elaboroEmail || '').toLowerCase() === yo) {
-      throw errorPermiso_('No puedes dar el visto bueno a una propuesta que tú preparaste: lo da otra persona de operaciones.');
+    const propia = req.solicitanteEmail === yo, preparo = String(prop.elaboroEmail || '').toLowerCase() === yo;
+    const excepcion = (propia || preparo) && excepcionPosible_(motivoExcepcion);
+    if (propia && !excepcion) throw errorPermiso_('No puedes dar el visto bueno a tu propia requisición.' + textoExcepcion_());
+    if (preparo && !excepcion) {
+      throw errorPermiso_('No puedes dar el visto bueno a una propuesta que tú preparaste: lo da otra persona de operaciones.' + textoExcepcion_());
     }
     if (Number(version) !== Number(prop.version) || String(huella || '') !== huellaPropuesta_(prop)) {
       throw new Error('Compras cambió la propuesta (ahora es la versión ' + prop.version + ') después de que la abriste: revísala otra vez.');
@@ -3609,6 +3616,10 @@ function autorizarPropuesta(folioReq, version, idSolicitud, huella) {
       throw new Error('La fecha de entrega de la propuesta (' + prop.fechaEntrega + ') ya pasó: regrésala a compras para actualizarla.');
     }
     const proyecto = proyectoParaCompras_(req.proyectoFolio);
+    if (excepcion) {
+      excepcionSuperAdmin_('visto bueno a ' + [propia ? 'su propia requisición' : '', preparo ? 'una propuesta que preparó' : '']
+        .filter(Boolean).join(' y '), req.folio, motivoExcepcion); // ya validado: se registra antes de emitir la orden
+    }
     const r = emitirOrdenCompra_(libro, ordenDePropuesta(prop), proyecto, req.folio,
       { email: prop.elaboroEmail, nombre: prop.elaboroNombre, autorizo: nombreYo_() + (nombreYo_() === yo ? '' : ' (' + yo + ')') });
     cambiarReq_(hoja, req, nuevo, { motivo: '', ocFolio: r.folio, revisar: true });
@@ -6300,14 +6311,572 @@ function codigoDeSitio(sitio, detalle) {
 // sitios con código (sitiosDetalle_, codigoDeSitio) y el estado REQ_EN_CAMINO.
 
 // ---- 6.A Identidad: Permisos, delegaciones, entrar con código (@helgen.services) y sesiones de CAPRI ----
+// Permisos: un super admin da de alta, edita y desactiva usuarios (pestaña Permisos del libro de Administración); el super
+// admin raíz (SUPER_ADMIN) no se desactiva ni pierde Super admin desde la página. Delegaciones: quien tiene Aprobaciones o
+// Compras los entrega a otra persona activa por unas fechas (máx. 90 días); los dos pueden actuar; termina sola. Entrar con
+// código: las cuentas @helgen.services piden un código de 6 dígitos por correo y reciben una sesión de CAPRI firmada
+// (capri.<datos>.<firma>, HMAC-SHA256 con SESION_SECRETO) que dura 30 días y se renueva sola mientras se usa.
 
 function modIdentidad_() {
-  return { nombre: 'Identidad', api: {}, cambios: {}, solo: [], publicas: [] };
+  // Solo declaraciones de función y literales: las const de esta sección todavía no existen cuando se llama (arriba)
+  return { nombre: 'Identidad',
+    api: { listarUsuarios: listarUsuarios, guardarUsuario: guardarUsuario, listarDelegaciones: listarDelegaciones,
+      crearDelegacion: crearDelegacion, cancelarDelegacion: cancelarDelegacion, solicitarCodigo: solicitarCodigo,
+      verificarCodigo: verificarCodigo },
+    cambios: { guardarUsuario: ['permisos'], crearDelegacion: ['permisos'], cancelarDelegacion: ['permisos'] },
+    // Quien aprueba puede ser una cuenta de solo requisiciones: también delega (cada función revisa sus reglas)
+    solo: ['listarDelegaciones', 'crearDelegacion', 'cancelarDelegacion'],
+    publicas: ['solicitarCodigo', 'verificarCodigo'],
+    bootstrap: function () {
+      const s = renovarSesionCapri_();
+      return s ? { sesionCapri: s } : {};
+    },
+    sincronizar: function (permisos, ctx, algo, r, errores) {
+      const s = renovarSesionCapri_();
+      if (s) r.sesionCapri = s;
+      if (!algo('permisos')) return;
+      if (ctx.admPermisos && permisos.superadmin) r.admPermisos = intentar_(errores, 'Permisos', listarUsuarios);
+      if (ctx.admDelegaciones && puedeVerDelegaciones_()) r.admDelegaciones = intentar_(errores, 'Delegaciones', listarDelegaciones);
+    },
+    preparar: function () {
+      secretoSesion_(true);
+      console.log('SESION_SECRETO listo (no se muestra). Correos que quedan hoy: ' + MailApp.getRemainingDailyQuota());
+    } };
 }
 
-/** Sesión propia de CAPRI (token que empieza con PREFIJO_SESION_CAPRI). La implementa el módulo de identidad. */
+const DIAS_SESION_CAPRI = 30;        // la sesión de CAPRI dura 30 días (pedido de Leo, 28/10/2026: "que no se cierre")
+const DIAS_RENOVAR_SESION_CAPRI = 15; // si le quedan menos, bootstrap / sincronizar mandan una nueva (sesionCapri)
+const MAX_DIAS_DELEGACION = 90;       // una delegación dura como máximo 90 días (contando el primero y el último)
+const CODIGO_VIGENCIA_MS = 10 * 60000, CODIGO_MAX_POR_HORA = 5, CODIGO_MAX_ERRORES = 5, CODIGO_BLOQUEO_MS = 15 * 60000;
+const MENSAJE_CODIGO_ENVIADO = 'Si el correo está dado de alta, te llegó un código.';
+const MENSAJE_CODIGO_BLOQUEO = 'Demasiados intentos con este correo. Espera 15 minutos y pide un código nuevo.';
+
+// ---- Permisos (solo super admin) ----
+
+/**
+ * Página de Permisos: usuarios de la pestaña Permisos (más el super admin raíz aunque no esté en ella), roles con su nombre y
+ * sitios con código. Sin libro de Administración (antes de prepararCapri): los de Script Properties y libro: false (no se edita).
+ */
+function listarUsuarios() {
+  exigirSuperAdmin_();
+  return vistaPermisos_();
+}
+
+function vistaPermisos_() {
+  const p = propiedades_();
+  const raiz = correosCapri(p.SUPER_ADMIN);
+  const hayLibro = !!p[AREA_ADMIN.propLibro];
+  let usuarios;
+  if (hayLibro) {
+    usuarios = enCache_('admPermisos', ['permisos'], TTL_CACHE, () =>
+      filasDeArea_(hojaAdmin_(libroAdmin_(), 'Permisos'), HOJAS_ADMIN, 'Permisos').map(usuarioDeFilaAdmin_).filter(Boolean));
+  } else {
+    const m = usuariosDesdePropiedades(p);
+    usuarios = Object.keys(m).map(c => Object.assign({}, m[c], { actualizo: '', actualizado: '' }));
+  }
+  usuarios = usuarios.map(u => Object.assign({}, u, { raiz: raiz.indexOf(u.correo) !== -1, enLista: true }));
+  raiz.forEach(c => {
+    if (!usuarios.some(u => u.correo === c)) {
+      usuarios.push({ correo: c, nombre: '', metodo: 'google', roles: ['superadmin'], sitio: '', activo: true, notas: '',
+        actualizo: '', actualizado: '', raiz: true, enLista: false });
+    }
+  });
+  usuarios.sort((a, b) => (b.activo ? 1 : 0) - (a.activo ? 1 : 0) ||
+    String(a.nombre || a.correo).localeCompare(String(b.nombre || b.correo), 'es'));
+  let sitios = [];
+  try { sitios = sitiosDetalle_(); } catch (e) { sitios = []; }
+  return { libro: hayLibro, usuarios: usuarios, raiz: raiz, yo: VENDEDOR_ ? yo_() : '',
+    roles: ROLES_CAPRI.map(r => ({ clave: r, nombre: NOMBRES_ROLES[r] })), rolesServicios: ROLES_SERVICIOS,
+    rolesConSolo: ROLES_CON_SOLO, dominioServicios: DOMINIO_SERVICIOS, sitios: sitios };
+}
+
+/** Usuario de una fila de Permisos con quién y cuándo se cambió (null si la fila no tiene un correo de CAPRI). */
+function usuarioDeFilaAdmin_(r) {
+  const correo = correoCapri(r[0]);
+  if (!correo) return null;
+  return Object.assign({}, usuariosDesdeFilas([r])[correo], { actualizo: String(r[7] || ''), actualizado: fechaTexto_(r[8]) });
+}
+
+/**
+ * Alta (p.nuevo) o edición de un usuario: p = {correo, nombre, roles, sitio, activo, notas, nuevo}. Valida con
+ * normalizarUsuario; @helgen.services solo "Solo requisiciones" (entra con código). El super admin raíz no se desactiva ni
+ * pierde Super admin; nadie se desactiva ni se quita Super admin a sí mismo. Queda en la Bitacora de Administración; el alta
+ * avisa a la persona (usuario.alta). Devuelve la página de Permisos.
+ */
+function guardarUsuario(p) {
+  exigirSuperAdmin_();
+  const x = p || {};
+  const u = normalizarUsuario(x);
+  if (!propiedades_()[AREA_ADMIN.propLibro]) {
+    throw new Error('Falta preparar CAPRI: Efrain debe correr prepararCapri() desde el editor de Apps Script. Mientras, los roles ' +
+      'siguen en Script Properties.');
+  }
+  const libro = libroAdmin_();
+  if (u.sitio) {
+    const codigos = sitiosDetalle_().map(s => s.codigo).filter(Boolean);
+    if (codigos.length && codigos.indexOf(u.sitio) === -1) {
+      throw new Error('El sitio ' + u.sitio + ' no está en la lista de sitios (Config → SITIOS): ' + codigos.join(', ') + '.');
+    }
+  }
+  const yo = yo_(), raiz = correosCapri(propiedades_().SUPER_ADMIN);
+  const esSuper = u.roles.indexOf('superadmin') !== -1;
+  if (raiz.indexOf(u.correo) !== -1) {
+    if (!u.activo) throw new Error(u.correo + ' es el super admin raíz (SUPER_ADMIN): no se puede desactivar desde aquí.');
+    if (!esSuper) throw new Error(u.correo + ' es el super admin raíz (SUPER_ADMIN): no se le puede quitar "Super admin".');
+  }
+  return conCandado_(() => {
+    const hoja = hojaAdmin_(libro, 'Permisos');
+    const filas = filasDeArea_(hoja, HOJAS_ADMIN, 'Permisos');
+    const i = filas.findIndex(r => correoCapri(r[0]) === u.correo);
+    if (x.nuevo && i !== -1) throw new Error(u.correo + ' ya está dado de alta: búscalo en la lista para editarlo.');
+    if (!x.nuevo && i === -1) throw new Error(u.correo + ' no está en Permisos: usa "Agregar usuario".');
+    const antes = i === -1 ? null : usuariosDesdeFilas([filas[i]])[u.correo];
+    if (u.correo === yo && antes && antes.activo && !u.activo) {
+      throw new Error('No puedes desactivar tu propia cuenta: pídeselo a otro super admin.');
+    }
+    if (u.correo === yo && antes && antes.roles.indexOf('superadmin') !== -1 && !esSuper && raiz.indexOf(yo) === -1) {
+      throw new Error('No puedes quitarte "Super admin" a ti mismo: pídeselo a otro super admin.');
+    }
+    const ahora = ahoraTexto_();
+    const fila = filaDeUsuario(u, yo, ahora).map(textoCelda);
+    fila[8] = "'" + ahora; // texto: Sheets no lo convierte en fecha
+    if (i === -1) hoja.appendRow(fila);
+    else hoja.getRange(i + 2, 1, 1, fila.length).setValues([fila]);
+    const cambio = cambioDeUsuario(antes, u);
+    bitacoraAdmin_(cambio.accion, u.correo, cambio.detalle, '');
+    if (!antes && u.activo) {
+      notificar_('usuario.alta', { para: [u.correo], correo: u.correo, nombre: u.nombre, metodo: u.metodo, sitio: u.sitio,
+        roles: u.roles.map(r => NOMBRES_ROLES[r]) });
+    }
+    SpreadsheetApp.flush();
+    return vistaPermisos_();
+  });
+}
+
+// ---- Delegaciones ----
+
+/** ¿Puede usar Delegaciones? Super admin (todas) o quien tiene hoy Aprobaciones o Compras (solo las suyas). */
+function puedeVerDelegaciones_() {
+  return !!VENDEDOR_ && (esSuperAdmin_() || tieneRol_('aprobaciones') || tieneRol_('compras'));
+}
+
+function exigirDelegaciones_() {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión para continuar.');
+  if (!puedeVerDelegaciones_()) throw errorPermiso_('Las delegaciones son para quien tiene Aprobaciones o Compras.');
+}
+
+/** Lo que normalizarDelegacion y las vistas necesitan, leído fresco (en una escritura, de la hoja; si no, del caché). */
+function ctxIdentidad_() {
+  const p = propiedades_();
+  return { usuarios: usuariosCapri_(), delegaciones: delegacionesCapri_(), hoy: hoyIso_(),
+    superAdmins: correosCapri(p.SUPER_ADMIN), soloListados: String(p.PERMISOS_SOLO_LISTADOS || '') === '1' };
+}
+
+/** Delegaciones que ve el usuario (super admin: todas; los demás: las que dio y las que recibió). */
+function listarDelegaciones() {
+  exigirDelegaciones_();
+  return vistaDelegaciones_();
+}
+
+function vistaDelegaciones_() {
+  const ctx = ctxIdentidad_(), yo = yo_(), sa = esSuperAdmin_();
+  const nombre = c => (ctx.usuarios[c] && ctx.usuarios[c].nombre) || c;
+  const delegables = c => rolesPropios_(c, ctx).roles.filter(r => ROLES_DELEGABLES.indexOf(r) !== -1);
+  const lista = ctx.delegaciones.filter(d => sa || d.de === yo || d.a === yo).map(d => {
+    const estado = estadoDelegacion(d, ctx.hoy);
+    return { id: d.id, de: d.de, deNombre: nombre(d.de), a: d.a, aNombre: nombre(d.a), desde: d.desde, hasta: d.hasta,
+      roles: d.roles, rolesNombres: d.roles.map(r => NOMBRES_ROLES[r]), estado: estado, creo: d.creo, creado: d.creado,
+      cancelo: d.cancelo, motivo: d.motivo,
+      puedeCancelar: (estado === 'Vigente' || estado === 'Programada') && (sa || d.de === yo || d.a === yo) };
+  }).reverse();
+  const activos = Object.keys(ctx.usuarios).map(c => ctx.usuarios[c]).filter(u => u.activo);
+  const r = { hoy: ctx.hoy, yo: yo, superadmin: sa, maxDias: MAX_DIAS_DELEGACION, delegaciones: lista, misRoles: delegables(yo),
+    roles: ROLES_DELEGABLES.map(x => ({ clave: x, nombre: NOMBRES_ROLES[x] })),
+    // A quién se puede delegar: activos de Permisos con @helgen.tech (solo = no recibe Compras)
+    candidatos: activos.filter(u => dominioDe(u.correo) === DOMINIO_HELGEN)
+      .map(u => ({ correo: u.correo, nombre: u.nombre || u.correo, solo: u.roles.indexOf('solo_requisicion') !== -1 }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')) };
+  if (sa) {
+    const todos = activos.map(u => u.correo).concat(ctx.superAdmins).filter((c, i, a) => a.indexOf(c) === i);
+    r.delegadores = todos.map(c => ({ correo: c, nombre: nombre(c), roles: delegables(c) })).filter(x => x.roles.length)
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  }
+  return r;
+}
+
+/**
+ * Nueva delegación: p = {de (solo un super admin puede poner a otra persona; si no, es quien llama), a, roles, desde, hasta}.
+ * Reglas en normalizarDelegacion. Queda en la Bitacora de Administración y avisa al delegado (delegacion).
+ */
+function crearDelegacion(p) {
+  exigirDelegaciones_();
+  const x = p || {}, yo = yo_(), sa = esSuperAdmin_();
+  const de = correoCapri(x.de) || yo;
+  if (de !== yo && !sa) throw errorPermiso_('Solo un super admin puede crear una delegación a nombre de otra persona.');
+  if (!propiedades_()[AREA_ADMIN.propLibro]) {
+    throw new Error('Falta preparar CAPRI: Efrain debe correr prepararCapri() desde el editor de Apps Script.');
+  }
+  const libro = libroAdmin_();
+  return conCandado_(() => {
+    const ctx = ctxIdentidad_(); // en una escritura se lee de la hoja (incluye lo que otro guardó hace un momento)
+    const d = normalizarDelegacion(Object.assign({}, x, { de: de }), ctx);
+    const hoja = hojaAdmin_(libro, 'Delegaciones');
+    const anio = ctx.hoy.slice(0, 4);
+    const ids = filasDeArea_(hoja, HOJAS_ADMIN, 'Delegaciones').map(r => r[0]);
+    const id = formatearFolio('DEL', anio, maxConsecutivo(ids, 'DEL', anio) + 1);
+    const t = textoCelda, ahora = ahoraTexto_();
+    hoja.appendRow([id, t(d.de), t(d.a), textoFecha_(d.desde), textoFecha_(d.hasta), d.roles.join(', '), 'Activa', t(yo),
+      "'" + ahora, '', '']);
+    const nombres = d.roles.map(r => NOMBRES_ROLES[r]);
+    bitacoraAdmin_('Delegar roles', id, d.de + ' → ' + d.a + ' · ' + nombres.join(', ') + ' · del ' + d.desde + ' al ' + d.hasta, '');
+    notificar_('delegacion', { para: [d.a], id: id, de: d.de, a: d.a, deNombre: nombreDeCorreo_(d.de),
+      aNombre: nombreDeCorreo_(d.a), desde: d.desde, hasta: d.hasta, roles: nombres, creo: yo });
+    SpreadsheetApp.flush();
+    return vistaDelegaciones_();
+  });
+}
+
+/** Cancela una delegación vigente o programada (quien la dio, quien la recibe o un super admin), con motivo. */
+function cancelarDelegacion(id, motivo) {
+  exigirDelegaciones_();
+  const m = motivoObligatorio_(motivo, 'Escribe por qué cancelas la delegación (mínimo 5 caracteres).');
+  if (!propiedades_()[AREA_ADMIN.propLibro]) throw new Error('No hay delegaciones: falta preparar CAPRI (prepararCapri).');
+  const libro = libroAdmin_(), yo = yo_(), sa = esSuperAdmin_();
+  return conCandado_(() => {
+    const hoja = hojaAdmin_(libro, 'Delegaciones');
+    const filas = filasDeArea_(hoja, HOJAS_ADMIN, 'Delegaciones');
+    const i = filas.findIndex(r => String(r[0]).trim().toUpperCase() === String(id || '').trim().toUpperCase());
+    if (i === -1) throw new Error('No existe la delegación ' + String(id || '') + '.');
+    const d = delegacionesDesdeFilas([filas[i]])[0];
+    if (!d) throw new Error('La delegación ' + String(id) + ' está incompleta en la hoja.');
+    if (!sa && d.de !== yo && d.a !== yo) throw errorPermiso_('Solo quien la dio, quien la recibe o un super admin la cancela.');
+    const estado = estadoDelegacion(d, hoyIso_());
+    if (estado === 'Cancelada') throw new Error('La delegación ' + d.id + ' ya estaba cancelada.');
+    if (estado === 'Terminada') throw new Error('La delegación ' + d.id + ' ya terminó: no hace falta cancelarla.');
+    hoja.getRange(i + 2, 7).setValue('Cancelada');
+    hoja.getRange(i + 2, 10, 1, 2).setValues([[textoCelda(yo), textoCelda(m)]]);
+    bitacoraAdmin_('Cancelar delegación', d.id, d.de + ' → ' + d.a, m);
+    SpreadsheetApp.flush();
+    return vistaDelegaciones_();
+  });
+}
+
+// ---- Excepción de super admin a la separación de funciones (aprobar lo propio, visto bueno a lo que uno preparó) ----
+
+/** ¿Se puede pasar por alto la regla? Super admin con motivo ≥ 10 caracteres (excepcionSuperAdmin_ lo deja en la Bitacora). */
+function excepcionPosible_(motivo) {
+  return esSuperAdmin_() && String(motivo == null ? '' : motivo).trim().length >= 10;
+}
+
+/** Lo que se agrega al error de separación de funciones cuando quien lo intenta es super admin (la interfaz pide el motivo). */
+function textoExcepcion_() {
+  return esSuperAdmin_() ? ' Como super admin puedes hacerlo si escribes el motivo (mínimo 10 caracteres; queda en la bitácora).' : '';
+}
+
+// ---- Entrar con código (@helgen.services) y sesiones de CAPRI ----
+
+/** Correo para el código: un @helgen.services válido (las @helgen.tech entran con Google). */
+function correoParaCodigo_(texto) {
+  const c = correoCapri(texto);
+  if (!c) {
+    throw new Error(String(texto == null ? '' : texto).trim() ? 'Escribe un correo @' + DOMINIO_SERVICIOS + ' válido.'
+      : 'Escribe tu correo @' + DOMINIO_SERVICIOS + '.');
+  }
+  if (dominioDe(c) !== DOMINIO_SERVICIOS) throw new Error('Las cuentas @' + DOMINIO_HELGEN + ' entran con el botón de Google.');
+  return c;
+}
+
+/** Usuario activo de Permisos con @helgen.services al que se le puede mandar código (null si no). */
+function usuarioParaCodigo_(correo) {
+  if (dominioDe(correo) !== DOMINIO_SERVICIOS) return null;
+  const u = usuarioCapri_(correo);
+  return u && u.activo && rolesEfectivos(correo, contextoRoles_()).activo ? u : null;
+}
+
+/** Secreto de las sesiones de CAPRI (Script Property SESION_SECRETO). crear: si falta, lo crea al azar. Nunca se registra. */
+function secretoSesion_(crear) {
+  const actual = propiedades_().SESION_SECRETO;
+  if (actual || !crear) return actual || '';
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) throw new Error('El sistema está ocupado. Intenta de nuevo en unos segundos.');
+  try {
+    const props = PropertiesService.getScriptProperties();
+    let s = props.getProperty('SESION_SECRETO');
+    if (!s) {
+      const azar = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+        Utilities.getUuid() + Utilities.getUuid() + Utilities.getUuid() + Date.now());
+      s = Utilities.base64EncodeWebSafe(azar).replace(/=+$/, '');
+      props.setProperty('SESION_SECRETO', s);
+    }
+    return s;
+  } finally {
+    lock.releaseLock();
+    MEMO_.props = null;
+  }
+}
+
+/** Firma (base64url sin relleno) de los datos de una sesión de CAPRI. */
+function firmaSesion_(datos, secreto) {
+  return Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(datos, secreto)).replace(/=+$/, '');
+}
+
+/** Sesión de CAPRI: capri.<base64url de {e: correo, x: vence (epoch s), n: nombre}>.<firma>. */
+function emitirSesionCapri_(correo, nombre) {
+  const secreto = secretoSesion_(true);
+  const datos = { e: correo, x: Math.floor(Date.now() / 1000) + DIAS_SESION_CAPRI * 86400, n: String(nombre || '').slice(0, 80) };
+  const carga = Utilities.base64EncodeWebSafe(JSON.stringify(datos), Utilities.Charset.UTF_8).replace(/=+$/, '');
+  return PREFIJO_SESION_CAPRI + carga + '.' + firmaSesion_(carga, secreto);
+}
+
+/** Texto UTF-8 de un base64url (con o sin relleno). */
+function textoDeBase64Url_(s) {
+  const bytes = Utilities.base64DecodeWebSafe(s + '==='.slice((s.length + 3) % 4));
+  return decodeURIComponent(bytes.map(b => '%' + ((b + 256) % 256).toString(16).padStart(2, '0')).join(''));
+}
+
+/**
+ * Verifica una sesión de CAPRI: firma (comparación de tiempo constante), vencimiento y que el correo siga siendo @helgen.services.
+ * Devuelve {email, nombre, apellido: ''}. Si la cuenta se desactivó, exigirAcceso_ la corta enseguida (en doPost).
+ */
 function verificarSesionCapri_(token) {
-  throw errorSesion_('Inicia sesión para continuar.');
+  const t = String(token || '');
+  const invalida = () => errorSesion_('Tu sesión no es válida. Inicia sesión otra vez.');
+  if (t.length > 2048 || t.indexOf(PREFIJO_SESION_CAPRI) !== 0) throw invalida();
+  const partes = t.slice(PREFIJO_SESION_CAPRI.length).split('.');
+  if (partes.length !== 2 || !/^[A-Za-z0-9_-]+$/.test(partes[0]) || !/^[A-Za-z0-9_-]+$/.test(partes[1])) throw invalida();
+  const secreto = secretoSesion_(false);
+  if (!secreto || !mismoTexto_(firmaSesion_(partes[0], secreto), partes[1])) throw invalida();
+  let d;
+  try { d = JSON.parse(textoDeBase64Url_(partes[0])); } catch (e) { throw invalida(); }
+  const correo = correoCapri(d && d.e);
+  const ahora = Math.floor(Date.now() / 1000), vence = Number(d && d.x);
+  if (!correo || dominioDe(correo) !== DOMINIO_SERVICIOS || !Number.isFinite(vence)) throw invalida();
+  if (vence > ahora + (DIAS_SESION_CAPRI + 1) * 86400) throw invalida();
+  if (vence <= ahora) throw errorSesion_('Tu sesión expiró. Pide un código nuevo para entrar.');
+  MEMO_.sesionCapri = { email: correo, x: vence };
+  return { email: correo, nombre: String(d.n || '') || correo, apellido: '' };
+}
+
+/** Sesión nueva si a la de esta petición (CAPRI) le quedan menos de 15 días; null si no hace falta o si es de Google. */
+function renovarSesionCapri_() {
+  const s = MEMO_.sesionCapri;
+  if (!s || !VENDEDOR_ || s.email !== VENDEDOR_.email) return null;
+  if (s.x - Math.floor(Date.now() / 1000) >= DIAS_RENOVAR_SESION_CAPRI * 86400) return null;
+  return emitirSesionCapri_(s.email, nombreDeCorreo_(s.email));
+}
+
+/** Compara dos textos sin salir antes (no deja medir cuántos caracteres coinciden). */
+function mismoTexto_(a, b) {
+  const x = String(a), y = String(b);
+  let dif = x.length ^ y.length;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) dif |= (x.charCodeAt(i) || 0) ^ (y.charCodeAt(i) || 0);
+  return dif === 0;
+}
+
+const huellaCorreo_ = c => Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, 'capri-correo|' + c))
+  .replace(/=+$/, '');
+const huellaCodigo_ = (secreto, c, codigo) => Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+  secreto + '|' + c + '|' + codigo));
+const jsonCache_ = v => { try { return v ? JSON.parse(v) : null; } catch (e) { return null; } };
+/** Marcas de tiempo (ms) posteriores a desde, de una lista guardada en el caché. */
+const recientes_ = (v, desde) => (jsonCache_(v) || []).filter(t => Number(t) > desde);
+
+/** Código de 6 dígitos al azar (de UUID aleatorios: Math.random no es seguro). */
+function codigoAleatorio_() {
+  const b = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, Utilities.getUuid() + Utilities.getUuid());
+  const n = (((b[0] & 255) << 24) >>> 0) + ((b[1] & 255) << 16) + ((b[2] & 255) << 8) + (b[3] & 255);
+  return String(n % 1000000).padStart(6, '0');
+}
+
+/** Candado corto para los contadores del código (dos pestañas no se saltan los límites). */
+function candadoCodigo_(f) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) throw new Error('El sistema está ocupado. Intenta de nuevo en unos segundos.');
+  try { return f(); } finally { lock.releaseLock(); }
+}
+
+/**
+ * Pública (sin sesión): manda un código de 6 dígitos a un @helgen.services activo en Permisos. Responde lo mismo esté o no
+ * dado de alta (no deja averiguar quién existe). Vale 10 minutos, una vez; máx. 5 por correo por hora; tras 5 intentos
+ * fallidos el correo se bloquea 15 minutos. En el caché solo queda la huella del código (con SESION_SECRETO).
+ */
+function solicitarCodigo(correo) {
+  const c = correoParaCodigo_(correo);
+  const secreto = secretoSesion_(true);
+  const h = huellaCorreo_(c), cache = CacheService.getScriptCache(), ahora = Date.now();
+  const envio = candadoCodigo_(() => {
+    const bloqueo = jsonCache_(cache.get('CAPRI_BLQ_' + h));
+    if (bloqueo && bloqueo.hasta > ahora) throw new Error(MENSAJE_CODIGO_BLOQUEO);
+    // Se cuentan todos los pedidos (con o sin alta): el límite no revela quién existe
+    const pedidos = recientes_(cache.get('CAPRI_PED_' + h), ahora - 3600000);
+    if (pedidos.length >= CODIGO_MAX_POR_HORA) {
+      throw new Error('Ya se pidieron ' + CODIGO_MAX_POR_HORA + ' códigos para este correo en la última hora. Espera un rato y vuelve a intentarlo.');
+    }
+    pedidos.push(ahora);
+    cache.put('CAPRI_PED_' + h, JSON.stringify(pedidos), 3600);
+    const u = usuarioParaCodigo_(c);
+    if (!u) return null;
+    const codigo = codigoAleatorio_(); // el nuevo reemplaza al anterior
+    cache.put('CAPRI_COD_' + h, JSON.stringify({ h: huellaCodigo_(secreto, c, codigo), x: ahora + CODIGO_VIGENCIA_MS }), 600);
+    return { u: u, codigo: codigo };
+  });
+  if (envio) {
+    try {
+      MailApp.sendEmail(correoCodigo(envio.u.nombre, envio.codigo, c));
+    } catch (e) {
+      console.warn('No se mandó el código de CAPRI: ' + e.message); // la respuesta es la misma (no revela si existe)
+    }
+  }
+  return { mensaje: MENSAJE_CODIGO_ENVIADO };
+}
+
+/**
+ * Pública (sin sesión): comprueba el código y devuelve {token, correo, nombre} con una sesión de CAPRI de 30 días. Un código
+ * equivocado o vencido cuenta como intento fallido (5 = bloqueo de 15 minutos); el bueno se borra (sirve una sola vez).
+ */
+function verificarCodigo(correo, codigo) {
+  const c = correoParaCodigo_(correo);
+  const cod = String(codigo == null ? '' : codigo).replace(/\s+/g, '');
+  if (!/^\d{6}$/.test(cod)) throw new Error('El código son 6 números.');
+  const secreto = secretoSesion_(false);
+  const h = huellaCorreo_(c), cache = CacheService.getScriptCache(), ahora = Date.now();
+  candadoCodigo_(() => {
+    const bloqueo = jsonCache_(cache.get('CAPRI_BLQ_' + h));
+    if (bloqueo && bloqueo.hasta > ahora) throw new Error(MENSAJE_CODIGO_BLOQUEO);
+    const guardado = jsonCache_(cache.get('CAPRI_COD_' + h));
+    const bueno = !!secreto && !!guardado && Number(guardado.x) > ahora && mismoTexto_(guardado.h, huellaCodigo_(secreto, c, cod));
+    if (!bueno) {
+      const errores = recientes_(cache.get('CAPRI_ERR_' + h), ahora - CODIGO_BLOQUEO_MS);
+      errores.push(ahora);
+      if (errores.length >= CODIGO_MAX_ERRORES) {
+        cache.put('CAPRI_BLQ_' + h, JSON.stringify({ hasta: ahora + CODIGO_BLOQUEO_MS }), CODIGO_BLOQUEO_MS / 1000);
+        cache.remove('CAPRI_COD_' + h);
+        cache.remove('CAPRI_ERR_' + h);
+        throw new Error(MENSAJE_CODIGO_BLOQUEO);
+      }
+      cache.put('CAPRI_ERR_' + h, JSON.stringify(errores), CODIGO_BLOQUEO_MS / 1000);
+      throw new Error('Código incorrecto o vencido. Revísalo o pide uno nuevo.');
+    }
+    cache.remove('CAPRI_COD_' + h);
+    cache.remove('CAPRI_ERR_' + h);
+  });
+  // Entre el pedido y la entrada pudieron desactivarlo
+  const u = usuarioParaCodigo_(c);
+  if (!u) throw errorAcceso_('Tu acceso a CAPRI está desactivado. Pide ayuda a un administrador.');
+  const nombre = u.nombre || c;
+  try {
+    if (propiedades_()[AREA_ADMIN.propLibro]) bitacoraAdmin_('Entrada con código', '', c, '');
+  } catch (e) {
+    console.warn('Entrada con código sin bitácora: ' + e.message);
+  }
+  return { token: emitirSesionCapri_(c, nombre), correo: c, nombre: nombre };
+}
+
+// ---- Identidad: lógica pura (sin servicios de Google; se prueba en Node) ----
+
+/** Estado de una delegación hoy: Cancelada, Programada (empieza después), Vigente o Terminada (ya pasó "hasta"). */
+function estadoDelegacion(d, hoy) {
+  if (d.estado && d.estado !== 'Activa') return d.estado;
+  if (hoy < d.desde) return 'Programada';
+  if (hoy > d.hasta) return 'Terminada';
+  return 'Vigente';
+}
+
+/** Días de "desde" a "hasta" contando los dos (AAAA-MM-DD válidas). */
+function diasDeDelegacion(desde, hasta) {
+  const utc = s => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10));
+  return Math.round((utc(hasta) - utc(desde)) / 86400000) + 1;
+}
+
+/**
+ * Valida una delegación. p = {de, a, roles, desde, hasta}; ctx = {hoy, usuarios, superAdmins, soloListados, delegaciones}
+ * (como rolesEfectivos). Reglas: solo Aprobaciones y Compras, y solo los que "de" tiene como propios (no lo que a su vez le
+ * delegaron); no a uno mismo; "a" activo y dado de alta en Permisos, nunca @helgen.services; Compras no a una cuenta de solo
+ * requisiciones; desde ≥ hoy, hasta ≥ desde, máx. 90 días; sin otra delegación activa igual en esas fechas.
+ * Devuelve {de, a, roles, desde, hasta}.
+ */
+function normalizarDelegacion(p, ctx) {
+  const x = p || {}, c = ctx || {};
+  const usuarios = c.usuarios || {};
+  const nombre = correo => (usuarios[correo] && usuarios[correo].nombre) || correo;
+  const de = correoCapri(x.de), a = correoCapri(x.a);
+  if (!de) throw new Error('Falta quién delega.');
+  if (!a) throw new Error('Elige a quién le delegas.');
+  if (de === a) throw new Error('No se puede delegar a uno mismo: elige a otra persona.');
+  const pedidos = (Array.isArray(x.roles) ? x.roles : String(x.roles == null ? '' : x.roles).split(/[,;\n]+/))
+    .map(s => String(s == null ? '' : s).trim()).filter(Boolean);
+  let roles = [];
+  pedidos.forEach(s => {
+    const r = rolesDeTexto([s]);
+    if (r.length !== 1 || ROLES_DELEGABLES.indexOf(r[0]) === -1) {
+      throw new Error('Solo se delegan ' + ROLES_DELEGABLES.map(k => NOMBRES_ROLES[k]).join(' y ') + '.');
+    }
+    if (roles.indexOf(r[0]) === -1) roles.push(r[0]);
+  });
+  roles = ordenarRoles_(roles);
+  if (!roles.length) throw new Error('Elige qué delegas: ' + ROLES_DELEGABLES.map(r => NOMBRES_ROLES[r]).join(' o ') + '.');
+  const desde = String(x.desde == null ? '' : x.desde).trim(), hasta = String(x.hasta == null ? '' : x.hasta).trim();
+  validarFechaIso(desde, null, 'La fecha de inicio');
+  validarFechaIso(hasta, null, 'La fecha de fin');
+  if (desde < c.hoy) throw new Error('La fecha de inicio no puede ser anterior a hoy.');
+  if (hasta < desde) throw new Error('La fecha de fin no puede ser anterior a la de inicio.');
+  if (diasDeDelegacion(desde, hasta) > MAX_DIAS_DELEGACION) {
+    throw new Error('Una delegación dura como máximo ' + MAX_DIAS_DELEGACION + ' días.');
+  }
+  const suyos = rolesPropios_(de, c);
+  if (!suyos.activo) throw new Error(nombre(de) + ' no está activo en CAPRI.');
+  const faltan = roles.filter(r => suyos.roles.indexOf(r) === -1);
+  if (faltan.length) {
+    throw new Error(nombre(de) + ' no tiene ' + faltan.map(r => '"' + NOMBRES_ROLES[r] + '"').join(' ni ') +
+      ': solo se delega lo que uno tiene.');
+  }
+  if (dominioDe(a) === DOMINIO_SERVICIOS) throw new Error('No se delega a cuentas @' + DOMINIO_SERVICIOS + '.');
+  const u = usuarios[a];
+  if (!u) throw new Error(a + ' no está dado de alta en Permisos.');
+  if (!u.activo) throw new Error(nombre(a) + ' está desactivado en CAPRI.');
+  if (roles.indexOf('compras') !== -1 && u.roles.indexOf('solo_requisicion') !== -1) {
+    throw new Error(nombre(a) + ' tiene "Solo requisiciones": no puede recibir Compras.');
+  }
+  const choca = (c.delegaciones || []).find(d => d.estado === 'Activa' && d.de === de && d.a === a && d.hasta >= c.hoy &&
+    !(d.hasta < desde || d.desde > hasta) && d.roles.some(r => roles.indexOf(r) !== -1));
+  if (choca) {
+    throw new Error('Ya hay una delegación de ' + nombre(de) + ' a ' + nombre(a) + ' en esas fechas (' + choca.id + '). Cancélala antes de crear otra.');
+  }
+  return { de: de, a: a, roles: roles, desde: desde, hasta: hasta };
+}
+
+/** Acción y detalle para la Bitacora al guardar un usuario (antes = null si es alta). */
+function cambioDeUsuario(antes, despues) {
+  const roles = u => (u.roles || []).map(r => NOMBRES_ROLES[r] || r).join(', ');
+  if (!antes) {
+    return { accion: 'Alta de usuario', detalle: despues.nombre + ' · ' + roles(despues) + (despues.sitio ? ' · sitio ' + despues.sitio : '') +
+      (despues.activo ? '' : ' · desactivado') };
+  }
+  const cambios = [];
+  if (antes.nombre !== despues.nombre) cambios.push('nombre: ' + (antes.nombre || '—') + ' → ' + despues.nombre);
+  if (roles(antes) !== roles(despues)) cambios.push('roles: ' + (roles(antes) || '—') + ' → ' + roles(despues));
+  if ((antes.sitio || '') !== (despues.sitio || '')) cambios.push('sitio: ' + (antes.sitio || '—') + ' → ' + (despues.sitio || '—'));
+  if (String(antes.notas || '') !== String(despues.notas || '')) cambios.push('notas');
+  const accion = antes.activo && !despues.activo ? 'Desactivar usuario' : !antes.activo && despues.activo ? 'Reactivar usuario'
+    : 'Cambiar usuario';
+  return { accion: accion, detalle: cambios.join(' · ') || 'sin cambios' };
+}
+
+/** Correo con el código de entrada (MailApp.sendEmail): sin ligas que inicien sesión solas. */
+function correoCodigo(nombre, codigo, para) {
+  const hola = 'Hola' + (nombre ? ', ' + nombre : '') + ':';
+  return {
+    to: para, subject: 'Tu código de CAPRI', name: 'CAPRI Helgen',
+    body: hola + '\n\nTu código para entrar a CAPRI es: ' + codigo + '\n\nVence en 10 minutos y sirve una sola vez. ' +
+      'Escríbelo en la pantalla donde lo pediste.\n\nSi no lo pediste tú, ignora este correo: sin el código nadie puede entrar.\n\n' +
+      'CAPRI · Helgen Servicios Especializados',
+    htmlBody: '<div style="font-family:Arial,sans-serif;color:#1F2937;font-size:14px;line-height:1.5">' +
+      '<p>' + escaparHtml(hola) + '</p><p>Tu código para entrar a <b>CAPRI</b> es:</p>' +
+      '<p style="font-size:28px;font-weight:bold;letter-spacing:6px;color:#2C3C5B;margin:8px 0">' + escaparHtml(codigo) + '</p>' +
+      '<p>Vence en 10 minutos y sirve una sola vez. Escríbelo en la pantalla donde lo pediste.</p>' +
+      '<p style="color:#6B7280">Si no lo pediste tú, ignora este correo: sin el código nadie puede entrar.</p>' +
+      '<p style="color:#6B7280;font-size:12px">CAPRI · Helgen Servicios Especializados</p></div>',
+  };
 }
 
 // ---- 6.B Correos y proveedores: avisos en cada relevo, solicitud de cotización en PDF y botones de correo ----
