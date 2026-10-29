@@ -5741,12 +5741,16 @@
           'fecha de su siguiente pago (el del plan de pagos o la recepción —o entrega— + días de crédito). Fuera: órdenes canceladas o anuladas, ' +
           'registros de prueba y las órdenes anteriores sin pago registrado (abajo, aparte).' });
     }
+    /** Revisión 6b: la semana 1 es la semana en curso; si hoy no es lunes, parcial (un domingo solo queda hoy). */
+    const parcialTexto = s => !s.parcial ? '' : s.diasRestantes === 1 ? 'parcial: solo queda hoy' : 'parcial: quedan ' + s.diasRestantes + ' días con hoy';
+    const semanaTexto = s => s.n === 1 ? (s.etiqueta || 'Semana en curso') : String(s.n);
     function htmlFlujo(d) {
       if (!d.monedas.length) return '<p class="nota">No hay cobros ni pagos esperados.</p>';
       const enc = '<th>Semana</th><th>Del – al</th><th class="num">Cobros esperados</th><th class="num">Pagos esperados</th><th class="num">Neto</th><th class="num">Acumulado</th>';
       const num = (n, m) => '<td class="num"' + (n < 0 ? ' style="color:#B91C1C"' : '') + '>' + dinero(n, m) + '</td>';
       return d.monedas.map(M => {
-        const filas = M.semanas.map(s => '<tr><td>' + s.n + '</td><td style="white-space:nowrap">' + esc(fechaMx(s.desde)) + ' – ' + esc(fechaMx(s.hasta)) +
+        const filas = M.semanas.map(s => '<tr><td' + (s.n === 1 ? ' style="white-space:nowrap"' : '') + '>' + esc(semanaTexto(s)) +
+          (parcialTexto(s) ? '<div class="nota">' + esc(parcialTexto(s)) + '</div>' : '') + '</td><td style="white-space:nowrap">' + esc(fechaMx(s.desde)) + ' – ' + esc(fechaMx(s.hasta)) +
           (s.cobrosVencidos || s.pagosVencidos ? '<div class="nota aviso-moneda">Incluye vencidos: cobros ' + dinero(s.cobrosVencidos, M.moneda) +
             ' · pagos ' + dinero(s.pagosVencidos, M.moneda) + '</div>' : '') + '</td>' +
           celda(s.cobros, M.moneda) + celda(s.pagos, M.moneda) + num(s.neto, M.moneda) + num(s.acumulado, M.moneda) + '</tr>').join('') +
@@ -5761,9 +5765,10 @@
           tabla('<th>Tipo</th><th>Folio</th><th>Detalle</th><th>Fecha</th><th>Semana</th><th class="num">Monto</th>', partidas.map(p =>
             '<tr><td>' + (p.tipo === 'cobro' ? 'Cobro' : 'Pago') + '</td><td style="white-space:nowrap">' + esc(p.folio) + '</td><td>' + esc(p.detalle) +
             (p.fuente === 'estimada' ? ' <span class="nota">(sin factura)</span>' : '') + chipDesbloqueado(p.desbloqueado) + '</td><td style="white-space:nowrap">' + (p.fecha ? esc(fechaMx(p.fecha)) : 'Sin fecha') +
-            (p.vencido ? ' <span class="chip cancelado">Vencido</span>' : '') + '</td><td>' + (p.semana || (p.donde === 'despues' ? 'Después' : '—')) + '</td>' +
+            (p.vencido ? ' <span class="chip cancelado">Vencido</span>' : '') + '</td><td>' + (p.semana === 1 ? 'En curso' : p.semana || (p.donde === 'despues' ? 'Después' : '—')) + '</td>' +
             '<td class="num">' + dinero(p.monto, p.moneda) + '</td></tr>').join('')) + '</details>';
-      }).join('') + '<div class="nota" style="margin-top:8px">Semana 1 = de lunes a domingo de esta semana; lo vencido cae en la semana 1 y se marca. ' +
+      }).join('') + '<div class="nota" style="margin-top:8px">Semana en curso = de lunes a domingo de esta semana (si hoy no es lunes es parcial: ' +
+        'ya pasaron días; un domingo solo queda hoy); lo vencido cae en ella y se marca. Son 13 semanas contando la semana en curso. ' +
         'Cobros: saldo de las etapas de contratos firmados (y de los desbloqueados que ya tienen pagos, marcados) en su fecha esperada. Pagos: saldo de las órdenes de compra en su vencimiento ' +
         '(factura, plan de pagos o recepción/entrega + crédito). El acumulado empieza en cero: no incluye el saldo en bancos.' +
         (d.ordenesAnteriores ? ' No incluye ' + plural(d.ordenesAnteriores, 'orden anterior', 'órdenes anteriores') + ' sin pago registrado ' +
@@ -5823,7 +5828,8 @@
       }
       if (tipo === 'flujo') {
         return armarCsv(['Moneda', 'Semana', 'Desde', 'Hasta', 'Cobros esperados', 'Pagos esperados', 'Neto', 'Acumulado', 'Cobros vencidos', 'Pagos vencidos'],
-          d.monedas.reduce((acc, M) => acc.concat(M.semanas.map(s => [texto(M.moneda), String(s.n), texto(s.desde), texto(s.hasta), num(s.cobros), num(s.pagos),
+          d.monedas.reduce((acc, M) => acc.concat(M.semanas.map(s => [texto(M.moneda), s.n === 1 ? texto(semanaTexto(s) + (s.parcial ? ' (' + parcialTexto(s) + ')' : ''))
+            : String(s.n), texto(s.desde), texto(s.hasta), num(s.cobros), num(s.pagos),
             num(s.neto), num(s.acumulado), num(s.cobrosVencidos), num(s.pagosVencidos)]),
           [[texto(M.moneda), texto('Sin fecha'), '', '', num(M.sinFecha.cobros), num(M.sinFecha.pagos), '', '', '', ''],
            [texto(M.moneda), texto('Después de la semana 13'), '', '', num(M.despues.cobros), num(M.despues.pagos), '', '', '', '']]), []));

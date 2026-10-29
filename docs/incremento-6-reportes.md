@@ -37,9 +37,12 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
 6. **Margen con un costo en otra moneda** (orden de compra en una moneda que no es la del contrato): el renglón dice "Revisar" y no
    suma; los totales de su línea suman solo los demás y dicen cuántos quedaron fuera. (El resumen de cobranza, en cambio, deja el
    margen total de esa moneda en blanco.)
-7. **Semanas del flujo:** de lunes a domingo; la semana 1 es la de hoy. Lo vencido (fecha anterior a hoy) cae en la semana 1 y se
-   marca; **lo que vence hoy no está vencido**. Sin fecha y después de la semana 13 van aparte y no entran al neto. El acumulado
-   empieza en cero (no conoce el saldo en bancos).
+7. **Semanas del flujo:** de lunes a domingo; la semana 1 es la de hoy y se llama **"Semana en curso"** (revisión 6b): si hoy no es
+   lunes es **parcial** y dice cuántos días le quedan con hoy (un domingo, "solo queda hoy"), en pantalla, en las partidas ("En
+   curso") y en el CSV ("Semana en curso (parcial: …)" en la columna Semana). **Siguen siendo 13 semanas** contando la en curso: un
+   domingo el horizonte real es de 12 semanas y un día (no se recorre para no cambiar las semanas de lunes a domingo ni el número
+   de columnas). Lo vencido (fecha anterior a hoy) cae en la semana en curso y se marca; **lo que vence hoy no está vencido**. Sin
+   fecha y después de la semana 13 van aparte y no entran al neto. El acumulado empieza en cero (no conoce el saldo en bancos).
 8. **Fecha esperada al reescribir el esquema:** se conserva **por el nombre de la etapa** (sin acentos ni mayúsculas). Una etapa
    nueva o renombrada queda sin fecha (nunca hereda la de otra). No se edita en proyectos Cancelados; sí en Cerrados.
 9. **Pestaña:** "Reportes" es un grupo propio en la barra (entre Cobranza y Administración). La interfaz decide si se ve con
@@ -77,7 +80,7 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
      la fecha (factura, plan de pagos o sin factura). Abajo, aparte y fuera de los totales, las **órdenes anteriores sin pago
      registrado** (decisión 11) con cuántas son. Sin datos de contrato ni margen. En el CSV van al final con la columna "Nota".
    - **Flujo de efectivo · 13 semanas** (solo super admin): cobros esperados contra pagos esperados por semana, neto y acumulado; la
-     semana 1 dice cuánto de lo suyo está vencido; aparte sin fecha y después de la semana 13; lista de partidas. Dice cuántas
+     semana 1 es la "Semana en curso" (parcial si hoy no es lunes) y dice cuánto de lo suyo está vencido; aparte sin fecha y después de la semana 13; lista de partidas. Dice cuántas
      órdenes anteriores sin pago registrado no incluye.
    - **Margen por proyecto** (cobranza, super admin): contratado sin IVA − órdenes de compra no canceladas, una columna por concepto
      de costo (hoy solo "Órdenes de compra"), totales por línea de negocio (Helgen / Helgen Energy) y moneda.
@@ -149,7 +152,7 @@ Nada en la Base de datos ni en el libro de compras. Caché (CacheService): `K_RE
   rangos.
 - **Agrupar (`antiguedadEnGrupos`):** cliente (por `cliente_id`) → proyecto; proveedor (por id) → orden. Un grupo es de una moneda:
   un cliente con proyectos en MXN y USD sale dos veces. Grupos del más vencido al menos; totales por moneda (MXN primero).
-- **Flujo (`flujoSemanal`):** ver decisión 7. Cobros = partidas de CxC; pagos = partidas de CxP. Neto = cobros − pagos de la semana;
+- **Flujo (`flujoSemanal`):** ver decisión 7 (semana 1: `etiqueta` "Semana en curso", `parcial`, `diasRestantes` con hoy). Cobros = partidas de CxC; pagos = partidas de CxP. Neto = cobros − pagos de la semana;
   acumulado = suma de netos desde la semana 1. Por moneda.
 - **Margen (`margenPorProyecto`):** contratos Aceptados o Firmados de proyectos no Cancelados ni de prueba. Contratado = `subtotal` (sin
   IVA). Costos = `costosDeOrdenes(órdenes vigentes)` + `costosExtra[folio]`. Margen con `margenProyecto` (el mismo cálculo de la
@@ -198,7 +201,8 @@ Nada en la Base de datos ni en el libro de compras. Caché (CacheService): `K_RE
 `tests/revision6-reportes.test.js` (revisión 6b): cada hallazgo de la revisión con el escenario que fallaba antes del arreglo —
 fecha de lo que no tiene factura igual a Cuentas por pagar (sección 2), órdenes anteriores sin pago registrado (sección 1: pura,
 sembradas por la API como las de la fase 3, interfaz y CSV), contratos desbloqueados con pagos (sección 4: pura, firmado → pago →
-desbloqueo por la API, CxC, flujo, chip y CSV; por firmar sin pagos sigue fuera)—.
+desbloqueo por la API, CxC, flujo, chip y CSV; por firmar sin pagos sigue fuera), semana en curso del flujo (sección 5: domingo,
+lunes y jueves; pantalla y CSV)—.
 
 `bash tests/todas.sh`: 25 archivos + sintaxis de la interfaz, todo en verde.
 

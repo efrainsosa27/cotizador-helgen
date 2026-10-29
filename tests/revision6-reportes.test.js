@@ -5,6 +5,7 @@
 //     fuera de los totales y del flujo; su costo sigue en el margen.
 //  4. Contratos desbloqueados (se firmaron, se desbloquearon y tienen pagos Vigentes): siguen en la antigüedad de CxC y en el flujo,
 //     marcados "Desbloqueado"; uno aceptado sin firmar y sin pagos sigue fuera.
+//  5. Flujo un domingo: la semana 1 es "Semana en curso" (parcial: un domingo solo queda hoy) en pantalla y en el CSV; siguen 13.
 //  2. Fecha base de lo que se debe sin factura: UNA regla para P (vista de la orden), Cuentas por pagar y R (venceSinFactura:
 //     recepción, o entrega, o la orden + días de crédito); el mismo saldo cae en el mismo rango y la misma semana que en Cuentas
 //     por pagar (facturas primero; el resto completo en la fecha del "siguiente" de P sin facturas, también con plan de pagos).
@@ -184,6 +185,23 @@ const L1 = 'OC-' + B.ANIO + '-0900', L2 = 'OC-' + B.ANIO + '-0901'; // órdenes 
   assert(!detalleDe(ok('tania', 'reporteCxc')).some(x => x.folio === p4), 'por firmar sin pagos: fuera');
 }
 
+// ================= 5. Flujo: la semana 1 es la semana en curso (parcial) =================
+{
+  const DOM = '2026-11-01', LUN = '2026-11-02'; // domingo y lunes
+  const cobro = (monto, fecha) => ({ moneda: 'MXN', monto, fecha, proyectoFolio: 'PRY-9-0002', etapa: 'Anticipo' });
+  const f = plain(P.flujoSemanal({ hoy: DOM, cobros: [cobro(100, '2026-10-28'), cobro(200, DOM), cobro(300, LUN)], pagos: [] }));
+  assert.deepEqual(f.semanas[0], { n: 1, desde: '2026-10-26', hasta: DOM, etiqueta: 'Semana en curso', parcial: true, diasRestantes: 1 },
+    'un domingo la semana 1 es la semana en curso y solo queda hoy');
+  assert.equal(f.semanas.length, 13, 'siguen 13 semanas');
+  assert.deepEqual([f.semanas[1].etiqueta, f.semanas[1].parcial, f.semanas[12].hasta], ['Semana 2', false, '2027-01-24']);
+  const M = f.monedas[0].semanas;
+  assert.deepEqual([M[0].etiqueta, M[0].parcial, M[0].diasRestantes, M[0].cobros, M[0].cobrosVencidos, M[1].cobros], ['Semana en curso', true, 1, 300, 100, 300],
+    'lo vencido y lo de hoy en la semana en curso; lo del lunes en la semana 2');
+  const g = plain(P.flujoSemanal({ hoy: LUN, cobros: [], pagos: [] }));
+  assert.deepEqual([g.semanas[0].desde, g.semanas[0].parcial, g.semanas[0].diasRestantes], [LUN, false, 7], 'un lunes la semana en curso está completa');
+  assert.equal(plain(P.flujoSemanal({ hoy: '2026-10-29', cobros: [], pagos: [] })).semanas[0].diasRestantes, 4, 'un jueves quedan 4 días con hoy');
+}
+
 // ================= Interfaz (mod-reportes sobre la app, conectada al servidor simulado) =================
 const vm = require('vm');
 const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
@@ -232,6 +250,15 @@ const esperar = async (k = 30) => { for (let i = 0; i < k; i++) await new Promis
   L.run("verTab('rep')"); await esperar();
   L.run("REPORTES.ver('flujo')"); await esperar();
   assert(/No incluye 2 órdenes anteriores sin pago registrado/.test(L.$('vistaRep').innerHTML), 'el flujo lo dice');
+  // 5. La semana en curso en el flujo y en su CSV (parcial salvo un lunes)
+  const dow = new Date(HOY_ISO + 'T12:00:00Z').getUTCDay(), parcialHoy = dow !== 1;
+  const hF = L.$('vistaRep').innerHTML;
+  assert(/<td style="white-space:nowrap">Semana en curso/.test(hF), 'la semana 1 se llama Semana en curso');
+  assert.equal(/parcial: (solo queda hoy|quedan \d días con hoy)/.test(hF), parcialHoy, 'parcial salvo un lunes');
+  const csvF = L.run("REPORTES.csv('flujo')").split('\r\n');
+  assert(new RegExp('^"MXN","Semana en curso' + (parcialHoy ? ' \\(parcial: ' : '"')).test(csvF[1]), csvF[1]);
+  assert.deepEqual(csvF.slice(1).filter(l => /^"MXN"/.test(l)).map(l => l.split(',')[1]).slice(1, 13), ['2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'],
+    '13 semanas: la en curso y 12 más');
   // 4. El chip "Desbloqueado" en CxC y en las partidas del flujo; columna "Contrato" en el CSV de CxC
   assert(/Desbloqueado<\/span>/.test(L.$('vistaRep').innerHTML), 'partida del flujo marcada');
   const T = montar('tania'); await esperar();

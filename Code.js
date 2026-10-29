@@ -12749,13 +12749,18 @@ function lunesDe(fechaIso) {
  * 1 = de lunes a domingo de la semana de hoy; las demás, las siguientes. Lo vencido (fecha anterior a hoy) cae en la semana 1 y
  * se marca (cobrosVencidos / pagosVencidos y vencido en la partida); lo que vence hoy no está vencido. Sin fecha y después de la
  * semana 13: aparte (no entran al neto). Por moneda (MXN primero; nunca se suman): por semana cobros, pagos, neto = cobros −
- * pagos y acumulado = suma de los netos desde la semana 1 (sin saldo inicial de bancos). Devuelve {hoy, inicio, fin, semanas
- * [{n, desde, hasta}], monedas [{moneda, semanas [{n, desde, hasta, cobros, pagos, neto, acumulado, cobrosVencidos,
- * pagosVencidos}], sinFecha {cobros, pagos}, despues {cobros, pagos}, totales {cobros, pagos, neto}}], partidas}.
+ * pagos y acumulado = suma de los netos desde la semana 1 (sin saldo inicial de bancos). La semana 1 se llama "Semana en curso"
+ * y, si hoy no es lunes, es parcial: parcial = true y diasRestantes = días de hoy al domingo, con hoy (un domingo, 1). Siguen
+ * siendo 13 semanas (revisión 6b: un domingo la semana 1 era casi toda pasado y parecía una semana completa). Devuelve {hoy,
+ * inicio, fin, semanas [{n, desde, hasta, etiqueta, parcial, diasRestantes}], monedas [{moneda, semanas [{n, desde, hasta,
+ * etiqueta, parcial, diasRestantes, cobros, pagos, neto, acumulado, cobrosVencidos, pagosVencidos}], sinFecha {cobros, pagos},
+ * despues {cobros, pagos}, totales {cobros, pagos, neto}}], partidas}.
  */
 function flujoSemanal(d) {
   const n = d.semanas || SEMANAS_FLUJO, inicio = lunesDe(d.hoy);
-  const semanas = Array.from({ length: n }, (_, i) => ({ n: i + 1, desde: sumarDias(inicio, 7 * i), hasta: sumarDias(inicio, 7 * i + 6) }));
+  const semanas = Array.from({ length: n }, (_, i) => ({ n: i + 1, desde: sumarDias(inicio, 7 * i), hasta: sumarDias(inicio, 7 * i + 6),
+    etiqueta: i === 0 ? 'Semana en curso' : 'Semana ' + (i + 1), parcial: i === 0 && d.hoy !== inicio, diasRestantes: 7 }));
+  semanas[0].diasRestantes = diasEntre(d.hoy, semanas[0].hasta) + 1; // con hoy: lunes 7, domingo 1
   const fin = semanas[n - 1].hasta;
   const monedas = {}, partidas = [];
   const de = m => monedas[m] || (monedas[m] = { moneda: m,
@@ -12782,7 +12787,8 @@ function flujoSemanal(d) {
     const filas = M.s.map((x, i) => {
       const neto = x.cobros - x.pagos;
       acum += neto; tc += x.cobros; tp += x.pagos;
-      return { n: i + 1, desde: semanas[i].desde, hasta: semanas[i].hasta, cobros: x.cobros / 100, pagos: x.pagos / 100,
+      return { n: i + 1, desde: semanas[i].desde, hasta: semanas[i].hasta, etiqueta: semanas[i].etiqueta, parcial: semanas[i].parcial,
+        diasRestantes: semanas[i].diasRestantes, cobros: x.cobros / 100, pagos: x.pagos / 100,
         neto: neto / 100, acumulado: acum / 100, cobrosVencidos: x.cobrosVencidos / 100, pagosVencidos: x.pagosVencidos / 100 };
     });
     return { moneda: m, semanas: filas, sinFecha: { cobros: M.sinFecha.cobros / 100, pagos: M.sinFecha.pagos / 100 },
