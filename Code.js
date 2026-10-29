@@ -10064,9 +10064,9 @@ function planAnulacion_(d, objetivo) {
   function pagoProveedor(x) {
     if (!agregar({ clave: 'pgp', folio: x.folio, x: x, proyectoFolio: x.proyectoFolio, estado: x.estado,
       descripcion: [x.folio, dinero(x.monto, x.monedaPago), x.fecha, x.ocFolio].filter(Boolean).join(' · ') })) return;
+    // Revisión del incremento 6: solo quien lo registró (compras). Quien pide o recibe nunca se entera de pagos (§6.13): el aviso
+    // llevaba el folio PGP en el asunto. (Si se anula su requisición u orden, a ellos les avisa ese registro.)
     correo(x.registroEmail);
-    const r = reqDe(x.reqFolio);
-    if (r) correo(r.solicitanteEmail, r.recibeEmail);
     archivo(x.comprobanteId);
   }
   function factura(x) {

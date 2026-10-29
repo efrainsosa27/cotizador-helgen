@@ -16,6 +16,7 @@
 //  8. Al cancelar o anular un pago, un pago que decía "Liquidación" y ya no liquida pasa a Anticipo o Parcial (según si ya se había
 //     recibido algo cuando se registró).
 //  9. El porcentaje de una etapa del plan es un número o un texto con un número (true, [50], "50%"… se rechazan).
+// 10. Anular un pago a proveedor no le manda correo a quien pidió (llevaba el folio PGP en el asunto).
 // Uso: node tests/pagos-revision.test.js .
 'use strict';
 const assert = require('assert');
@@ -396,6 +397,23 @@ const guardado = {}; // lo que usa la sección de interfaz
     cotizacion: { nombre: 'cot.pdf', datos: A.PDF }, idSolicitud: id('q') }).folio;
   falla('efrain', 'autorizarRequisicion', [folio, OCD({ planPago: con(true, 99) })], /debe ser un número mayor a 0/);
   assert.equal(vista(folio).requisicion.estado, 'Solicitada');
+}
+
+// ================= 10. Anular un pago a proveedor no le avisa a quien pidió (r7) =================
+{
+  const s = siempre();
+  const p = pagar(s.req, 400);
+  correosNuevos();
+  ok('leo', 'anular', p.folio, 'Pago capturado por error en la orden', id('an'));
+  const c = correosNuevos();
+  assert(!c.some(x => /obrero/.test(String(x.to))), 'quien pidió no se entera de pagos: ' + JSON.stringify(c.map(x => [x.to, x.subject])));
+  assert(c.some(x => /pedro/.test(String(x.to)) && /PGP-\d{4}-\d{4} · Anulado/.test(x.subject)), 'quien registró el pago sí');
+  assert(!c.some(x => /obrero|rosa/.test(String(x.to)) && /PGP-|\$/.test(x.subject + x.body)));
+  // Anular la requisición completa sí le avisa (sin el folio del pago en el asunto)
+  correosNuevos();
+  ok('leo', 'anular', s.req, 'Requisición duplicada por error', id('an'));
+  const c2 = correosNuevos().filter(x => /obrero/.test(String(x.to)));
+  assert(c2.length && c2.every(x => !/PGP-|\$/.test(x.subject + x.body)), JSON.stringify(c2.map(x => x.subject)));
 }
 
 // ================= Interfaz (al final: es asíncrona; DOM simulado conectado al servidor simulado) =================
