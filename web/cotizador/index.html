@@ -124,12 +124,32 @@
 
 <!-- Inicio de sesión: tapa la app hasta tener un token de Google de @helgen.tech -->
 <div id="login">
+  <!-- Incremento 4: @helgen.tech entra con Google; @helgen.services, con un código por correo (api-web) -->
   <div class="login-envoltura">
     <img id="loginLogo" alt="Helgen">
     <div class="login-caja">
-      <h2>Cotizador Helgen</h2>
-      <p>Inicia sesión con tu cuenta @helgen.tech</p>
-      <div id="gisBoton"></div>
+      <h2>CAPRI</h2>
+      <p class="nota" style="margin:0 0 18px;line-height:1.5">Cotizaciones · Aprobaciones · Pagos · Requisiciones · Inventario</p>
+      <div id="loginGoogle">
+        <p>Entra con tu cuenta @helgen.tech</p>
+        <div id="gisBoton"></div>
+        <p style="margin:18px 0 0"><a href="#" onclick="loginCapri.verPanel('codigo');return false">Soy de @helgen.services</a></p>
+      </div>
+      <div id="loginCodigo" class="oculto" style="text-align:left">
+        <p style="text-align:center">Te mandamos un código de 6 números a tu correo @helgen.services.</p>
+        <label for="loginCorreo">Correo</label>
+        <input id="loginCorreo" type="email" autocomplete="email" placeholder="nombre@helgen.services" maxlength="120"
+               onkeydown="if(event.key==='Enter')loginCapri.pedirCodigo()">
+        <div style="margin-top:10px;text-align:center"><button type="button" id="btnPedirCodigo" class="btn" onclick="loginCapri.pedirCodigo()">Enviar código</button></div>
+        <div id="loginPaso2" class="oculto" style="margin-top:14px">
+          <label for="loginNumero">Código</label>
+          <input id="loginNumero" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456"
+                 style="font-size:20px;letter-spacing:6px;text-align:center" onkeydown="if(event.key==='Enter')loginCapri.entrar()">
+          <div style="margin-top:10px;text-align:center"><button type="button" id="btnEntrarCodigo" class="btn" onclick="loginCapri.entrar()">Entrar</button></div>
+        </div>
+        <p id="loginInfo" class="nota" style="margin:12px 0 0;text-align:center"></p>
+        <p style="margin:14px 0 0;text-align:center"><a href="#" onclick="loginCapri.verPanel('google');return false">Entrar con Google (@helgen.tech)</a></p>
+      </div>
       <p id="loginMsg"></p>
     </div>
   </div>
@@ -754,79 +774,168 @@
 
 <script id="api-web">
   // Fuera de Apps Script (Cloudflare) no existe google.script.run: esta capa lo imita con fetch al doPost.
-  // Cada llamada lleva el ID token de Google; el servidor lo verifica (aud, dominio) antes de ejecutar nada.
-  // Dentro de Apps Script no hace nada y se usa el original.
+  // Cada llamada lleva la sesión: el ID token de Google (@helgen.tech) o la sesión de CAPRI (@helgen.services, que entra con un
+  // código por correo; empieza con "capri."). El servidor la verifica antes de ejecutar nada. Dentro de Apps Script no hace nada.
+  // Incremento 4: la sesión vive en localStorage (sigue en pestañas nuevas y al reabrir el navegador). Si la de Google venció,
+  // primero se intenta entrar sin clics (One Tap con auto_select) y solo si Google no puede se muestra la pantalla de entrada.
+  // La de CAPRI dura 30 días y el servidor manda una nueva (sesionCapri) cuando le quedan menos de 15.
   (function () {
     if (window.google && google.script && google.script.run) return;
     const API_URL = 'https://script.google.com/macros/s/AKfycbwBjF7ra_4O8INsxBq0eh-4r-BlSsJ4LLxcJgVCPRpx1U1a-Pz1CUSdYtvj_Mh0S6y2/exec';
     // Client ID de OAuth (no es secreto). Debe ser el mismo que CLIENT_ID_GOOGLE en Code.js (proyecto de Apps Script 1GsH8Dja…).
     const CLIENT_ID_GOOGLE = '884526916417-cn5fh45io0nnpvlad2439thkpius4063.apps.googleusercontent.com';
-    const DOMINIO = 'helgen.tech';
-    const CLAVE_SESION = 'cotizadorHelgenSesion';
+    const DOMINIO = 'helgen.tech', DOMINIO_SERVICIOS = 'helgen.services', PREFIJO_CAPRI = 'capri.';
+    const CLAVE_SESION = 'cotizadorHelgenSesion'; // ID token de Google (antes en sessionStorage: se migra solo)
+    const CLAVE_CAPRI = 'capriSesion';            // sesión de CAPRI (@helgen.services)
+    const CLAVE_CORREO = 'capriCorreoCodigo';     // último correo con el que se pidió código (solo para llenar el campo)
+    const PUBLICAS = ['solicitarCodigo', 'verificarCodigo']; // se llaman sin sesión (no esperan en la cola)
     const $ = id => document.getElementById(id);
+    const guardar = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+    const leer = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+    const borrar = k => { try { localStorage.removeItem(k); } catch (e) {} };
 
     // ---- Sesión ----
-    let token = null, expira = 0, gisListo = false, correo = '';
+    let token = null, expira = 0, correo = '', tipo = ''; // tipo: 'google' o 'capri'
+    let gisListo = false, panel = 'google', accesoNegado = false;
+    let silencio = 0, silencioAlCargar = false, ultimoSilencio = 0; // intento de entrar sin clics
     const pendientes = []; // llamadas que esperan a que se inicie sesión
 
-    // Solo para mostrar el nombre y saber cuándo expira; quien decide es el servidor al verificar el token
+    // Solo para mostrar el nombre y saber cuándo expira; quien decide es el servidor al verificar la sesión
     function leerToken(t) {
       const b = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
       const bytes = Uint8Array.from(atob(b + '==='.slice((b.length + 3) % 4)), c => c.charCodeAt(0));
       return JSON.parse(new TextDecoder().decode(bytes));
     }
+    function datosSesion(t) {
+      const d = leerToken(t);
+      if (t.indexOf(PREFIJO_CAPRI) === 0) return { tipo: 'capri', email: d.e, nombre: d.n, exp: d.x };
+      return { tipo: 'google', email: d.email, exp: d.exp, nombre: [d.given_name, d.family_name].filter(Boolean).join(' ') || d.name };
+    }
     const vigente = () => !!token && expira * 1000 > Date.now() + 60000; // margen de 1 min
 
-    function pintarUsuario(datos) {
-      const nombre = [datos.given_name, datos.family_name].filter(Boolean).join(' ') || datos.name || datos.email;
-      $('usuarioNombre').textContent = nombre;
-      $('usuarioNombre').title = datos.email || '';
+    function pintarUsuario(d) {
+      $('usuarioNombre').textContent = d.nombre || d.email || '';
+      $('usuarioNombre').title = d.email || '';
       $('usuario').classList.remove('oculto');
     }
 
-    function guardarSesion(t) {
-      const datos = leerToken(t);
-      token = t; expira = Number(datos.exp) || 0; correo = String(datos.email || '').toLowerCase();
-      try { sessionStorage.setItem(CLAVE_SESION, t); } catch (e) {}
-      pintarUsuario(datos);
+    function guardarSesion(t, sinAviso) {
+      const d = datosSesion(t);
+      token = t; expira = Number(d.exp) || 0; correo = String(d.email || '').toLowerCase(); tipo = d.tipo;
+      guardar(tipo === 'capri' ? CLAVE_CAPRI : CLAVE_SESION, t);
+      borrar(tipo === 'capri' ? CLAVE_SESION : CLAVE_CAPRI); // una sola sesión a la vez
+      try { sessionStorage.removeItem(CLAVE_SESION); } catch (e) {}
+      pintarUsuario(d);
       // La interfaz dibuja al instante las pestañas de la última sesión de este correo (solo interfaz)
-      document.dispatchEvent(new CustomEvent('sesion-lista', { detail: correo }));
+      if (!sinAviso) document.dispatchEvent(new CustomEvent('sesion-lista', { detail: correo }));
     }
 
     function olvidarSesion() {
-      token = null; expira = 0; correo = '';
+      token = null; expira = 0; correo = ''; tipo = '';
+      borrar(CLAVE_SESION); borrar(CLAVE_CAPRI);
       try { sessionStorage.removeItem(CLAVE_SESION); } catch (e) {}
       $('usuario').classList.add('oculto');
     }
 
-    function mostrarLogin(mensaje) {
+    /** Pantalla de entrada: 'google' (botón de Google) o 'codigo' (@helgen.services). */
+    function verPanel(p) {
+      panel = p === 'codigo' ? 'codigo' : 'google';
+      $('loginGoogle').classList.toggle('oculto', panel !== 'google');
+      $('loginCodigo').classList.toggle('oculto', panel !== 'codigo');
+      $('loginMsg').textContent = '';
+      if (panel === 'codigo' && !$('loginCorreo').value) $('loginCorreo').value = leer(CLAVE_CORREO) || '';
+    }
+
+    function mostrarLogin(mensaje, modo, sinOneTap) {
       const yaVisible = !$('login').classList.contains('oculto');
-      $('loginMsg').textContent = mensaje || '';
+      if (modo) verPanel(modo);
+      if (mensaje != null || !yaVisible) $('loginMsg').textContent = mensaje || ''; // sin mensaje nuevo, se queda el que había
       $('login').classList.remove('oculto');
-      if (gisListo && !yaVisible) google.accounts.id.prompt(); // One Tap; el botón queda como respaldo
+      // One Tap; el botón queda como respaldo. Nunca después de ACCESO: con auto_select volvería a entrar sola (ciclo)
+      if (gisListo && !yaVisible && !sinOneTap && panel === 'google' && !accesoNegado) google.accounts.id.prompt();
     }
 
     function pedirSesion(mensaje) {
+      const modo = tipo === 'capri' ? 'codigo' : 'google';
       olvidarSesion();
-      mostrarLogin(mensaje);
+      mostrarLogin(mensaje, modo);
     }
 
-    // Respuesta de Google Identity Services al elegir cuenta
-    function alIniciarSesion(resp) {
-      let datos;
-      try { datos = leerToken(resp.credential); } catch (e) { mostrarLogin('No se pudo leer la sesión. Intenta de nuevo.'); return; }
-      if (datos.hd !== DOMINIO) { mostrarLogin('Solo se permiten cuentas @' + DOMINIO + '.'); return; }
-      guardarSesion(resp.credential);
+    /** Ya hay sesión: se esconde la pantalla de entrada y siguen las llamadas en espera (después de ACCESO, carga limpia). */
+    function entro() {
       $('login').classList.add('oculto');
+      $('loginMsg').textContent = '';
+      if (accesoNegado) { location.reload(); return; }
       pendientes.splice(0).forEach(f => f());
+    }
+
+    // Respuesta de Google Identity Services al elegir cuenta (o al entrar sin clics)
+    function alIniciarSesion(resp) {
+      terminarSilencio();
+      let datos;
+      try { datos = leerToken(resp.credential); } catch (e) { mostrarLogin('No se pudo leer la sesión. Intenta de nuevo.', 'google'); return; }
+      if (datos.hd !== DOMINIO) { mostrarLogin('Solo se permiten cuentas @' + DOMINIO + '.', 'google'); return; }
+      guardarSesion(resp.credential);
+      entro();
+    }
+
+    /**
+     * La sesión de Google dura ~1 h: One Tap con auto_select vuelve a entrar sin clics. Si Google no puede (varias cuentas, la
+     * persona lo cerró, espera entre intentos), se muestra la pantalla de entrada; con avisar = false (todavía vigente), no.
+     */
+    function entrarSinClics(avisar) {
+      if (silencio || accesoNegado) return;
+      if (!gisListo) { if (avisar !== false) silencioAlCargar = true; return; } // iniciarGis lo intenta al cargar Google
+      if (avisar === false && Date.now() - ultimoSilencio < 120000) return;
+      ultimoSilencio = Date.now();
+      const fallo = () => { terminarSilencio(); if (avisar !== false && !vigente()) mostrarLogin('', 'google', true); };
+      silencio = setTimeout(fallo, 15000);
+      try {
+        google.accounts.id.prompt(n => {
+          if (!silencio || !n) return;
+          const es = f => { try { return !!(n[f] && n[f]()); } catch (e) { return false; } };
+          let razon = '';
+          try { razon = n.getDismissedReason ? n.getDismissedReason() : ''; } catch (e) { razon = ''; }
+          if (es('isNotDisplayed') || es('isSkippedMoment') || (es('isDismissedMoment') && razon !== 'credential_returned')) fallo();
+        });
+      } catch (e) { fallo(); }
+    }
+    function terminarSilencio() { if (silencio) clearTimeout(silencio); silencio = 0; }
+
+    /** Una llamada no tiene sesión vigente (ya quedó en la cola). */
+    function sinSesion() {
+      if (tipo === 'google') entrarSinClics(true);
+      else if (tipo === 'capri') pedirSesion('Tu sesión expiró. Pide un código nuevo para entrar.');
+      else mostrarLogin();
+    }
+
+    /** La cuenta no tiene acceso (desactivada o sin alta): mensaje en la pantalla de entrada, sin reintentos ni entrada automática. */
+    function sinAcceso(mensaje) {
+      const modo = tipo === 'capri' ? 'codigo' : 'google';
+      accesoNegado = true;
+      pendientes.length = 0;
+      terminarSilencio();
+      if (gisListo) { try { google.accounts.id.disableAutoSelect(); } catch (e) {} }
+      olvidarSesion();
+      mostrarLogin(mensaje || 'Tu cuenta no tiene acceso a CAPRI. Pide ayuda a un administrador.', modo);
     }
 
     window.cerrarSesion = function () {
       if (gisListo) google.accounts.id.disableAutoSelect();
+      terminarSilencio();
       pedirSesion('Cerraste sesión.');
     };
 
     // ---- Llamadas al servidor ----
+    // text/plain: es una "solicitud simple" y el navegador no hace la consulta CORS previa (Apps Script no la responde)
+    function enviar(cuerpo) {
+      return fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(cuerpo) })
+        .then(r => {
+          if (!r.ok) return { ok: false, error: 'El servidor respondió ' + r.status + '.' };
+          return r.json().catch(() => ({ ok: false, error: 'Respuesta inválida del servidor.' }));
+        }, err => ({ ok: false, error: 'No se pudo conectar con el servidor. Revisa tu conexión e intenta de nuevo. (' + err.message + ')' }));
+    }
+
     function llamar(funcion, args, alExito, alFallar, esReintento) {
       // El error lleva el codigo del servidor (p. ej. 'PROYECTO') para que la interfaz reaccione
       const fallar = (msg, codigo) => {
@@ -834,31 +943,42 @@
         if (alFallar) alFallar(e); else console.error(msg);
       };
       if (!/^https:\/\//.test(API_URL)) { fallar('Falta configurar la URL del servidor (API_URL).'); return; }
-      if (!vigente()) {
-        pendientes.push(() => llamar(funcion, args, alExito, alFallar, esReintento));
-        if (token) pedirSesion('Tu sesión expiró. Vuelve a iniciar sesión.'); else mostrarLogin();
-        return;
-      }
-      // text/plain: es una "solicitud simple" y el navegador no hace la consulta CORS previa (Apps Script no la responde)
-      fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                       body: JSON.stringify({ funcion: funcion, args: args, token: token }) })
-        .then(r => {
-          if (!r.ok) return { ok: false, error: 'El servidor respondió ' + r.status + '.' };
-          return r.json().catch(() => ({ ok: false, error: 'Respuesta inválida del servidor.' }));
-        }, err => ({ ok: false, error: 'No se pudo conectar con el servidor. Revisa tu conexión e intenta de nuevo. (' + err.message + ')' }))
-        .then(res => {
+      // Pedir y comprobar el código de entrada: sin sesión (no esperan en la cola)
+      if (PUBLICAS.indexOf(funcion) !== -1) {
+        enviar({ funcion: funcion, args: args }).then(res => {
           if (res && res.ok) { if (alExito) alExito(res.datos); return; }
-          if (res && res.codigo === 'SESION') {
-            // Una vez: se pide sesión de nuevo y la llamada se repite al entrar (guardar es idempotente por idSolicitud)
-            if (!esReintento) {
-              pendientes.push(() => llamar(funcion, args, alExito, alFallar, true));
-              pedirSesion(res.error);
-              return;
-            }
-            pedirSesion(res.error);
-          }
           fallar((res && res.error) || 'Respuesta inválida del servidor.', res && res.codigo);
         });
+        return;
+      }
+      if (!vigente()) {
+        pendientes.push(() => llamar(funcion, args, alExito, alFallar, esReintento));
+        sinSesion();
+        return;
+      }
+      if (tipo === 'google' && expira * 1000 - Date.now() < 300000) entrarSinClics(false); // por vencer: se renueva sin esperar
+      enviar({ funcion: funcion, args: args, token: token }).then(res => {
+        if (res && res.ok) {
+          // Sesión de CAPRI renovada por el servidor (le quedaban menos de 15 días)
+          const nueva = res.datos && res.datos.sesionCapri;
+          if (tipo === 'capri' && typeof nueva === 'string' && nueva.indexOf(PREFIJO_CAPRI) === 0) {
+            try { guardarSesion(nueva, true); } catch (e) {}
+          }
+          if (alExito) alExito(res.datos);
+          return;
+        }
+        if (res && res.codigo === 'ACCESO') { sinAcceso(res.error); fallar(res.error, 'ACCESO'); return; }
+        if (res && res.codigo === 'SESION') {
+          // Una vez: se pide sesión de nuevo y la llamada se repite al entrar (guardar es idempotente por idSolicitud)
+          if (!esReintento) {
+            pendientes.push(() => llamar(funcion, args, alExito, alFallar, true));
+            pedirSesion(res.error);
+            return;
+          }
+          pedirSesion(res.error);
+        }
+        fallar((res && res.error) || 'Respuesta inválida del servidor.', res && res.codigo);
+      });
     }
 
     // Igual que google.script.run: withSuccessHandler / withFailureHandler encadenables y luego la función
@@ -878,6 +998,49 @@
     // Para la sincronización: no consultar sin sesión (si no, las consultas se forman en cola y abren el inicio de sesión)
     window.sesionVigente = vigente;
     window.correoSesion = () => correo;
+    window.tipoSesion = () => tipo; // 'google', 'capri' o '' (sin sesión)
+
+    // ---- Entrar con código (@helgen.services) ----
+    const avisoLogin = t => { $('loginMsg').textContent = t || ''; };
+    function revisarCorreo(c) {
+      if (!c) return 'Escribe tu correo @' + DOMINIO_SERVICIOS + '.';
+      if (c.slice(-DOMINIO.length - 1) === '@' + DOMINIO) return 'Las cuentas @' + DOMINIO + ' entran con el botón de Google.';
+      if (!/^[a-z0-9._%+-]+@helgen\.services$/.test(c)) return 'Escribe un correo @' + DOMINIO_SERVICIOS + ' válido.';
+      return '';
+    }
+    function pedirCodigo() {
+      const c = String($('loginCorreo').value || '').trim().toLowerCase(), error = revisarCorreo(c);
+      avisoLogin(error); $('loginInfo').textContent = '';
+      if (error) return;
+      const b = $('btnPedirCodigo');
+      if (b.disabled) return;
+      b.disabled = true; $('loginInfo').textContent = 'Enviando…';
+      llamar('solicitarCodigo', [c], r => {
+        b.disabled = false; guardar(CLAVE_CORREO, c);
+        $('loginInfo').textContent = (r && r.mensaje) || 'Si el correo está dado de alta, te llegó un código.';
+        $('loginPaso2').classList.remove('oculto'); b.textContent = 'Enviar otro código';
+        try { $('loginNumero').focus(); } catch (e) {}
+      }, e => { b.disabled = false; $('loginInfo').textContent = ''; avisoLogin(e.message); });
+    }
+    function entrarConCodigo() {
+      const c = String($('loginCorreo').value || '').trim().toLowerCase(), error = revisarCorreo(c);
+      if (error) { avisoLogin(error); return; }
+      const n = String($('loginNumero').value || '').replace(/\D/g, '');
+      if (n.length !== 6) { avisoLogin('El código son 6 números.'); return; }
+      const b = $('btnEntrarCodigo');
+      if (b.disabled) return;
+      b.disabled = true; avisoLogin('');
+      llamar('verificarCodigo', [c, n], r => {
+        b.disabled = false; $('loginNumero').value = ''; $('loginInfo').textContent = '';
+        $('loginPaso2').classList.add('oculto'); $('btnPedirCodigo').textContent = 'Enviar código';
+        guardarSesion(r.token);
+        entro();
+      }, e => { b.disabled = false; avisoLogin(e.message); });
+    }
+    window.loginCapri = {
+      verPanel: p => { verPanel(p); if (panel === 'google' && gisListo && !accesoNegado) google.accounts.id.prompt(); },
+      pedirCodigo: pedirCodigo, entrar: entrarConCodigo,
+    };
 
     // ---- Google Identity Services (se carga con el <script> de accounts.google.com, abajo) ----
     window.iniciarGis = function () {
@@ -896,19 +1059,34 @@
         theme: 'outline', size: 'large', shape: 'pill', text: 'signin_with', locale: 'es-419', width: 280,
       });
       gisListo = true;
-      if (!$('login').classList.contains('oculto')) google.accounts.id.prompt();
+      if (silencioAlCargar) { silencioAlCargar = false; entrarSinClics(true); }
+      else if (!$('login').classList.contains('oculto') && panel === 'google' && !accesoNegado) google.accounts.id.prompt();
     };
     window.errorGis = function () {
-      mostrarLogin('No se pudo cargar el inicio de sesión de Google. Revisa tu conexión y recarga la página.');
+      if (tipo === 'capri' || panel === 'codigo') return; // la entrada con código no necesita Google
+      mostrarLogin('No se pudo cargar el inicio de sesión de Google. Revisa tu conexión y recarga la página.', 'google');
     };
+    // Al volver a la pestaña con la sesión de Google vencida: se intenta entrar sin clics de una vez
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && tipo === 'google' && !vigente()) entrarSinClics(true);
+    });
 
-    // Al cargar: el logo de la pantalla de entrada es el mismo del encabezado; se reutiliza una sesión vigente
+    // Al cargar: el logo de la pantalla de entrada es el mismo del encabezado; se reutiliza la sesión guardada
     $('loginLogo').src = document.querySelector('header img').src;
+    let guardadaG = leer(CLAVE_SESION);
+    const guardadaC = leer(CLAVE_CAPRI);
+    if (!guardadaG) { try { guardadaG = sessionStorage.getItem(CLAVE_SESION); } catch (e) {} } // la guardaba la versión anterior
     try {
-      const guardado = sessionStorage.getItem(CLAVE_SESION);
-      if (guardado) guardarSesion(guardado);
+      if (guardadaC) guardarSesion(guardadaC); else if (guardadaG) guardarSesion(guardadaG);
     } catch (e) { olvidarSesion(); }
-    if (vigente()) $('login').classList.add('oculto'); else olvidarSesion();
+    if (vigente()) $('login').classList.add('oculto');
+    else if (tipo === 'google') { $('login').classList.add('oculto'); entrarSinClics(true); } // venció: sin clics si se puede
+    else if (tipo === 'capri') {
+      const c = correo;
+      olvidarSesion();
+      $('loginCorreo').value = c;
+      mostrarLogin('Tu sesión expiró. Pide un código nuevo para entrar.', 'codigo');
+    } else olvidarSesion();
   })();
 </script>
 <script src="https://accounts.google.com/gsi/client" async onload="iniciarGis()" onerror="errorGis()"></script>
@@ -2168,8 +2346,10 @@
       (rq.fechaRequerida ? ' · Para el ' + esc(fechaMx(rq.fechaRequerida)) : '') + (rq.origenFolio ? ' · Separada de ' + esc(rq.origenFolio) : '') +
       (rq.estado === 'Aprobada' && rq.motivo ? '<br><b>Regresada a compras:</b> ' + esc(rq.motivo) : '') +
       (rq.cotizacionId ? '<br>' + ligaArchivo(rq.folio, rq.cotizacionId, 'Ver la cotización que adjuntó quien pidió') : '');
-    $('opsAviso').textContent = v.esPropia && ['Solicitada', 'Cotizada'].indexOf(rq.estado) !== -1 ? 'Es tu requisición: la aprueba otra persona de operaciones.'
-      : v.preparoPropuesta && rq.estado === 'Cotizada' ? 'Tú preparaste la propuesta: el visto bueno lo da otra persona de operaciones.' : '';
+    $('opsAviso').textContent = (v.esPropia && ['Solicitada', 'Cotizada'].indexOf(rq.estado) !== -1 ? 'Es tu requisición: la aprueba otra persona de operaciones.'
+      : v.preparoPropuesta && rq.estado === 'Cotizada' ? 'Tú preparaste la propuesta: el visto bueno lo da otra persona de operaciones.' : '') +
+      (v.excepcionSuperAdmin && ['Solicitada', 'Cotizada'].indexOf(rq.estado) !== -1
+        ? ' Como super admin puedes hacerlo tú, con el motivo por escrito (queda en la bitácora).' : '');
     const ap = v.puedeAprobar;
     $('opsRenglonesEnc').innerHTML = '<tr><th>#</th><th>Material</th><th class="num">Pidió</th><th>Notas</th>' +
       (ap ? '<th>¿Se compra?</th><th class="num" style="width:110px">Cantidad</th><th>Comentario (obligatorio si no)</th>' : '<th>Decisión</th>') + '</tr>';
@@ -2242,9 +2422,29 @@
       mostrarError('Escribe por qué no se compra cada renglón que marcaste con "No" (lo verá quien lo pidió).'); return;
     }
     if (!renglones.some(x => x.aprobado)) { mostrarError('No aprobaste ningún renglón: si no se compra nada, usa "Rechazar todo".'); return; }
-    accionCob('btnOpsAprobar', 'aprobarRequisicion', [v.requisicion.folio, { version: v.version, prioridad: $('opsPrioridad').value,
+    accionConExcepcion('btnOpsAprobar', 'aprobarRequisicion', [v.requisicion.folio, { version: v.version, prioridad: $('opsPrioridad').value,
       nota: $('opsNota').value, renglones: renglones }],
       x => { pintarOps(x); aviso('ok', 'Requisición <b>' + esc(x.requisicion.folio) + '</b> aprobada: pasa a compras.'); });
+  }
+  /**
+   * Como accionCob, para aprobar y dar el visto bueno (incremento 4): si el servidor lo niega por separación de funciones (es tuya
+   * o tú preparaste la propuesta) y eres super admin, pide el motivo (≥ 10 caracteres) y repite con él como último argumento.
+   */
+  function accionConExcepcion(boton, funcion, args, alExito, conMotivo) {
+    const b = $(boton);
+    if (b) { if (b.disabled) return; b.disabled = true; }
+    const listo = () => { if (b) b.disabled = false; };
+    google.script.run.withSuccessHandler(x => { listo(); alExito(x); }).withFailureHandler(err => {
+      listo();
+      if (!conMotivo && err && err.codigo === 'PERMISO' && PERMISOS.superadmin) {
+        const motivo = window.prompt(err.message + '\n\nMotivo de la excepción (mínimo 10 caracteres; queda en la bitácora):');
+        if (motivo == null) return;
+        if (motivo.trim().length < 10) { mostrarError('Escribe el motivo de la excepción (mínimo 10 caracteres).'); return; }
+        accionConExcepcion(boton, funcion, args.concat([motivo.trim()]), alExito, true);
+        return;
+      }
+      mostrarError(err);
+    })[funcion](...args);
   }
   function revisarOps(funcion) {
     const v = OPSV;
@@ -2261,7 +2461,7 @@
     const pr = v.propuesta;
     if (!window.confirm('¿Visto bueno a la propuesta de ' + pr.proveedor.razonSocial + ' por ' + dinero(pr.total, pr.moneda).replace(/&amp;/g, '&') +
       '? Se emite la orden de compra.')) return;
-    accionCob('btnOpsVisto', 'autorizarPropuesta', [v.requisicion.folio, pr.version, ID_VOBO, pr.huella], r => {
+    accionConExcepcion('btnOpsVisto', 'autorizarPropuesta', [v.requisicion.folio, pr.version, ID_VOBO, pr.huella], r => {
       pintarOps(r.vista); aviso('ok', 'Visto bueno: se emitió la orden <b>' + esc(r.ocFolio) + '</b> de ' + esc(r.folio) + '.');
     });
   }
@@ -3077,7 +3277,242 @@
 
 <!-- ===== Incremento 4 (CAPRI): un bloque de script por módulo; cada uno se registra con registrarModulo ===== -->
 <script id="mod-identidad">
-  // Identidad: Permisos, delegaciones, entrar con código (@helgen.services) y sesión que se mantiene
+  // Identidad: Permisos, delegaciones, entrar con código (@helgen.services) y sesión que se mantiene.
+  // Aquí: los bloques #adminPermisos (solo super admin) y #adminDelegaciones (super admin y quien tiene Aprobaciones o Compras)
+  // de Administración. La pantalla de entrada y la sesión viven en <script id="api-web">. El servidor revisa todo otra vez.
+  (function () {
+    const $ = id => document.getElementById(id);
+    const fecha = iso => typeof fechaMx === 'function' ? fechaMx(iso) : String(iso || '');
+    let VP = null, VD = null;          // páginas de Permisos y Delegaciones (las manda el servidor)
+    let EDITA = null, NUEVO = true;    // correo que se edita en el formulario de Permisos (null = alta)
+    let verP = false, verD = false;    // qué bloques puede ver (solo interfaz)
+
+    $('adminPermisos').innerHTML =
+      '<div class="modulo"><h2>Permisos</h2>' +
+      '<p class="nota" style="margin-top:0">Quién entra a CAPRI y qué puede hacer. Las cuentas @helgen.tech entran con Google; las ' +
+      '@helgen.services, con un código por correo (por ahora solo "Solo requisiciones"). Desactivar a alguien le quita el acceso en su ' +
+      'siguiente clic. Cada cambio queda en la bitácora.</p>' +
+      '<div id="admSinLibro" class="aviso error oculto"></div>' +
+      '<div class="acciones" style="margin:0 0 12px"><input id="admBuscar" placeholder="Buscar por correo, nombre, rol o sitio" style="max-width:340px">' +
+      '<button type="button" class="btn btn-sec" id="btnAdmNuevo" onclick="identidad.nuevoUsuario()">Agregar usuario</button></div>' +
+      '<div id="admForm" class="sat oculto" style="margin:0 0 14px"><div class="sat-titulo" id="admFormTitulo">Agregar usuario</div>' +
+      '<div class="grid"><div><label for="admCorreo">Correo *</label><input id="admCorreo" type="email" maxlength="120" placeholder="nombre@helgen.tech"></div>' +
+      '<div><label for="admNombre">Nombre *</label><input id="admNombre" maxlength="80"></div>' +
+      '<div><label for="admSitio">Sitio</label><select id="admSitio"></select></div>' +
+      '<div><label for="admNotas">Notas</label><input id="admNotas" maxlength="200"></div></div>' +
+      '<label style="margin-top:12px">Roles *</label><div id="admRoles" style="display:flex;flex-wrap:wrap;gap:6px 18px"></div>' +
+      '<p class="nota" id="admRolesNota" style="margin:6px 0 0"></p>' +
+      '<label style="display:flex;gap:6px;align-items:center;margin-top:10px;color:#1F2937"><input type="checkbox" id="admActivo" style="width:auto"> ' +
+      'Activo (puede entrar a CAPRI)</label>' +
+      '<div class="acciones"><button type="button" class="btn" id="btnAdmGuardar" onclick="identidad.guardarUsuario()">Guardar</button>' +
+      '<button type="button" class="btn btn-sec" onclick="identidad.cerrarForm()">Cancelar</button></div></div>' +
+      '<div style="overflow-x:auto"><table><thead><tr><th>Persona</th><th>Roles</th><th>Sitio</th><th>Estado</th><th></th></tr></thead>' +
+      '<tbody id="admUsuarios"><tr><td colspan="5" class="nota">Cargando…</td></tr></tbody></table></div></div>';
+
+    $('adminDelegaciones').innerHTML =
+      '<div class="modulo"><h2>Delegaciones</h2>' +
+      '<p class="nota" style="margin-top:0">Entrega tus roles de Aprobaciones o Compras a otra persona por unas fechas (vacaciones, viaje). ' +
+      'Los dos pueden actuar mientras dure y termina sola (máximo 90 días). Nadie aprueba lo que pidió: tampoco quien recibe la delegación.</p>' +
+      '<div id="admDelForm" class="sat" style="margin:0 0 14px"><div class="sat-titulo">Nueva delegación</div>' +
+      '<div class="grid"><div id="admDelDeCaja" class="oculto"><label for="admDelDe">Quién delega</label><select id="admDelDe"></select></div>' +
+      '<div><label for="admDelA">A quién *</label><select id="admDelA"></select></div>' +
+      '<div><label for="admDelDesde">Desde *</label><input id="admDelDesde" type="date"></div>' +
+      '<div><label for="admDelHasta">Hasta *</label><input id="admDelHasta" type="date"></div></div>' +
+      '<label style="margin-top:12px">Qué delegas *</label><div id="admDelRoles" style="display:flex;flex-wrap:wrap;gap:6px 18px"></div>' +
+      '<div class="acciones"><button type="button" class="btn" id="btnAdmDelegar" onclick="identidad.crearDelegacion()">Delegar</button></div></div>' +
+      '<p class="nota oculto" id="admDelSinRoles" style="margin:0 0 12px">No tienes roles propios que se puedan delegar (Aprobaciones o Compras).</p>' +
+      '<div style="overflow-x:auto"><table><thead><tr><th>De</th><th>A</th><th>Qué</th><th>Fechas</th><th>Estado</th><th></th></tr></thead>' +
+      '<tbody id="admDelegLista"><tr><td colspan="6" class="nota">Cargando…</td></tr></tbody></table></div></div>';
+
+    // ---- Permisos ----
+    function cargarPermisos() {
+      google.script.run.withSuccessHandler(v => { VP = v; pintarUsuarios(); }).withFailureHandler(mostrarError).listarUsuarios();
+    }
+    const nombreRol = clave => ((VP && VP.roles || []).find(r => r.clave === clave) || { nombre: clave }).nombre;
+    function pintarUsuarios() {
+      if (!VP) return;
+      $('admSinLibro').classList.toggle('oculto', !!VP.libro);
+      $('admSinLibro').textContent = VP.libro ? '' : 'Falta preparar CAPRI (prepararCapri desde el editor de Apps Script): mientras, los roles ' +
+        'salen de Script Properties y aquí solo se pueden ver.';
+      $('btnAdmNuevo').disabled = !VP.libro;
+      const q = String($('admBuscar').value || '').trim().toLowerCase();
+      const lista = VP.usuarios.filter(u => !q || [u.correo, u.nombre, u.sitio].concat(u.roles.map(nombreRol)).join(' ').toLowerCase().indexOf(q) !== -1);
+      $('admUsuarios').innerHTML = lista.length ? lista.map(u => '<tr' + (u.activo ? '' : ' style="color:var(--gris)"') + '><td><b>' +
+        esc(u.nombre || u.correo) + '</b><div class="nota">' + esc(u.correo) + (u.metodo === 'codigo' ? ' · entra con código' : '') + '</div></td><td>' +
+        (u.raiz ? '<span class="chip firmado">Super admin raíz</span> ' : '') +
+        u.roles.filter(r => !(u.raiz && r === 'superadmin')).map(r => '<span class="chip">' + esc(nombreRol(r)) + '</span>').join(' ') +
+        '</td><td>' + esc(u.sitio || '—') + '</td><td>' + (u.activo ? '<span class="chip firmado">Activo</span>' : '<span class="chip cancelado">Desactivado</span>') +
+        (u.actualizo ? '<div class="nota">' + esc(u.actualizo) + (u.actualizado ? ' · ' + esc(fecha(u.actualizado)) : '') + '</div>' : '') +
+        '</td><td>' + (VP.libro ? '<button type="button" class="btn btn-sec" style="padding:6px 12px;font-size:12px" onclick="identidad.editarUsuario(\'' +
+        esc(u.correo) + '\')">' + (u.enLista ? 'Editar' : 'Agregar a la lista') + '</button>' : '') + '</td></tr>').join('')
+        : '<tr><td colspan="5" class="nota">' + (q ? 'Nadie coincide con la búsqueda.' : 'Todavía no hay usuarios.') + '</td></tr>';
+    }
+    function pintarRoles() {
+      $('admRoles').innerHTML = VP.roles.map(r => '<label style="display:flex;gap:6px;align-items:center;margin:0;color:#1F2937">' +
+        '<input type="checkbox" id="admRol_' + esc(r.clave) + '" style="width:auto"> ' + esc(r.nombre) + '</label>').join('');
+      VP.roles.forEach(r => { $('admRol_' + r.clave).checked = false; $('admRol_' + r.clave).disabled = false;
+        $('admRol_' + r.clave).onchange = () => reglasRoles(); });
+      $('admSitio').innerHTML = '<option value="">Sin sitio</option>' + (VP.sitios || []).filter(s => s.codigo)
+        .map(s => '<option value="' + esc(s.codigo) + '">' + esc(s.codigo + ' · ' + s.nombre) + '</option>').join('');
+    }
+    const esServicios = c => /@helgen\.services$/i.test(String(c || '').trim());
+    /** Solo interfaz (el servidor vuelve a revisar): @helgen.services solo "Solo requisiciones"; esta solo con Aprobaciones; raíz y uno mismo. */
+    function reglasRoles() {
+      if (!VP) return;
+      const correo = String($('admCorreo').value || '').trim().toLowerCase(), serv = esServicios(correo);
+      const u = EDITA ? VP.usuarios.find(x => x.correo === EDITA) : null;
+      const raiz = !!(u && u.raiz), yo = !!(u && u.correo === VP.yo);
+      const solo = !serv && $('admRol_solo_requisicion').checked;
+      VP.roles.forEach(r => {
+        const c = $('admRol_' + r.clave);
+        let fijo = null; // true = marcado sin poder cambiarlo; false = sin marcar sin poder cambiarlo; null = libre
+        if (serv) fijo = VP.rolesServicios.indexOf(r.clave) !== -1;
+        else if (r.clave === 'superadmin' && (raiz || (yo && u.roles.indexOf('superadmin') !== -1))) fijo = true;
+        else if (solo && r.clave !== 'solo_requisicion' && VP.rolesConSolo.indexOf(r.clave) === -1) fijo = false;
+        if (fijo !== null) c.checked = fijo;
+        c.disabled = fijo !== null;
+      });
+      $('admRolesNota').textContent = serv ? 'Las cuentas @helgen.services por ahora solo tienen "Solo requisiciones" y entran con un código por correo.'
+        : solo ? '"Solo requisiciones" solo se combina con Aprobaciones.'
+        : $('admRol_superadmin').checked ? 'Super admin tiene todos los roles y la Administración.' : '';
+      $('admActivo').disabled = raiz || (yo && !!u.activo);
+      if (raiz) $('admActivo').checked = true;
+    }
+    function abrirForm(titulo) {
+      pintarRoles();
+      $('admFormTitulo').textContent = titulo;
+      $('admForm').classList.remove('oculto');
+    }
+    function nuevoUsuario() {
+      if (!VP || !VP.libro) return;
+      EDITA = null; NUEVO = true;
+      abrirForm('Agregar usuario');
+      ['admCorreo', 'admNombre', 'admNotas', 'admSitio'].forEach(id => { $(id).value = ''; });
+      $('admCorreo').disabled = false; $('admActivo').checked = true;
+      reglasRoles();
+      try { $('admCorreo').focus(); } catch (e) {}
+    }
+    function editarUsuario(correo) {
+      const u = VP && VP.usuarios.find(x => x.correo === correo);
+      if (!u) return;
+      EDITA = u.correo; NUEVO = !u.enLista;
+      abrirForm((u.enLista ? 'Editar ' : 'Agregar a la lista: ') + u.correo);
+      $('admCorreo').value = u.correo; $('admCorreo').disabled = true;
+      $('admNombre').value = u.nombre || ''; $('admNotas').value = u.notas || ''; $('admSitio').value = u.sitio || '';
+      $('admActivo').checked = !!u.activo;
+      u.roles.forEach(r => { if ($('admRol_' + r)) $('admRol_' + r).checked = true; });
+      reglasRoles();
+    }
+    function cerrarForm() { EDITA = null; $('admForm').classList.add('oculto'); }
+    function guardarUsuario() {
+      const correo = String($('admCorreo').value || '').trim().toLowerCase(), nombre = String($('admNombre').value || '').trim();
+      if (!correo) { mostrarError('Escribe el correo.'); return; }
+      if (!nombre) { mostrarError('Escribe el nombre de la persona.'); return; }
+      const roles = VP.roles.map(r => r.clave).filter(r => $('admRol_' + r).checked);
+      if (!roles.length) { mostrarError('Elige al menos un rol.'); return; }
+      const p = { nuevo: NUEVO, correo: correo, nombre: nombre, roles: roles, sitio: $('admSitio').value || '', activo: !!$('admActivo').checked,
+        notas: $('admNotas').value || '' };
+      accionCob('btnAdmGuardar', 'guardarUsuario', [p], v => {
+        VP = v; pintarUsuarios(); cerrarForm();
+        aviso('ok', 'Permisos de <b>' + esc(correo) + '</b> guardados' + (p.nuevo && p.activo ? '. Le avisamos por correo.' : '.'));
+      });
+    }
+
+    // ---- Delegaciones ----
+    function cargarDelegaciones() {
+      google.script.run.withSuccessHandler(v => { VD = v; pintarDelegaciones(true); }).withFailureHandler(mostrarError).listarDelegaciones();
+    }
+    function rolesDe(de) {
+      if (!VD) return [];
+      if (!VD.superadmin || de === VD.yo && !(VD.delegadores || []).some(x => x.correo === de)) return VD.misRoles || [];
+      return ((VD.delegadores || []).find(x => x.correo === de) || { roles: [] }).roles;
+    }
+    function pintarFormDelegacion() {
+      const sa = !!VD.superadmin;
+      $('admDelDeCaja').classList.toggle('oculto', !sa);
+      if (sa) {
+        $('admDelDe').innerHTML = (VD.delegadores || []).map(x => '<option value="' + esc(x.correo) + '">' + esc(x.nombre) + ' (' + esc(x.correo) + ')</option>').join('');
+        $('admDelDe').value = (VD.delegadores || []).some(x => x.correo === VD.yo) ? VD.yo : ((VD.delegadores || [])[0] || {}).correo || '';
+        $('admDelDe').onchange = () => opcionesDelegacion();
+      }
+      const sinRoles = !sa && !(VD.misRoles || []).length;
+      $('admDelForm').classList.toggle('oculto', sinRoles);
+      $('admDelSinRoles').classList.toggle('oculto', !sinRoles);
+      $('admDelDesde').value = VD.hoy; $('admDelHasta').value = '';
+      try { $('admDelDesde').min = VD.hoy; $('admDelHasta').min = VD.hoy; } catch (e) {}
+      opcionesDelegacion();
+    }
+    function opcionesDelegacion() {
+      const de = VD.superadmin ? $('admDelDe').value : VD.yo, tiene = rolesDe(de);
+      $('admDelA').innerHTML = '<option value="">Elige a la persona…</option>' + (VD.candidatos || []).filter(c => c.correo !== de)
+        .map(c => '<option value="' + esc(c.correo) + '">' + esc(c.nombre) + ' (' + esc(c.correo) + ')' + (c.solo ? ' · solo requisiciones' : '') + '</option>').join('');
+      $('admDelRoles').innerHTML = (VD.roles || []).map(r => '<label style="display:flex;gap:6px;align-items:center;margin:0;color:#1F2937">' +
+        '<input type="checkbox" id="admDelRol_' + esc(r.clave) + '" style="width:auto"> ' + esc(r.nombre) + '</label>').join('');
+      (VD.roles || []).forEach(r => {
+        const c = $('admDelRol_' + r.clave), si = tiene.indexOf(r.clave) !== -1;
+        c.disabled = !si; c.checked = si && tiene.length === 1;
+      });
+    }
+    function pintarDelegaciones(conForm) {
+      if (!VD) return;
+      if (conForm) pintarFormDelegacion();
+      const chip = { Vigente: 'firmado', Programada: 'aceptada', Cancelada: 'cancelado', Terminada: '' };
+      $('admDelegLista').innerHTML = VD.delegaciones.length ? VD.delegaciones.map(d => '<tr><td>' + esc(d.deNombre) + '<div class="nota">' +
+        esc(d.id) + '</div></td><td>' + esc(d.aNombre) + '</td><td>' + d.rolesNombres.map(esc).join(', ') + '</td><td>' + esc(fecha(d.desde)) +
+        ' – ' + esc(fecha(d.hasta)) + '</td><td><span class="chip ' + (chip[d.estado] || '') + '">' + esc(d.estado) + '</span>' +
+        (d.estado === 'Cancelada' && d.motivo ? '<div class="nota">' + esc(d.motivo) + '</div>' : '') + '</td><td>' +
+        (d.puedeCancelar ? '<button type="button" class="btn btn-sec" style="padding:6px 12px;font-size:12px" onclick="identidad.cancelarDelegacion(\'' +
+          esc(d.id) + '\')">Cancelar</button>' : '') + '</td></tr>').join('')
+        : '<tr><td colspan="6" class="nota">No hay delegaciones.</td></tr>';
+    }
+    function crearDelegacion() {
+      if (!VD) return;
+      const de = VD.superadmin ? $('admDelDe').value : VD.yo;
+      const p = { de: de, a: $('admDelA').value || '', roles: (VD.roles || []).map(r => r.clave).filter(r => $('admDelRol_' + r).checked),
+        desde: $('admDelDesde').value || '', hasta: $('admDelHasta').value || '' };
+      if (!p.a) { mostrarError('Elige a quién le delegas.'); return; }
+      if (!p.roles.length) { mostrarError('Elige qué delegas (Aprobaciones o Compras).'); return; }
+      if (!p.desde || !p.hasta) { mostrarError('Pon las fechas de inicio y de fin.'); return; }
+      accionCob('btnAdmDelegar', 'crearDelegacion', [p], v => {
+        VD = v; pintarDelegaciones(true);
+        aviso('ok', 'Delegación creada: <b>' + esc(p.a) + '</b> del ' + esc(fecha(p.desde)) + ' al ' + esc(fecha(p.hasta)) + '. Le avisamos por correo.');
+      });
+    }
+    function cancelarDelegacion(id) {
+      const motivo = window.prompt('Motivo para cancelar la delegación ' + id + ':');
+      if (motivo == null) return;
+      if (motivo.trim().length < 5) { mostrarError('Escribe el motivo (mínimo 5 caracteres).'); return; }
+      accionCob(null, 'cancelarDelegacion', [id, motivo.trim()], v => { VD = v; pintarDelegaciones(false); aviso('ok', 'Delegación <b>' + esc(id) + '</b> cancelada.'); });
+    }
+
+    $('admBuscar').addEventListener('input', pintarUsuarios);
+    $('admCorreo').addEventListener('input', reglasRoles);
+    window.identidad = { nuevoUsuario: nuevoUsuario, editarUsuario: editarUsuario, cerrarForm: cerrarForm, guardarUsuario: guardarUsuario,
+      pintarUsuarios: pintarUsuarios, crearDelegacion: crearDelegacion, cancelarDelegacion: cancelarDelegacion };
+
+    function alPermisos(p) {
+      p = p || {};
+      verP = !!p.superadmin;
+      verD = !!(p.superadmin || p.operaciones || p.compras); // Aprobaciones = permisos.operaciones
+      $('adminPermisos').classList.toggle('oculto', !verP);
+      $('adminDelegaciones').classList.toggle('oculto', !verD);
+      if (!verP) VP = null;
+      if (!verD) VD = null;
+      if (TAB === 'admin') alVerTab('admin');
+    }
+    function alVerTab(t) {
+      if (t !== 'admin') return;
+      if (verP && !VP) cargarPermisos();
+      if (verD && !VD) cargarDelegaciones();
+    }
+    registrarModulo({ nombre: 'Identidad', alPermisos: alPermisos, alVerTab: alVerTab,
+      contexto: () => ({ admPermisos: verP && !!VP, admDelegaciones: verD && !!VD }),
+      alSincronizar: r => {
+        if (r.admPermisos && verP) { VP = r.admPermisos; pintarUsuarios(); }  // el formulario abierto no se toca
+        if (r.admDelegaciones && verD) { VD = r.admDelegaciones; pintarDelegaciones(false); }
+      } });
+    alPermisos(PERMISOS); // por si los permisos se aplicaron antes de cargar este bloque
+  })();
 </script>
 
 <script id="mod-correos">
