@@ -2056,7 +2056,7 @@
 
   /** CSV de los renglones filtrados (UTF-8 con BOM para que Excel lea los acentos). Texto que empiece con = + - @ va con apóstrofo. */
   function csvResumenCob(lista) {
-    const texto = s => { const v = String(s ?? ''); return '"' + (/^[=+\-@]/.test(v) ? "'" + v : v).replace(/"/g, '""') + '"'; };
+    const texto = s => { const v = String(s ?? ''); return '"' + (/^[=+\-@\t\r]/.test(v) ? "'" + v : v).replace(/"/g, '""') + '"'; };
     const num = n => n == null ? '' : r2(n).toFixed(2);
     const enc = ['Folio', 'Proyecto', 'Cliente', 'Línea de negocio', 'Contrato', 'Moneda', 'Contratado con IVA', 'Cobrado', 'Saldo', 'Avance %',
       'Siguiente etapa', 'Saldo siguiente etapa', 'Último pago', 'Órdenes de compra', 'Costo OC sin IVA', 'Margen sin IVA', 'Margen %'];
@@ -3695,7 +3695,7 @@
   const porPagarCxp = a => a.pendiente != null ? Number(a.pendiente) : Number(a.total);
   /** CSV de las facturas filtradas (UTF-8 con BOM para Excel; texto que empiece con = + - @ va con apóstrofo). */
   function csvCxp(lista) {
-    const texto = s => { const v = String(s ?? ''); return '"' + (/^[=+\-@]/.test(v) ? "'" + v : v).replace(/"/g, '""') + '"'; };
+    const texto = s => { const v = String(s ?? ''); return '"' + (/^[=+\-@\t\r]/.test(v) ? "'" + v : v).replace(/"/g, '""') + '"'; };
     const etiqueta = {}; ((CXP && CXP.rangos) || []).forEach(r => { etiqueta[r.clave] = r.etiqueta; });
     const enc = ['Vencimiento', 'Días vencida', 'Antigüedad', 'Factura', 'Tipo', 'Número', 'Proveedor', 'Proyecto', 'Nombre del proyecto',
       'Orden de compra', 'Requisición', 'Emisión', 'Moneda', 'Total', 'Pagado', 'Por pagar'];

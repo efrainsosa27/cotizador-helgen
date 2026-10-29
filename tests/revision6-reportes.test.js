@@ -426,3 +426,11 @@ const esperar = async (k = 30) => { for (let i = 0; i < k; i++) await new Promis
   assert(celdas.length > 10 && !celdas.some(c => /^"[=+\-@\t\r]/.test(c)), 'ninguna celda empieza con = + - @, tabulador o CR');
   console.log('OK revisión 6b de reportes');
 })().catch(e => { console.error(e); process.exit(1); });
+
+// Integración (29/10/2026): ningún CSV de la interfaz usa la guarda vieja sin tabulador ni retorno (fórmula al abrir en Excel)
+{
+  const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+  assert.equal((html.match(/\/\^\[=\+\\-@\]\//g) || []).length, 0, 'guarda CSV vieja (sin \\t \\r) en la interfaz');
+  assert((html.match(/\/\^\[=\+\\-@\\t\\r\]\//g) || []).length >= 3, 'guarda CSV con \\t \\r en resumen, CxP y reportes');
+  console.log('OK guardas CSV');
+}
