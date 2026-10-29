@@ -60,7 +60,7 @@ function verificarTokenGoogle_(idToken) {
 
   const cache = CacheService.getScriptCache();
   const huella = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, token));
-  const claveCache = 'TOK_' + huella;
+  const claveCache = claveNs_('TOK_' + huella); // con el espacio del caché del código (VERSION_CODIGO_CACHE)
   const previo = cache.get(claveCache);
   if (previo) return JSON.parse(previo);
 
@@ -628,10 +628,23 @@ function subirVersiones_(colecciones) {
 const TROZO_CACHE = 30000; // caracteres por entrada (CacheService admite 100 KB por valor; un acento ocupa 2 bytes)
 
 /**
+ * Espacio del caché del código publicado. Va al final de toda clave de datos entre peticiones (claveNs_): leerCache_ /
+ * guardarCache_ (listas K_…, fuentes F_…, PORTAL_ITEMS), huellas H_ y marcas R_ de fuenteConHuella_, ENCABEZADOS_OK,
+ * ACCESO_FOTOS, tokens verificados TOK_ y sugerencias SAT. **Se cambia en cada publicación que cambie la forma de algo que se
+ * guarda en caché** (CLAUDE.md §8): así el código nuevo no sirve listas armadas por el anterior (les faltarían campos hasta que
+ * subiera la versión de su colección, hasta 6 h). Al publicar, la primera carga de cada lista se arma de las hojas (como con el
+ * caché vacío). No va en las claves de idempotencia (REQ_, OC_, PGP_…: un reintento justo al publicar no debe duplicar), ni en las
+ * de la entrada con código (CAPRI_*: bloqueos y códigos vigentes) ni en FOTOCM_ (fotos ya archivadas en Drive).
+ */
+const VERSION_CODIGO_CACHE = '2026-10-29r';
+function claveNs_(clave) { return clave + '@' + VERSION_CODIGO_CACHE; }
+
+/**
  * Lee un valor JSON guardado por guardarCache_; undefined si no está o le falta un trozo. Rapidez (30/10/2026): un valor que
  * cabe en un trozo va en la misma entrada ("V:<json>", una lectura); uno más grande, en trozos ("N:<n>" + <clave>#0…).
  */
 function leerCache_(clave) {
+  clave = claveNs_(clave);
   const cache = CacheService.getScriptCache();
   const meta = cache.get(clave);
   if (meta && meta.slice(0, 2) === 'V:') {
@@ -650,6 +663,7 @@ function leerCache_(clave) {
 }
 
 function guardarCache_(clave, valor, ttl) {
+  clave = claveNs_(clave);
   try {
     const texto = JSON.stringify(valor), datos = {};
     // Rapidez: lo que cabe en un trozo va en la misma entrada (al leerlo, un viaje a CacheService en lugar de dos)
@@ -707,19 +721,19 @@ function fuenteConHuella_(nombre, coleccion, cadaSeg, leer, revisar) {
   const cache = CacheService.getScriptCache();
   // Rapidez: ya está en la petición con esta versión (p. ej. Permisos, que se leen para los roles): para revisarla basta
   // saber si ya toca releer la hoja (marca R_); no se vuelve a traer el valor del caché
-  if (memo && memo.version === v && cache.get('R_' + nombre)) {
+  if (memo && memo.version === v && cache.get(claveNs_('R_' + nombre))) {
     memo.revisado = true;
     return memo.valor;
   }
   const previo = leerCache_('F_' + nombre + '_' + v);
-  if (previo !== undefined && (!revisar || cache.get('R_' + nombre))) {
+  if (previo !== undefined && (!revisar || cache.get(claveNs_('R_' + nombre)))) {
     MEMO_['F_' + nombre] = { valor: previo, revisado: !!revisar, version: v };
     return previo;
   }
   const firma = x => Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(x)));
   let valor = leer();
   let huella = firma(valor);
-  const anterior = String(cache.get('H_' + nombre) || '').split('|');
+  const anterior = String(cache.get(claveNs_('H_' + nombre)) || '').split('|');
   let version = v;
   if (anterior.length === 2 && Number(anterior[0]) === v && anterior[1] !== huella) {
     subirVersiones_([coleccion]); // alguien la editó directo en la hoja
@@ -730,8 +744,8 @@ function fuenteConHuella_(nombre, coleccion, cadaSeg, leer, revisar) {
     huella = firma(valor);
   }
   guardarCache_('F_' + nombre + '_' + version, valor, TTL_CACHE);
-  cache.put('H_' + nombre, version + '|' + huella, TTL_CACHE);
-  cache.put('R_' + nombre, '1', cadaSeg);
+  cache.put(claveNs_('H_' + nombre), version + '|' + huella, TTL_CACHE);
+  cache.put(claveNs_('R_' + nombre), '1', cadaSeg);
   MEMO_['F_' + nombre] = { valor: valor, revisado: true, version: version };
   return valor;
 }
@@ -1390,7 +1404,7 @@ function ordenarConIaSat_(texto, candidatos) {
   const cache = CacheService.getScriptCache();
   const llave = 'satIA:' + Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5,
     palabrasSat(texto).join(' ') + '|' + candidatos.map(c => c.clave).join(','), Utilities.Charset.UTF_8));
-  const guardada = cache.get(llave);
+  const guardada = cache.get(claveNs_(llave));
   if (guardada) return JSON.parse(guardada);
   try {
     const r = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
@@ -1403,7 +1417,7 @@ function ordenarConIaSat_(texto, candidatos) {
       return null;
     }
     const lista = leerRespuestaIaSat(r.getContentText(), candidatos);
-    cache.put(llave, JSON.stringify(lista), 21600); // 6 h: la misma búsqueda no se vuelve a cobrar
+    cache.put(claveNs_(llave), JSON.stringify(lista), 21600); // 6 h: la misma búsqueda no se vuelve a cobrar
     return lista;
   } catch (e) {
     console.warn('IA claves SAT: ' + (e && e.message ? e.message : e));
@@ -2086,7 +2100,7 @@ function claveEncabezados_(libro, hoja, nombre, enc) {
 function encabezadosOk_() {
   if (!MEMO_.enc) {
     let previo = {};
-    try { previo = JSON.parse(CacheService.getScriptCache().get(CACHE_ENCABEZADOS) || '{}') || {}; } catch (e) { previo = {}; }
+    try { previo = JSON.parse(CacheService.getScriptCache().get(claveNs_(CACHE_ENCABEZADOS)) || '{}') || {}; } catch (e) { previo = {}; }
     MEMO_.enc = previo;
   }
   return MEMO_.enc;
@@ -2102,7 +2116,7 @@ function anotarEncabezados_(clave) {
   ok[clave] = ahora;
   // Solo las revisiones vigentes (cada una vence 6 h después de hecha, aunque el mapa se vuelva a guardar)
   Object.keys(ok).forEach(k => { if (!(ahora - Number(ok[k]) < TTL_CACHE * 1000)) delete ok[k]; });
-  try { CacheService.getScriptCache().put(CACHE_ENCABEZADOS, JSON.stringify(ok), TTL_CACHE); } catch (e) { /* solo se pierde el ahorro */ }
+  try { CacheService.getScriptCache().put(claveNs_(CACHE_ENCABEZADOS), JSON.stringify(ok), TTL_CACHE); } catch (e) { /* solo se pierde el ahorro */ }
 }
 
 /**
@@ -11693,13 +11707,13 @@ function accesoFotos_(correo) {
   if (!MEMO_.accesoFotos) {
     const cache = CacheService.getScriptCache();
     let lista = null;
-    try { lista = JSON.parse(cache.get('ACCESO_FOTOS') || 'null'); } catch (e) { lista = null; }
+    try { lista = JSON.parse(cache.get(claveNs_('ACCESO_FOTOS')) || 'null'); } catch (e) { lista = null; }
     if (!Array.isArray(lista)) {
       try {
         const f = carpetaCompras_();
         lista = f.getEditors().concat(f.getViewers()).map(u => String(u.getEmail()).toLowerCase());
         try { lista.push(String(f.getOwner().getEmail()).toLowerCase()); } catch (e) { /* sin dueño visible */ }
-        cache.put('ACCESO_FOTOS', JSON.stringify(lista), 3600);
+        cache.put(claveNs_('ACCESO_FOTOS'), JSON.stringify(lista), 3600);
       } catch (e) {
         lista = [];
       }

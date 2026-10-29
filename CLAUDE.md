@@ -157,6 +157,9 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
   la primera escritura: `confiarEncabezados_`); un valor chico del caché va en una entrada (`V:<json>`; los grandes, en
   trozos `N:n`). Una fuente en `MEMO_` solo se reusa con la misma versión. Las vistas de compras toman moneda y línea de
   `contratosCache_()`. Perfil: `tests/perfil.js` (operaciones con Google por escenario, `--detalle`, `--respuestas`, `--estado`).
+  Revisión independiente de la rapidez (`tests/rapidez.test.js` §11–§16): memos derivados (`MEMOS_DERIVADOS_`) que se olvidan como
+  las filas; versiones que no se repiten y suben sin candado (`versionNueva_`); `candado_` anidable; y **`VERSION_CODIGO_CACHE`**:
+  espacio del caché del código publicado, al final de toda clave de datos (`claveNs_`; no en idempotencia, `CAPRI_*` ni `FOTOCM_`).
 
 ### 4.2 Catálogo de productos
 - `hojaCatalogo_()` — abre "Catálogo Helgen"; si no existe, `crearCatalogo_()` (bajo candado). Llama `asegurarColumnasSat_()`.
@@ -926,6 +929,11 @@ npx --yes wrangler@4 deploy
 
 - Antes de `push`, confirmar que `.clasp.json` apunta a `1GsH8Dja…` y que nadie cambió el proyecto en el editor
   (clonar en una carpeta temporal y comparar).
+- **Antes de publicar la API, cambiar `VERSION_CODIGO_CACHE` en `Code.js`** (p. ej. a la fecha + una letra: `2026-10-29r` →
+  `2026-11-03a`) en toda publicación que cambie la forma de algo que se guarda en caché (listas, fuentes, vistas: un campo nuevo,
+  quitado o renombrado). Si no, el código nuevo sirve hasta 6 h las listas que armó el anterior (sin los campos nuevos) mientras
+  no suba la versión de su colección. En la duda, cambiarlo: el costo es que la primera carga de cada lista después de publicar
+  se arma de las hojas (como con el caché vacío) y cada sesión vuelve a verificar su token una vez. No toca la idempotencia.
 - Las pruebas de cotización y SAT simulan un vendedor (`VENDEDOR_`), porque `guardarCotizacion` exige sesión.
 - Revisar sintaxis del JS de la interfaz: extraer los `<script>` de `web/cotizador/index.html` y `node --check`.
 - Comprobar la API con `curl` usando `-d` sin `-X POST` (con `-X POST -L` curl repite el POST en la redirección de Google y

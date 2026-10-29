@@ -16,8 +16,8 @@
 //  6. Las vistas de compras (requisición y órdenes del proyecto) toman moneda y línea del caché de contratos: sin leer Contratos
 //     si nada cambió y con la moneda nueva en cuanto cobranza marca otra cotización aceptada.
 //  7. Encabezados de Cotizaciones y del catálogo (columnas SAT): revisados una vez en 6 h, y repuestos si faltan.
-//  8. Caché: un valor que cabe en un trozo va en la misma entrada (una lectura); uno grande, en trozos; lo guardado con el
-//     formato de antes (N:n + trozos) se sigue leyendo; null y valores con acentos regresan iguales.
+//  8. Caché: un valor que cabe en un trozo va en la misma entrada (una lectura); uno grande, en trozos; lo guardado en trozos
+//     aunque quepa en uno se sigue leyendo; lo que dejó el código publicado antes no; null y acentos regresan iguales.
 //  9. La sincronización revisa Permisos con lo que ya trajo para los roles (sin pedirlo otra vez al caché) y, cuando toca
 //     releer la hoja, un cambio a mano en Permisos sí se detecta (sube la versión; la siguiente consulta y cada función ya
 //     usan los permisos nuevos, como antes).
@@ -35,13 +35,17 @@
 //     que se suelta completo).
 // 15. La versión siempre sube: aunque otra ejecución tenga el candado (subirVersiones_ ya no lo usa), y dos subidas a la vez
 //     de la misma colección dan valores distintos.
+// 16. Publicar: el código nuevo no sirve listas que dejó en caché el anterior (VERSION_CODIGO_CACHE en toda clave de datos), y
+//     la idempotencia sí sobrevive (un reintento justo al publicar no duplica).
 // Uso: node tests/rapidez.test.js .
 'use strict';
 const assert = require('assert');
 const dir = process.argv[2] || '.';
-const crear = extra => require('./arnes')(dir, Object.assign({ props: {
+const crear = (extra, otroDir) => require('./arnes')(otroDir || dir, Object.assign({ props: {
   ROL_COMPRAS: 'pedro@helgen.tech', ROL_COBRANZA: 'efrain@helgen.tech', ROL_REQUISICION: 'obrero@helgen.tech',
   SOLO_REQUISICION: 'rosa@helgen.tech', ROL_OPERACIONES: '', SUPER_ADMIN: 'leo@helgen.tech' } }, extra || {}));
+// Clave real en CacheService de una clave de datos (con el espacio del código publicado, VERSION_CODIGO_CACHE)
+const ns = (A, k) => A.correr('claveNs_(' + JSON.stringify(k) + ')');
 
 // ================= 1. IDs y libros por petición =================
 {
@@ -92,7 +96,7 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   assert.equal(perfil.ops.filter(o => o.tipo === 'lee' && (o.pila || []).some(f => f === 'hojaDeArea_' || f === 'hojaProyectos_')).length, 0,
     'sin lecturas de encabezados de pestañas ya revisadas');
   // Una vez por petición aunque el caché esté vacío (antes: una por cada uso de la pestaña)
-  Object.keys(cache).filter(k => k === 'ENCABEZADOS_OK').forEach(k => delete cache[k]);
+  delete cache[ns(A, 'ENCABEZADOS_OK')];
   perfil.ops = [];
   ok('pedro', 'getRequisicion', r2);
   for (const n of ['Requisiciones', 'RequisicionesRenglones', 'Proveedores']) assert(lecturasFila1(n) <= 1, n + ': ' + lecturasFila1(n));
@@ -121,13 +125,13 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   LC().pest.Bitacora.m[0][0] = 'xx';
   pedir();
   assert.equal(LC().pest.Bitacora.m[0][0], 'xx', 'anotada: no se relee (se repara a más tardar 6 h después)');
-  const ok6 = JSON.parse(cache.ENCABEZADOS_OK);
+  const ok6 = JSON.parse(cache[ns(A, 'ENCABEZADOS_OK')]);
   Object.keys(ok6).forEach(k => { if (/\/Bitacora\//.test(k)) ok6[k] = Date.now() - 6 * 3600 * 1000 - 1; });
-  cache.ENCABEZADOS_OK = JSON.stringify(ok6);
+  cache[ns(A, 'ENCABEZADOS_OK')] = JSON.stringify(ok6);
   pedir();
   assert.equal(LC().pest.Bitacora.m[0][0], 'fecha', 'vencida: se revisa y se repara');
   // Una anotación vencida no se queda en el caché al guardar otras
-  assert(Object.values(JSON.parse(cache.ENCABEZADOS_OK)).every(t => Date.now() - t < 6 * 3600 * 1000));
+  assert(Object.values(JSON.parse(cache[ns(A, 'ENCABEZADOS_OK')])).every(t => Date.now() - t < 6 * 3600 * 1000));
   // Alguien vacía a mano la pestaña (con todo y encabezados) sin borrarla: la anotación sigue vigente, pero antes de la primera
   // escritura se ve que está vacía y se reponen los encabezados; el renglón nuevo queda en la fila 2 (como antes)
   for (const n of ['Bitacora', 'RequisicionesEventos', 'Requisiciones']) LC().pest[n].m.length = 0;
@@ -325,9 +329,9 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   assert.equal(filas1(), 0, 'después, ninguno');
   // Vencida la anotación (6 h) se revisan y se reponen
   cat[0][6] = ''; cot[0][19] = 'x';
-  const ok6 = JSON.parse(cache.ENCABEZADOS_OK);
+  const ok6 = JSON.parse(cache[ns(A, 'ENCABEZADOS_OK')]);
   Object.keys(ok6).forEach(k => { ok6[k] = Date.now() - 6 * 3600 * 1000 - 1; });
-  cache.ENCABEZADOS_OK = JSON.stringify(ok6);
+  cache[ns(A, 'ENCABEZADOS_OK')] = JSON.stringify(ok6);
   guardar(3);
   assert.deepEqual([cat[0][6], cot[0][19]], ['Clave SAT', 'proyecto_folio'], 'repuestos');
 }
@@ -338,7 +342,7 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   const { correr, cache, perfil, plain } = A;
   const chico = { a: 'Señalización — ñ', n: [1, 2, 3] };
   correr(`guardarCache_('K_prueba_chico', ${JSON.stringify(chico)}, 600)`);
-  assert.equal(cache.K_prueba_chico.slice(0, 2), 'V:', 'en la misma entrada');
+  assert.equal(cache[ns(A, 'K_prueba_chico')].slice(0, 2), 'V:', 'en la misma entrada');
   perfil.ops = [];
   assert.deepEqual(plain(correr(`leerCache_('K_prueba_chico')`)), chico);
   assert.equal(perfil.ops.filter(o => o.tipo === 'cache').length, 1, 'una lectura');
@@ -347,13 +351,16 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   assert.equal(correr(`leerCache_('K_no_existe')`), undefined);
   const grande = Array.from({ length: 3000 }, (_, i) => 'renglón ' + i + ' con acentos áéíóú');
   correr(`guardarCache_('K_prueba_grande', ${JSON.stringify(grande)}, 600)`);
-  assert(/^N:\d+$/.test(cache.K_prueba_grande) && cache['K_prueba_grande#1'], 'en trozos');
+  assert(/^N:\d+$/.test(cache[ns(A, 'K_prueba_grande')]) && cache[ns(A, 'K_prueba_grande') + '#1'], 'en trozos');
   assert.deepEqual(plain(correr(`leerCache_('K_prueba_grande')`)), grande);
-  // Formato de antes (lo dejó la versión publicada): se sigue leyendo
-  cache.K_viejo = 'N:1'; cache['K_viejo#0'] = JSON.stringify({ viejo: true });
+  // En trozos aunque quepa en uno (formato de antes de Rapidez 9): se sigue leyendo
+  cache[ns(A, 'K_viejo')] = 'N:1'; cache[ns(A, 'K_viejo') + '#0'] = JSON.stringify({ viejo: true });
   assert.deepEqual(plain(correr(`leerCache_('K_viejo')`)), { viejo: true });
-  cache.K_roto = 'N:2'; cache['K_roto#0'] = '{"a"';
+  cache[ns(A, 'K_roto')] = 'N:2'; cache[ns(A, 'K_roto') + '#0'] = '{"a"';
   assert.equal(correr(`leerCache_('K_roto')`), undefined, 'falta un trozo: no está');
+  // Lo que dejó el código publicado antes (otra clave: sin el espacio de este código) no se lee
+  cache.K_publicado = 'V:' + JSON.stringify({ viejo: true });
+  assert.equal(correr(`leerCache_('K_publicado')`), undefined, 'lo del código anterior no se sirve');
 }
 
 // ================= 9. Revisar Permisos en la sincronización =================
@@ -372,7 +379,7 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   const per = A.libros[props.ADMIN_DB_ID].pest.Permisos.m;
   const fila = per.find(x => x[0] === 'pedro@helgen.tech');
   fila[3] = 'requisicion';
-  delete cache.R_usuarios;
+  delete cache[ns(A, 'R_usuarios')];
   r = ok('pedro', 'sincronizar', vers, {});
   assert(r.cambios.indexOf('permisos') !== -1, 'sube la versión de permisos');
   // Como en la versión publicada: los permisos de esa misma respuesta se calcularon antes de revisar; la siguiente ya los trae
@@ -612,6 +619,50 @@ const compras = A => {
   } finally {
     A.ctx.Date = DateReal;
   }
+}
+
+// ================= 16. Publicar: el código nuevo no sirve lo que dejó en caché el anterior =================
+{
+  const fs = require('fs'), os = require('os'), path = require('path');
+  // "Publicada" = este mismo código con otro espacio de caché (lo que había antes de publicar); sin la constante, las mismas claves
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'capri-publicada-'));
+  fs.copyFileSync(path.join(dir, 'Logo.js'), path.join(tmp, 'Logo.js'));
+  fs.writeFileSync(path.join(tmp, 'Code.js'), fs.readFileSync(path.join(dir, 'Code.js'), 'utf8')
+    .replace(/const VERSION_CODIGO_CACHE = '[^']*';/, "const VERSION_CODIGO_CACHE = 'publicada-anterior';"));
+  const V = crear({}, tmp), CV = compras(V);
+  const req = CV.pedir(CV.proyecto('Uno'));
+  const pedido = { proyectoFolio: V.libros.DB.pest.Proyectos.m[1][0], sitio: 'Querétaro', renglones: [{ descripcion: 'Tubo', cantidad: 1 }],
+    cotizacion: { nombre: 'c.pdf', datos: V.PDF }, idSolicitud: 'q-al-publicar' };
+  const folioAntes = V.ok('obrero', 'guardarRequisicion', pedido).folio;
+  V.ok('obrero', 'misRequisiciones');
+  // Lo que guardó la publicada tenía otra forma (le falta un campo que el código nuevo sí arma)
+  const deMisReq = Object.keys(V.cache).filter(k => /^K_misReq_/.test(k) && !/#/.test(k));
+  assert(deMisReq.length, 'la publicada dejó su lista en caché');
+  deMisReq.forEach(k => {
+    const lista = JSON.parse(V.cache[k].slice(2));
+    lista.forEach(x => { delete x.devoluciones; x.dePublicada = true; });
+    V.cache[k] = 'V:' + JSON.stringify(lista);
+  });
+  // Se publica el código nuevo: mismas hojas, propiedades, archivos y caché
+  const N = crear();
+  Object.assign(N.props, V.props); Object.assign(N.cache, V.cache);
+  Object.assign(N.carpetas, V.carpetas); Object.assign(N.archivos, V.archivos);
+  for (const id in V.libros) { const L = V.libros[id], pest = {}; for (const n in L.pest) pest[n] = N.hoja(L.pest[n].m); N.libro(id, L.nombre, pest); }
+  const antes = new Set(Object.keys(N.cache));
+  const mia = N.ok('obrero', 'misRequisiciones').find(x => x.folio === req);
+  assert(!mia.dePublicada && Array.isArray(mia.devoluciones), 'la lista se arma con el código nuevo (no la de la publicada)');
+  assert(!(N.ok('obrero', 'bootstrap').req.mias || []).some(x => x.dePublicada), 'tampoco en la carga inicial');
+  // Un reintento justo al publicar no duplica (la idempotencia no lleva el espacio del código)
+  assert.equal(N.ok('obrero', 'guardarRequisicion', pedido).folio, folioAntes, 'mismo folio');
+  assert.equal(N.libros[N.props.COMPRAS_DB_ID].pest.Requisiciones.m.filter(r => r[0] === folioAntes).length, 1, 'sin duplicado');
+  // Toda clave de datos que escribe el código nuevo lleva su espacio (las de idempotencia, CAPRI_* y FOTOCM_ no)
+  const v = N.correr('VERSION_CODIGO_CACHE');
+  N.ok('pedro', 'bootstrap'); N.ok('pedro', 'sincronizar', {}, { req: req }); N.ok('leo', 'bootstrap');
+  const sinEspacio = Object.keys(N.cache).filter(k => !antes.has(k) && !k.endsWith('@' + v) && !/@[^@#]+#\d+$/.test(k) &&
+    !/^(REQ|PRY|PAG|OC|PGP|PROP|VOBO|SEP|REC|FPR|ENC|ANU|PRV|DEV|DVR)_/.test(k) && !/^(CAPRI_|FOTOCM_)/.test(k));
+  assert.deepEqual(sinEspacio, [], 'claves de datos sin el espacio del código');
+  assert(Object.keys(N.cache).some(k => /^K_/.test(k) && k.endsWith('@' + v)), 'las listas sí lo llevan');
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 console.log('rapidez: todo bien');

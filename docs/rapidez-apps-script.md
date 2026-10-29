@@ -155,8 +155,18 @@ tabla se midieron al hacer cada commit (con el perfil de ese momento); la tabla 
   lo que se lee. Si alguien **vacía** a mano la pestaña completa (con encabezados) sin borrarla, Rapidez 12 lo cubre: cuando la
   fila 1 se dio por buena sin leerla, la primera escritura de la petición en esa pestaña revisa con `getLastRow` que no esté
   vacía y, si lo está, repone los encabezados antes de escribir (como antes; sin eso, el siguiente renglón caía en la fila 1).
-- **Rapidez 9 · formato del caché.** Mismas claves, versiones y tiempos de vida; cambia cómo se guarda un valor chico. Las dos
-  versiones del código conviven: la nueva lee el formato viejo; la vieja toma `V:` como «no está» y lo vuelve a armar.
+- **Rapidez 9 · formato del caché.** Mismas versiones y tiempos de vida; cambia cómo se guarda un valor chico. `leerCache_` sigue
+  leyendo el formato en trozos (`N:n`), que es el de los valores grandes. Lo que dejó el código publicado antes ya no se lee
+  (revisión 3, abajo).
+- **Revisión 3 · espacio del caché por publicación (`VERSION_CODIGO_CACHE`, hoy `2026-10-29r`).** Antes, al publicar, el código
+  nuevo servía las listas que había guardado el anterior (mismas claves) mientras no subiera la versión de su colección: hasta 6 h
+  sin los campos nuevos (con esta rama: devoluciones, pago parcial, fotos…). Ahora toda clave de datos entre peticiones lleva al
+  final `@<VERSION_CODIGO_CACHE>` (`claveNs_`): `leerCache_`/`guardarCache_` (listas `K_`, fuentes `F_`, `PORTAL_ITEMS`), huellas
+  `H_` y marcas `R_`, `ENCABEZADOS_OK`, `ACCESO_FOTOS`, tokens verificados `TOK_` y sugerencias SAT. No lo llevan las claves de
+  idempotencia (`REQ_`, `OC_`, `PGP_`…: un reintento justo al publicar devuelve el mismo folio), las de la entrada con código
+  (`CAPRI_*`: bloqueos y códigos vigentes) ni `FOTOCM_` (fotos ya archivadas). Se cambia en cada publicación que cambie la forma
+  de algo en caché (CLAUDE.md §8). Costo al publicar: la primera carga de cada lista se arma de las hojas y cada sesión verifica su
+  token otra vez. Prueba: §16 (también revisa que toda clave de datos que escribe el código lleve el espacio).
 - **Rapidez 7 · vistas de compras con `contratosCache_()`.** En una consulta: caché por versión de contratos (marcar aceptada,
   firmar o desbloquear suben la versión). Un cambio **a mano** en Contratos lo detecta la sincronización en ≤ 10 min, igual que en
   las listas (`listarProyectosCompras` ya lo hacía así). En una escritura se lee la hoja (como antes).
@@ -318,4 +328,6 @@ más, solo cuando alguien editó la hoja a mano). Prueba: §12.
 - **No publicado.** Esta rama sale de `incremento-5` (sin publicar): publicar las dos juntas o `incremento-5` primero. API:
   `npx clasp push --force` y nueva versión del deployment como facilities@ (§8 de CLAUDE.md). Interfaz (solo Rapidez 6):
   `CLOUDFLARE_ACCOUNT_ID=… npx --yes wrangler@4 deploy`. No hace falta correr nada desde el editor ni permisos nuevos.
-- Al publicar, el caché que dejó la versión anterior se sigue usando (Rapidez 9 lee los dos formatos).
+- Al publicar, el caché que dejó la versión anterior **no** se usa: `VERSION_CODIGO_CACHE` = `2026-10-29r` (revisión 3). La primera
+  carga de cada lista se arma de las hojas (como con el caché vacío: ~5 s el bootstrap, 9 s la primera ejecución). Si se publica
+  otra vez con cambios en algo que se guarda en caché, cambiar el valor antes (CLAUDE.md §8).

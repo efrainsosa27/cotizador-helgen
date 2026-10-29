@@ -452,7 +452,7 @@ assert(Object.keys(cache).some(k=>k.startsWith('K_reqs_')),'lista de requisicion
 const fila9=db.pest.Proyectos.m.findIndex(x=>x[0]===p9); db.pest.Proyectos.m[fila9][6]='Cancelado';
 const vMan=ok('pedro','sincronizar',{},{}).versiones;
 assert(ok('pedro','bootstrap').com.proyectos.some(p=>p.folio===p9),'antes de la revisión sigue el dato en caché');
-delete cache['R_proyectos']; // pasan los 5 min de la revisión
+for (const k of Object.keys(cache)) if (k.startsWith('R_proyectos')) delete cache[k]; // pasan los 5 min de la revisión
 const sMan=ok('pedro','sincronizar',vMan,{});
 assert.deepEqual([...sMan.cambios],['proyectos'],'la huella cambió: sube la versión');
 assert(!sMan.comProyectos.some(p=>p.folio===p9)&&!sMan.reqProyectos.some(p=>p.folio===p9),'cancelado a mano: sale de las listas');
