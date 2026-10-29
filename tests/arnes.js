@@ -94,8 +94,10 @@ module.exports = function crearArnes(dir, opciones) {
   // ---- UrlFetch: Drive, tokeninfo de Google y las rutas que agregue la prueba ({re, fn(url, opciones) → {codigo, cuerpo}}) ----
   const rutas = op.rutas || [];
   const llamadas = [];
+  // Un Buffer en cuerpo = respuesta binaria (getContent da bytes con signo, como Apps Script; incremento 5: fotos del centro de mando)
   const respuesta = (codigo, cuerpo) => ({ getResponseCode: () => codigo,
-    getContentText: () => typeof cuerpo === 'string' ? cuerpo : JSON.stringify(cuerpo == null ? {} : cuerpo) });
+    getContent: () => Buffer.isBuffer(cuerpo) ? [...cuerpo].map(x => x > 127 ? x - 256 : x) : [...Buffer.from(String(cuerpo == null ? '' : cuerpo))],
+    getContentText: () => Buffer.isBuffer(cuerpo) ? cuerpo.toString('binary') : typeof cuerpo === 'string' ? cuerpo : JSON.stringify(cuerpo == null ? {} : cuerpo) });
   function fetch(url, opf) {
     llamadas.push({ url, opciones: opf });
     if (/googleapis\.com\/drive\//.test(url)) return apiDrive(url, opf);
@@ -174,7 +176,12 @@ module.exports = function crearArnes(dir, opciones) {
   // Para leer o cambiar variables let/const del código (VENDEDOR_, MEMO_, SITIOS_INICIALES…), que no son propiedades de ctx
   const correr = codigo => vm.runInContext(codigo, ctx);
   const como = (correo, nombre) => correr('VENDEDOR_ = ' + JSON.stringify(correo ? { email: correo, nombre: nombre || correo, apellido: '' } : null) + '; MEMO_ = {};');
+  // Incremento 5 (recepción con fotos): FOTO = un JPEG mínimo en base64; conFotos(renglones) le pone su foto a cada renglón y
+  // FOTOS = {renglones: [{renglon: 1…20, foto}]} para "Recibí el material" y "Lo recogí"
+  const FOTO = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0, 16, 0x4A, 0x46, 0x49, 0x46, 0, 1]).toString('base64');
+  const conFotos = rs => rs.map(r => Object.assign({ foto: { nombre: 'foto.jpg', datos: FOTO, mime: 'image/jpeg' } }, r));
+  const FOTOS = { renglones: conFotos(Array.from({ length: 20 }, (_, i) => ({ renglon: i + 1 }))) };
   return Object.assign(A, { ctx, P: ctx, correr, como, post, ok, falla, plain, props, cache, libros, carpetas, archivos, correos, llamadas, rutas,
     tokens, claims, activadores, HOY, HOY_ISO, masDias, ANIO: String(HOY.getFullYear()), miUnidad, maestra, hoja, libro,
-    PDF: Buffer.from('%PDF-1.4 cotizacion del proveedor').toString('base64') });
+    PDF: Buffer.from('%PDF-1.4 cotizacion del proveedor').toString('base64'), FOTO, conFotos, FOTOS });
 };

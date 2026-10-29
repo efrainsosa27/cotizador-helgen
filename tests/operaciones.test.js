@@ -116,6 +116,8 @@ function vivos(f){return f.hijos.filter(h=>!h.trashed)}
 
 const PDF=Buffer.from('%PDF-1.4 cotizacion del proveedor').toString('base64');
 const JPG=Buffer.from([0xFF,0xD8,0xFF,0xE0,1,2,3]).toString('base64');
+// Incremento 5: una foto por renglón recibido
+const conFotos=rs=>rs.map(r=>({foto:{nombre:'f.jpg',datos:JPG},...r}));
 const REQ=f=>'REQ-'+ANIO+'-'+f, OC=f=>'OC-'+ANIO+'-'+f, PGP=f=>'PGP-'+ANIO+'-'+f;const REC=f=>'REC-'+ANIO+'-'+f;
 const plain=x=>JSON.parse(JSON.stringify(x));
 
@@ -342,11 +344,11 @@ let mr=ok('rosa','misRequisiciones').find(x=>x.folio===r1);
 assert.deepEqual([mr.esReceptor,mr.puedeRecibir,mr.puedeCancelar,mr.puedeEditar],[true,true,false,false]);
 
 // Recepción parcial (rosa) con foto; luis y ana no pueden; compras en su lugar con notas
-const recibir=(quien,extra)=>ok(quien,'registrarRecepcion',{reqFolio:r1,sitio:'Manzanillo (TIMSA)',idSolicitud:'rc'+(++nId),...extra});
-falla('luis','registrarRecepcion',[{reqFolio:r1,sitio:'Querétaro',renglones:[{renglon:1,cantidad:1}]}],/Solo quien pidió la requisición .* o quien la recibe/,'PERMISO');
+const recibir=(quien,extra)=>ok(quien,'registrarRecepcion',{reqFolio:r1,sitio:'Manzanillo (TIMSA)',idSolicitud:'rc'+(++nId),...extra,renglones:conFotos(extra.renglones||[])});
+falla('luis','registrarRecepcion',[{reqFolio:r1,sitio:'Querétaro',renglones:conFotos([{renglon:1,cantidad:1}])}],/Solo quien pidió la requisición .* o quien la recibe/,'PERMISO');
 falla('ana','registrarRecepcion',[{reqFolio:r1}],/No tienes permiso para registrar recepciones/,'PERMISO');
-falla('rosa','registrarRecepcion',[{reqFolio:r1,sitio:'Manzanillo (TIMSA)',renglones:[{renglon:1,cantidad:81}]}],/solo faltan 80 M por recibir/);
-falla('rosa','registrarRecepcion',[{reqFolio:r1,sitio:'Manzanillo (TIMSA)',renglones:[{renglon:3,cantidad:1}]}],/no tiene el renglón 3/);
+falla('rosa','registrarRecepcion',[{reqFolio:r1,sitio:'Manzanillo (TIMSA)',renglones:conFotos([{renglon:1,cantidad:81}])}],/solo faltan 80 M por recibir/);
+falla('rosa','registrarRecepcion',[{reqFolio:r1,sitio:'Manzanillo (TIMSA)',renglones:conFotos([{renglon:3,cantidad:1}])}],/no tiene el renglón 3/);
 let rr=recibir('rosa',{renglones:[{renglon:1,cantidad:50}],evidencia:{nombre:'remision.jpg',datos:JPG},notas:'Faltan 30 m',idSolicitud:'rcR'});
 assert.equal(recibir('rosa',{renglones:[{renglon:1,cantidad:50}],idSolicitud:'rcR'}).folio,REC('0001'),'idempotencia');
 assert.deepEqual([rr.folio,rr.completo,rr.estado],[REC('0001'),false,'Autorizada']);
@@ -358,14 +360,14 @@ assert.deepEqual([foto.blob.name,foto.acceso],[r1+' — Recepción '+REC('0001')
 mo=ok('obrero','misRequisiciones').find(x=>x.folio===r1);
 assert.deepEqual([mo.estado,mo.avance.map(l=>l.recibido+'/'+l.pedido).join(),mo.recepciones.length,mo.recepciones[0].sitio],['Autorizada','50/80,0/12',1,'Manzanillo (TIMSA)']);
 assert.equal(mo.recepciones[0].evidenciaUrl,undefined,'quien pidió no recibe la liga de la foto');
-falla('pedro','registrarRecepcion',[{reqFolio:r1,sitio:'Querétaro',renglones:[{renglon:2,cantidad:1}]}],/escribe en las notas por qué/);
+falla('pedro','registrarRecepcion',[{reqFolio:r1,sitio:'Querétaro',renglones:conFotos([{renglon:2,cantidad:1}])}],/escribe en las notas por qué/);
 
 // Completa sin pagar: Recibida (la orden sigue Emitida, con fecha de recepción)
 rr=recibir('obrero',{renglones:[{renglon:1,cantidad:30},{renglon:2,cantidad:12}]});
 assert.deepEqual([rr.completo,rr.estado],[true,'Recibida']);
 let fo=H('OrdenesCompra').find(x=>x[0]===ocF);
 assert.deepEqual([fo[28],fo[29],fo[30]],['Emitida',HOY_ISO,'obrero@helgen.tech']);
-falla('rosa','registrarRecepcion',[{reqFolio:r1,sitio:'Querétaro',renglones:[{renglon:1,cantidad:1}]}],/está recibida: no tiene material por recibir/);
+falla('rosa','registrarRecepcion',[{reqFolio:r1,sitio:'Querétaro',renglones:conFotos([{renglon:1,cantidad:1}])}],/está recibida: no tiene material por recibir/);
 vc=ok('pedro','getRequisicion',r1);
 assert.deepEqual([vc.puedePagar,vc.puedeCancelarPago,vc.recepcionCompleta,vc.recepciones.length,!!vc.recepciones[0].evidenciaUrl],[true,false,true,2,true]);
 falla('pedro','cancelarOrdenCompra',[ocF,'Ya no la queremos'],/ya tiene material recibido/);
@@ -411,7 +413,7 @@ ok('pedro','cotizarRequisicion',r2,prop2);
 const oc2=ok('adri','autorizarPropuesta',r2,1,'vb2',huella(r2)).ocFolio;
 pg=pagar(r2,2436);
 assert.equal(pg.vista.requisicion.estado,'Pagada');
-rr=ok('obrero','registrarRecepcion',{reqFolio:r2,sitio:'Querétaro',renglones:[{renglon:1,cantidad:2}],idSolicitud:'r2a'});
+rr=ok('obrero','registrarRecepcion',{reqFolio:r2,sitio:'Querétaro',renglones:conFotos([{renglon:1,cantidad:2}]),idSolicitud:'r2a'});
 assert.deepEqual([rr.completo,rr.estado],[false,'Pagada']);
 const recMal=rr.folio;
 vc=ok('pedro','cancelarRecepcion',recMal,'Llegaron a Manzanillo, no a Querétaro');
@@ -419,7 +421,7 @@ assert.deepEqual(movs().filter(m=>m[0]===recMal).map(m=>m[18]+':'+m[19]+':'+m[21
 assert.deepEqual([vc.requisicion.estado,vc.avance.map(l=>l.recibido).join()],['Pagada','0,0']);
 falla('pedro','cancelarRecepcion',[recMal,'Otra vez lo mismo'],/ya está cancelada/);
 falla('obrero','cancelarRecepcion',[recMal,'Otra vez lo mismo'],/permiso de compras/,'PERMISO');
-rr=ok('obrero','registrarRecepcion',{reqFolio:r2,sitio:'Manzanillo (TIMSA)',renglones:[{renglon:1,cantidad:2},{renglon:2,cantidad:8}],final:true,notas:'Faltaron 2 m de cable',idSolicitud:'r2b'});
+rr=ok('obrero','registrarRecepcion',{reqFolio:r2,sitio:'Manzanillo (TIMSA)',renglones:conFotos([{renglon:1,cantidad:2},{renglon:2,cantidad:8}]),final:true,notas:'Faltaron 2 m de cable',idSolicitud:'r2b'});
 assert.deepEqual([rr.completo,rr.estado],[true,'Cerrada']);
 fo=H('OrdenesCompra').find(x=>x[0]===oc2);
 assert.deepEqual([fo[28],fo[30]],['Recibida','obrero@helgen.tech']);
@@ -443,7 +445,7 @@ falla('mixta','devolverRequisicion',[r3,'Quiero ver los montos'],/permiso de ope
 const r6=ok('obrero','guardarRequisicion',nuevaReq({renglones:[{descripcion:'GPS',cantidad:1},{descripcion:'Radio',cantidad:1}]})).folio;
 ok('adri','aprobarRequisicion',r6,todo(2));
 falla('mixta','devolverRequisicion',[r6,'Quiero ver los montos'],/No tienes permiso de compras/,'PERMISO');
-falla('mixta','registrarRecepcion',[{reqFolio:r1,sitio:'Querétaro',renglones:[{renglon:1,cantidad:1}],notas:'En su lugar'}],/Solo quien pidió/,'PERMISO');
+falla('mixta','registrarRecepcion',[{reqFolio:r1,sitio:'Querétaro',renglones:conFotos([{renglon:1,cantidad:1}]),notas:'En su lugar'}],/Solo quien pidió/,'PERMISO');
 falla('mixta','archivoRequisicion',[r1,archProp.id],/No tienes acceso a ese archivo/,'PERMISO');
 // La versión de la propuesta sigue al retirarla (separar): el visto bueno de una propuesta vieja no pasa aunque coincida el número
 ok('pedro','cotizarRequisicion',r6,{...prop2,proveedor:{razonSocial:'Proveedor Barato'},renglones:[{renglon:1,disponibilidad:'Exacto',costo:1},{renglon:2,disponibilidad:'Exacto',costo:1}],idSolicitud:'p6'});

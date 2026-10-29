@@ -89,7 +89,8 @@ function verificarTokenGoogle_(idToken) {
  * Las mod*_ son declaraciones de función: se pueden llamar aquí aunque estén más abajo. Dentro de `api` solo van
  * declaraciones de función (una const de más abajo todavía no existe al cargar el archivo).
  */
-const MODULOS_ = [modIdentidad_(), modAnular_(), modCorreos_(), modCentroMando_(), modPantallas_()];
+const MODULOS_ = [modIdentidad_(), modAnular_(), modCorreos_(), modCentroMando_(), modPantallas_(),
+  modRecepcion_()]; // incremento 5: H · recepción con fotos y devoluciones
 /** Une un campo de todos los módulos: objetos con Object.assign, listas con concat. */
 function deModulos_(campo, inicial) {
   return MODULOS_.reduce((acc, m) => Array.isArray(inicial) ? acc.concat(m[campo] || []) : Object.assign(acc, m[campo] || {}), inicial);
@@ -2373,7 +2374,9 @@ const HOJAS_COMPRAS = {
   MovimientosInventario: {
     enc: ['folio', 'fecha', 'fecha_registro', 'tipo', 'sitio', 'proyecto_folio', 'req_folio', 'oc_folio', 'renglon', 'clave',
       'descripcion', 'unidad', 'cantidad', 'correo', 'nombre', 'notas', 'evidencia_id', 'evidencia_url', 'estado',
-      'cancelado_por', 'fecha_cancelacion', 'motivo_cancelacion'],
+      'cancelado_por', 'fecha_cancelacion', 'motivo_cancelacion',
+      // Incremento 5 (módulo H): foto del renglón en Drive (se buscan por nombre con colMov_)
+      'foto_id', 'foto_url'],
     numeros: [9, 13],
   },
   // inventario_item (incremento 4): código del ítem en el centro de mando (opcional; sin ítem = "por ligar" allá)
@@ -2391,6 +2394,14 @@ const HOJAS_COMPRAS = {
   // Avisos al centro de mando (incremento 4, 6.C): cada aviso se escribe aquí antes de mandarse (Pendiente) y queda Enviado
   // cuando el centro de mando lo acepta; el activador de 15 minutos reintenta los pendientes. Nunca se borran filas.
   PortalPendientes: { enc: ['evento_id', 'cuerpo', 'intentos', 'ultimo_error', 'creado', 'estado', 'enviado'], numeros: [] },
+  // Devoluciones DEV-AAAA-NNNN (incremento 5, módulo H): material equivocado o dañado; compras resuelve. Nunca se borran filas.
+  // origen_clave: (OC, renglón, foto o comentario) de un problema reportado en el centro de mando (no se crea dos veces)
+  Devoluciones: {
+    enc: ['folio', 'fecha', 'req_folio', 'oc_folio', 'proyecto_folio', 'renglon', 'descripcion', 'cantidad', 'tipo', 'comentario',
+      'foto_id', 'foto_url', 'origen', 'reporto_email', 'estado', 'resolucion', 'nota_resolucion', 'guia_devolucion',
+      'resolvio_email', 'fecha_resolucion', 'origen_clave'],
+    numeros: [6, 8],
+  },
 };
 const COL_ESTADO_OC = 29; // AC: estado, recepción (AD:AE) y cancelación (AF:AH)
 /** Columna (desde 1) de un encabezado de OrdenesCompra (las del centro de mando se buscan por nombre). */
@@ -2895,16 +2906,23 @@ function movDesdeFila_(r, fila) {
     correo: String(r[13] || ''), nombre: String(r[14] || r[13] || ''), notas: String(r[15] || ''), evidenciaId: String(r[16] || ''),
     evidenciaUrl: String(r[17] || ''), estado: String(r[18] || 'Vigente'), canceladoPor: String(r[19] || ''),
     fechaCancelacion: fechaTexto_(r[20]), motivoCancelacion: String(r[21] || ''), fila: fila,
+    // Incremento 5 (H): foto del renglón (un id "centro:…" = foto del centro de mando que todavía no llega a Drive)
+    fotoId: String(r[colMov_('foto_id') - 1] || ''), fotoUrl: String(r[colMov_('foto_url') - 1] || ''),
   };
 }
+/** Columna (desde 1) de un encabezado de MovimientosInventario (las de la foto se buscan por nombre). */
+const colMov_ = nombre => HOJAS_COMPRAS.MovimientosInventario.enc.indexOf(nombre) + 1;
 
-/** {FOLIO DE LA ORDEN: [movimientos]} de las entradas por compra. Sin libro: ninguno. */
+/**
+ * {FOLIO DE LA ORDEN: [movimientos]} de las entradas por compra y, desde el incremento 5, de las devoluciones (cantidad
+ * negativa: avanceRecepcion las descuenta). Sin libro: ninguno.
+ */
 function movimientosPorOc_(libro) {
   const mapa = {};
   if (!libro) return mapa;
   filasDeArea_(hojaCompras_(libro, 'MovimientosInventario'), HOJAS_COMPRAS, 'MovimientosInventario').forEach((r, i) => {
     const m = movDesdeFila_(r, i + 2);
-    if (!m.folio || m.tipo !== TIPO_ENTRADA_COMPRA || m.estado === ESTADO_ANULADA) return; // anuladas: ni se ven ni cuentan
+    if (!m.folio || !cuentaEnRecepcion(m.tipo) || m.estado === ESTADO_ANULADA) return; // anuladas: ni se ven ni cuentan
     const f = m.ocFolio.toUpperCase();
     (mapa[f] = mapa[f] || []).push(m);
   });
@@ -2915,6 +2933,7 @@ function movimientosPorOc_(libro) {
 function recepcionesDe_(movs, conEvidencia) {
   const porFolio = {}, orden = [];
   (movs || []).forEach(m => {
+    if (m.tipo && m.tipo !== TIPO_ENTRADA_COMPRA) return; // H: las devoluciones se ven en su lista (DEV-…), no como recepción
     let x = porFolio[m.folio];
     if (!x) {
       x = porFolio[m.folio] = { folio: m.folio, fecha: m.fecha, registro: m.fechaRegistro, nombre: m.nombre, correo: m.correo,
@@ -2922,7 +2941,8 @@ function recepcionesDe_(movs, conEvidencia) {
       if (conEvidencia) x.evidenciaUrl = m.evidenciaUrl;
       orden.push(x);
     }
-    x.renglones.push({ renglon: m.renglon, descripcion: m.descripcion, unidad: m.unidad, cantidad: m.cantidad });
+    x.renglones.push(Object.assign({ renglon: m.renglon, descripcion: m.descripcion, unidad: m.unidad, cantidad: m.cantidad },
+      conEvidencia && /^https?:/.test(m.fotoUrl || '') ? { fotoUrl: m.fotoUrl } : {})); // H: "Ver foto" (compras)
   });
   return orden;
 }
@@ -3039,8 +3059,8 @@ function misRequisicionesDeHojas_(yo, flujo) {
       orden = ordenes[req.ocFolio.toUpperCase()] || null;
       m = movs[req.ocFolio.toUpperCase()] || [];
     }
-    lista.push(reqParaSolicitante_(req, ren[f], ev[f], proyectos, { flujo: flujo, yo: yo, orden: orden, movimientos: m,
-      centro: centroDeReq_(req, cfg, det) }));
+    lista.push(Object.assign(reqParaSolicitante_(req, ren[f], ev[f], proyectos, { flujo: flujo, yo: yo, orden: orden, movimientos: m,
+      centro: centroDeReq_(req, cfg, det) }), recepcionParaSolicitante_(libro, req, orden, m, yo))); // H: devoluciones y fotos
   });
   return lista.reverse();
 }
@@ -3160,11 +3180,17 @@ function cerrarReq_(libro, hoja, req, nota, motivo) {
     (nota ? ' · ' + nota : ''), motivo || '', HOJAS_COMPRAS);
 }
 
-/** "Recibí el material": solo el solicitante y solo si está Pagada. notas opcionales (p. ej. "faltó 1 pieza"). */
-function cerrarRequisicion(folioReq, notas) {
+/**
+ * "Recibí el material": solo el solicitante y solo si está Pagada. notas opcionales (p. ej. "faltó 1 pieza").
+ * Incremento 5 (H): d = {renglones: [{renglon (de la orden), foto: {nombre, datos, mime}, problema?: {tipo, cantidad,
+ * comentario, foto}}], idSolicitud}: una foto por renglón pendiente de la orden (cada uno queda como entrada por compra, folio
+ * REC). Si se reporta un problema (o hay una devolución abierta), la requisición queda Recibida y no se cierra hasta resolverla.
+ */
+function cerrarRequisicion(folioReq, notas, d) {
   exigirRequisicion_();
   if (flujoOperaciones_()) throw new Error('Confirma lo que recibiste renglón por renglón con "Registrar recepción".');
   const nota = notaOpcional_(notas);
+  const fotos = fotosDeRenglones_((d || {}).renglones); // H: se leen antes del candado
   const libro = libroCompras_();
   return conCandado_(() => {
     const { hoja, req } = buscarReq_(libro, folioReq);
@@ -3172,6 +3198,8 @@ function cerrarRequisicion(folioReq, notas) {
       throw errorPermiso_('Solo quien hizo la requisición ' + req.folio + ' puede confirmar que recibió el material.');
     }
     exigirNoLigado_(req);
+    // H: entrada por compra de lo pendiente con su foto (y problemas); con una devolución abierta queda Recibida (retenida)
+    if (recibirTodoConFotos_(libro, hoja, req, fotos, nota, true)) { SpreadsheetApp.flush(); return misRequisiciones(); }
     cerrarReq_(libro, hoja, req, nota, '');
     SpreadsheetApp.flush();
     return misRequisiciones();
@@ -3262,7 +3290,7 @@ function vistaRequisicion_(libro, folioReq) {
   const porCotizar = req.estado === REQ_APROBADA || req.estado === REQ_COTIZADA;
   const ocPagada = !!orden && orden.estado === OC_PAGADA;
   const conOrden = [REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO].indexOf(req.estado) !== -1;
-  return {
+  return Object.assign({ // H (incremento 5): devoluciones, fotos y "Reportar problema" al final (recepcionParaCompras_)
     requisicion: r,
     flujoOperaciones: flujo,
     version: vigente.version, // versión de los renglones (separar la exige)
@@ -3301,7 +3329,7 @@ function vistaRequisicion_(libro, folioReq) {
     // Centro de mando (incremento 4): proyecto ligado (recibir o cerrar aquí es el respaldo de compras) y registrar el envío
     centroMando: centroDeReq_(req),
     puedeEnCamino: conOrden && !!orden && orden.estado !== OC_CANCELADA,
-  };
+  }, recepcionParaCompras_(libro, req, orden, movs, avance));
 }
 
 function getRequisicion(folioReq) {
@@ -3410,7 +3438,9 @@ function registrarPagoProveedor(p) {
     const { hoja, req } = buscarReq_(libro, reqFolio);
     // Con todo ya recibido (Recibida), el pago la cierra y la orden queda Recibida; En camino sigue En camino (pagada)
     const yaRecibida = req.estado === REQ_RECIBIDA, enCamino = req.estado === REQ_EN_CAMINO;
-    const nuevo = transicionReq(req.estado, yaRecibida ? 'pagarRecibida' : enCamino ? 'pagarEnCamino' : 'pagar');
+    // H (incremento 5): con una devolución abierta el pago no la cierra (sigue Recibida, la orden Pagada) hasta resolverla
+    const retenida = yaRecibida ? devolucionAbiertaDe_(libro, req.folio) : '';
+    const nuevo = transicionReq(req.estado, retenida ? 'pagarRetenida' : yaRecibida ? 'pagarRecibida' : enCamino ? 'pagarEnCamino' : 'pagar');
     const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
     if (d0.ocFolio && String(d0.ocFolio).trim().toUpperCase() !== orden.folio.toUpperCase()) {
       throw new Error('La orden ' + String(d0.ocFolio).toUpperCase() + ' no es la de la requisición ' + req.folio + '.');
@@ -3431,9 +3461,10 @@ function registrarPagoProveedor(p) {
       orden.folio, req.folio, req.proyectoFolio, pago.monto, pago.monedaPago, pago.tipoCambio, pago.montoAplicado, orden.moneda,
       pago.metodo, t(pago.referencia), archivo.getId(), archivo.getUrl(), t(VENDEDOR_.email),
       t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '']);
-    hO.getRange(orden.fila, COL_ESTADO_OC).setValue(yaRecibida ? OC_RECIBIDA : OC_PAGADA);
+    hO.getRange(orden.fila, COL_ESTADO_OC).setValue(yaRecibida && !retenida ? OC_RECIBIDA : OC_PAGADA);
     cambiarReq_(hoja, req, nuevo, {});
-    eventoReq_(libro, req.folio, nuevo, yaRecibida ? 'Pagada; el material ya estaba recibido.' : enCamino ? 'Pagada; el material va en camino.' : '');
+    eventoReq_(libro, req.folio, nuevo, retenida ? 'Pagada; ' + textoRetenida(retenida) : // H
+      yaRecibida ? 'Pagada; el material ya estaba recibido.' : enCamino ? 'Pagada; el material va en camino.' : '');
     bitacora_(libro, 'Registrar pago a proveedor', req.proyectoFolio, folio + ' · ' + orden.folio + ' · ' + req.folio + ' · ' +
       formatoMoneda(pago.monto) + ' ' + pago.monedaPago + (pago.tipoCambio ? ' · TC ' + pago.tipoCambio + ' = ' +
       formatoMoneda(pago.montoAplicado) + ' ' + orden.moneda : '') + ' · ' + pago.metodo, '', HOJAS_COMPRAS);
@@ -3492,6 +3523,9 @@ function cerrarRequisicionCompras(folioReq, motivo, notas) {
   return conAvisoPortal_(conCandado_(() => {
     const { hoja, req } = buscarReq_(libro, folioReq);
     const ligado = proyectoLigado_(req.proyectoFolio);
+    // H (incremento 5): con una devolución abierta no se cierra; lo pendiente queda como entrada por compra (sin foto obligatoria)
+    exigirSinDevolucionAbierta_(libro, req);
+    recibirTodoConFotos_(libro, hoja, req, {}, nota, false);
     cerrarReq_(libro, hoja, req, nota, m + (ligado ? ' (respaldo: no llega al inventario del sitio)' : ''));
     if (ligado) avisarPortal_('req.cerrada', req.ocFolio);
     SpreadsheetApp.flush();
@@ -3849,6 +3883,7 @@ function registrarRecepcion(p) {
   const d0 = p || {};
   const bytes = bytesDeAdjunto_(d0.evidencia, 'No se pudo leer la foto. Vuelve a adjuntarla.');
   const tipo = bytes ? validarArchivo(bytes, 'la foto de la remisión', 'La foto') : null;
+  const fotos = fotosDeRenglones_(d0.renglones); // H (incremento 5): foto y problema por renglón, leídos antes del candado
   const sitios = sitios_();
   const libro = libroCompras_();
   const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
@@ -3885,17 +3920,27 @@ function registrarRecepcion(p) {
       throw new Error('Recepción de respaldo (el proyecto se recibe en el centro de mando): escribe en las notas por qué la registras aquí.');
     }
     if (!propio && rec.notas.length < 5) throw new Error('Registras la recepción en lugar de quien la recibe: escribe en las notas por qué.');
+    // H (incremento 5): una foto por renglón recibido y, si se reporta un problema al recibir, se revisa antes de escribir nada
+    const problemas = validarFotosYProblemas_(rec.renglones, fotos, avance.lineas);
     const hM = hojaCompras_(libro, 'MovimientosInventario');
     const folio = siguienteFolio_(PREFIJO_REC, hM, 'CONSECUTIVO_REC_');
     const archivo = bytes ? privado_(carpetaRequisiciones_(req.proyectoFolio).createFile(Utilities.newBlob(bytes, tipo.mime,
       nombreArchivoReq(req.folio, 'Recepción ' + folio, tipo.ext, 1)))) : null;
+    const guardadas = guardarFotosRecepcion_(req.proyectoFolio, folio, fotos, rec.renglones); // H: Drive, privado_
     const ahora = ahoraTexto_(), t = textoCelda;
-    rec.renglones.forEach(x => hM.appendRow([folio, textoFecha_(hoyIso_()), ahora, TIPO_ENTRADA_COMPRA, t(rec.sitio), req.proyectoFolio,
+    rec.renglones.forEach(x => hM.appendRow(conFotoMov_([folio, textoFecha_(hoyIso_()), ahora, TIPO_ENTRADA_COMPRA, t(rec.sitio), req.proyectoFolio,
       req.folio, orden.folio, x.renglon, t(x.clave), t(x.descripcion), t(x.unidad), x.cantidad, t(yo), t(nombreYo_()), t(rec.notas),
-      archivo ? archivo.getId() : '', archivo ? archivo.getUrl() : '', 'Vigente', '', '', '']));
-    let nuevo = req.estado;
+      archivo ? archivo.getId() : '', archivo ? archivo.getUrl() : '', 'Vigente', '', '', ''], guardadas[x.renglon])));
+    crearDevolucionesDeRecepcion_(libro, req, orden, problemas, fotos); // H: problema reportado al recibir → DEV-…
+    let nuevo = req.estado, retenida = '';
     if (rec.completo) {
-      if (req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && orden.estado === OC_PAGADA)) {
+      // H: con una devolución abierta no se cierra: queda Recibida (la orden sigue Pagada) hasta que compras la resuelva
+      retenida = (req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && orden.estado === OC_PAGADA)) ?
+        devolucionAbiertaDe_(libro, req.folio) : '';
+      if (retenida) {
+        nuevo = transicionReq(req.estado, 'recibirRetenida');
+        hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(yo)]]);
+      } else if (req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && orden.estado === OC_PAGADA)) {
         nuevo = transicionReq(req.estado, 'recibirPagada');
         hO.getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(hoyIso_()), t(yo)]]);
       } else {
@@ -3914,7 +3959,7 @@ function registrarRecepcion(p) {
     eventoReq_(libro, req.folio, nuevo, 'Recepción ' + folio + ' en ' + rec.sitio + ' (' +
       (rec.completo ? (faltante ? 'última, con faltante' : 'completa') : 'parcial') + '): ' + lista +
       (centro ? ' · respaldo de compras (no llega al inventario del sitio en el centro de mando)' : propio ? '' : ' · registrada por compras') +
-      (rec.notas ? ' · ' + rec.notas : ''));
+      (rec.notas ? ' · ' + rec.notas : '') + (retenida ? ' · ' + textoRetenida(retenida) : ''));
     notificar_('req.recibida', { req: req.folio, parcial: !rec.completo, sitio: rec.sitio, nota: rec.notas }); // correo a compras (6.B)
     bitacora_(libro, centro ? 'Registrar recepción (respaldo del centro de mando)' : 'Registrar recepción', req.proyectoFolio,
       folio + ' · ' + req.folio + ' · ' + orden.folio + ' · ' + rec.sitio + ' · ' + lista + (rec.completo ? ' · ' + nuevo : ' · parcial'),
@@ -3943,7 +3988,8 @@ function cancelarRecepcion(folioRec, motivo) {
     const filas = [];
     filasDeArea_(hM, HOJAS_COMPRAS, 'MovimientosInventario').forEach((r, i) => {
       const x = movDesdeFila_(r, i + 2);
-      if (x.folio.toUpperCase() === folio) filas.push(x);
+      // H (incremento 5): solo entradas por compra (una devolución o "Lo recogí" no se cancelan aquí)
+      if (x.folio.toUpperCase() === folio && x.tipo === TIPO_ENTRADA_COMPRA) filas.push(x);
     });
     if (!filas.length) throw new Error('No existe la recepción ' + folio + '.');
     if (filas.every(x => x.estado === ESTADO_ANULADA)) throw new Error('La recepción ' + folio + ' está anulada.');
@@ -3952,6 +3998,7 @@ function cancelarRecepcion(folioRec, motivo) {
     if (req.estado === REQ_CERRADA) {
       throw new Error('La requisición ' + req.folio + ' ya está cerrada (pagada y recibida): la recepción no se puede cancelar.');
     }
+    exigirSinDevoluciones_(libro, req, filas); // H: con una devolución de esos renglones, primero se resuelve
     const { hoja: hO, orden } = buscarOrden_(libro, filas[0].ocFolio);
     const ahora = ahoraTexto_(), t = textoCelda;
     filas.forEach(x => hM.getRange(x.fila, 19, 1, 4).setValues([['Cancelado', t(yo_()), ahora, t(m)]]));
@@ -5015,13 +5062,24 @@ const TRANSICIONES_REQ = {
   pagarEnCamino: { de: [REQ_EN_CAMINO], a: REQ_EN_CAMINO },
   cancelarPagoEnCamino: { de: [REQ_EN_CAMINO], a: REQ_EN_CAMINO },
   cancelarRecepcionEnCamino: { de: [REQ_RECIBIDA], a: REQ_EN_CAMINO },
+  // Devoluciones (incremento 5, módulo H). Con una devolución Abierta la requisición no se cierra: lo que la cerraría (recibir
+  // todo con la orden pagada, o pagar la ya recibida) la deja Recibida hasta que compras la resuelva (cerrarRetenida la cierra).
+  // "Reponer" regresa el renglón a por recibir: la requisición vuelve a Autorizada, Pagada o En camino según su orden.
+  recibirRetenida: { de: [REQ_PAGADA, REQ_EN_CAMINO], a: REQ_RECIBIDA },
+  pagarRetenida: { de: [REQ_RECIBIDA], a: REQ_RECIBIDA },
+  cerrarRetenida: { de: [REQ_RECIBIDA], a: REQ_CERRADA },
+  devolucionAutorizada: { de: [REQ_RECIBIDA, REQ_CERRADA], a: REQ_AUTORIZADA },
+  devolucionPagada: { de: [REQ_RECIBIDA, REQ_CERRADA], a: REQ_PAGADA },
+  devolucionEnCamino: { de: [REQ_RECIBIDA, REQ_CERRADA], a: REQ_EN_CAMINO },
 };
 const VERBOS_REQ = { autorizar: 'autorizar', rechazar: 'rechazar', devolver: 'devolver', reenviar: 'reenviar', cancelar: 'cancelar',
   pagar: 'pagar', cancelarPago: 'cancelar el pago de', cerrar: 'cerrar', cancelarOc: 'regresar a Solicitada', aprobar: 'aprobar',
   cotizar: 'mandar la propuesta de', regresarACompras: 'regresar a compras', visto: 'dar el visto bueno a', recibir: 'recibir',
   recibirPagada: 'recibir', pagarRecibida: 'pagar', cancelarOcAprobada: 'regresar a Aprobada',
   cancelarRecepcion: 'cancelar la recepción de', enCamino: 'marcar en camino', pagarEnCamino: 'pagar',
-  cancelarPagoEnCamino: 'cancelar el pago de', cancelarRecepcionEnCamino: 'cancelar la recepción de', cerrarEnCamino: 'cerrar' };
+  cancelarPagoEnCamino: 'cancelar el pago de', cancelarRecepcionEnCamino: 'cancelar la recepción de', cerrarEnCamino: 'cerrar',
+  recibirRetenida: 'recibir', pagarRetenida: 'pagar', cerrarRetenida: 'cerrar', devolucionAutorizada: 'reabrir por una devolución',
+  devolucionPagada: 'reabrir por una devolución', devolucionEnCamino: 'reabrir por una devolución' };
 
 /** Estado nuevo de una requisición tras la acción; error si no se puede desde su estado actual. */
 function transicionReq(estado, accion) {
@@ -5299,14 +5357,16 @@ function renglonesSinRecepcion(prop) {
  */
 function avanceRecepcion(renglones, movimientos, sinRecibir) {
   const r4 = n => Math.round(n * 10000) / 10000;
-  const recibido = {};
+  const recibido = {}, faltante = {};
   (movimientos || []).forEach(m => {
     if (m.estado === 'Vigente') recibido[m.renglon] = r4((recibido[m.renglon] || 0) + (Number(m.cantidad) || 0));
+    // Incremento 5 (H): devuelto sin reponer (devolver al proveedor o cancelar el renglón) = faltante aceptado: ya no se espera
+    if (m.estado === 'Vigente' && m.tipo === TIPO_DEVOLUCION_CIERRA) faltante[m.renglon] = r4((faltante[m.renglon] || 0) - (Number(m.cantidad) || 0));
   });
   const lineas = (renglones || []).map((r, i) => {
-    const pedido = Number(r.cantidad) || 0, rec = recibido[i + 1] || 0;
-    return { renglon: i + 1, clave: r.clave || '', descripcion: r.descripcion, unidad: r.unidad, pedido: pedido, recibido: rec,
-      pendiente: Math.max(0, r4(pedido - rec)) };
+    const pedido = Number(r.cantidad) || 0, rec = recibido[i + 1] || 0, falta = faltante[i + 1] || 0;
+    return Object.assign({ renglon: i + 1, clave: r.clave || '', descripcion: r.descripcion, unidad: r.unidad, pedido: pedido, recibido: rec,
+      pendiente: Math.max(0, r4(pedido - falta - rec)) }, falta ? { faltante: falta } : {});
   }).filter(l => (sinRecibir || []).indexOf(l.renglon) === -1);
   return { lineas: lineas, completo: lineas.length > 0 && lineas.every(l => l.pendiente <= 1e-9), algo: lineas.some(l => l.recibido > 0) };
 }
@@ -7144,7 +7204,10 @@ function modCorreos_() {
 /** Eventos de aviso (tipo de notificar_). Quién recibe cada uno lo decide el módulo de correos (tabla del spec, sección 5). */
 const EVENTOS_CORREO = ['req.solicitada', 'req.aprobada', 'req.devuelta', 'req.rechazada', 'req.cotizada', 'req.regresada',
   'req.autorizada', 'req.encamino', 'req.pagada', 'req.recibida', 'req.cancelada', 'oc.cancelada', 'delegacion', 'usuario.alta',
-  'anulado'];
+  'anulado',
+  // Incremento 5 (H): devoluciones. datos = {req, dev: {folio, renglon, descripcion, cantidad, unidad, tipo, resolucion, reporto},
+  // nota (el comentario o la nota de la resolución: nunca va en el correo), quien?}
+  'dev.reportada', 'dev.resuelta'];
 
 /** Dirección de CAPRI (la liga de cada aviso abre la requisición con #req=REQ-…). */
 const URL_AVISOS_CAPRI = 'https://cotizador-helgen.cotizador-helgen.workers.dev/cotizador/';
@@ -7318,6 +7381,14 @@ function infoDeAviso_(tipo, d, actor, memo) {
   info.centro = !!(req && typeof proyectoLigado_ === 'function' && proyectoLigado_(req.proyectoFolio));
   info.paqueteria = limpiar(d.paqueteria);
   info.guia = limpiar(d.guia);
+  // Incremento 5 (H): la devolución (sin montos ni proveedor: la descripción también se limpia)
+  if (d.dev && typeof d.dev === 'object') {
+    const dv = d.dev;
+    info.dev = { folio: String(dv.folio || ''), renglon: Number(dv.renglon) || '', descripcion: limpiar(String(dv.descripcion || '').slice(0, 120)),
+      cantidad: Number(dv.cantidad) || '', unidad: String(dv.unidad || ''), tipo: String(dv.tipo || ''),
+      resolucion: String(dv.resolucion || ''), origen: String(dv.origen || '') };
+    info.devReporto = String(dv.reporto || '').toLowerCase();
+  }
   if (tipo === 'delegacion') {
     Object.assign(info, { delegado: correoCapri(d.a), de: correoCapri(d.de), deNombre: nombreDeCorreo_(d.de),
       roles: rolesDeTexto(d.roles).map(r => NOMBRES_ROLES[r]), desde: String(d.desde || ''), hasta: String(d.hasta || '') });
@@ -7526,6 +7597,13 @@ function destinatariosAviso(tipo, d, info, roles) {
       const lista = Array.isArray(x.para) ? x.para : String(x.para || '').split(/[\s,;]+/);
       return [{ quien: 'involucrado', para: lista }];
     }
+    // Incremento 5 (H): problema reportado → compras (y quien pidió, si lo reportó otra persona); resuelto → quien reportó,
+    // quien pidió y quien recibe
+    case 'dev.reportada': return [{ quien: 'compras', para: co }].concat(i.actorCorreo !== sol ? [{ quien: 'solicitante', para: [sol] }] : []);
+    case 'dev.resuelta': {
+      const reporto = String((x.dev && x.dev.reporto) || i.devReporto || '').toLowerCase();
+      return [{ quien: 'reporto', para: [reporto] }, { quien: 'solicitante', para: [sol] }, { quien: 'recibe', para: [rec] }];
+    }
   }
   return [];
 }
@@ -7665,6 +7743,24 @@ function contenidoAviso(tipo, quien, info) {
       x.filas = [['Proyecto', [i.proyectoVisible, i.proyectoNombre].filter(Boolean).join(' · ')], ['Lo hizo', quienHizo],
         ['Cuándo', fechaCorreo(i.fecha)]];
       x.nota = i.nota;
+      break;
+    }
+    // Incremento 5 (H): devoluciones (sin montos, proveedor ni folio de orden; el comentario solo como "hay una nota")
+    case 'dev.reportada': case 'dev.resuelta': {
+      const dv = i.dev || {};
+      const material = [dv.cantidad, dv.unidad].filter(v => v !== '' && v != null).join(' ') + (dv.descripcion ? ' de "' + dv.descripcion + '"' : '');
+      if (tipo === 'dev.reportada') {
+        req('Problema con material', quien === 'compras'
+          ? 'Se reportó un problema con material recibido (' + (dv.folio || 'devolución') + '). Revísalo en CAPRI y resuélvelo: reponer, ' +
+            'devolver al proveedor, cancelar el renglón o conservar. Mientras esté abierta, la requisición no se cierra.'
+          : 'Se reportó un problema con el material de tu requisición (' + (dv.folio || 'devolución') + '). Compras lo va a resolver.', i.nota);
+      } else {
+        req('Devolución resuelta', 'Compras resolvió la devolución ' + (dv.folio || '') + ': ' + textoResolucionDev(dv.resolucion) +
+          (quien === 'reporto' ? ' Gracias por reportarlo.' : ''), i.nota);
+      }
+      x.filas.splice(1, 0, ['Devolución', dv.folio], ['Material', material], ['Problema', dv.tipo],
+        ['Origen', dv.origen === ORIGEN_DEV_CENTRO ? 'Reportado en el centro de mando' + (i.quien ? ' por ' + i.quien : '') : '']);
+      if (tipo === 'dev.resuelta') x.filas.splice(4, 0, ['Resolución', dv.resolucion]);
       break;
     }
   }
@@ -7910,7 +8006,8 @@ function modCentroMando_() {
   };
 }
 
-const TIPOS_EVENTO_PORTAL = ['oc.autorizada', 'oc.pagada', 'oc.en_camino', 'oc.cancelada', 'req.cerrada'];
+const TIPOS_EVENTO_PORTAL = ['oc.autorizada', 'oc.pagada', 'oc.en_camino', 'oc.cancelada', 'req.cerrada',
+  'oc.devolucion']; // incremento 5 (H): se resolvió una devolución de un proyecto ligado
 const MENSAJE_PORTAL_PENDIENTE = 'Guardado. El centro de mando se actualizará en unos minutos.';
 /** Quién aparece en el historial y la Bitacora cuando el cambio lo trae el centro de mando. */
 const CORREO_CENTRO_MANDO = 'centro de mando';
@@ -8060,7 +8157,7 @@ function enviarEventoPortal_(cfg, texto) {
  * "<folio OC>:<tipo>:<n>" (n = cuántas veces se ha formado ese tipo para esa orden): un reintento nunca duplica.
  * Solo proyectos ligados y con la función encendida. Nunca lanza error. Devuelve el evento_id ('' si no aplica).
  */
-function avisarPortal_(tipo, folioOc) {
+function avisarPortal_(tipo, folioOc, extra) { // extra (H, incremento 5): {devolucion} para oc.devolucion
   try {
     const cfg = configPortal_();
     if (!cfg.activo || TIPOS_EVENTO_PORTAL.indexOf(tipo) === -1) return '';
@@ -8087,7 +8184,8 @@ function avisarPortal_(tipo, folioOc) {
     const datos = { cuando: isoConZona_(new Date()), quien: VENDEDOR_ ? VENDEDOR_.email : '', prueba: cfg.prueba, orden: orden, req: req,
       proyectoFolio: folioInterno(orden.proyectoFolio), proyectoClave: clave,
       sitioCodigo: req ? codigoDeSitio(req.sitio, sitiosDetalle_()) : '',
-      sinRecibir: renglonesSinRecepcion(req ? propuestaVigente_(req) : null) };
+      sinRecibir: renglonesSinRecepcion(req ? propuestaVigente_(req) : null),
+      devolucion: extra && extra.devolucion ? extra.devolucion : null }; // H: oc.devolucion
     let cuerpo = cuerpoEventoPortal(tipo, previos + 1, datos);
     let texto = jsonAscii(cuerpo);
     if (texto.length > 45000) { cuerpo = cuerpoEventoPortal(tipo, previos + 1, datos, 40); texto = jsonAscii(cuerpo); } // cabe en una celda
@@ -8196,6 +8294,7 @@ function marcarEnCamino(folioReq, d) {
   const compras = esCompras_(), requisicion = esRequisicion_();
   if (!compras && !requisicion) throw errorPermiso_('No tienes permiso para registrar envíos.');
   const d0 = d || {};
+  const fotos = d0.recogido === true ? fotosDeRenglones_(d0.renglones) : null; // H (incremento 5): "Lo recogí" lleva foto por renglón
   const libro = libroCompras_();
   const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
   const cache = CacheService.getScriptCache();
@@ -8220,6 +8319,7 @@ function marcarEnCamino(folioReq, d) {
     const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
     if (orden.estado === OC_CANCELADA) throw new Error('La orden ' + orden.folio + ' está cancelada.');
     const e = normalizarEnCamino(d0, { hoy: hoyIso_(), nombre: nombreYo_() });
+    if (recogido) fotosRecogido_(libro, req, orden, fotos); // H: una foto por renglón por recibir (se revisan antes de escribir)
     const t = textoCelda;
     hO.getRange(orden.fila, colOc_('paqueteria'), 1, 5).setValues([[t(e.paqueteria), t(e.guia), textoFecha_(e.fechaEstimada),
       ahoraTexto_(), t(yo)]]);
@@ -8368,8 +8468,11 @@ function traerRecepcionesPortal() {
       });
       SpreadsheetApp.flush();
     }));
+    // H (incremento 5): fotos del centro de mando a Drive, ya fuera del candado; una que falla deja errores (no avanza la última
+    // consulta: el centro de mando la vuelve a ofrecer), pero no detiene ni deshace lo ya aplicado
+    if (res.fotos && res.fotos.length) archivarFotosPortal_(cfg, libro, res);
   }
-  if (res.cerradas.length || res.parciales.length) subirVersiones_(['requisiciones', 'oc']);
+  if (res.cerradas.length || res.parciales.length || (res.devoluciones || []).length || res.archivadas) subirVersiones_(['requisiciones', 'oc']);
   if (res.alertas && res.alertas.length) props.setProperty('PORTAL_ALERTA', ahoraTexto_() + ' · ' + res.alertas.join(' · ').slice(0, 450));
   if (!res.errores.length) {
     props.setProperty('PORTAL_ULTIMA_CONSULTA', String(r.datos.hasta || inicio));
@@ -8409,6 +8512,8 @@ function aplicarRecepcionPortal_(libro, x, det, res) {
   const { hoja, req } = buscarReq_(libro, orden.reqFolio);
   if ([REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO, REQ_RECIBIDA].indexOf(req.estado) === -1 ||
       req.ocFolio.toUpperCase() !== orden.folio.toUpperCase()) {
+    // H (incremento 5): de una ya cerrada todavía llegan fotos por archivar y problemas reportados después en el sitio
+    if (req.estado === REQ_CERRADA && req.ocFolio.toUpperCase() === orden.folio.toUpperCase()) fotosYProblemasPortal_(libro, x, orden, req, res, '');
     res.ignoradas.push(ocFolio + ' (' + req.folio + ' ' + req.estado.toLowerCase() + ')');
     return;
   }
@@ -8421,33 +8526,44 @@ function aplicarRecepcionPortal_(libro, x, det, res) {
   const lugar = (codigo || sitio) + ' por ' + recibio + ' en el centro de mando, ' + fechaCortaEs(fecha);
 
   // Lo recibido (acumulado por renglón de la orden) contra lo ya registrado en CAPRI: solo se copia la diferencia
-  const avance = avanceRecepcion(orden.renglones, movimientosPorOc_(libro)[ocFolio] || [], renglonesSinRecepcion(propuestaVigente_(req)));
+  const movsOc = movimientosPorOc_(libro)[ocFolio] || [];
+  const avance = avanceRecepcion(orden.renglones, movsOc, renglonesSinRecepcion(propuestaVigente_(req)));
+  // H (incremento 5): una recepción registrada antes de que compras resolviera "Reponer" en ese renglón ya está contada (si el
+  // centro de mando la vuelve a mandar, p. ej. porque se archivó su foto, no es material nuevo); tampoco su "completa"
+  const anterior = recepcionAntesDeReponer_(movsOc, x.cuando);
   const nuevos = [];
   (Array.isArray(x.renglones) ? x.renglones : []).forEach(l => {
     const linea = avance.lineas.find(a => a.renglon === Number(l && l.n));
-    if (!linea) return;
-    const total = Math.min(Math.max(0, Number(l.recibido) || 0), linea.pedido);
+    if (!linea || anterior(linea.renglon)) return;
+    const total = Math.min(Math.max(0, Number(l.recibido) || 0), linea.pedido - (linea.faltante || 0));
     const dif = Math.round((total - linea.recibido) * 10000) / 10000;
-    if (dif > 1e-9) nuevos.push({ renglon: linea.renglon, clave: linea.clave, descripcion: linea.descripcion, unidad: linea.unidad, cantidad: dif });
+    if (dif > 1e-9) nuevos.push({ renglon: linea.renglon, clave: linea.clave, descripcion: linea.descripcion, unidad: linea.unidad, cantidad: dif,
+      foto: fotoPortal(l.foto) }); // H: foto por archivar ("centro:<id>" hasta que llegue a Drive)
   });
   const t = textoCelda;
+  let folioRec = '';
   if (nuevos.length) {
     const hM = hojaCompras_(libro, 'MovimientosInventario');
-    const folio = siguienteFolio_(PREFIJO_REC, hM, 'CONSECUTIVO_REC_');
+    const folio = folioRec = siguienteFolio_(PREFIJO_REC, hM, 'CONSECUTIVO_REC_');
     const ahora = ahoraTexto_();
-    nuevos.forEach(n => hM.appendRow([folio, textoFecha_(fecha), ahora, TIPO_ENTRADA_COMPRA, t(sitio), req.proyectoFolio, req.folio,
+    nuevos.forEach(n => hM.appendRow(conFotoMov_([folio, textoFecha_(fecha), ahora, TIPO_ENTRADA_COMPRA, t(sitio), req.proyectoFolio, req.folio,
       orden.folio, n.renglon, t(n.clave), t(n.descripcion), t(n.unidad), n.cantidad, t(CORREO_CENTRO_MANDO),
-      t(recibio + ' (centro de mando)'), t('Recibido en ' + lugar), '', '', 'Vigente', '', '', '']));
+      t(recibio + ' (centro de mando)'), t('Recibido en ' + lugar), '', '', 'Vigente', '', '', ''],
+      n.foto && !n.foto.archivada ? { id: MARCA_FOTO_CENTRO + n.foto.id, url: '' } : n.foto && n.foto.url ? { id: '', url: n.foto.url } : null)));
   }
+  fotosYProblemasPortal_(libro, x, orden, req, res, folioRec); // H: fotos por archivar y problemas reportados en el sitio
   const lista = nuevos.map(n => n.cantidad + ' ' + n.unidad + ' ' + String(n.descripcion).slice(0, 40)).join('; ');
-  if (x.completa === true && req.estado !== REQ_RECIBIDA) {
+  const completaVieja = (Array.isArray(x.renglones) ? x.renglones : []).some(l => anterior(Number(l && l.n)));
+  if (x.completa === true && req.estado !== REQ_RECIBIDA && !completaVieja) {
     const pagada = orden.estado === OC_PAGADA;
-    const nuevo = transicionReq(req.estado, pagada ? 'recibirPagada' : 'recibir');
+    // H: con una devolución abierta (p. ej. el sitio reportó un problema en esta misma recepción) no se cierra: queda Recibida
+    const retenida = pagada ? devolucionAbiertaDe_(libro, req.folio) : '';
+    const nuevo = transicionReq(req.estado, retenida ? 'recibirRetenida' : pagada ? 'recibirPagada' : 'recibir');
     const nota = 'Recibido en ' + lugar;
-    if (pagada) hO.getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(fecha), t(recibio + ' (centro de mando)')]]);
+    if (pagada && !retenida) hO.getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(fecha), t(recibio + ' (centro de mando)')]]);
     else hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(fecha), t(recibio + ' (centro de mando)')]]);
     cambiarReq_(hoja, req, nuevo, { notasRecepcion: nota });
-    eventoReq_(libro, req.folio, nuevo, nota + (pagada ? '' : ' · falta el pago al proveedor'));
+    eventoReq_(libro, req.folio, nuevo, nota + (retenida ? ' · ' + textoRetenida(retenida) : pagada ? '' : ' · falta el pago al proveedor'));
     bitacora_(libro, 'Recepción del centro de mando', req.proyectoFolio, req.folio + ' · ' + orden.folio + ' · ' + nota +
       (lista ? ' · ' + lista : '') + ' · ' + nuevo, '', HOJAS_COMPRAS);
     notificar_('req.recibida', { folio: req.folio, req: reqParaAviso_(req), nota: nota, sitio: req.sitio, centroMando: true });
@@ -8627,7 +8743,9 @@ function jsonAscii(obj) {
 function cuerpoEventoPortal(tipo, n, d, maxDesc) {
   if (TIPOS_EVENTO_PORTAL.indexOf(tipo) === -1) throw new Error('Tipo de aviso no válido: ' + tipo);
   const o = d.orden || {}, q = d.req || {}, sin = d.sinRecibir || [], corta = maxDesc || 200;
-  return {
+  // Incremento 5 (H): oc.devolucion lleva la devolución resuelta (renglón n de la orden, cantidad, tipo, resolución y nota limpia)
+  const dv = tipo === 'oc.devolucion' ? d.devolucion || {} : null;
+  return Object.assign({
     evento_id: o.folio + ':' + tipo + ':' + n, tipo: tipo, cuando: d.cuando, quien: d.quien || '', prueba: !!d.prueba,
     oc: {
       folio: o.folio, req_folio: q.folio || o.reqFolio || '', proyecto_folio: d.proyectoFolio || o.proyectoFolio || '',
@@ -8638,7 +8756,8 @@ function cuerpoEventoPortal(tipo, n, d, maxDesc) {
         unidad: r.unidad || 'PZA', cantidad: Number(r.cantidad) || 0, item: r.item ? String(r.item) : null }))
         .filter(r => sin.indexOf(r.n) === -1),
     },
-  };
+  }, dv ? { devolucion: { folio: String(dv.folio || ''), renglon: Number(dv.renglon) || 0, cantidad: Number(dv.cantidad) || 0,
+    tipo: String(dv.tipo || ''), resolucion: String(dv.resolucion || ''), nota: limpiarTextoAviso(dv.nota, []) } } : {});
 }
 
 /** Rutas de las llaves con montos en un objeto (un aviso al centro de mando nunca debe tener ninguna). */
@@ -8785,6 +8904,10 @@ function pendientes(todos) {
   const usuarios = contextoRoles_().usuarios, nombres = {};
   Object.keys(usuarios).forEach(c => { if (usuarios[c].nombre) nombres[c] = usuarios[c].nombre; });
   const o = { yo: yo_(), roles: roles, flujo: flujoOperaciones_(), hoy: hoy, cxp: cxp, nombres: nombres, ligado: proyectoLigadoPend_ };
+  // Incremento 5 (H): devoluciones abiertas, para compras (y para el super admin que ve los de todos)
+  if (roles.compras || esSuperAdmin_()) {
+    try { o.devoluciones = devolucionesParaPendientes_(); } catch (e) { avisos.push('Devoluciones: ' + e.message); }
+  }
   const base = basePendientes_();
   const mios = itemsPendientes(base, o);
   return { hoy: hoy, todos: verTodos, flujo: o.flujo, items: verTodos ? itemsPendientes(base, Object.assign({}, o, { todos: true })) : mios,
@@ -8950,6 +9073,14 @@ function itemsPendientes(base, o) {
       }
     }
   });
+
+  // Devoluciones abiertas (incremento 5, módulo H): las resuelve compras; se abren desde su requisición
+  if (roles.compras || todos) {
+    (x.devoluciones || []).forEach(dv => agregar({ folio: dv.folio, sitio: dv.sitio, desde: dv.desde || dv.fecha, prioridad: '' }, 'compras', {
+      tipo: 'devolucion', req: dv.reqFolio, titulo: 'Devolución por resolver', accion: 'Resolver', destino: 'com', urgente: false,
+      detalle: [[dv.proyectoVisible, dv.proyectoNombre].filter(Boolean).join(' · '), dv.reqFolio, dv.tipo,
+        dv.cantidad + ' ' + dv.unidad + ' ' + String(dv.descripcion || '').slice(0, 60)] }, 'Compras'));
+  }
 
   // Facturas que no se anotaron en una orden por pagar (órdenes de antes, sin requisición abierta)
   Object.keys(facturas).forEach(k => facturas[k].forEach(f => {
@@ -9619,4 +9750,829 @@ function listarAnuladosDeHoja_(texto) {
     lista.push(x);
   });
   return lista.reverse().slice(0, 200);
+}
+
+// ---- 6.H Recepción con fotos y devoluciones (incremento 5; contrato en docs/incremento-5.md §3–§5) ----
+// Fotos: cada renglón que llega (cantidad > 0) lleva una foto, comprimida en el navegador (lado mayor 1600 px, JPEG 0.72), en
+// "Registrar lo que llegó", "Recibí el material", "Lo recogí" y la recepción de respaldo de compras. El servidor las guarda en
+// Compras/AAAA/<proyecto>/Recepciones/<REC-… o DEV-…> — r<n>.jpg con privado_ y anota foto_id / foto_url en su movimiento.
+// Devoluciones DEV-AAAA-NNNN: quien pidió, quien recibe o compras reporta un problema (al recibir o después, hasta 30 días
+// después de Recibida/Cerrada); compras (o super admin) resuelve: Reponer (movimiento negativo, el renglón vuelve a por recibir
+// y la requisición se reabre), Devolver al proveedor / Cancelar renglón (movimiento negativo; faltante aceptado) o Conservar.
+// Con una devolución Abierta la requisición no se cierra (la deja Recibida; cerrarRetenida la cierra al resolverse).
+// Centro de mando: sus recepciones traen foto y problema por renglón; CAPRI baja las fotos (fuera del candado), las guarda en
+// Drive, avisa que se archivaron y crea la DEV de cada problema una sola vez. Al resolver una devolución de un proyecto ligado
+// avisa oc.devolucion (sin montos).
+
+function modRecepcion_() {
+  return { nombre: 'Recepción',
+    api: { reportarProblema: reportarProblema, listarDevoluciones: listarDevoluciones, resolverDevolucion: resolverDevolucion },
+    // Una devolución cambia la requisición (historial, estado) y sus movimientos (avance de la orden)
+    cambios: { reportarProblema: ['requisiciones', 'oc'], resolverDevolucion: ['requisiciones', 'oc'] },
+    // Quien pide o recibe suele tener "Solo requisiciones": reporta y ve las suyas
+    solo: ['reportarProblema', 'listarDevoluciones'],
+    publicas: [],
+    sincronizar: function (permisos, ctx, algo, r, errores) {
+      // La lista "Devoluciones" de Compras, si está abierta (ctx.devoluciones = su filtro)
+      if (ctx && ctx.devoluciones && (permisos.compras || permisos.superadmin) && algo('requisiciones', 'oc')) {
+        r.devoluciones = intentar_(errores, 'Devoluciones', () => listarDevoluciones(ctx.devoluciones));
+      }
+    },
+    preparar: function () {
+      const libro = libroComprasSiExiste_();
+      if (libro) { hojaCompras_(libro, 'Devoluciones'); hojaCompras_(libro, 'MovimientosInventario'); }
+      console.log('Recepción con fotos: pestaña Devoluciones y columnas foto_id / foto_url ' + (libro ? 'listas.' : 'se crean con el libro de compras.'));
+    } };
+}
+
+const PREFIJO_DEV = 'DEV';
+const DEV_ABIERTA = 'Abierta', DEV_RESUELTA = 'Resuelta';
+const TIPOS_DEV = ['Incorrecto', 'Dañado', 'Faltante', 'Sobrante', 'Otro'];
+const RES_REPONER = 'Reponer', RES_DEVOLVER = 'Devolver al proveedor', RES_CANCELAR = 'Cancelar renglón', RES_CONSERVAR = 'Conservar';
+const RESOLUCIONES_DEV = [RES_REPONER, RES_DEVOLVER, RES_CANCELAR, RES_CONSERVAR];
+const ORIGEN_DEV_CAPRI = 'CAPRI', ORIGEN_DEV_CENTRO = 'Centro de mando';
+/** Movimientos de una devolución (cantidad negativa): Reponer → el renglón vuelve a "por recibir"; sin reponer → faltante aceptado. */
+const TIPO_DEVOLUCION = 'Devolución', TIPO_DEVOLUCION_CIERRA = 'Devolución sin reponer';
+/** "Lo recogí": la foto de cada renglón que se recogió (no cuenta como recepción: se recibe al llegar al sitio). */
+const TIPO_RECOGIDO = 'Recogido en tienda';
+const DIAS_REPORTAR_DEV = 30;
+const SUBCARPETA_RECEPCIONES = 'Recepciones';
+const MAX_FOTO = 10 * 1024 * 1024;
+/** foto_id provisional de una foto del centro de mando que todavía no llega a Drive. */
+const MARCA_FOTO_CENTRO = 'centro:';
+const RUTA_PORTAL_FOTO = '/api/integracion/cotizador/foto';
+const RUTA_PORTAL_FOTO_ARCHIVADA = '/api/integracion/cotizador/foto-archivada';
+const MAX_FOTOS_PORTAL = 40; // por corrida (la siguiente sigue)
+
+// -- Fotos que manda el navegador --
+
+/**
+ * Fotos y problemas por renglón de lo que manda la interfaz: renglones = [{renglon, foto: {nombre, datos (base64), mime},
+ * problema: {tipo, cantidad, comentario, foto}}] → {renglon: {foto: {bytes, tipo} | null, problema: {…, foto} | null}}. Se lee y
+ * se valida (imagen, ≤ 10 MB) antes del candado.
+ */
+function fotosDeRenglones_(renglones) {
+  const mapa = {};
+  (Array.isArray(renglones) ? renglones : []).forEach(r => {
+    const n = Number(r && r.renglon);
+    if (!(n > 0)) return;
+    const x = { foto: fotoDeAdjunto_(r.foto), problema: null };
+    if (r.problema && typeof r.problema === 'object') x.problema = Object.assign({}, r.problema, { foto: fotoDeAdjunto_(r.problema.foto) });
+    mapa[n] = x;
+  });
+  return mapa;
+}
+
+/** {bytes, tipo: {mime, ext}} de una foto adjunta ({nombre, datos}); null si no viene. */
+function fotoDeAdjunto_(adjunto) {
+  if (!adjunto || !adjunto.datos) return null;
+  const bytes = bytesDeAdjunto_(adjunto, 'No se pudo leer una foto. Vuelve a tomarla.');
+  return { bytes: bytes, tipo: validarFoto(bytes) };
+}
+
+/** Compras/AAAA/<folio del proyecto>/Recepciones/ (restringida). */
+function carpetaRecepciones_(proyectoFolio) {
+  return privado_(subcarpeta_(carpetaProyectoCompras_(proyectoFolio), SUBCARPETA_RECEPCIONES));
+}
+
+/** Guarda (privadas) las fotos de los renglones recibidos: {renglon: {id, url}}. */
+function guardarFotosRecepcion_(proyectoFolio, folio, fotos, recibidos) {
+  const r = {};
+  let carpeta = null;
+  (recibidos || []).forEach(x => {
+    const f = fotos && fotos[x.renglon] && fotos[x.renglon].foto;
+    if (!f) return;
+    carpeta = carpeta || carpetaRecepciones_(proyectoFolio);
+    const a = privado_(carpeta.createFile(Utilities.newBlob(f.bytes, f.tipo.mime, nombreArchivoFoto(folio, x.renglon, f.tipo.ext))));
+    r[x.renglon] = { id: a.getId(), url: a.getUrl() };
+  });
+  return r;
+}
+
+/** Fila de MovimientosInventario con su foto (columnas foto_id / foto_url por nombre). foto = {id, url} o null. */
+function conFotoMov_(fila, foto) {
+  const f = fila.slice();
+  while (f.length < HOJAS_COMPRAS.MovimientosInventario.enc.length) f.push('');
+  if (foto) { f[colMov_('foto_id') - 1] = foto.id || ''; f[colMov_('foto_url') - 1] = foto.url || ''; }
+  return f;
+}
+
+/** Avance de la recepción de la orden de una requisición (con devoluciones). */
+function avanceDeReq_(libro, req, orden) {
+  return avanceRecepcion(orden.renglones, movimientosPorOc_(libro)[orden.folio.toUpperCase()] || [],
+    renglonesSinRecepcion(propuestaVigente_(req)));
+}
+
+/**
+ * Antes de escribir: una foto por renglón recibido (exigir ≠ false) y los problemas reportados al recibir, validados contra lo
+ * recibido de su renglón (lo de antes + lo de ahora − lo que ya está en devoluciones abiertas). recibidos = [{renglon, cantidad,
+ * descripcion, unidad}]; lineas = avance antes de registrar. Devuelve [{renglon, descripcion, unidad, cantidad, tipo,
+ * comentario, foto}].
+ */
+function validarFotosYProblemas_(recibidos, fotos, lineas, ocupado, exigir) {
+  const lista = recibidos || [], problemas = [];
+  lista.forEach(x => {
+    const f = (fotos || {})[x.renglon] || {};
+    if (exigir !== false && Number(x.cantidad) > 0 && !f.foto) {
+      throw new Error('Falta la foto de "' + String(x.descripcion).slice(0, 40) + '" (una por renglón recibido).');
+    }
+    if (!f.problema) return;
+    const l = (lineas || []).find(y => y.renglon === x.renglon) || {};
+    const disponible = Math.round(((Number(l.recibido) || 0) + (Number(x.cantidad) || 0) - (Number((ocupado || {})[x.renglon]) || 0)) * 10000) / 10000;
+    const p = normalizarProblema(f.problema, { descripcion: x.descripcion, unidad: x.unidad, disponible: disponible }, !!f.problema.foto);
+    problemas.push(Object.assign(p, { renglon: x.renglon, descripcion: x.descripcion, unidad: x.unidad, foto: f.problema.foto }));
+  });
+  Object.keys(fotos || {}).forEach(n => {
+    if (fotos[n].problema && !lista.some(x => x.renglon === Number(n))) {
+      throw new Error('El problema del renglón ' + n + ' no corresponde a lo que estás recibiendo: repórtalo con "Reportar problema".');
+    }
+  });
+  return problemas;
+}
+
+/** DEV de cada problema reportado al recibir (después de escribir los movimientos). */
+function crearDevolucionesDeRecepcion_(libro, req, orden, problemas) {
+  return (problemas || []).map(p => crearDevolucion_(libro, req, orden, p, {}));
+}
+
+/**
+ * "Recibí el material" (flujo de siempre) y el cierre de compras: entrada por compra (folio REC) de cada renglón pendiente de la
+ * orden con su foto (exigirFotos) y los problemas reportados. Revisa antes lo mismo que el cierre (cerrarReq_). Si queda una
+ * devolución abierta y la orden está pagada, la requisición queda Recibida (no se cierra) y devuelve true; si no, false y quien
+ * llama cierra como siempre.
+ */
+function recibirTodoConFotos_(libro, hoja, req, fotos, nota, exigirFotos) {
+  if (!req.ocFolio) return false; // sin orden: el cierre dará su error de siempre
+  const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
+  validarCierreConFotos_(req, orden);
+  const avance = avanceDeReq_(libro, req, orden);
+  const recibidos = avance.lineas.filter(l => l.pendiente > 1e-9).map(l => ({ renglon: l.renglon, cantidad: l.pendiente, clave: l.clave,
+    descripcion: l.descripcion, unidad: l.unidad }));
+  const problemas = validarFotosYProblemas_(recibidos, fotos, avance.lineas, ocupadoEnDevoluciones_(libro, orden.folio), exigirFotos);
+  const t = textoCelda;
+  if (recibidos.length) {
+    const hM = hojaCompras_(libro, 'MovimientosInventario');
+    const folio = siguienteFolio_(PREFIJO_REC, hM, 'CONSECUTIVO_REC_');
+    const guardadas = guardarFotosRecepcion_(req.proyectoFolio, folio, fotos, recibidos);
+    const ahora = ahoraTexto_(), notas = nota || (exigirFotos ? 'Recibí el material' : 'Cierre de compras');
+    recibidos.forEach(x => hM.appendRow(conFotoMov_([folio, textoFecha_(hoyIso_()), ahora, TIPO_ENTRADA_COMPRA, t(req.sitio), req.proyectoFolio,
+      req.folio, orden.folio, x.renglon, t(x.clave), t(x.descripcion), t(x.unidad), x.cantidad, t(yo_()), t(nombreYo_()), t(notas),
+      '', '', 'Vigente', '', '', ''], guardadas[x.renglon])));
+    crearDevolucionesDeRecepcion_(libro, req, orden, problemas);
+  }
+  const abierta = exigirFotos && orden.estado === OC_PAGADA ? devolucionAbiertaDe_(libro, req.folio) : '';
+  if (!abierta) return false;
+  const nuevo = transicionReq(req.estado, 'recibirRetenida');
+  hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(VENDEDOR_.email)]]);
+  cambiarReq_(hoja, req, nuevo, { notasRecepcion: nota });
+  eventoReq_(libro, req.folio, nuevo, ['Material recibido', nota, textoRetenida(abierta)].filter(Boolean).join(' · '));
+  notificar_('req.recibida', { req: req.folio, nota: nota }); // correo a compras (6.B)
+  bitacora_(libro, 'Recibir material (retenida por devolución)', req.proyectoFolio, req.folio + ' · ' + orden.folio + ' · ' + abierta, '', HOJAS_COMPRAS);
+  return true;
+}
+
+/** Lo mismo que revisa cerrarReq_ (estado y orden pagada), antes de escribir. Con crédito del proveedor (módulo F) se recibe sin pagar. */
+function validarCierreConFotos_(req, orden) {
+  const credito = typeof recibeAntesDePagar_ === 'function' && !!recibeAntesDePagar_(orden); // F (incremento 5), si ya está
+  if (credito && orden.estado === OC_EMITIDA) { transicionReq(req.estado, 'recibir'); return; }
+  transicionReq(req.estado, req.estado === REQ_EN_CAMINO ? 'cerrarEnCamino' : 'cerrar');
+  if (orden.estado !== OC_PAGADA) throw new Error('La orden ' + orden.folio + ' no está pagada.');
+}
+
+/**
+ * "Lo recogí": una foto por renglón por recibir (se revisan todas antes de escribir); quedan como movimientos "Recogido en
+ * tienda" (folio REC, no cuentan como recepción: se recibe al llegar al sitio).
+ */
+function fotosRecogido_(libro, req, orden, fotos) {
+  const avance = avanceDeReq_(libro, req, orden);
+  const recogidos = avance.lineas.filter(l => l.pendiente > 1e-9).map(l => ({ renglon: l.renglon, cantidad: l.pendiente, clave: l.clave,
+    descripcion: l.descripcion, unidad: l.unidad }));
+  const soloFotos = {};
+  Object.keys(fotos || {}).forEach(n => { soloFotos[n] = { foto: fotos[n].foto, problema: null }; }); // al recoger no se reportan problemas
+  validarFotosYProblemas_(recogidos, soloFotos, avance.lineas, {}, true);
+  if (!recogidos.length) return '';
+  const hM = hojaCompras_(libro, 'MovimientosInventario');
+  const folio = siguienteFolio_(PREFIJO_REC, hM, 'CONSECUTIVO_REC_');
+  const guardadas = guardarFotosRecepcion_(req.proyectoFolio, folio, soloFotos, recogidos);
+  const ahora = ahoraTexto_(), t = textoCelda;
+  recogidos.forEach(x => hM.appendRow(conFotoMov_([folio, textoFecha_(hoyIso_()), ahora, TIPO_RECOGIDO, t(req.sitio), req.proyectoFolio,
+    req.folio, orden.folio, x.renglon, t(x.clave), t(x.descripcion), t(x.unidad), x.cantidad, t(yo_()), t(nombreYo_()), t('Lo recogí'),
+    '', '', 'Vigente', '', '', ''], guardadas[x.renglon])));
+  return folio;
+}
+
+// -- Devoluciones: hoja, lectura y reglas --
+
+/** Devolución desde su fila. */
+function devDesdeFila_(r, fila) {
+  return { folio: String(r[0] || ''), fecha: momentoTexto_(r[1]), reqFolio: String(r[2] || ''), ocFolio: String(r[3] || ''),
+    proyectoFolio: String(r[4] || ''), renglon: Number(r[5]) || 0, descripcion: String(r[6] || ''), cantidad: Number(r[7]) || 0,
+    tipo: String(r[8] || ''), comentario: String(r[9] || ''), fotoId: String(r[10] || ''), fotoUrl: String(r[11] || ''),
+    origen: String(r[12] || ORIGEN_DEV_CAPRI), reportoEmail: String(r[13] || ''), estado: String(r[14] || DEV_ABIERTA),
+    resolucion: String(r[15] || ''), notaResolucion: String(r[16] || ''), guia: String(r[17] || ''), resolvioEmail: String(r[18] || ''),
+    fechaResolucion: momentoTexto_(r[19]), origenClave: String(r[20] || ''), fila: fila };
+}
+
+/** "AAAA-MM-DD HH:mm:ss" de una celda (Date de Sheets o texto, con o sin apóstrofo). */
+function momentoTexto_(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
+  return String(v == null ? '' : v).replace(/^'/, '');
+}
+
+/** Todas las devoluciones del libro (en esta petición se leen una vez; quien escribe borra MEMO_.devs). */
+function devolucionesDelLibro_(libro) {
+  if (MEMO_.devs) return MEMO_.devs;
+  const hoja = libro && libro.getSheetByName('Devoluciones');
+  MEMO_.devs = hoja ? filasDeArea_(hojaCompras_(libro, 'Devoluciones'), HOJAS_COMPRAS, 'Devoluciones')
+    .map((r, i) => devDesdeFila_(r, i + 2)).filter(d => d.folio && d.estado !== ESTADO_ANULADA) : [];
+  return MEMO_.devs;
+}
+
+/** Folio de la primera devolución Abierta de la requisición ('' si no hay). */
+function devolucionAbiertaDe_(libro, reqFolio) {
+  const f = String(reqFolio || '').toUpperCase();
+  const d = devolucionesDelLibro_(libro).find(x => x.reqFolio.toUpperCase() === f && x.estado === DEV_ABIERTA && !esAnulado_(x.folio));
+  return d ? d.folio : '';
+}
+
+/** {renglon: cantidad en devoluciones Abiertas} de una orden (no se reporta dos veces lo mismo). */
+function ocupadoEnDevoluciones_(libro, ocFolio) {
+  const f = String(ocFolio || '').toUpperCase(), r = {};
+  devolucionesDelLibro_(libro).forEach(d => {
+    if (d.ocFolio.toUpperCase() === f && d.estado === DEV_ABIERTA) r[d.renglon] = Math.round(((r[d.renglon] || 0) + d.cantidad) * 10000) / 10000;
+  });
+  return r;
+}
+
+/** Ningún cierre con una devolución abierta (compras y su respaldo). */
+function exigirSinDevolucionAbierta_(libro, req) {
+  const abierta = devolucionAbiertaDe_(libro, req.folio);
+  if (abierta) throw new Error('La devolución ' + abierta + ' de ' + req.folio + ' está abierta: resuélvela antes de cerrar la requisición.');
+}
+
+/** Cancelar una recepción: no si sus renglones tienen una devolución abierta o una resuelta con movimiento (quedaría negativo). */
+function exigirSinDevoluciones_(libro, req, filas) {
+  const renglones = (filas || []).map(x => x.renglon);
+  const d = devolucionesDelLibro_(libro).find(x => x.reqFolio.toUpperCase() === req.folio.toUpperCase() &&
+    renglones.indexOf(x.renglon) !== -1 && (x.estado === DEV_ABIERTA || (x.estado === DEV_RESUELTA && x.resolucion !== RES_CONSERVAR)));
+  if (d) throw new Error('El material de esa recepción tiene la devolución ' + d.folio + ' (' + d.estado.toLowerCase() + '): no se puede cancelar la recepción.');
+}
+
+/**
+ * Fecha (AAAA-MM-DD) en que se recibió todo: la de la orden (fecha_recepcion) o, si falta, la última actualización de la
+ * requisición. Sirve para la ventana de 30 días.
+ */
+function fechaRecepcionReq_(req, orden) {
+  return (orden && /^\d{4}-\d{2}-\d{2}$/.test(String(orden.fechaRecepcion || '')) ? orden.fechaRecepcion : '') ||
+    String(marcaOrdenable(req.actualizado) || '').slice(0, 10);
+}
+
+/** '' si se puede reportar un problema de la requisición hoy; si no, el motivo. */
+function motivoSinReporte_(req, orden) {
+  if (!orden || orden.estado === OC_CANCELADA) return 'La requisición ' + req.folio + ' no tiene material recibido.';
+  if ([REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO].indexOf(req.estado) !== -1) return ''; // recepción en curso
+  if ([REQ_RECIBIDA, REQ_CERRADA].indexOf(req.estado) === -1) {
+    return 'La requisición ' + req.folio + ' está ' + String(req.estado).toLowerCase() + ': no tiene material recibido para reportar.';
+  }
+  const desde = fechaRecepcionReq_(req, orden);
+  return dentroDeVentanaDev(desde, hoyIso_()) ? '' : 'Pasaron más de ' + DIAS_REPORTAR_DEV + ' días desde que se recibió el material de ' +
+    req.folio + ' (' + desde + '): ya no se reportan problemas aquí. Habla con compras.';
+}
+
+/** Renglones de la orden en los que hoy se puede reportar un problema (con material recibido que no esté ya en una devolución abierta). */
+function renglonesReportables_(libro, req, orden, avance) {
+  if (!orden || !avance || motivoSinReporte_(req, orden)) return [];
+  const ocupado = ocupadoEnDevoluciones_(libro, orden.folio);
+  return avance.lineas.filter(l => l.recibido - (ocupado[l.renglon] || 0) > 1e-9).map(l => ({ renglon: l.renglon,
+    descripcion: l.descripcion, unidad: l.unidad, disponible: Math.round((l.recibido - (ocupado[l.renglon] || 0)) * 10000) / 10000 }));
+}
+
+/**
+ * Escribe una devolución Abierta (folio DEV con su consecutivo), su foto (si viene en bytes) y su historial; forma el aviso
+ * dev.reportada. p = {renglon, descripcion, unidad, cantidad, tipo, comentario, foto: {bytes, tipo} | null}; o = {origen, reporto,
+ * clave (origen_clave), foto: {id, url} ya conocida (centro de mando)}. Devuelve el folio.
+ */
+function crearDevolucion_(libro, req, orden, p, o) {
+  const x = o || {};
+  const hD = hojaCompras_(libro, 'Devoluciones');
+  const folio = siguienteFolio_(PREFIJO_DEV, hD, 'CONSECUTIVO_DEV_');
+  let foto = x.foto || null;
+  if (p.foto && p.foto.bytes) {
+    const a = privado_(carpetaRecepciones_(req.proyectoFolio).createFile(Utilities.newBlob(p.foto.bytes, p.foto.tipo.mime,
+      nombreArchivoFoto(folio, p.renglon, p.foto.tipo.ext))));
+    foto = { id: a.getId(), url: a.getUrl() };
+  }
+  const origen = x.origen || ORIGEN_DEV_CAPRI, reporto = x.reporto || yo_(), t = textoCelda;
+  hD.appendRow([folio, "'" + ahoraTexto_(), req.folio, orden.folio, req.proyectoFolio, p.renglon, t(p.descripcion), p.cantidad, p.tipo,
+    t(p.comentario), foto ? t(foto.id || '') : '', foto ? t(foto.url || '') : '', origen, t(reporto), DEV_ABIERTA, '', '', '', '', '', t(x.clave || '')]);
+  MEMO_.devs = null;
+  const material = p.cantidad + ' ' + (p.unidad || '') + ' de ' + String(p.descripcion).slice(0, 60);
+  eventoReq_(libro, req.folio, req.estado, 'Problema reportado (' + folio + '): ' + p.tipo + ' · ' + material +
+    (origen === ORIGEN_DEV_CENTRO ? ' · en el centro de mando por ' + reporto : '') + '. Compras lo va a resolver.');
+  bitacora_(libro, 'Reportar problema', req.proyectoFolio, folio + ' · ' + req.folio + ' · ' + orden.folio + ' · renglón ' + p.renglon + ' · ' +
+    p.tipo + ' · ' + material + ' · ' + origen, p.comentario, HOJAS_COMPRAS);
+  notificar_('dev.reportada', { req: req.folio, nota: p.comentario, quien: origen === ORIGEN_DEV_CENTRO ? reporto : '',
+    dev: { folio: folio, renglon: p.renglon, descripcion: p.descripcion, cantidad: p.cantidad, unidad: p.unidad, tipo: p.tipo, origen: origen,
+      reporto: reporto } });
+  return folio;
+}
+
+// -- API --
+
+/**
+ * Reportar un problema con material ya recibido (quien pidió, quien recibe o compras): d = {renglon (de la orden), cantidad,
+ * tipo (Incorrecto · Dañado · Faltante · Sobrante · Otro), comentario (≥ 5), foto: {nombre, datos} (obligatoria salvo Faltante),
+ * idSolicitud}. Mientras la recepción sigue en curso o hasta 30 días después de Recibida/Cerrada. Crea DEV-AAAA-NNNN Abierta y
+ * avisa a compras (dev.reportada). Devuelve {folio, requisiciones (quien pide), vista (compras)}.
+ */
+function reportarProblema(reqFolio, d) {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + '.');
+  const compras = esCompras_(), requisicion = esRequisicion_();
+  if (!compras && !requisicion) throw errorPermiso_('No tienes permiso para reportar problemas con el material.');
+  const d0 = d || {};
+  const foto = fotoDeAdjunto_(d0.foto);
+  const libro = libroCompras_();
+  const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
+  const cache = CacheService.getScriptCache();
+  const claveCache = idSolicitud ? 'DEV_' + idSolicitud : '';
+  return conCandado_(() => {
+    if (claveCache) {
+      const previo = cache.get(claveCache);
+      if (previo) return JSON.parse(previo);
+    }
+    const { req } = buscarReq_(libro, reqFolio);
+    const yo = yo_(), recibe = req.recibeEmail || req.solicitanteEmail;
+    if (!compras && yo !== req.solicitanteEmail && yo !== recibe) {
+      throw errorPermiso_('Solo quien pidió la requisición ' + req.folio + ', quien la recibe o compras puede reportar un problema.');
+    }
+    if (!req.ocFolio) throw new Error('La requisición ' + req.folio + ' no tiene material recibido.');
+    const { orden } = buscarOrden_(libro, req.ocFolio);
+    const motivo = motivoSinReporte_(req, orden);
+    if (motivo) throw new Error(motivo);
+    const avance = avanceDeReq_(libro, req, orden);
+    const n = Number(d0.renglon);
+    const linea = avance.lineas.find(l => l.renglon === n);
+    if (!linea) throw new Error('La orden de ' + req.folio + ' no tiene el renglón ' + String(d0.renglon == null ? '' : d0.renglon).slice(0, 10) + ' por recibir en sitio.');
+    const disponible = Math.round((linea.recibido - (ocupadoEnDevoluciones_(libro, orden.folio)[n] || 0)) * 10000) / 10000;
+    if (!(disponible > 1e-9)) {
+      throw new Error('De "' + String(linea.descripcion).slice(0, 40) + '" no hay material recibido para reportar (o ya está en una devolución abierta).');
+    }
+    const p = normalizarProblema(d0, { descripcion: linea.descripcion, unidad: linea.unidad, disponible: disponible }, !!foto);
+    const folio = crearDevolucion_(libro, req, orden, Object.assign(p, { renglon: n, descripcion: linea.descripcion, unidad: linea.unidad,
+      foto: foto }), {});
+    SpreadsheetApp.flush();
+    const resultado = { folio: folio, requisiciones: requisicion ? misRequisiciones() : null,
+      vista: compras ? vistaRequisicion_(libro, req.folio) : null };
+    guardarIdempotencia_(cache, claveCache, resultado);
+    return resultado;
+  });
+}
+
+/**
+ * Devoluciones, más recientes primero (máx. 300). Compras (o super admin): todas, con la nota de la resolución y la orden; quien
+ * pide o recibe: solo las de sus requisiciones, sin orden ni nota de compras. filtro = texto o {texto, estado, req}.
+ */
+function listarDevoluciones(filtro) {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + '.');
+  const compras = esCompras_() || esSuperAdmin_();
+  if (!compras && !esRequisicion_()) throw errorPermiso_('No tienes permiso para ver devoluciones.');
+  const f = filtro && typeof filtro === 'object' ? filtro : { texto: filtro };
+  const libro = libroComprasSiExiste_();
+  if (!libro) return [];
+  const yo = yo_(), estado = String(f.estado || '').trim(), q = textoNormal(f.texto), reqF = String(f.req || '').trim().toUpperCase();
+  const mias = {};
+  if (!compras) {
+    filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach(r => {
+      const sol = String(r[3] || '').toLowerCase(), rec = String(r[23] || '').toLowerCase() || sol;
+      if (sol === yo || rec === yo) mias[String(r[0]).toUpperCase()] = true;
+    });
+  }
+  const proyectos = mapaProyectos_(), ordenes = ordenesPorFolio_(libro);
+  return devolucionesDelLibro_(libro).filter(dv => !esAnulado_(dv.folio) && !esAnulado_(dv.reqFolio) &&
+    (compras || mias[dv.reqFolio.toUpperCase()]) && (!estado || dv.estado === estado) && (!reqF || dv.reqFolio.toUpperCase() === reqF))
+    .map(dv => devolucionParaVista_(dv, proyectos, ordenes, compras))
+    .filter(dv => !q || textoNormal([dv.folio, dv.reqFolio, dv.proyectoVisible, dv.proyectoNombre, dv.descripcion, dv.tipo, dv.reporto,
+      dv.ocFolio || ''].join(' ')).includes(q))
+    .reverse().slice(0, 300);
+}
+
+/** Lo que la interfaz ve de una devolución (sin montos; la orden y la nota de compras solo para compras). */
+function devolucionParaVista_(dv, proyectos, ordenes, compras) {
+  const p = proyectos[dv.proyectoFolio.toUpperCase()];
+  const o = ordenes[dv.ocFolio.toUpperCase()];
+  const ren = o && o.renglones ? o.renglones[dv.renglon - 1] : null;
+  const x = { folio: dv.folio, fecha: dv.fecha, reqFolio: dv.reqFolio, proyectoFolio: dv.proyectoFolio,
+    proyectoVisible: p ? p.folioVisible : dv.proyectoFolio, proyectoNombre: p ? p.nombre : '', renglon: dv.renglon,
+    descripcion: dv.descripcion, cantidad: dv.cantidad, unidad: ren ? ren.unidad || '' : '', tipo: dv.tipo, comentario: dv.comentario,
+    fotoUrl: /^https?:/.test(dv.fotoUrl) ? dv.fotoUrl : '', fotoPendiente: dv.fotoId.indexOf(MARCA_FOTO_CENTRO) === 0,
+    origen: dv.origen, reporto: dv.reportoEmail, estado: dv.estado, resolucion: dv.resolucion, guia: dv.guia,
+    resolvio: dv.resolvioEmail, fechaResolucion: dv.fechaResolucion };
+  if (compras) Object.assign(x, { ocFolio: dv.ocFolio, notaResolucion: dv.notaResolucion, puedeResolver: dv.estado === DEV_ABIERTA });
+  return x;
+}
+
+/**
+ * Compras (o super admin) resuelve una devolución Abierta: d = {resolucion (Reponer · Devolver al proveedor · Cancelar renglón ·
+ * Conservar), nota (obligatoria al devolver o cancelar), guia (opcional), idSolicitud}. Reponer: movimiento negativo "Devolución
+ * DEV-…" y el renglón vuelve a por recibir (la requisición regresa de Recibida/Cerrada a Autorizada, Pagada o En camino según su
+ * orden). Devolver/Cancelar: movimiento negativo y el renglón queda cerrado con faltante aceptado. Conservar: nada cambia. Si ya
+ * no queda otra abierta y la requisición estaba retenida (Recibida con la orden pagada), se cierra. Proyecto ligado: oc.devolucion.
+ */
+function resolverDevolucion(folioDev, d) {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + '.');
+  if (!esCompras_() && !esSuperAdmin_()) throw errorPermiso_('Solo compras resuelve devoluciones.');
+  const d0 = d || {};
+  const r = normalizarResolucion(d0);
+  const libro = libroCompras_();
+  const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
+  const cache = CacheService.getScriptCache();
+  const claveCache = idSolicitud ? 'DVR_' + idSolicitud : '';
+  return conAvisoPortal_(conCandado_(() => {
+    if (claveCache) {
+      const previo = cache.get(claveCache);
+      if (previo) return JSON.parse(previo);
+    }
+    const folio = String(folioDev || '').trim().toUpperCase();
+    const dev = devolucionesDelLibro_(libro).find(x => x.folio.toUpperCase() === folio);
+    if (!dev || esAnulado_(dev.folio)) throw new Error('No existe la devolución ' + folio + '.');
+    if (dev.estado !== DEV_ABIERTA) throw new Error('La devolución ' + dev.folio + ' ya está resuelta (' + dev.resolucion + ').');
+    const { hoja, req } = buscarReq_(libro, dev.reqFolio);
+    const { hoja: hO, orden } = buscarOrden_(libro, dev.ocFolio);
+    const efecto = efectoResolucion(r.resolucion);
+    const avance = avanceDeReq_(libro, req, orden);
+    const linea = avance.lineas.find(l => l.renglon === dev.renglon);
+    const t = textoCelda, ahora = ahoraTexto_();
+    if (efecto.movimiento) {
+      if (!linea || linea.recibido + 1e-9 < dev.cantidad) {
+        throw new Error('Del renglón ' + dev.renglon + ' ya no hay ' + dev.cantidad + ' recibidos (¿se canceló la recepción?): resuélvela como "Conservar" o revisa las recepciones.');
+      }
+      hojaCompras_(libro, 'MovimientosInventario').appendRow(conFotoMov_([dev.folio, textoFecha_(hoyIso_()), ahora, efecto.movimiento,
+        t(req.sitio), req.proyectoFolio, req.folio, orden.folio, dev.renglon, t(linea.clave), t(linea.descripcion), t(linea.unidad),
+        -dev.cantidad, t(yo_()), t(nombreYo_()), t('Devolución ' + dev.folio + ' · ' + r.resolucion), '', '', 'Vigente', '', '', ''], null));
+    }
+    hojaCompras_(libro, 'Devoluciones').getRange(dev.fila, 15, 1, 6).setValues([[DEV_RESUELTA, r.resolucion, t(r.nota), t(r.guia),
+      t(yo_()), "'" + ahora]]);
+    MEMO_.devs = null;
+    let nuevo = req.estado;
+    if (efecto.reabre && (req.estado === REQ_RECIBIDA || req.estado === REQ_CERRADA)) {
+      const pagada = orden.estado === OC_PAGADA || orden.estado === OC_RECIBIDA;
+      nuevo = transicionReq(req.estado, orden.enCaminoEn ? 'devolucionEnCamino' : pagada ? 'devolucionPagada' : 'devolucionAutorizada');
+      if (orden.estado === OC_RECIBIDA) { hO.getRange(orden.fila, COL_ESTADO_OC).setValue(OC_PAGADA); orden.estado = OC_PAGADA; }
+      hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([['', '']]); // ya no está recibido todo
+      cambiarReq_(hoja, req, nuevo, {});
+    } else {
+      cambiarReq_(hoja, req, req.estado, {});
+    }
+    const material = dev.cantidad + ' ' + (linea ? linea.unidad : '') + ' de ' + String(dev.descripcion).slice(0, 60);
+    eventoReq_(libro, req.folio, nuevo, 'Devolución ' + dev.folio + ' resuelta: ' + r.resolucion + ' (' + material + '). ' +
+      textoResolucionDev(r.resolucion) + (r.guia ? ' Guía de la devolución: ' + r.guia + '.' : ''));
+    bitacora_(libro, 'Resolver devolución', req.proyectoFolio, dev.folio + ' · ' + req.folio + ' · ' + orden.folio + ' · renglón ' + dev.renglon +
+      ' · ' + r.resolucion + ' · ' + material + (r.guia ? ' · guía ' + r.guia : ''), r.nota, HOJAS_COMPRAS);
+    notificar_('dev.resuelta', { req: req.folio, nota: r.nota, dev: { folio: dev.folio, renglon: dev.renglon, descripcion: dev.descripcion,
+      cantidad: dev.cantidad, unidad: linea ? linea.unidad : '', tipo: dev.tipo, resolucion: r.resolucion, origen: dev.origen, reporto: dev.reportoEmail } });
+    if (proyectoLigado_(req.proyectoFolio)) {
+      avisarPortal_('oc.devolucion', orden.folio, { devolucion: { folio: dev.folio, renglon: dev.renglon, cantidad: dev.cantidad, tipo: dev.tipo,
+        resolucion: r.resolucion, nota: r.nota } });
+    }
+    nuevo = cerrarRetenida_(libro, hoja, req, hO, orden) || nuevo;
+    SpreadsheetApp.flush();
+    const resultado = { folio: dev.folio, estado: nuevo, vista: vistaRequisicion_(libro, req.folio),
+      devoluciones: listarDevoluciones({ estado: DEV_ABIERTA }) };
+    guardarIdempotencia_(cache, claveCache, resultado);
+    return resultado;
+  }));
+}
+
+/**
+ * Requisición retenida por una devolución (Recibida con la orden ya pagada y todo recibido): si ya no queda ninguna abierta, se
+ * cierra (la orden queda Recibida). Devuelve el estado nuevo o ''.
+ */
+function cerrarRetenida_(libro, hoja, req, hO, orden) {
+  if (req.estado !== REQ_RECIBIDA || orden.estado !== OC_PAGADA || devolucionAbiertaDe_(libro, req.folio)) return '';
+  if (!avanceDeReq_(libro, req, orden).completo) return '';
+  const nuevo = transicionReq(req.estado, 'cerrarRetenida');
+  hO.getRange(orden.fila, COL_ESTADO_OC).setValue(OC_RECIBIDA);
+  orden.estado = OC_RECIBIDA;
+  cambiarReq_(hoja, req, nuevo, {});
+  eventoReq_(libro, req.folio, nuevo, 'Cerrada: ya no hay devoluciones abiertas y el material está recibido y pagado.');
+  bitacora_(libro, 'Cerrar requisición (devoluciones resueltas)', req.proyectoFolio, req.folio + ' · ' + orden.folio + ' recibida', '', HOJAS_COMPRAS);
+  return nuevo;
+}
+
+// -- Lo que ven las pantallas --
+
+/**
+ * Para "Mis requisiciones" (quien pide o recibe): sus devoluciones (sin orden ni nota de compras), los renglones donde puede
+ * reportar un problema y, solo si tiene acceso a la carpeta de compras en Drive, las ligas "Ver foto".
+ */
+function recepcionParaSolicitante_(libro, req, orden, movs, yo) {
+  const o = orden && ocVigente(orden) ? orden : null;
+  const devs = devolucionesDelLibro_(libro).filter(d => d.reqFolio.toUpperCase() === req.folio.toUpperCase() && !esAnulado_(d.folio));
+  const x = { devoluciones: devs.map(d => ({ folio: d.folio, fecha: d.fecha, renglon: d.renglon, descripcion: d.descripcion,
+    cantidad: d.cantidad, tipo: d.tipo, comentario: d.comentario, estado: d.estado, resolucion: d.resolucion, guia: d.guia,
+    origen: d.origen })), reportables: [], fotos: [] };
+  if (!o) return x;
+  const avance = avanceRecepcion(o.renglones, movs, renglonesSinRecepcion(propuestaVigente_(req)));
+  x.reportables = renglonesReportables_(libro, req, o, avance);
+  if (accesoFotos_(yo)) x.fotos = fotosDeMovimientos_(movs).concat(devs.filter(d => /^https?:/.test(d.fotoUrl))
+    .map(d => ({ folio: d.folio, renglon: d.renglon, descripcion: d.descripcion, url: d.fotoUrl, tipo: 'Problema' })));
+  return x;
+}
+
+/** Para la requisición en Compras: devoluciones completas, renglones reportables, fotos de "Lo recogí" y catálogos del formulario. */
+function recepcionParaCompras_(libro, req, orden, movs, avance) {
+  const proyectos = mapaProyectos_(), ordenes = {};
+  if (orden) ordenes[orden.folio.toUpperCase()] = orden;
+  const devs = devolucionesDelLibro_(libro).filter(d => d.reqFolio.toUpperCase() === req.folio.toUpperCase() && !esAnulado_(d.folio))
+    .map(d => devolucionParaVista_(d, proyectos, ordenes, true));
+  let recogido = [];
+  if (orden && esRecogido(orden.paqueteria)) {
+    recogido = fotosDeMovimientos_(filasDeArea_(hojaCompras_(libro, 'MovimientosInventario'), HOJAS_COMPRAS, 'MovimientosInventario')
+      .map((r, i) => movDesdeFila_(r, i + 2)).filter(m => m.tipo === TIPO_RECOGIDO && m.ocFolio.toUpperCase() === orden.folio.toUpperCase() &&
+        m.estado === 'Vigente'));
+  }
+  return { devoluciones: devs, reportables: orden && orden.estado !== OC_CANCELADA ? renglonesReportables_(libro, req, orden, avance) : [],
+    fotosRecogido: recogido, tiposDev: TIPOS_DEV, resolucionesDev: RESOLUCIONES_DEV };
+}
+
+/** "Ver foto" de los movimientos que ya tienen su foto en Drive: [{folio, renglon, descripcion, url, tipo, fecha, nombre}]. */
+function fotosDeMovimientos_(movs) {
+  return (movs || []).filter(m => m.estado === 'Vigente' && /^https?:/.test(m.fotoUrl || '')).map(m => ({ folio: m.folio, renglon: m.renglon,
+    descripcion: m.descripcion, url: m.fotoUrl, tipo: m.tipo === TIPO_RECOGIDO ? 'Lo recogí' : 'Recepción', fecha: m.fecha, nombre: m.nombre }));
+}
+
+/**
+ * ¿La persona puede abrir las fotos en Drive? (editor o lector de la carpeta de compras, que se comparte por persona; el dueño
+ * siempre). Una hora en caché; si Drive no contesta, no (la vista de quien pidió no muestra la liga).
+ */
+function accesoFotos_(correo) {
+  const c = String(correo || '').toLowerCase();
+  if (!c) return false;
+  if (!MEMO_.accesoFotos) {
+    const cache = CacheService.getScriptCache();
+    let lista = null;
+    try { lista = JSON.parse(cache.get('ACCESO_FOTOS') || 'null'); } catch (e) { lista = null; }
+    if (!Array.isArray(lista)) {
+      try {
+        const f = carpetaCompras_();
+        lista = f.getEditors().concat(f.getViewers()).map(u => String(u.getEmail()).toLowerCase());
+        try { lista.push(String(f.getOwner().getEmail()).toLowerCase()); } catch (e) { /* sin dueño visible */ }
+        cache.put('ACCESO_FOTOS', JSON.stringify(lista), 3600);
+      } catch (e) {
+        lista = [];
+      }
+    }
+    MEMO_.accesoFotos = lista;
+  }
+  return MEMO_.accesoFotos.indexOf(c) !== -1;
+}
+
+/** Devoluciones abiertas para Pendientes de compras (en caché por versión). */
+function devolucionesParaPendientes_() {
+  return enCache_('devPend', ['requisiciones', 'oc', 'proyectos', 'anulaciones'], TTL_CACHE, () => {
+    const libro = libroComprasSiExiste_();
+    if (!libro) return [];
+    const abiertas = devolucionesDelLibro_(libro).filter(d => d.estado === DEV_ABIERTA && !esAnulado_(d.folio) && !esAnulado_(d.reqFolio));
+    if (!abiertas.length) return [];
+    const proyectos = mapaProyectos_(), ordenes = ordenesPorFolio_(libro);
+    return abiertas.map(d => Object.assign(devolucionParaVista_(d, proyectos, ordenes, true), { desde: marcaOrdenable(d.fecha) }));
+  });
+}
+
+// -- Centro de mando: fotos y problemas que llegan con sus recepciones (contrato §5) --
+
+/**
+ * Fotos por archivar y problemas de una recepción del centro de mando (dentro del candado; no llama al centro de mando):
+ * cada foto no archivada se anota en res.fotos para bajarla después; cada problema crea su DEV una sola vez (origen_clave).
+ */
+function fotosYProblemasPortal_(libro, x, orden, req, res, folioRec) {
+  const recibio = String(x.recibio == null ? '' : x.recibio).trim().replace(/\s+/g, ' ').slice(0, 60) || CORREO_CENTRO_MANDO;
+  res.fotos = res.fotos || [];
+  (Array.isArray(x.renglones) ? x.renglones : []).forEach(l => {
+    const n = Number(l && l.n);
+    if (!(n > 0)) return;
+    const base = { oc: orden.folio, req: req.folio, proyecto: req.proyectoFolio, renglon: n };
+    const f = fotoPortal(l.foto);
+    if (f && !f.archivada) res.fotos.push(Object.assign({ id: f.id, destino: 'mov', folio: folioRec || req.folio }, base));
+    const p = l.problema && typeof l.problema === 'object' ? l.problema : null;
+    if (!p) return;
+    const pf = fotoPortal(p.foto);
+    const clave = claveProblemaPortal(orden.folio, n, p);
+    let dev = devolucionesDelLibro_(libro).find(d => d.origenClave === clave);
+    if (!dev) {
+      const folio = crearDevolucionPortal_(libro, req, orden, n, p, pf, recibio, clave);
+      if (!folio) return;
+      (res.devoluciones = res.devoluciones || []).push(folio);
+      dev = { folio: folio };
+    }
+    if (pf && !pf.archivada) res.fotos.push(Object.assign({ id: pf.id, destino: 'dev', folio: dev.folio }, base));
+  });
+}
+
+/** DEV de un problema reportado en el sitio (origen Centro de mando, reportó = quien recibió). '' si el renglón no existe. */
+function crearDevolucionPortal_(libro, req, orden, n, p, pf, recibio, clave) {
+  const linea = avanceDeReq_(libro, req, orden).lineas.find(l => l.renglon === n);
+  if (!linea) return '';
+  const pedida = Number(p.cantidad);
+  const recibido = Math.max(0, linea.recibido);
+  const cantidad = Math.round((isFinite(pedida) && pedida > 0 ? (recibido > 0 ? Math.min(pedida, recibido) : pedida) : recibido || 1) * 10000) / 10000;
+  const tipo = TIPOS_DEV.find(t => textoNormal(t) === textoNormal(p.tipo)) || 'Otro';
+  const comentario = String(p.comentario == null ? '' : p.comentario).trim().replace(/\s+/g, ' ').slice(0, 500) ||
+    'Reportado en el centro de mando (sin comentario).';
+  const foto = pf ? (pf.archivada && /^https?:/.test(pf.url) ? { id: '', url: pf.url } : { id: MARCA_FOTO_CENTRO + pf.id, url: '' }) : null;
+  return crearDevolucion_(libro, req, orden, { renglon: n, descripcion: linea.descripcion, unidad: linea.unidad, cantidad: cantidad,
+    tipo: tipo, comentario: comentario, foto: null }, { origen: ORIGEN_DEV_CENTRO, reporto: recibio, clave: clave, foto: foto });
+}
+
+/**
+ * Fuera del candado: baja cada foto pendiente del centro de mando (GET firmado), la guarda en Drive (privada, en Recepciones),
+ * anota foto_id / foto_url en su movimiento o devolución y avisa que se archivó (POST firmado). Lo que falle va a res.errores
+ * (la última consulta no avanza y el centro de mando la vuelve a ofrecer); un 404 = ya no existe o ya se archivó (nada que hacer).
+ */
+function archivarFotosPortal_(cfg, libro, res) {
+  const vistas = {}, cache = CacheService.getScriptCache();
+  res.archivadas = 0; res.fotosPerdidas = res.fotosPerdidas || [];
+  (res.fotos || []).filter(f => !vistas[f.id] && (vistas[f.id] = true)).slice(0, MAX_FOTOS_PORTAL).forEach(tarea => {
+    try {
+      let url = cache.get('FOTOCM_' + tarea.id) || ''; // ya está en Drive: solo falta avisar que se archivó
+      if (!url) {
+        const g = descargarFotoPortal_(cfg, tarea.id);
+        if (g.codigo === 404) { res.fotosPerdidas.push(tarea.id); return; }
+        if (!g.ok) { res.errores.push('Foto ' + tarea.id + ': ' + g.error); return; }
+        const tipo = validarFoto(g.bytes);
+        const archivo = privado_(carpetaRecepciones_(tarea.proyecto).createFile(Utilities.newBlob(g.bytes, tipo.mime,
+          nombreArchivoFoto(tarea.folio, tarea.renglon, tipo.ext))));
+        url = archivo.getUrl();
+        conCandado_(() => anotarFotoPortal_(libro, tarea, archivo.getId(), url));
+        cache.put('FOTOCM_' + tarea.id, url, 21600);
+      }
+      const a = llamarPortal_(cfg, 'post', cfg.url + RUTA_PORTAL_FOTO_ARCHIVADA, jsonAscii({ id: tarea.id, url: url }));
+      if (!a.ok) { res.errores.push('Foto ' + tarea.id + ' (aviso de archivada): ' + a.error); return; }
+      res.archivadas++;
+    } catch (e) {
+      res.errores.push('Foto ' + tarea.id + ': ' + String(e && e.message || e).slice(0, 200));
+    }
+  });
+}
+
+/** GET firmado de una foto del centro de mando: {ok, codigo, bytes, error}. Nunca lanza error. */
+function descargarFotoPortal_(cfg, id) {
+  const tiempo = isoConZona_(new Date());
+  let r;
+  try {
+    r = UrlFetchApp.fetch(cfg.url + RUTA_PORTAL_FOTO + '?id=' + encodeURIComponent(id), { method: 'get', muteHttpExceptions: true,
+      followRedirects: false, headers: { 'X-Hbox-Tiempo': tiempo, 'X-Hbox-Firma': 'sha256=' + firmaPortal_(cfg.secreto, tiempo, '') } });
+  } catch (e) {
+    return { ok: false, codigo: 0, error: 'Sin respuesta del centro de mando: ' + String(e && e.message || e).slice(0, 200) };
+  }
+  const codigo = r.getResponseCode();
+  if (codigo !== 200) return { ok: false, codigo: codigo, error: 'El centro de mando respondió ' + codigo };
+  return { ok: true, codigo: codigo, bytes: r.getContent() };
+}
+
+/**
+ * Anota la foto ya guardada en Drive (dentro del candado): el movimiento o la devolución con foto_id "centro:<id>"; si no hay
+ * (recepción de antes del incremento 5, o registrada por compras), la última entrada vigente de ese renglón sin foto. Si no hay
+ * dónde, queda en la Bitacora (la foto ya está en Drive).
+ */
+function anotarFotoPortal_(libro, tarea, id, url) {
+  const marca = MARCA_FOTO_CENTRO + tarea.id, cI = colMov_('foto_id');
+  const hM = hojaCompras_(libro, 'MovimientosInventario');
+  const filas = filasDeArea_(hM, HOJAS_COMPRAS, 'MovimientosInventario');
+  let i = filas.findIndex(r => String(r[cI - 1]) === marca);
+  if (i === -1 && tarea.destino === 'mov') {
+    for (let k = filas.length - 1; k >= 0; k--) {
+      const m = movDesdeFila_(filas[k], k + 2);
+      if (m.ocFolio.toUpperCase() === String(tarea.oc).toUpperCase() && m.renglon === tarea.renglon && m.tipo === TIPO_ENTRADA_COMPRA &&
+        m.estado === 'Vigente' && !m.fotoId && !m.fotoUrl) { i = k; break; }
+    }
+  }
+  if (i !== -1) { hM.getRange(i + 2, cI, 1, 2).setValues([[id, url]]); return 'mov'; }
+  const hD = hojaCompras_(libro, 'Devoluciones'), cD = HOJAS_COMPRAS.Devoluciones.enc.indexOf('foto_id') + 1;
+  const j = filasDeArea_(hD, HOJAS_COMPRAS, 'Devoluciones').findIndex(r => String(r[cD - 1]) === marca);
+  if (j !== -1) { hD.getRange(j + 2, cD, 1, 2).setValues([[id, url]]); MEMO_.devs = null; return 'dev'; }
+  bitacora_(libro, 'Foto del centro de mando sin renglón', tarea.proyecto, tarea.oc + ' · renglón ' + tarea.renglon + ' · ' + url, '', HOJAS_COMPRAS);
+  return '';
+}
+
+/**
+ * ¿La recepción del centro de mando (cuando) es de antes de que compras resolviera "Reponer" en ese renglón? Entonces su
+ * cantidad ya está contada (y su "completa" es vieja). Devuelve una función renglon → bool.
+ */
+function recepcionAntesDeReponer_(movs, cuando) {
+  const fecha = new Date(String(cuando || ''));
+  if (isNaN(fecha.getTime())) return () => false;
+  const recibida = Utilities.formatDate(fecha, 'America/Mexico_City', 'yyyy-MM-dd HH:mm');
+  const reposicion = {};
+  (movs || []).forEach(m => {
+    if (m.tipo !== TIPO_DEVOLUCION || m.estado !== 'Vigente') return;
+    const t = marcaOrdenable(m.fechaRegistro);
+    if (t > (reposicion[m.renglon] || '')) reposicion[m.renglon] = t;
+  });
+  return renglon => !!reposicion[renglon] && recibida <= reposicion[renglon];
+}
+
+// -- Recepción y devoluciones: lógica pura (sin servicios de Google; se prueba en Node) --
+
+/** ¿El movimiento cuenta en el avance de la recepción? (entradas por compra y devoluciones). */
+function cuentaEnRecepcion(tipo) {
+  return tipo === TIPO_ENTRADA_COMPRA || tipo === TIPO_DEVOLUCION || tipo === TIPO_DEVOLUCION_CIERRA;
+}
+
+/** Tipo real de una foto (imagen JPG, PNG o HEIC; máximo 10 MB). bytes con o sin signo. Devuelve {mime, ext}. */
+function validarFoto(bytes) {
+  if (!bytes || !bytes.length) throw new Error('Toma la foto del material.');
+  if (bytes.length > MAX_FOTO) throw new Error('La foto pesa más de 10 MB: vuelve a tomarla (CAPRI la comprime sola).');
+  const t = validarArchivo(bytes, 'la foto', 'La foto');
+  if (t.ext === 'pdf') throw new Error('La foto debe ser una imagen (JPG, PNG o HEIC), no un PDF.');
+  return t;
+}
+
+/** "REC-2026-0001 — r1.jpg" (con " (n)" desde el segundo archivo con el mismo nombre). */
+function nombreArchivoFoto(folio, renglon, ext, n) {
+  return String(folio) + ' — r' + Number(renglon) + (n > 1 ? ' (' + n + ')' : '') + '.' + String(ext || 'jpg');
+}
+
+/**
+ * Problema reportado: p = {tipo, comentario, cantidad}; linea = {descripcion, unidad, disponible (recibido que no está en otra
+ * devolución abierta)}; conFoto. Comentario de 5 a 500; cantidad > 0 y no mayor a lo disponible; foto obligatoria salvo
+ * Faltante. Devuelve {tipo, comentario, cantidad}.
+ */
+function normalizarProblema(p, linea, conFoto) {
+  const d = p || {}, l = linea || {};
+  const desc = '"' + String(l.descripcion || 'el renglón').slice(0, 40) + '"';
+  const tipo = TIPOS_DEV.find(t => textoNormal(t) === textoNormal(d.tipo));
+  if (!tipo) throw new Error('Elige qué pasó con ' + desc + ': ' + TIPOS_DEV.join(', ') + '.');
+  const comentario = String(d.comentario == null ? '' : d.comentario).trim().replace(/\s+/g, ' ');
+  if (comentario.length < 5) throw new Error('Describe el problema de ' + desc + ' (mínimo 5 caracteres).');
+  if (comentario.length > 500) throw new Error('El comentario del problema debe tener máximo 500 caracteres.');
+  const txt = d.cantidad, cantidad = txt === '' || txt == null ? NaN : Number(txt);
+  if (!isFinite(cantidad) || cantidad <= 0) throw new Error('Escribe cuántos ' + (l.unidad || '') + ' de ' + desc + ' tienen el problema.');
+  const disponible = Number(l.disponible);
+  if (isFinite(disponible) && cantidad > disponible + 1e-9) {
+    throw new Error('De ' + desc + ' solo hay ' + Math.max(0, disponible) + ' ' + (l.unidad || '') + ' recibidos para reportar.');
+  }
+  if (!conFoto && tipo !== 'Faltante') throw new Error('Toma una foto del problema de ' + desc + ' (solo un faltante puede ir sin foto).');
+  return { tipo: tipo, comentario: comentario, cantidad: Math.round(cantidad * 10000) / 10000 };
+}
+
+/** Resolución de compras: d = {resolucion, nota, guia}. Nota obligatoria (≥ 5) al devolver o cancelar; guía opcional (≤ 60). */
+function normalizarResolucion(d) {
+  const x = d || {};
+  const resolucion = RESOLUCIONES_DEV.find(r => textoNormal(r) === textoNormal(x.resolucion));
+  if (!resolucion) throw new Error('Elige la resolución: ' + RESOLUCIONES_DEV.join(', ') + '.');
+  const nota = String(x.nota == null ? '' : x.nota).trim().replace(/\s+/g, ' ');
+  if (nota.length > 500) throw new Error('La nota debe tener máximo 500 caracteres.');
+  if ((resolucion === RES_DEVOLVER || resolucion === RES_CANCELAR) && nota.length < 5) {
+    throw new Error(resolucion === RES_DEVOLVER ? 'Escribe la nota de la devolución (nota de crédito o reembolso).'
+      : 'Escribe por qué se cancela el renglón.');
+  }
+  const guia = String(x.guia == null ? '' : x.guia).trim().replace(/\s+/g, ' ');
+  if (guia.length > 60) throw new Error('La guía de la devolución debe tener máximo 60 caracteres.');
+  return { resolucion: resolucion, nota: nota, guia: guia };
+}
+
+/** Efecto de una resolución: {movimiento (tipo del movimiento negativo o ''), reabre (el renglón vuelve a por recibir)}. */
+function efectoResolucion(resolucion) {
+  if (resolucion === RES_REPONER) return { movimiento: TIPO_DEVOLUCION, reabre: true };
+  if (resolucion === RES_DEVOLVER || resolucion === RES_CANCELAR) return { movimiento: TIPO_DEVOLUCION_CIERRA, reabre: false };
+  return { movimiento: '', reabre: false };
+}
+
+/** Texto de cada resolución (historial y correos). */
+function textoResolucionDev(resolucion) {
+  return ({ [RES_REPONER]: 'El proveedor manda el material otra vez: queda por recibir.',
+    [RES_DEVOLVER]: 'Se devuelve al proveedor (nota de crédito o reembolso): ese material ya no se espera.',
+    [RES_CANCELAR]: 'Se cancela lo reportado: ese material ya no se espera.',
+    [RES_CONSERVAR]: 'Se conserva como llegó.' })[resolucion] || '';
+}
+
+/** Nota del historial de una requisición que no se cierra por una devolución abierta. */
+function textoRetenida(folioDev) {
+  return 'queda Recibida (sin cerrar) hasta que compras resuelva la devolución ' + folioDev;
+}
+
+/** ¿Hoy (AAAA-MM-DD) está dentro de los 30 días para reportar desde que se recibió (desde)? Sin fecha, sí. */
+function dentroDeVentanaDev(desde, hoy) {
+  const ok = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
+  return !ok(desde) || !ok(hoy) || diasEntre(desde, hoy) <= DIAS_REPORTAR_DEV;
+}
+
+/** Foto de una recepción del centro de mando: {id, archivada, url} o null (id solo [A-Za-z0-9._-], ≤ 80). */
+function fotoPortal(f) {
+  if (!f || typeof f !== 'object') return null;
+  const id = String(f.id == null ? '' : f.id).trim();
+  if (!/^[A-Za-z0-9._-]{1,80}$/.test(id)) return null;
+  const url = String(f.url == null ? '' : f.url).trim();
+  return { id: id, archivada: f.archivada === true, url: /^https:\/\//i.test(url) ? url.slice(0, 500) : '' };
+}
+
+/** Llave de un problema del centro de mando (una DEV por OC, renglón y foto del problema o, sin foto, comentario). */
+function claveProblemaPortal(ocFolio, n, p) {
+  const x = p || {}, f = fotoPortal(x.foto);
+  if (f) return String(ocFolio).toUpperCase() + ':' + Number(n) + ':f:' + f.id;
+  const texto = [x.tipo, x.cantidad, x.comentario].map(v => String(v == null ? '' : v).trim()).join('|');
+  let h = 5381;
+  for (let i = 0; i < texto.length; i++) h = ((h * 33) ^ texto.charCodeAt(i)) >>> 0;
+  return String(ocFolio).toUpperCase() + ':' + Number(n) + ':c:' + h.toString(16);
 }

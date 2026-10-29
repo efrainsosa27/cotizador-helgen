@@ -68,7 +68,7 @@ const A = require('./arnes')(dir, { rutas, props: {
   ROL_REQUISICION: 'obrero@helgen.tech, efrain@helgen.tech, pedro@helgen.tech', SOLO_REQUISICION: 'rosa@helgen.tech, adri@helgen.tech',
   ROL_OPERACIONES: 'adri@helgen.tech, leo@helgen.tech',
   PORTAL_URL: 'https://drogheda.test/', PORTAL_PROYECTOS: JSON.stringify({ [P1 + '-DRO']: 'drogheda' }) } });
-const { P, ok, falla, plain, props, HOY_ISO, masDias, correr, como, PDF } = A;
+const { P, ok, falla, plain, props, HOY_ISO, masDias, correr, como, PDF, conFotos, FOTOS } = A;
 const MANANA = masDias(1), AYER = masDias(-1);
 correr('var AVISOS = []; enviarCorreosPendientes_ = function () { AVISOS.push.apply(AVISOS, MEMO_.correos || []); MEMO_.correos = []; };');
 const avisos = tipo => plain(correr('AVISOS')).filter(a => a.tipo === tipo);
@@ -203,7 +203,7 @@ assert.deepEqual(JSON.parse(filaOc[21]).map(r => r.descripcion + ':' + (r.item |
   'la orden conserva el ítem (exacto: el de quien pidió; sustituto: el que eligió compras)');
 assert.equal(ok('obrero', 'marcarEnCamino', r0.req, { paqueteria: 'Estafeta', guia: 'E-1', fechaEstimada: MANANA, idSolicitud: id('e') }).estado, 'En camino');
 assert.equal(llamadasCM(), 0);
-let rr = ok('rosa', 'registrarRecepcion', { reqFolio: r0.req, sitio: 'Manzanillo (TIMSA)', renglones: [{ renglon: 1, cantidad: 80 }, { renglon: 2, cantidad: 12 }], idSolicitud: id('r') });
+let rr = ok('rosa', 'registrarRecepcion', { reqFolio: r0.req, sitio: 'Manzanillo (TIMSA)', renglones: conFotos([{ renglon: 1, cantidad: 80 }, { renglon: 2, cantidad: 12 }]), idSolicitud: id('r') });
 assert.deepEqual([rr.completo, rr.estado], [true, 'Recibida'], 'En camino sin pagar + todo recibido = Recibida (espera el pago)');
 assert.equal(pagar(r0.req).vista.requisicion.estado, 'Cerrada');
 
@@ -245,8 +245,8 @@ assert.deepEqual([m1.centroMando.sitio, m1.puedeRecibir, m1.puedeCerrar, m1.pued
   ['ZLO · Manzanillo (TIMSA)', false, false, true, true, null]);
 let mr = mia('rosa', r1.req);
 assert.deepEqual([mr.puedeRecibir, mr.puedeEnCamino, mr.puedeRecoger], [false, false, true], 'quien recibe: solo "Lo recogí"');
-falla('obrero', 'registrarRecepcion', [{ reqFolio: r1.req, sitio: 'Manzanillo (TIMSA)', renglones: [{ renglon: 1, cantidad: 1 }] }], /se recibe en el centro de mando \(ZLO/);
-falla('rosa', 'registrarRecepcion', [{ reqFolio: r1.req, sitio: 'Manzanillo (TIMSA)', renglones: [{ renglon: 1, cantidad: 1 }] }], /se recibe en el centro de mando/);
+falla('obrero', 'registrarRecepcion', [{ reqFolio: r1.req, sitio: 'Manzanillo (TIMSA)', renglones: conFotos([{ renglon: 1, cantidad: 1 }]) }], /se recibe en el centro de mando \(ZLO/);
+falla('rosa', 'registrarRecepcion', [{ reqFolio: r1.req, sitio: 'Manzanillo (TIMSA)', renglones: conFotos([{ renglon: 1, cantidad: 1 }]) }], /se recibe en el centro de mando/);
 let vc = ok('pedro', 'getRequisicion', r1.req);
 assert.deepEqual([vc.centroMando.sitioCodigo, vc.centroMando.proyecto, vc.puedeEnCamino, vc.puedeRecibir], ['ZLO', 'drogheda', true, true], 'compras: respaldo');
 
@@ -275,7 +275,7 @@ assert.equal(avisos('req.encamino').filter(a => a.datos.folio === r0.req).length
 assert.deepEqual(enc[0].datos.para, ['obrero@helgen.tech', 'rosa@helgen.tech']);
 assert.deepEqual(llaves(enc[0].datos).filter(k => MONTOS.test(k) || /proveedor|propuesta/.test(k)), [], 'el aviso por correo no lleva montos ni proveedor');
 // Lo recogí (quien recibe): corrige el envío y forma oc.en_camino:2
-en = ok('rosa', 'marcarEnCamino', r1.req, { recogido: true, idSolicitud: id('e') });
+en = ok('rosa', 'marcarEnCamino', r1.req, { recogido: true, renglones: FOTOS.renglones, idSolicitud: id('e') });
 assert.equal(CM.eventos[r1.oc + ':oc.en_camino:2'].oc.paqueteria, 'Recogido por Rosa Mena');
 assert.equal(CM.eventos[r1.oc + ':oc.en_camino:2'].oc.guia, '');
 assert(/Envío corregido: Recogido por Rosa Mena/.test(mia('rosa', r1.req).eventos.slice(-1)[0].nota));
@@ -301,14 +301,14 @@ m1 = mia('obrero', r1.req);
 assert.equal(m1.estado, 'En camino', 'parcial: sigue En camino');
 assert.equal(m1.eventos.slice(-1)[0].nota, 'Recepción parcial en ZLO por jesush en el centro de mando, 30-oct-2026: 50 M Cable THW 10');
 assert.equal(m1.eventos.slice(-1)[0].correo, 'centro de mando');
-let movs = H('MovimientosInventario').filter(r => r[7] === r1.oc);
+let movs = H('MovimientosInventario').filter(r => r[7] === r1.oc && r[3] === 'Entrada por compra');
 assert.deepEqual(movs.map(r => [r[4], r[8], r[12], r[13], r[14]]), [['Manzanillo (TIMSA)', 1, 50, 'centro de mando', 'jesush (centro de mando)']]);
 // La misma recepción otra vez (la consulta se repitió): nada nuevo
 como(null);
 tr = plain(P.traerRecepcionesPortal());
 assert.deepEqual([tr.parciales, tr.ignoradas], [[], [r1.oc + ' (sin cambios)']]);
 assert.equal(CM.desdes[1], hasta1, 'la siguiente pide desde el "hasta" que contestó el centro de mando');
-assert.equal(H('MovimientosInventario').filter(r => r[7] === r1.oc).length, 1);
+assert.equal(H('MovimientosInventario').filter(r => r[7] === r1.oc && r[3] === 'Entrada por compra').length, 1);
 // Completa (acumulado): cierra sola; la orden pagada queda Recibida
 CM.recepciones = [{ oc_folio: r1.oc, req_folio: r1.req, sitio: 'ZLO', completa: true, recibio: 'jesush', cuando: cuando,
   renglones: [{ n: 1, pedido: 80, recibido: 80 }, { n: 2, pedido: 12, recibido: 12 }] }];
@@ -321,7 +321,7 @@ m1 = mia('obrero', r1.req);
 assert.deepEqual([m1.estado, m1.notasRecepcion], ['Cerrada', 'Recibido en ZLO por jesush en el centro de mando, 30-oct-2026']);
 filaOc = H('OrdenesCompra').find(r => r[0] === r1.oc);
 assert.deepEqual([filaOc[28], filaOc[29], filaOc[30]], ['Recibida', '2026-10-30', 'jesush (centro de mando)']);
-assert.deepEqual(H('MovimientosInventario').filter(r => r[7] === r1.oc).map(r => r[8] + ':' + r[12]), ['1:50', '1:30', '2:12'], 'solo la diferencia');
+assert.deepEqual(H('MovimientosInventario').filter(r => r[7] === r1.oc && r[3] === 'Entrada por compra').map(r => r[8] + ':' + r[12]), ['1:50', '1:30', '2:12'], 'solo la diferencia');
 const bit = H('Bitacora').filter(r => r[2] === 'Recepción del centro de mando');
 assert.deepEqual([bit.length, bit[0][1]], [1, 'centro de mando'], 'Bitacora por "centro de mando"');
 // (fuera de doPost los avisos quedan en la cola de la petición; el activador los manda al final)
@@ -406,8 +406,8 @@ CM.recibidos.forEach(e => {
 // ---- Sin pagar: recepción completa → Recibida; el pago la cierra ----
 const r3 = hastaOrden(P1, { sitio: 'Querétaro' });
 // Respaldo de compras (el centro de mando no funciona): motivo obligatorio, no llega al inventario del sitio
-falla('pedro', 'registrarRecepcion', [{ reqFolio: r3.req, sitio: 'Querétaro', renglones: [{ renglon: 1, cantidad: 80 }] }], /Recepción de respaldo/);
-rr = ok('pedro', 'registrarRecepcion', { reqFolio: r3.req, sitio: 'Querétaro', notas: 'El centro de mando está caído', renglones: [{ renglon: 1, cantidad: 80 }], idSolicitud: id('r') });
+falla('pedro', 'registrarRecepcion', [{ reqFolio: r3.req, sitio: 'Querétaro', renglones: conFotos([{ renglon: 1, cantidad: 80 }]) }], /Recepción de respaldo/);
+rr = ok('pedro', 'registrarRecepcion', { reqFolio: r3.req, sitio: 'Querétaro', notas: 'El centro de mando está caído', renglones: conFotos([{ renglon: 1, cantidad: 80 }]), idSolicitud: id('r') });
 assert.deepEqual([rr.completo, rr.estado], [false, 'Autorizada']);
 assert(/respaldo de compras \(no llega al inventario del sitio/.test(rr.vista.eventos.slice(-1)[0].nota));
 CM.recepciones = [{ oc_folio: r3.oc, req_folio: r3.req, sitio: 'QRO', completa: true, recibio: 'jesusr', cuando: new Date().toISOString(),
@@ -415,7 +415,7 @@ CM.recepciones = [{ oc_folio: r3.oc, req_folio: r3.req, sitio: 'QRO', completa: 
 como(null);
 tr = plain(P.traerRecepcionesPortal());
 assert.deepEqual(tr.cerradas, [r3.req]);
-assert.deepEqual(H('MovimientosInventario').filter(r => r[7] === r3.oc).map(r => r[8] + ':' + r[12] + ':' + r[13]),
+assert.deepEqual(H('MovimientosInventario').filter(r => r[7] === r3.oc && r[3] === 'Entrada por compra').map(r => r[8] + ':' + r[12] + ':' + r[13]),
   ['1:80:pedro@helgen.tech', '2:12:centro de mando'], 'lo del respaldo no se duplica');
 let v3 = ok('pedro', 'getRequisicion', r3.req);
 assert.deepEqual([v3.requisicion.estado, v3.orden.estado, v3.orden.recibio, v3.puedePagar], ['Recibida', 'Emitida', 'jesusr (centro de mando)', true]);
@@ -427,14 +427,14 @@ assert(CM.eventos[r3.oc + ':oc.pagada:1']);
 // Respaldo completo: req.cerrada (el centro de mando deja de esperar el material)
 const r4 = hastaOrden(P1);
 rr = ok('pedro', 'registrarRecepcion', { reqFolio: r4.req, sitio: 'Manzanillo (TIMSA)', notas: 'Sin señal en el sitio', final: true,
-  renglones: [{ renglon: 1, cantidad: 80 }, { renglon: 2, cantidad: 12 }], idSolicitud: id('r') });
+  renglones: conFotos([{ renglon: 1, cantidad: 80 }, { renglon: 2, cantidad: 12 }]), idSolicitud: id('r') });
 assert.deepEqual([rr.completo, rr.estado], [true, 'Recibida']);
 assert(CM.eventos[r4.oc + ':req.cerrada:1']);
 // Cancelar la recepción de una que iba en camino la regresa a En camino
 const r5 = hastaOrden(P1);
 ok('obrero', 'marcarEnCamino', r5.req, { paqueteria: 'Paquetexpress', guia: 'PX-9', fechaEstimada: MANANA, idSolicitud: id('e') });
 rr = ok('pedro', 'registrarRecepcion', { reqFolio: r5.req, sitio: 'Manzanillo (TIMSA)', notas: 'Respaldo por prueba',
-  renglones: [{ renglon: 1, cantidad: 80 }, { renglon: 2, cantidad: 12 }], idSolicitud: id('r') });
+  renglones: conFotos([{ renglon: 1, cantidad: 80 }, { renglon: 2, cantidad: 12 }]), idSolicitud: id('r') });
 assert.equal(rr.estado, 'Recibida');
 assert.equal(ok('pedro', 'cancelarRecepcion', rr.folio, 'Se registró por error').requisicion.estado, 'En camino');
 
@@ -450,7 +450,7 @@ pagar(rNo.req);
 assert.deepEqual([llamadasCM(), H('PortalPendientes').length], [antes, filasAntes], 'proyecto sin ligar: ni avisos ni llamadas');
 let mNo = mia('obrero', rNo.req);
 assert.deepEqual([mNo.centroMando, mNo.puedeRecibir, mNo.estado], [null, true, 'En camino'], 'sin ligar: se recibe en CAPRI');
-rr = ok('rosa', 'registrarRecepcion', { reqFolio: rNo.req, sitio: 'Querétaro', renglones: [{ renglon: 1, cantidad: 80 }, { renglon: 2, cantidad: 12 }], idSolicitud: id('r') });
+rr = ok('rosa', 'registrarRecepcion', { reqFolio: rNo.req, sitio: 'Querétaro', renglones: conFotos([{ renglon: 1, cantidad: 80 }, { renglon: 2, cantidad: 12 }]), idSolicitud: id('r') });
 assert.equal(rr.estado, 'Cerrada', 'en camino y pagada: recibir todo la cierra');
 
 // ---- Mis artículos (sugerencias de lo que la persona ya pidió) ----

@@ -13,7 +13,7 @@ const A = require('./arnes')(dir, { props: {
   ROL_COBRANZA: 'efrain@helgen.tech, tania@helgen.tech', ADMIN_DESBLOQUEO: 'efrain@helgen.tech',
   ROL_COMPRAS: 'efrain@helgen.tech, pedro@helgen.tech', ROL_REQUISICION: 'obrero@helgen.tech, rosa@helgen.tech, pedro@helgen.tech',
   SOLO_REQUISICION: 'adri@helgen.tech', ROL_OPERACIONES: '' } });
-const { P, ok, falla, plain, props, libros, archivos, carpetas, HOY_ISO, masDias, correr, ANIO, PDF } = A;
+const { P, ok, falla, plain, props, libros, archivos, carpetas, HOY_ISO, masDias, correr, ANIO, PDF, conFotos, FOTOS } = A;
 const MANANA = masDias(1);
 const JPG = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3]).toString('base64');
 let nId = 0;
@@ -88,7 +88,7 @@ const pagarProv = (reqFolio, monto) => ok('pedro', 'registrarPagoProveedor', { r
 const facturar = (ocFolio, numero, subtotal, moneda) => ok('pedro', 'registrarFacturaProveedor', { ocFolio, tipo: 'Extranjera', numero, fecha: HOY_ISO,
   moneda: moneda || 'MXN', subtotal, impuestos: Math.round(subtotal * 16) / 100, pdf: { nombre: 'f.pdf', datos: PDF }, idSolicitud: id('f') }).folio;
 const r1 = req(p1, 'Cable'), oc1 = autorizar(r1, 1000), pgp1 = pagarProv(r1, 1160);
-ok('obrero', 'cerrarRequisicion', r1, 'Todo bien');
+ok('obrero', 'cerrarRequisicion', r1, 'Todo bien', FOTOS);
 const r2 = req(p1, 'Tubo'), oc2 = autorizar(r2, 2000), fpr1 = facturar(oc2, 'F-100', 2000);
 const r3 = req(p2, 'Antena'), oc3 = autorizar(r3, 50);
 const LC = libros[props.COBRANZA_DB_ID], LO = libros[props.COMPRAS_DB_ID];
@@ -297,7 +297,7 @@ assert.equal(ok('pedro', 'cotizarRequisicion', r4, propuesta(10)).version, 1);
 const vbo = ok('adri', 'getRequisicionOperaciones', r4).propuesta.huella;
 const oc4 = ok('adri', 'autorizarPropuesta', r4, 1, id('vb'), vbo).ocFolio;
 const recibir = (cantidad, extra) => ok('obrero', 'registrarRecepcion', Object.assign({ reqFolio: r4, sitio: 'Querétaro',
-  renglones: [{ renglon: 1, cantidad }], idSolicitud: id('rc') }, extra || {})).folio;
+  renglones: conFotos([{ renglon: 1, cantidad }]), idSolicitud: id('rc') }, extra || {})).folio;
 const rec1 = recibir(4), rec2 = recibir(6, { evidencia: { nombre: 'r.jpg', datos: JPG } });
 const pgp4 = pagarProv(r4, 116);
 assert.deepEqual([fila(LO, 'Requisiciones', r4)[5], fila(LO, 'OrdenesCompra', oc4)[28]], ['Cerrada', 'Recibida']);
@@ -349,7 +349,7 @@ const r5 = ok('obrero', 'guardarRequisicion', { proyectoFolio: p2, sitio: 'Quer�
 ok('adri', 'aprobarRequisicion', r5, { version: 1, renglones: [{ renglon: 1, aprobado: true }] });
 ok('pedro', 'cotizarRequisicion', r5, propuesta(5));
 const oc5 = ok('adri', 'autorizarPropuesta', r5, 1, id('vb'), ok('adri', 'getRequisicionOperaciones', r5).propuesta.huella).ocFolio;
-const rec5 = ok('obrero', 'registrarRecepcion', { reqFolio: r5, sitio: 'Querétaro', renglones: [{ renglon: 1, cantidad: 2 }], idSolicitud: id('rc') }).folio;
+const rec5 = ok('obrero', 'registrarRecepcion', { reqFolio: r5, sitio: 'Querétaro', renglones: conFotos([{ renglon: 1, cantidad: 2 }]), idSolicitud: id('rc') }).folio;
 assert.deepEqual([fila(LO, 'Requisiciones', r5)[5], fila(LO, 'OrdenesCompra', oc5)[28], fila(LO, 'OrdenesCompra', oc5)[29]], ['Recibida', 'Emitida', HOY_ISO]);
 prev = ok('leo', 'previsualizarAnulacion', rec5);
 assert(/pasa de Recibida a Autorizada/.test(prev.efectos[0]), prev.efectos[0]);

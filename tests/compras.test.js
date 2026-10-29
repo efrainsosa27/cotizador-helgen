@@ -187,6 +187,8 @@ falla('pedro','getCobranzaProyecto',[p1],/No tienes permiso de cobranza/,'PERMIS
 
 // Requisiciones (las pide obrero): toda orden de compra sale de una requisición autorizada
 const PDF=Buffer.from('%PDF-1.4 cotizacion del proveedor').toString('base64');
+// Incremento 5: "Recibí el material" lleva una foto por renglón de la orden
+const FOTOS={renglones:Array.from({length:20},(_,i)=>({renglon:i+1,foto:{nombre:'f.jpg',datos:Buffer.from([0xFF,0xD8,0xFF,0xE0,0,16]).toString('base64')}}))};
 const req=(proyectoFolio)=>ok('obrero','guardarRequisicion',{proyectoFolio,renglones:[{descripcion:'Material',cantidad:1,unidad:'pza'}],
   cotizacion:{nombre:'cot.pdf',datos:PDF},idSolicitud:'rq'+(++nId)}).folio;
 const reqP4=req(p4);
@@ -207,7 +209,7 @@ assert(!('margen' in v)&&!('contrato' in v)&&!/11600|10000/.test(JSON.stringify(
 const carpCom=carpetas[props.COMPRAS_FOLDER_ID], LC=libros[props.COMPRAS_DB_ID];
 assert.equal(ruta(carpCom),'Mi unidad/Cotizador Helgen — Compras');
 assert.equal(LC.nombre,'Cotizador Helgen — Compras (datos)'); assert.equal(archivos[LC.id].padre,carpCom);
-assert.deepEqual(Object.keys(LC.pest).sort(),['Bitacora','FacturasProveedor','MovimientosInventario','OrdenesCompra','PagosProveedores','PortalPendientes','Proveedores','Requisiciones','RequisicionesEventos','RequisicionesRenglones']);
+assert.deepEqual(Object.keys(LC.pest).sort(),['Bitacora','Devoluciones','FacturasProveedor','MovimientosInventario','OrdenesCompra','PagosProveedores','PortalPendientes','Proveedores','Requisiciones','RequisicionesEventos','RequisicionesRenglones']);
 assert.deepEqual([carpCom.acceso,archivos[LC.id].acceso],['PRIVATE','PRIVATE'],'carpeta y libro de compras restringidos');
 const H=n=>LC.pest[n].m, bit=()=>H('Bitacora').slice(1);
 
@@ -272,7 +274,7 @@ const pagoR2={reqFolio:R2,fecha:HOY_ISO,monto:100,monedaPago:'USD',metodo:'Trans
 v=ok('pedro','registrarPagoProveedor',pagoR2).vista;
 assert.deepEqual([v.requisicion.estado,v.orden.estado],['Pagada','Pagada']);
 falla('pedro','cancelarOrdenCompra',[OC('0002'),'Ya no se necesita'],/ya está pagada: no se puede cancelar/);
-ok('obrero','cerrarRequisicion',R2,'');
+ok('obrero','cerrarRequisicion',R2,'',FOTOS);
 f=H('OrdenesCompra')[2];
 assert.deepEqual([f[28],f[29],f[30]],['Recibida',HOY_ISO,'obrero@helgen.tech'],'recibida con la fecha y el correo del solicitante');
 falla('pedro','cancelarOrdenCompra',[OC('0002'),'Ya no se necesita'],/ya se recibió: no se puede cancelar/);

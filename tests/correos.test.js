@@ -14,7 +14,7 @@ const PROPS = { ROL_COBRANZA: 'efrain@helgen.tech', ADMIN_DESBLOQUEO: 'efrain@he
   ROL_REQUISICION: 'obrero@helgen.tech, pedro@helgen.tech', SOLO_REQUISICION: 'rosa@helgen.tech, adri@helgen.tech',
   ROL_OPERACIONES: 'adri@helgen.tech' };
 const A = require('./arnes')(dir, { props: PROPS });
-const { P, ok, falla, plain, props, HOY_ISO, masDias, ANIO, como } = A;
+const { P, ok, falla, plain, props, HOY_ISO, masDias, ANIO, como, conFotos, FOTOS } = A;
 const REQ = n => 'REQ-' + ANIO + '-' + n, OC = n => 'OC-' + ANIO + '-' + n;
 const fmx = iso => iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4);
 const MANANA = masDias(1);
@@ -194,11 +194,11 @@ assert(/ · Material por recibir · /.test(aRosa.subject) && /Tú recibes el mat
 assert(/ · Autorizada, enviar orden · /.test(aCompras.subject) && /Enviar orden al proveedor/.test(aCompras.body));
 
 // Recepción parcial por quien recibe → compras; el resto lo registra compras en su lugar → compras, quien pidió y quien recibe
-ok('rosa', 'registrarRecepcion', { reqFolio: r1, sitio: 'Manzanillo (TIMSA)', renglones: [{ renglon: 1, cantidad: 50 }], notas: 'Faltan 30 m', idSolicitud: 'rc1' });
+ok('rosa', 'registrarRecepcion', { reqFolio: r1, sitio: 'Manzanillo (TIMSA)', renglones: conFotos([{ renglon: 1, cantidad: 50 }]), notas: 'Faltan 30 m', idSolicitud: 'rc1' });
 m = nuevos();
 assert.deepEqual([m.length, para(m[0])], [1, COMPRAS]);
 assert(/ · Recepción parcial · /.test(m[0].subject) && /Nota: Hay una nota: ábrela en CAPRI/.test(m[0].body) && !/Faltan 30/.test(m[0].body) && /recepción parcial del material en Manzanillo/.test(m[0].body));
-ok('pedro', 'registrarRecepcion', { reqFolio: r1, sitio: 'Manzanillo (TIMSA)', renglones: [{ renglon: 1, cantidad: 30 }, { renglon: 2, cantidad: 12 }],
+ok('pedro', 'registrarRecepcion', { reqFolio: r1, sitio: 'Manzanillo (TIMSA)', renglones: conFotos([{ renglon: 1, cantidad: 30 }, { renglon: 2, cantidad: 12 }]),
   notas: 'Llegó al almacén de compras', idSolicitud: 'rc2' });
 m = nuevos();
 assert.equal(m.length, 3);
@@ -411,7 +411,7 @@ assert.equal(B.correos.length, 4, 'pagar avisa a quien recibe');
 assert.deepEqual([para(B.correos[3]), / · Pagada, por recibir · /.test(B.correos[3].subject), /confirma en CAPRI/.test(B.correos[3].body)],
   [['obrero@helgen.tech'], true, true]);
 assert(!/464|Eléctrica|OC-/.test(B.correos[3].body + B.correos[3].subject), 'sin monto, proveedor ni orden');
-B.ok('obrero', 'cerrarRequisicion', rB, 'Todo bien');
+B.ok('obrero', 'cerrarRequisicion', rB, 'Todo bien', B.FOTOS);
 const cierre = B.correos[4];
 assert.deepEqual([para(cierre), / · Material recibido · /.test(cierre.subject), /La requisición quedó cerrada/.test(cierre.body)],
   [['efrain@helgen.tech', 'pedro@helgen.tech'], true, true]);
