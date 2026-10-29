@@ -172,6 +172,8 @@
     <button id="grpVentas" class="oculto" onclick="verGrupo('ventas')">Ventas</button>
     <button id="grpCompras" class="oculto" onclick="verGrupo('compras')">Compras<span id="cntCompras" class="cuenta oculto"></span></button>
     <button id="tabCob" class="oculto" onclick="verTab('cob')">Cobranza</button>
+    <!-- R (incremento 6): solo si ve algún reporte (mod-reportes; el servidor revisa el rol de cada uno) -->
+    <button id="tabRep" class="oculto" onclick="verTab('rep')">Reportes</button>
     <button id="tabAdmin" class="oculto" onclick="verTab('admin')">Administración</button>
     <a id="lnkInventario" class="nav-externo oculto" href="https://drogheda.helgen.online/" target="_blank" rel="noopener noreferrer"
        title="Se abre en otra pestaña">Inventario (centro de mando) ↗</a>
@@ -252,6 +254,9 @@
       <div id="pendLista"><div class="nota" style="margin-top:12px">Cargando…</div></div>
     </div>
   </section>
+
+  <!-- ===== REPORTES (incremento 6 · R): antigüedad de CxC y CxP, flujo de 13 semanas y margen; lo llena mod-reportes ===== -->
+  <section id="vistaRep" class="oculto"></section>
 
   <!-- ===== ADMINISTRACIÓN (incremento 4): cada módulo llena su bloque ===== -->
   <section id="vistaAdmin" class="oculto">
@@ -476,6 +481,8 @@
         <tbody id="cobEsquema"></tbody>
       </table>
       <div id="cobEsqAcciones" class="acciones"></div>
+      <!-- R (incremento 6): fechas esperadas de cobro por etapa (mod-reportes) -->
+      <div id="cobFechas" class="oculto"></div>
     </div>
 
     <div id="cobModPagos" class="modulo oculto">
@@ -2137,6 +2144,7 @@
       (p.comprobanteUrl ? '<a href="' + esc(p.comprobanteUrl) + '" target="_blank">Ver</a>' : '') + '</td><td>' +
       (p.estado === 'Vigente' ? '<button type="button" class="quitar" title="Cancelar pago" onclick="cancelarPagoCob(\'' + esc(p.folio) + '\')">×</button>'
         : '<span class="chip cancelado">Cancelado</span>') + '</td></tr>').join('');
+    avisarModulos('alCobranza', v); // R (incremento 6): fechas esperadas de cobro por etapa (mod-reportes)
   }
 
   function pintarEsquema() {
@@ -5420,6 +5428,291 @@
       alSincronizar(r) { if (r && r.devoluciones && RD.lista) pintarLista(r.devoluciones); },
       alMisReq(lista) { pintarMisReqDev(lista); },
       alVistaReqCom(v) { pintarCompras(v); },
+    });
+  })();
+</script>
+<script id="mod-reportes">
+  // Reportes (incremento 6, módulo R): pestaña Reportes con la antigüedad de cuentas por cobrar y por pagar, el flujo de efectivo de
+  // 13 semanas y el margen por proyecto, cada uno con su CSV; y las fechas esperadas de cobro en la vista de Cobranza del proyecto.
+  // Qué reportes ve cada quien sale de PERMISOS (cobranza: CxC y margen; compras: CxP; super admin: todos); es solo para dibujar:
+  // el servidor revisa el rol en cada llamada. MXN y USD siempre aparte (nunca se suman ni se comparan).
+  (function () {
+    // Grupo propio en la navegación (verTab, pintarNav y tabVisible del script principal leen estas tablas)
+    GRUPOS.rep = ['rep']; BOTON_TAB.rep = 'tabRep'; BOTON_GRUPO.rep = 'tabRep';
+    const TIPOS = [
+      { tipo: 'cxc', titulo: 'Antigüedad de cuentas por cobrar', boton: 'Cuentas por cobrar', funcion: 'reporteCxc', porDia: true },
+      { tipo: 'cxp', titulo: 'Antigüedad de cuentas por pagar', boton: 'Cuentas por pagar', funcion: 'reporteCxp', porDia: true },
+      { tipo: 'flujo', titulo: 'Flujo de efectivo · 13 semanas', boton: 'Flujo 13 semanas', funcion: 'reporteFlujo', porDia: true },
+      { tipo: 'margen', titulo: 'Margen por proyecto', boton: 'Margen', funcion: 'reporteMargen', porDia: false },
+    ];
+    const FUENTES = { plan: 'Plan de pagos', factura: 'Factura', estimada: 'Estimada (entrega + crédito)', '': 'Sin fecha' };
+    const est = { tipo: '', datos: {}, dia: {}, cargando: {}, error: {} };
+    let FECHAS_V = null; // vista de cobranza con la que se pintaron las fechas esperadas
+    const hoyLocal = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); };
+    const def = t => TIPOS.find(x => x.tipo === t);
+    const plural = (n, uno, varios) => n + ' ' + (n === 1 ? uno : varios);
+    const tabla = (enc, cuerpo, estilo) => '<div class="tabla-desliza"><table style="font-size:12px' + (estilo || '') + '"><thead><tr>' + enc + '</tr></thead><tbody>' + cuerpo + '</tbody></table></div>';
+    const celda = (n, moneda, fuerte) => '<td class="num">' + (n ? (fuerte ? '<b>' + dinero(n, moneda) + '</b>' : dinero(n, moneda)) : '') + '</td>';
+    const tile = (k, x, neg) => '<div class="tile"><span>' + esc(k) + '</span><b' + (neg ? ' class="negativo"' : '') + '>' + x + '</b></div>';
+    /** Días de atraso de una fecha contra hoy (positivo = vencida). */
+    const diasDe = (iso, hoy) => { const t = s => { const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : NaN; };
+      const n = Math.round((t(hoy) - t(iso)) / 864e5); return isNaN(n) ? null : n; };
+    const textoDias = d => d == null ? 'sin fecha' : d > 0 ? 'vencida hace ' + plural(d, 'día', 'días') : d === 0 ? 'vence hoy' : 'en ' + plural(-d, 'día', 'días');
+
+    /** Reportes que esta persona puede ver (mismo criterio que permisosReportes_ en el servidor). */
+    function permitidos() {
+      if (SOLO_REQ) return [];
+      const p = PERMISOS || {};
+      return TIPOS.filter(t => t.tipo === 'cxp' ? !!p.compras : t.tipo === 'flujo' ? !!p.superadmin : !!p.cobranza);
+    }
+    const puede = t => permitidos().some(x => x.tipo === t);
+
+    function cargar(tipo) {
+      if (!puede(tipo) || est.cargando[tipo]) return;
+      est.cargando[tipo] = true; est.error[tipo] = '';
+      if (est.tipo === tipo) pintar();
+      google.script.run.withSuccessHandler(d => { est.cargando[tipo] = false; recibir(tipo, d); })
+        .withFailureHandler(err => {
+          est.cargando[tipo] = false; est.error[tipo] = err && err.message ? err.message : String(err);
+          if (est.tipo === tipo && TAB === 'rep') pintar();
+        })[def(tipo).funcion]();
+    }
+    function recibir(tipo, d) {
+      if (!puede(tipo) || !d) return; // el rol cambió mientras llegaba: no se guarda
+      est.datos[tipo] = d; est.dia[tipo] = hoyLocal();
+      if (est.tipo === tipo && TAB === 'rep') pintar();
+    }
+    /** Muestra un reporte (lo pide si no está o si es de otro día). Con un clic, avisa a la sincronización cuál está abierto. */
+    function ver(tipo, conClic) {
+      if (!puede(tipo)) return;
+      est.tipo = tipo;
+      if (!est.datos[tipo] || (def(tipo).porDia && est.dia[tipo] !== hoyLocal())) cargar(tipo);
+      pintar();
+      if (conClic && BOOT) sincronizarAhora();
+    }
+    function abrir() {
+      const lista = permitidos();
+      if (!lista.length) { $('vistaRep').innerHTML = ''; return; }
+      if (!puede(est.tipo)) est.tipo = lista[0].tipo;
+      ver(est.tipo);
+    }
+
+    // ---- Pantalla ----
+    function pintar() {
+      const lista = permitidos(), d = est.datos[est.tipo], x = def(est.tipo);
+      if (!x || !lista.length) { $('vistaRep').innerHTML = ''; return; }
+      const botones = lista.map(t => '<button type="button" class="btn' + (t.tipo === est.tipo ? '' : ' btn-sec') + '" onclick="REPORTES.ver(\'' + t.tipo + '\')">' +
+        esc(t.boton) + '</button>').join('');
+      let cuerpo;
+      if (est.error[est.tipo]) cuerpo = '<div class="aviso error" style="display:block">No se pudo cargar el reporte: ' + esc(est.error[est.tipo]) + '</div>';
+      else if (!d) cuerpo = '<p class="nota">Cargando…</p>';
+      else cuerpo = est.tipo === 'cxc' ? htmlCxc(d) : est.tipo === 'cxp' ? htmlCxp(d) : est.tipo === 'flujo' ? htmlFlujo(d) : htmlMargen(d);
+      $('vistaRep').innerHTML = '<div class="modulo"><h2>Reportes</h2>' +
+        '<div class="acciones" style="margin-top:0">' + botones + '</div>' +
+        '<div class="acciones"><button type="button" class="btn btn-sec" onclick="REPORTES.actualizar()"' + (est.cargando[est.tipo] ? ' disabled' : '') + '>' +
+          (est.cargando[est.tipo] && d ? 'Actualizando…' : 'Actualizar') + '</button>' +
+          '<button type="button" class="btn btn-sec" onclick="REPORTES.descargar()"' + (d ? '' : ' disabled') + '>Descargar CSV</button>' +
+          '<span class="nota">' + (d && d.hoy ? 'Al ' + esc(fechaMx(d.hoy)) + ' · ' : '') + 'MXN y USD siempre aparte.</span></div></div>' +
+        '<div class="modulo"><h2>' + esc(x.titulo) + '</h2>' + cuerpo + '</div>';
+    }
+
+    /** Totales por moneda: un mosaico por rango, vencido y total. */
+    function htmlTotalesAntiguedad(d, quien) {
+      return d.totales.map(t => '<div class="sat-titulo" style="margin-top:4px">' + esc(t.moneda) + ' · ' + plural(t.grupos, quien[0], quien[1]) + '</div>' +
+        '<div class="tiles">' + d.rangos.map(r => tile(r.etiqueta, dinero(t[r.clave], t.moneda))).join('') +
+        tile('Vencido', dinero(t.vencido, t.moneda), t.vencido > 0) + tile('Total', dinero(t.total, t.moneda)) + '</div>').join('');
+    }
+    /** Tabla de antigüedad: un renglón por grupo (cliente o proveedor) y debajo su detalle (proyecto u orden), por moneda. */
+    function htmlAntiguedad(d, cfg) {
+      if (!d.grupos.length) return '<p class="nota">' + cfg.vacio + '</p>';
+      const enc = '<th>' + cfg.columna + '</th>' + d.rangos.map(r => '<th class="num">' + esc(r.etiqueta) + '</th>').join('') + '<th class="num">Total</th>';
+      return htmlTotalesAntiguedad(d, cfg.quien) + d.totales.map(t => {
+        const grupos = d.grupos.filter(g => g.moneda === t.moneda);
+        const filas = grupos.map(g => '<tr style="background:var(--cielo)"><td><b>' + esc(cfg.grupo(g)) + '</b></td>' +
+          d.rangos.map(r => celda(g[r.clave], g.moneda, true)).join('') + celda(g.total, g.moneda, true) + '</tr>' +
+          g.detalle.map(x => '<tr><td style="padding-left:16px;min-width:220px">' + cfg.detalle(x) +
+            '<div class="nota">' + x.partidas.map(p => esc(cfg.partida(p))).join('<br>') + '</div></td>' +
+            d.rangos.map(r => celda(x[r.clave], x.moneda)).join('') + celda(x.total, x.moneda, true) + '</tr>').join('')).join('');
+        const total = '<tr><td><b>Total ' + esc(t.moneda) + '</b></td>' + d.rangos.map(r => celda(t[r.clave], t.moneda, true)).join('') + celda(t.total, t.moneda, true) + '</tr>';
+        return '<div class="sat-titulo" style="margin-top:14px">' + esc(t.moneda) + '</div>' + tabla(enc, filas + total);
+      }).join('') + '<div class="nota" style="margin-top:8px">' + cfg.nota + '</div>';
+    }
+    function htmlCxc(d) {
+      return htmlAntiguedad(d, { columna: 'Cliente / proyecto', quien: ['cliente', 'clientes'], vacio: 'No hay saldos por cobrar en contratos firmados.',
+        grupo: g => g.cliente || 'Sin cliente',
+        detalle: x => '<b style="white-space:nowrap">' + esc(x.folioVisible) + '</b> · ' + esc(x.nombre) + ' <span class="nota">· ' + esc(MARCA_TXT[x.marca] || '') +
+          (x.estadoProyecto && x.estadoProyecto !== 'Activo' ? ' · ' + esc(x.estadoProyecto) : '') + '</span>',
+        partida: p => p.etapa + ': ' + dineroTexto(p.monto, p.moneda) + ' · ' + (p.fecha ? fechaMx(p.fecha) + ' (' + textoDias(p.dias) + ')' : 'sin fecha esperada'),
+        nota: 'Saldo de cada etapa de los contratos firmados (con IVA), con el mismo reparto de pagos que la vista del proyecto. La fecha es la ' +
+          'fecha esperada de cobro de la etapa (Cobranza → proyecto → Esquema de pagos); sin ella, la etapa va en "Sin fecha". Hoy no está vencido. ' +
+          'Fuera: contratos por firmar, proyectos cancelados, lo anulado y los registros de prueba.' });
+    }
+    function htmlCxp(d) {
+      return htmlAntiguedad(d, { columna: 'Proveedor / orden', quien: ['proveedor', 'proveedores'], vacio: 'No hay saldos por pagar a proveedores.',
+        grupo: g => g.proveedor || 'Sin proveedor',
+        detalle: x => '<b style="white-space:nowrap">' + esc(x.ocFolio) + '</b>' + (x.reqFolio ? ' <span class="nota">· ' + esc(x.reqFolio) + '</span>' : '') +
+          '<div class="nota">' + esc(x.proyectoVisible) + (x.proyectoNombre ? ' · ' + esc(x.proyectoNombre) : '') +
+          (x.estadoProyecto && x.estadoProyecto !== 'Activo' ? ' · ' + esc(x.estadoProyecto) : '') + '</div>',
+        partida: p => (FUENTES[p.fuente] || p.fuente) + (p.referencia && p.fuente !== 'estimada' && p.fuente !== '' ? ' ' + p.referencia : '') + ': ' +
+          dineroTexto(p.monto, p.moneda) + (p.fecha ? ' · ' + fechaMx(p.fecha) + ' (' + textoDias(p.dias) + ')' : ''),
+        nota: 'Saldo de cada orden de compra vigente (lo esperado menos lo pagado, en la moneda de la orden). Fecha: la del plan de pagos; si no, ' +
+          'el vencimiento de sus facturas (emisión + días de crédito; lo pagado cubre primero la que vence antes); lo que no tiene factura, ' +
+          'estimada con la fecha de entrega + días de crédito. Fuera: órdenes canceladas o anuladas y registros de prueba.' });
+    }
+    function htmlFlujo(d) {
+      if (!d.monedas.length) return '<p class="nota">No hay cobros ni pagos esperados.</p>';
+      const enc = '<th>Semana</th><th>Del – al</th><th class="num">Cobros esperados</th><th class="num">Pagos esperados</th><th class="num">Neto</th><th class="num">Acumulado</th>';
+      const num = (n, m) => '<td class="num"' + (n < 0 ? ' style="color:#B91C1C"' : '') + '>' + dinero(n, m) + '</td>';
+      return d.monedas.map(M => {
+        const filas = M.semanas.map(s => '<tr><td>' + s.n + '</td><td style="white-space:nowrap">' + esc(fechaMx(s.desde)) + ' – ' + esc(fechaMx(s.hasta)) +
+          (s.cobrosVencidos || s.pagosVencidos ? '<div class="nota aviso-moneda">Incluye vencidos: cobros ' + dinero(s.cobrosVencidos, M.moneda) +
+            ' · pagos ' + dinero(s.pagosVencidos, M.moneda) + '</div>' : '') + '</td>' +
+          celda(s.cobros, M.moneda) + celda(s.pagos, M.moneda) + num(s.neto, M.moneda) + num(s.acumulado, M.moneda) + '</tr>').join('') +
+          '<tr><td colspan="2"><b>13 semanas</b></td>' + celda(M.totales.cobros, M.moneda, true) + celda(M.totales.pagos, M.moneda, true) +
+          num(M.totales.neto, M.moneda) + '<td></td></tr>';
+        const fuera = [['Sin fecha', M.sinFecha], ['Después de la semana 13', M.despues]].filter(([, x]) => x.cobros || x.pagos)
+          .map(([k, x]) => k + ': cobros ' + dinero(x.cobros, M.moneda) + ' · pagos ' + dinero(x.pagos, M.moneda)).join('<br>');
+        const partidas = d.partidas.filter(p => p.moneda === M.moneda);
+        return '<div class="sat-titulo" style="margin-top:14px">' + esc(M.moneda) + '</div>' + tabla(enc, filas) +
+          (fuera ? '<div class="nota" style="margin-top:6px">' + fuera + ' (no entran al neto).</div>' : '') +
+          '<details style="margin-top:8px"><summary class="nota">Partidas (' + partidas.length + ')</summary>' +
+          tabla('<th>Tipo</th><th>Folio</th><th>Detalle</th><th>Fecha</th><th>Semana</th><th class="num">Monto</th>', partidas.map(p =>
+            '<tr><td>' + (p.tipo === 'cobro' ? 'Cobro' : 'Pago') + '</td><td style="white-space:nowrap">' + esc(p.folio) + '</td><td>' + esc(p.detalle) +
+            (p.fuente === 'estimada' ? ' <span class="nota">(fecha estimada)</span>' : '') + '</td><td style="white-space:nowrap">' + (p.fecha ? esc(fechaMx(p.fecha)) : 'Sin fecha') +
+            (p.vencido ? ' <span class="chip cancelado">Vencido</span>' : '') + '</td><td>' + (p.semana || (p.donde === 'despues' ? 'Después' : '—')) + '</td>' +
+            '<td class="num">' + dinero(p.monto, p.moneda) + '</td></tr>').join('')) + '</details>';
+      }).join('') + '<div class="nota" style="margin-top:8px">Semana 1 = de lunes a domingo de esta semana; lo vencido cae en la semana 1 y se marca. ' +
+        'Cobros: saldo de las etapas de contratos firmados en su fecha esperada. Pagos: saldo de las órdenes de compra en su vencimiento ' +
+        '(plan de pagos, factura o estimado). El acumulado empieza en cero: no incluye el saldo en bancos.</div>';
+    }
+    function htmlMargen(d) {
+      if (!d.proyectos.length) return '<p class="nota">No hay proyectos con cotización aceptada.</p>';
+      const conceptos = d.conceptos || [];
+      const tot = d.totales.map(t => '<div class="sat-titulo" style="margin-top:4px">' + esc(MARCA_TXT[t.marca] || 'Sin línea') + ' · ' + esc(t.moneda) +
+        ' · ' + plural(t.proyectos, 'contrato firmado', 'contratos firmados') + (t.porFirmar ? ' · ' + t.porFirmar + ' por firmar (no suman)' : '') +
+        (t.conError ? ' · ' + t.conError + ' con costos en otra moneda (no suman)' : '') + '</div>' +
+        '<div class="tiles">' + tile('Contratado sin IVA', dinero(t.contratado, t.moneda)) +
+        t.costos.map(c => tile(c.concepto, '− ' + dinero(c.monto, t.moneda))).join('') +
+        tile('Margen', dinero(t.margen, t.moneda), t.margen < 0) + tile('Margen %', t.porcentaje == null ? '—' : t.porcentaje + '%', t.margen < 0) + '</div>').join('');
+      const enc = '<th>Proyecto</th><th>Contrato</th><th class="num">Contratado sin IVA</th>' + conceptos.map(c => '<th class="num">' + esc(c) + '</th>').join('') +
+        '<th class="num">Margen</th><th class="num">%</th>';
+      const filas = d.proyectos.map(p => {
+        const costo = c => { const x = p.costos.find(y => y.concepto === c && y.moneda === p.moneda); return x ? x.monto : 0; };
+        return '<tr><td style="min-width:200px"><b style="white-space:nowrap">' + esc(p.folioVisible) + '</b> <span class="nota">· ' + esc(MARCA_TXT[p.marca] || '') +
+          ' · ' + esc(p.moneda) + '</span><div class="nota">' + esc(p.cliente) + ' · ' + esc(p.nombre) + '</div></td>' +
+          '<td><span class="chip ' + (p.estadoContrato === 'Firmado' ? 'firmado' : 'aceptada') + '" style="white-space:nowrap">' + esc(p.estadoContrato) + '</span></td>' +
+          '<td class="num">' + dinero(p.contratado, p.moneda) + '</td>' + conceptos.map(c => celda(costo(c), p.moneda)).join('') +
+          (p.margenError ? '<td class="num" colspan="2"><span class="nota aviso-moneda" title="' + esc(p.margenError) + '">Revisar: ' + esc(p.margenError) + '</span></td>'
+            : '<td class="num"><b' + (p.margen < 0 ? ' class="aviso-moneda"' : '') + '>' + dinero(p.margen, p.moneda) + '</b></td><td class="num">' + p.porcentaje + '%</td>') + '</tr>';
+      }).join('');
+      return tot + tabla(enc, filas, ';margin-top:10px') + '<div class="nota" style="margin-top:8px">Contratado sin IVA (subtotal de la cotización aceptada) menos ' +
+        'el costo sin IVA de las órdenes de compra no canceladas, en la moneda del contrato; los gastos y la nómina se sumarán como otras columnas. ' +
+        'Los totales son por línea de negocio y moneda, solo de contratos firmados. Fuera: proyectos cancelados, lo anulado y los registros de prueba.</div>';
+    }
+    /** Importe con su moneda como texto plano (para notas que luego se escapan). */
+    const dineroTexto = (n, m) => (Math.round((Number(n) + Number.EPSILON) * 100) / 100).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      .replace(/^(-?)/, '$1$') + ' ' + (m || 'MXN');
+
+    // ---- CSV (mismas reglas que el del resumen de cobranza: UTF-8 con BOM, texto que empiece con = + - @ con apóstrofo) ----
+    const texto = s => { const v = String(s ?? ''); return '"' + (/^[=+\-@]/.test(v) ? "'" + v : v).replace(/"/g, '""') + '"'; };
+    const num = n => n == null || n === '' ? '' : (Math.round((Number(n) + Number.EPSILON) * 100) / 100).toFixed(2);
+    const armarCsv = (enc, filas) => '﻿' + [enc.map(texto).join(',')].concat(filas.map(f => f.join(','))).join('\r\n');
+    function csv(tipo) {
+      const d = est.datos[tipo];
+      if (!d) return '';
+      const rangos = d.rangos || [];
+      if (tipo === 'cxc') {
+        return armarCsv(['Cliente', 'Folio', 'Proyecto', 'Línea de negocio', 'Moneda'].concat(rangos.map(r => r.etiqueta), ['Total', 'Etapas por cobrar']),
+          d.grupos.reduce((acc, g) => acc.concat(g.detalle.map(x => [texto(g.cliente), texto(x.folioVisible), texto(x.nombre), texto(MARCA_TXT[x.marca] || ''),
+            texto(x.moneda)].concat(rangos.map(r => num(x[r.clave])), [num(x.total), texto(x.partidas.map(p => p.etapa + ' ' + num(p.monto) + ' ' +
+            (p.fecha || 'sin fecha')).join(' | '))]))), []));
+      }
+      if (tipo === 'cxp') {
+        return armarCsv(['Proveedor', 'Orden de compra', 'Requisición', 'Proyecto', 'Moneda'].concat(rangos.map(r => r.etiqueta), ['Total', 'Vencimientos']),
+          d.grupos.reduce((acc, g) => acc.concat(g.detalle.map(x => [texto(g.proveedor), texto(x.ocFolio), texto(x.reqFolio), texto(x.proyectoVisible),
+            texto(x.moneda)].concat(rangos.map(r => num(x[r.clave])), [num(x.total), texto(x.partidas.map(p => (FUENTES[p.fuente] || p.fuente) + ' ' +
+            num(p.monto) + ' ' + (p.fecha || 'sin fecha')).join(' | '))]))), []));
+      }
+      if (tipo === 'flujo') {
+        return armarCsv(['Moneda', 'Semana', 'Desde', 'Hasta', 'Cobros esperados', 'Pagos esperados', 'Neto', 'Acumulado', 'Cobros vencidos', 'Pagos vencidos'],
+          d.monedas.reduce((acc, M) => acc.concat(M.semanas.map(s => [texto(M.moneda), String(s.n), texto(s.desde), texto(s.hasta), num(s.cobros), num(s.pagos),
+            num(s.neto), num(s.acumulado), num(s.cobrosVencidos), num(s.pagosVencidos)]),
+          [[texto(M.moneda), texto('Sin fecha'), '', '', num(M.sinFecha.cobros), num(M.sinFecha.pagos), '', '', '', ''],
+           [texto(M.moneda), texto('Después de la semana 13'), '', '', num(M.despues.cobros), num(M.despues.pagos), '', '', '', '']]), []));
+      }
+      const conceptos = d.conceptos || [];
+      return armarCsv(['Folio', 'Proyecto', 'Cliente', 'Línea de negocio', 'Contrato', 'Moneda', 'Contratado sin IVA'].concat(conceptos,
+        ['Total costos', 'Margen', 'Margen %', 'Nota']), d.proyectos.map(p => [texto(p.folioVisible), texto(p.nombre), texto(p.cliente),
+        texto(MARCA_TXT[p.marca] || ''), texto(p.estadoContrato), texto(p.moneda), num(p.contratado)].concat(conceptos.map(c => {
+        const x = p.costos.find(y => y.concepto === c && y.moneda === p.moneda); return num(x ? x.monto : 0); }),
+        [num(p.totalCostos), num(p.margen), p.porcentaje == null ? '' : String(p.porcentaje), texto(p.margenError)])));
+    }
+    function descargar() {
+      const d = est.datos[est.tipo];
+      if (!d) { aviso('error', 'Espera a que cargue el reporte.'); return; }
+      const url = URL.createObjectURL(new Blob([csv(est.tipo)], { type: 'text/csv;charset=utf-8' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = est.tipo + '-' + (d.hoy || hoyLocal()) + '.csv';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    // ---- Fechas esperadas de cobro en la vista de Cobranza del proyecto (servidor: guardarFechasEsperadas) ----
+    function pintarFechas(v) {
+      const caja = $('cobFechas'), c = v && v.contrato, esq = (v && v.esquema) || [];
+      FECHAS_V = c && esq.length ? v : null;
+      if (!FECHAS_V) { caja.classList.add('oculto'); caja.innerHTML = ''; return; }
+      const res = v.resumen ? v.resumen.etapas : [], hoy = v.hoy || hoyLocal(), edit = !!v.fechasEditables;
+      const estado = (fecha, saldo) => saldo != null && saldo <= 0.004 ? 'Cobrada' : !fecha ? 'Sin fecha' : (t => t.charAt(0).toUpperCase() + t.slice(1))(textoDias(diasDe(fecha, hoy)));
+      caja.classList.remove('oculto');
+      caja.innerHTML = '<div class="sat" style="margin-top:14px"><div class="sat-titulo">Fechas esperadas de cobro</div>' +
+        '<div class="nota" style="margin-bottom:8px">Opcionales: sirven para la antigüedad de cuentas por cobrar y el flujo de efectivo (Reportes). ' +
+        'Se pueden cambiar aunque el contrato esté firmado, porque no cambian montos; cada cambio queda en la bitácora.</div>' +
+        tabla('<th style="width:30px">#</th><th>Etapa</th><th class="num">Saldo</th><th style="width:170px">Fecha esperada</th><th>Estado</th>',
+          esq.map((e, i) => { const x = res[i] || {};
+            return '<tr><td>' + (i + 1) + '</td><td>' + esc(e.etapa) + '</td><td class="num">' + (x.saldo != null ? dinero(x.saldo, c.moneda) : '') + '</td><td>' +
+              (edit ? '<input id="cobFecha' + (i + 1) + '" type="date" value="' + esc(e.fechaEsperada || '') + '">' : esc(e.fechaEsperada ? fechaMx(e.fechaEsperada) : '—')) +
+              '</td><td>' + esc(estado(e.fechaEsperada, x.saldo)) + '</td></tr>'; }).join('')) +
+        (edit ? '<div class="acciones"><button type="button" class="btn btn-sec" id="btnFechasCob" onclick="REPORTES.guardarFechas()">Guardar fechas</button>' +
+          '<span class="nota">Deja vacía la fecha que no se conozca.</span></div>' : '') + '</div>';
+      if (edit) esq.forEach((e, i) => { const inp = $('cobFecha' + (i + 1)); if (inp) inp.value = e.fechaEsperada || ''; });
+    }
+    function guardarFechas() {
+      const v = FECHAS_V;
+      if (!v || !v.fechasEditables) return;
+      const cambiadas = v.esquema.map((e, i) => ({ orden: i + 1, etapa: e.etapa, fecha: String(($('cobFecha' + (i + 1)) || {}).value || '').trim(), antes: e.fechaEsperada || '' }))
+        .filter(x => x.fecha !== x.antes).map(x => ({ orden: x.orden, etapa: x.etapa, fecha: x.fecha }));
+      if (!cambiadas.length) { aviso('ok', 'Las fechas esperadas no cambiaron.'); return; }
+      accionCob('btnFechasCob', 'guardarFechasEsperadas', [v.proyecto.folio, cambiadas], nv => {
+        delete est.datos.cxc; delete est.datos.flujo; // se vuelven a pedir al abrirlos
+        pintarCobranza(nv); aviso('ok', 'Fechas esperadas de cobro guardadas.');
+      });
+    }
+
+    window.REPORTES = { ver: t => ver(t, true), actualizar: () => { if (est.tipo) cargar(est.tipo); }, descargar: descargar, csv: csv, guardarFechas: guardarFechas,
+      permitidos: () => permitidos().map(t => t.tipo) };
+
+    registrarModulo({
+      nombre: 'Reportes',
+      alPermisos() {
+        const lista = permitidos();
+        $('tabRep').classList.toggle('oculto', !lista.length);
+        // Lo que ya no puede ver se borra de la memoria de la página (cambió su rol)
+        TIPOS.forEach(t => { if (!puede(t.tipo)) { delete est.datos[t.tipo]; delete est.dia[t.tipo]; } });
+        if (est.tipo && !puede(est.tipo)) est.tipo = lista.length ? lista[0].tipo : '';
+        if (TAB === 'rep' && lista.length) abrir();
+      },
+      alVerTab(t) {
+        $('vistaRep').classList.toggle('oculto', t !== 'rep');
+        if (t === 'rep') abrir();
+      },
+      // El servidor vuelve a mandar el reporte abierto cuando cambia algo de lo que usa
+      contexto() { return TAB === 'rep' && est.tipo && puede(est.tipo) ? { reporte: est.tipo } : {}; },
+      alSincronizar(r) {
+        if (r && r.reporte && r.reporte.datos) recibir(r.reporte.tipo, r.reporte.datos);
+        else if (TAB === 'rep' && est.tipo && def(est.tipo).porDia && est.datos[est.tipo] && est.dia[est.tipo] !== hoyLocal()) cargar(est.tipo); // cambió el día
+      },
+      alCobranza(v) { pintarFechas(v); },
     });
   })();
 </script>

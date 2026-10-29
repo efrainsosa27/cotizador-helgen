@@ -8,6 +8,8 @@
 //  2. Servidor por doPost: fecha esperada (permisos, antes y después de firmar, se conserva al reescribir el esquema por nombre,
 //     esquema cambiado, fechas no válidas, borrar, proyecto cancelado, Bitácora, texto en la hoja, versión), los cuatro reportes
 //     con datos sembrados (cifras iguales a la vista del proyecto), permisos por rol, caché por versión y sincronizar.
+//  3. Interfaz (mod-reportes sobre la app, conectada al servidor simulado): pestaña según el rol, cada reporte, CSV, fechas en la
+//     vista de Cobranza del proyecto.
 // Uso: node tests/reportes.test.js .
 'use strict';
 const assert = require('assert');
@@ -441,4 +443,125 @@ const vActual = ok('tania', 'bootstrap').versiones;
 assert.equal(ok('tania', 'sincronizar', vActual, { reporte: 'cxc' }).reporte, undefined, 'sin cambios no se manda');
 assert.deepEqual(plain(correr('CAMBIOS_API.guardarFechasEsperadas')), ['contratos']);
 
-console.log('OK reportes (fecha esperada, CxC, CxP, flujo, margen, permisos, caché)');
+// ================= 3. Interfaz (mod-reportes sobre la app, conectada al servidor simulado) =================
+const fs = require('fs'), path = require('path'), vm = require('vm');
+const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
+assert(scripts.some(s => s.id === 'mod-reportes'), 'existe <script id="mod-reportes">');
+assert(/<button id="tabRep" class="oculto" onclick="verTab\('rep'\)">Reportes<\/button>/.test(html), 'botón de la pestaña, oculto de inicio');
+assert(/<section id="vistaRep" class="oculto">/.test(html) && /<div id="cobFechas" class="oculto"><\/div>/.test(html));
+assert(/avisarModulos\('alCobranza', v\)/.test(html), 'pintarCobranza avisa a los módulos');
+function montar(quien) {
+  const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const token = 'h.' + b64({ email: quien + '@helgen.tech', given_name: quien, exp: Math.floor(Date.now() / 1000) + 3600 }) + '.f';
+  function elemento(tag) {
+    const e = { tag, value: '', textContent: '', className: '', title: '', src: '', placeholder: '', disabled: false, hijos: [], oyentes: {}, _clases: new Set(), porClase: {},
+      classList: { add: c => e._clases.add(c), remove: c => e._clases.delete(c), contains: c => e._clases.has(c), toggle: (c, f) => f ? e._clases.add(c) : e._clases.delete(c) },
+      addEventListener: (t, f) => (e.oyentes[t] = e.oyentes[t] || []).push(f), disparar: t => (e.oyentes[t] || []).forEach(f => f({ target: e })),
+      focus() {}, remove() {}, click() {}, appendChild: h => e.hijos.push(h), prepend: h => e.hijos.unshift(h), contains: () => false,
+      querySelector: sel => e.porClase[sel] || (e.porClase[sel] = elemento('input')), querySelectorAll: sel => sel === 'tr' ? e.hijos : [] };
+    let h = ''; Object.defineProperty(e, 'innerHTML', { get: () => h, set: v => { h = v; if (v === '') e.hijos.length = 0; } });
+    return e;
+  }
+  const porId = {}, oyentesDoc = {};
+  const document = { getElementById: id => porId[id] || (porId[id] = elemento('div')), querySelector: () => ({ src: 'data:logo' }), createElement: t => elemento(t),
+    visibilityState: 'visible', activeElement: null, body: elemento('body'),
+    addEventListener: (t, f) => (oyentesDoc[t] = oyentesDoc[t] || []).push(f), dispatchEvent: ev => (oyentesDoc[ev.type] || []).forEach(f => f(ev)) };
+  document.getElementById('login').classList.add('oculto');
+  ['tabCob', 'tabCom', 'tabRep', 'vistaRep', 'cobFechas'].forEach(i => document.getElementById(i).classList.add('oculto')); // como en el HTML
+  const almacen = { cotizadorHelgenSesion: token }, llamadas = [];
+  // Todo va al servidor simulado como esta persona (también la carga inicial y la sincronización)
+  async function fetch(url, o) {
+    const c = JSON.parse(o.body); llamadas.push(c);
+    const datos = A.post(quien, c.funcion, ...c.args);
+    return { ok: true, json: async () => datos };
+  }
+  const ctx = { document, fetch, console, JSON, Date, Math, Number, String, Array, Object, Promise, Proxy, Error, Uint8Array, TextDecoder,
+    atob: s => Buffer.from(s, 'base64').toString('binary'), crypto: { randomUUID: () => 'id-' + Math.random() },
+    sessionStorage: { getItem: k => almacen[k] ?? null, setItem: (k, v) => almacen[k] = v, removeItem: k => delete almacen[k] },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, confirm: () => true, prompt: () => null,
+    CustomEvent: class { constructor(type, o) { this.type = type; this.detail = o && o.detail; } },
+    setTimeout, clearTimeout, setInterval: () => 0, scrollTo() {} };
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  ['api-web', undefined, 'mod-reportes'].forEach(n => vm.runInContext(scripts.find(s => s.id === n).src, ctx));
+  return { ctx, $: id => document.getElementById(id), llamadas, run: c => vm.runInContext(c, ctx) };
+}
+const esperar = async (k = 30) => { for (let i = 0; i < k; i++) await new Promise(r => setImmediate(r)); };
+(async () => {
+  // ---- Cobranza: CxC y margen; nunca CxP ni flujo ----
+  const T = montar('tania');
+  await esperar();
+  assert(!T.$('tabRep').classList.contains('oculto'), 'cobranza ve la pestaña Reportes');
+  assert.deepEqual(plain(T.run('REPORTES.permitidos()')), ['cxc', 'margen']);
+  T.run("verTab('rep')");
+  await esperar();
+  assert(!T.$('vistaRep').classList.contains('oculto'), 'se ve la pantalla');
+  let h = T.$('vistaRep').innerHTML;
+  assert(/Antigüedad de cuentas por cobrar/.test(h) && /Cliente Uno — Uno SA/.test(h) && /=Cliente Dos — Antenas SA/.test(h), 'CxC pintado');
+  assert(/REPORTES\.ver\('margen'\)/.test(h) && !/REPORTES\.ver\('cxp'\)/.test(h) && !/REPORTES\.ver\('flujo'\)/.test(h), 'solo sus reportes');
+  assert(/No vencido/.test(h) && /Más de 90 días/.test(h) && /Sin fecha/.test(h) && /class="tabla-desliza"/.test(h), 'rangos y tablas que se deslizan');
+  assert(/Instalación: \$2,440\.00 MXN · /.test(h), 'la etapa con su fecha: ' + h.slice(0, 0));
+  assert(T.llamadas.some(c => c.funcion === 'reporteCxc'));
+  const csv = T.run("REPORTES.csv('cxc')");
+  assert.equal(csv.charCodeAt(0), 0xFEFF, 'UTF-8 con BOM (Excel)');
+  assert(csv.split('\r\n')[0].startsWith('﻿"Cliente","Folio","Proyecto","Línea de negocio","Moneda","No vencido","1–30 días"'), csv.split('\r\n')[0]);
+  assert(/"'=Cliente Dos — Antenas SA"/.test(csv), 'texto que empieza con = va con apóstrofo');
+  assert(/,"USD",0\.00,0\.00,0\.00,0\.00,348\.00,116\.00,464\.00,/.test(csv), 'USD en su renglón: ' + csv);
+  T.run("REPORTES.ver('cxp')"); await esperar();
+  assert(!T.llamadas.some(c => c.funcion === 'reporteCxp'), 'ni la pide');
+  T.run("REPORTES.ver('margen')"); await esperar();
+  h = T.$('vistaRep').innerHTML;
+  assert(/Margen por proyecto/.test(h) && /Helgen Energy · MXN/.test(h) && /Por firmar/.test(h) && /Órdenes de compra/.test(h), 'margen pintado');
+  assert(/"Folio","Proyecto","Cliente","Línea de negocio","Contrato","Moneda","Contratado sin IVA","Órdenes de compra","Total costos","Margen","Margen %","Nota"/.test(T.run("REPORTES.csv('margen')")));
+  // Contexto de la sincronización: el reporte abierto
+  assert.equal(plain(T.run('contextoSync()')).reporte, 'margen');
+  // Fechas esperadas en la vista de Cobranza del proyecto
+  T.run("verTab('cob')"); await esperar();
+  assert(T.$('vistaRep').classList.contains('oculto'), 'al cambiar de pestaña se esconde');
+  T.run('abrirProyectoCob(' + JSON.stringify(p2) + ')'); await esperar();
+  const caja = T.$('cobFechas');
+  assert(!caja.classList.contains('oculto') && /Fechas esperadas de cobro/.test(caja.innerHTML) && /id="cobFecha3" type="date"/.test(caja.innerHTML), 'bloque de fechas');
+  assert(/Vencida hace 10 días/.test(caja.innerHTML) && /En 20 días/.test(caja.innerHTML), 'estado de cada etapa: ' + caja.innerHTML);
+  assert.deepEqual([T.$('cobFecha1').value, T.$('cobFecha2').value, T.$('cobFecha3').value], [masDias(-10), masDias(20), masDias(40)]);
+  T.$('cobFecha3').value = masDias(50);
+  T.run('REPORTES.guardarFechas()'); await esperar();
+  const g = T.llamadas.find(c => c.funcion === 'guardarFechasEsperadas');
+  assert.deepEqual(g.args, [p2, [{ orden: 3, etapa: 'Encendido del sistema', fecha: masDias(50) }]], 'solo manda lo que cambió');
+  assert(/Fechas esperadas de cobro guardadas/.test(T.$('aviso').innerHTML), T.$('aviso').innerHTML);
+  assert.equal(ok('tania', 'getCobranzaProyecto', p2).esquema[2].fechaEsperada, masDias(50));
+  T.run('REPORTES.guardarFechas()'); await esperar();
+  assert(/no cambiaron/.test(T.$('aviso').innerHTML), 'sin cambios no llama al servidor');
+  assert.equal(T.llamadas.filter(c => c.funcion === 'guardarFechasEsperadas').length, 1);
+  // Proyecto sin contrato: sin bloque
+  T.run('abrirProyectoCob(' + JSON.stringify(vacio) + ')'); await esperar();
+  assert(T.$('cobFechas').classList.contains('oculto'));
+
+  // ---- Compras: solo CxP ----
+  const C = montar('pedro');
+  await esperar();
+  assert.deepEqual(plain(C.run('REPORTES.permitidos()')), ['cxp']);
+  C.run("verTab('rep')"); await esperar();
+  h = C.$('vistaRep').innerHTML;
+  assert(/Antigüedad de cuentas por pagar/.test(h) && /Eléctrica del Centro/.test(h) && /Ardusimple SL/.test(h) && /Factura/.test(h) && /Estimada/.test(h), 'CxP pintado');
+  assert(!/Cliente Uno|Contratado|Margen/.test(h), 'sin datos de contrato');
+  assert(/"Proveedor","Orden de compra","Requisición","Proyecto","Moneda"/.test(C.run("REPORTES.csv('cxp')")));
+
+  // ---- Super admin: los cuatro; el flujo ----
+  const L = montar('leo');
+  await esperar();
+  assert.deepEqual(plain(L.run('REPORTES.permitidos()')), ['cxc', 'cxp', 'flujo', 'margen']);
+  L.run("verTab('rep')"); await esperar();
+  L.run("REPORTES.ver('flujo')"); await esperar();
+  h = L.$('vistaRep').innerHTML;
+  assert(/Flujo de efectivo · 13 semanas/.test(h) && /Incluye vencidos/.test(h) && /13 semanas/.test(h) && /Partidas \(/.test(h), 'flujo pintado');
+  const csvF = L.run("REPORTES.csv('flujo')").split('\r\n');
+  assert.equal(csvF.length, 1 + 2 * (13 + 2), 'por moneda: 13 semanas + sin fecha + después');
+
+  // ---- Ventas: sin pestaña ----
+  const V = montar('ana');
+  await esperar();
+  assert(V.$('tabRep').classList.contains('oculto'), 'sin reportes no ve la pestaña');
+  assert.deepEqual(plain(V.run('REPORTES.permitidos()')), []);
+  console.log('OK reportes (fecha esperada, CxC, CxP, flujo, margen, permisos, caché, interfaz)');
+})().catch(e => { console.error(e); process.exit(1); });
