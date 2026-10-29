@@ -3,6 +3,8 @@
 //  B. oc.devolucion lleva devolucion.origen ('centro' si el problema se reportó en el sitio, 'capri' si aquí); la DEV de un
 //     problema del sitio usa problema.por como quien reportó (y, si no viene, quien recibió).
 //  C. La reposición recibida en el centro de mando en el mismo minuto que "Reponer" sí se cuenta (antes: minuto y <=).
+//  D. Fotos que CAPRI no puede ligar (orden que no existe, anulada o de un proyecto no ligado) se archivan igual (privadas) y se
+//     avisa foto-archivada: antes el centro de mando las ofrecía para siempre.
 // Uso: node tests/revision5-centro.test.js .
 'use strict';
 const assert = require('assert'), crypto = require('crypto');
@@ -137,6 +139,52 @@ const eventos = tipo => Object.values(CM.eventos).filter(e => e.tipo === tipo);
     new Date(base.getTime() - 1000).toISOString(), false, { 'DEV-1': texto(base) })(1), true);
   assert.equal(P.recepcionAntesDeReponer_([{ tipo: 'Devolución', estado: 'Vigente', renglon: 1, folio: 'DEV-1', fechaRegistro: '' }],
     new Date(base.getTime() + 1000).toISOString(), false, { 'DEV-1': texto(base) })(1), false);
+}
+
+// ================= D. Fotos sin dónde ligarse =================
+{
+  props.SUPER_ADMIN = 'leo@helgen.tech';
+  P.prepararCapri();
+  correr(`enviarCorreosPendientes_ = function () { MEMO_.correos = []; };`);
+  const archivo = idFoto => A.archivos[(A.archivos && Object.keys(A.archivos).find(k => A.archivos[k].blob && CM.archivadas[idFoto] &&
+    CM.archivadas[idFoto].indexOf(k) !== -1)) || ''];
+  const ruta = a => { const r = []; for (let f = a && a.padre; f; f = f.padre) r.unshift(f.nombre); return r.join('/'); };
+  // D1. Orden que CAPRI no conoce
+  CM.fotos['D-X1'] = JPEG_CM;
+  CM.recepciones = [{ oc_folio: 'OC-' + ANIO + '-9999', req_folio: 'REQ-' + ANIO + '-9999', sitio: 'QRO', completa: true, recibio: 'jesusr',
+    cuando: new Date().toISOString(), renglones: [{ n: 1, pedido: 5, recibido: 5, foto: { id: 'D-X1', archivada: false, url: '' } }] }];
+  let tr = traer();
+  assert(CM.archivadas['D-X1'], 'orden desconocida: se avisa archivada ' + JSON.stringify(tr));
+  let a = archivo('D-X1');
+  assert(a && /Cotizador Helgen — Compras\/\d{4}\/_sin-orden$/.test(ruta(a)) && a.acceso === 'PRIVATE', 'Compras/AAAA/_sin-orden, privada: ' + ruta(a));
+  assert(a.padre.acceso === 'PRIVATE', 'la carpeta _sin-orden también');
+  // D2. Orden anulada
+  const c = ligada();
+  ok('leo', 'anular', c.oc, 'Orden emitida al proveedor equivocado', id('an'));
+  CM.fotos['D-A1'] = JPEG_CM;
+  CM.recepciones = [{ oc_folio: c.oc, req_folio: c.req, sitio: 'QRO', completa: false, recibio: 'jesusr', cuando: new Date().toISOString(),
+    renglones: [{ n: 1, pedido: 80, recibido: 3, foto: { id: 'D-A1', archivada: false, url: '' } }] }];
+  tr = traer();
+  assert(CM.archivadas['D-A1'], 'orden anulada: se avisa archivada ' + JSON.stringify(tr));
+  a = archivo('D-A1');
+  assert(a && new RegExp('/' + P1 + '/Recepciones$').test(ruta(a)) && a.acceso === 'PRIVATE', 'Recepciones del proyecto: ' + ruta(a));
+  // D3. Orden de un proyecto que no está ligado al centro de mando
+  const P2 = ok('ana', 'crearProyecto', { nombre: 'Casa del Lago', ubicacion: 'Qro', cliente: { nombre: 'Luis', empresa: 'S' }, idSolicitud: 'p2' }).folio;
+  const r2 = ok('obrero', 'guardarRequisicion', { proyectoFolio: P2, sitio: 'Querétaro', renglones: RENGLONES, cotizacion: { nombre: 'c.pdf', datos: A.PDF }, idSolicitud: id('q') }).folio;
+  const oc2 = ok('efrain', 'autorizarRequisicion', r2, OCD()).ocFolio;
+  CM.fotos['D-N1'] = JPEG_CM;
+  CM.recepciones = [{ oc_folio: oc2, req_folio: r2, sitio: 'QRO', completa: false, recibio: 'jesusr', cuando: new Date().toISOString(),
+    renglones: [{ n: 1, pedido: 80, recibido: 3, foto: { id: 'D-N1', archivada: false, url: '' } }] }];
+  tr = traer();
+  assert(CM.archivadas['D-N1'], 'proyecto no ligado: se avisa archivada ' + JSON.stringify(tr));
+  a = archivo('D-N1');
+  assert(a && new RegExp('/' + P2 + '/Recepciones$').test(ruta(a)) && a.acceso === 'PRIVATE', ruta(a));
+  assert.equal(H('MovimientosInventario').filter(r => r[7] === oc2).length, 0, 'la recepción se sigue ignorando (no entra a CAPRI)');
+  // La siguiente consulta ya no las baja otra vez (el centro de mando las marcó archivadas)
+  const gets = CM.gets.length;
+  CM.recepciones.forEach(x => x.renglones.forEach(l => { l.foto.archivada = true; l.foto.url = CM.archivadas[l.foto.id]; }));
+  traer();
+  assert.equal(CM.gets.length, gets);
 }
 
 console.log('revision5-centro: ok');

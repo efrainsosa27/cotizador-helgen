@@ -8622,10 +8622,16 @@ function aplicarRecepcionPortal_(libro, x, det, res) {
     encontrada = buscarOrden_(libro, ocFolio, true); // también anulada: se avisa (huerfana), no se ignora en silencio
   } catch (e) {
     res.ignoradas.push(ocFolio + ' (no existe)');
+    fotosSinOrdenPortal_(x, ocFolio, res); // revisión 5b: sus fotos se archivan igual (si no, el centro de mando las ofrece siempre)
     return;
   }
   const { hoja: hO, orden } = encontrada;
-  if (!proyectoLigado_(orden.proyectoFolio)) { res.ignoradas.push(ocFolio + ' (proyecto no ligado)'); return; }
+  if (!proyectoLigado_(orden.proyectoFolio)) {
+    res.ignoradas.push(ocFolio + ' (proyecto no ligado)');
+    // Revisión 5b: la recepción se ignora como siempre, pero sus fotos se archivan en las Recepciones del proyecto
+    fotosYProblemasPortal_(libro, x, orden, { folio: orden.reqFolio || orden.folio, proyectoFolio: orden.proyectoFolio }, res, '', [], true);
+    return;
+  }
   const huerfana = motivo => {
     res.ignoradas.push(ocFolio + ' (' + motivo + ')');
     // H (incremento 5): sus fotos también se archivan (evidencia; si no, el centro de mando las vuelve a ofrecer siempre)
@@ -10658,6 +10664,7 @@ const TIPO_FALTANTE_ACEPTADO = 'Faltante aceptado';
 const TIPO_RECOGIDO = 'Recogido en tienda';
 const DIAS_REPORTAR_DEV = 30;
 const SUBCARPETA_RECEPCIONES = 'Recepciones';
+const SUBCARPETA_SIN_ORDEN = '_sin-orden'; // revisión 5b: Compras/AAAA/_sin-orden/ (fotos de órdenes que CAPRI no tiene)
 const MAX_FOTO = 10 * 1024 * 1024;
 /** foto_id provisional de una foto del centro de mando que todavía no llega a Drive. */
 const MARCA_FOTO_CENTRO = 'centro:';
@@ -11280,6 +11287,27 @@ function fotosYProblemasPortal_(libro, x, orden, req, res, folioRec, movs, soloF
   });
 }
 
+/**
+ * Fotos de una recepción del centro de mando de una orden que CAPRI no tiene (revisión 5b): se archivan igual en
+ * Compras/AAAA/_sin-orden/ (privada) para que el centro de mando las borre; no hay movimiento ni devolución donde anotarlas
+ * (queda en la Bitacora). El nombre del archivo lleva el folio de la orden si tiene forma de folio.
+ */
+function fotosSinOrdenPortal_(x, ocFolio, res) {
+  res.fotos = res.fotos || [];
+  const folio = /^[A-Z]{2,6}-\d{4}-\d{1,8}$/.test(ocFolio) ? ocFolio : 'SIN-ORDEN';
+  (Array.isArray(x.renglones) ? x.renglones : []).forEach(l => {
+    const n = Number(l && l.n) || 0;
+    [fotoPortal(l && l.foto), fotoPortal(l && l.problema && l.problema.foto)].forEach(f => {
+      if (f && !f.archivada) res.fotos.push({ id: f.id, destino: 'ninguno', sinOrden: true, folio: folio, oc: ocFolio, req: '', proyecto: '', renglon: n });
+    });
+  });
+}
+
+/** Carpeta privada Compras/AAAA/_sin-orden/ (fotos del centro de mando de órdenes que CAPRI no tiene). */
+function carpetaSinOrden_() {
+  return privado_(subcarpeta_(privado_(subcarpeta_(carpetaCompras_(), hoyIso_().slice(0, 4))), SUBCARPETA_SIN_ORDEN));
+}
+
 /** DEV de un problema reportado en el sitio (origen Centro de mando, reportó = problema.por o quien recibió). '' si el renglón no existe. */
 function crearDevolucionPortal_(libro, req, orden, n, p, pf, recibio, clave) {
   const linea = avanceDeReq_(libro, req, orden).lineas.find(l => l.renglon === n);
@@ -11313,8 +11341,8 @@ function archivarFotosPortal_(cfg, libro, res) {
         if (g.codigo === 404) { res.fotosPerdidas.push(tarea.id); return; }
         if (!g.ok) { res.errores.push('Foto ' + tarea.id + ': ' + g.error); return; }
         const tipo = validarFoto(g.bytes);
-        const archivo = privado_(carpetaRecepciones_(tarea.proyecto).createFile(Utilities.newBlob(g.bytes, tipo.mime,
-          nombreArchivoFoto(tarea.folio, tarea.renglon, tipo.ext))));
+        const carpeta = tarea.sinOrden ? carpetaSinOrden_() : carpetaRecepciones_(tarea.proyecto); // revisión 5b: sin orden en CAPRI
+        const archivo = privado_(carpeta.createFile(Utilities.newBlob(g.bytes, tipo.mime, nombreArchivoFoto(tarea.folio, tarea.renglon, tipo.ext))));
         url = archivo.getUrl();
         comoCentroMando_(() => conCandado_(() => anotarFotoPortal_(libro, tarea, archivo.getId(), url)));
         cache.put('FOTOCM_' + tarea.id, url, 21600);
@@ -11349,6 +11377,10 @@ function descargarFotoPortal_(cfg, id) {
  * dónde, queda en la Bitacora (la foto ya está en Drive).
  */
 function anotarFotoPortal_(libro, tarea, id, url) {
+  if (tarea.sinOrden) {
+    bitacora_(libro, 'Foto del centro de mando de una orden que CAPRI no tiene', '', tarea.oc + ' · renglón ' + tarea.renglon + ' · ' + url, '', HOJAS_COMPRAS);
+    return '';
+  }
   const marca = MARCA_FOTO_CENTRO + tarea.id, cI = colMov_('foto_id');
   const hM = hojaCompras_(libro, 'MovimientosInventario');
   const filas = filasDeArea_(hM, HOJAS_COMPRAS, 'MovimientosInventario');

@@ -208,6 +208,9 @@ Sin montos, proveedor ni folio de orden (reglas de B). Fuera de doPost (activado
 7. Una devolución del centro de mando se crea aunque la cantidad reportada pase de lo recibido (se recorta a lo recibido) o sea
    de una requisición cerrada hace más de 30 días: lo reportó el sitio.
 8. Las fotos del centro de mando de órdenes canceladas o anuladas se archivan (sin DEV); la recepción se ignora como hasta hoy.
+   Revisión 5b: también las de una orden de un **proyecto no ligado** (en las Recepciones de ese proyecto) y las de una orden que
+   **CAPRI no tiene** (en `Compras/AAAA/_sin-orden/`, privada; solo queda en la Bitacora), y en todos los casos se avisa
+   `foto-archivada`: antes el centro de mando las ofrecía en cada consulta y ese renglón quedaba bloqueado allá.
 9. Las fotos se guardan dentro del candado (como la cotización y el comprobante de siempre: Drive, no el centro de mando).
 
 ## 9. Desviaciones del contrato
