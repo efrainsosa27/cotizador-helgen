@@ -4,6 +4,8 @@
 // de ellas con el candado tomado y el tamaño del JSON de la respuesta; estima el tiempo en vivo con pesos por operación.
 // No es una prueba (todas.sh no la corre): es la medición de antes y después.
 // Uso: node tests/perfil.js . [--json salida.json] [--comparar antes.json] [--detalle "texto del escenario"]
+//      [--respuestas respuestas.json] [--estado estado.json]  (lo que regresó cada llamada y cómo quedaron las hojas: para
+//      comprobar que antes y después responden y escriben lo mismo)
 'use strict';
 const assert = require('assert'), fs = require('fs');
 const argv = process.argv.slice(2);
@@ -149,6 +151,7 @@ function resumen(ops) {
   return { c, celdas, seg: Math.round(seg * 100) / 100, candado, segCandado: Math.round(segCandado * 100) / 100 };
 }
 const resultados = [];
+const respuestas = []; // --respuestas archivo.json: lo que regresó cada llamada medida (para comparar antes y después)
 const detalle = opcion('--detalle');
 /** Mide fn (una o varias llamadas por doPost): operaciones, segundos estimados y bytes de la respuesta. */
 function medir(nombre, fn, nota) {
@@ -156,7 +159,8 @@ function medir(nombre, fn, nota) {
   let bytes = 0, llamadas = 0;
   const postOriginal = A.post;
   try {
-    fn((q, f, ...a) => { const r = post(q, f, ...a); llamadas++; bytes += A.ultimaRespuesta; assert(r.ok, nombre + ' · ' + f + ': ' + r.error); return r.datos; });
+    fn((q, f, ...a) => { const r = post(q, f, ...a); llamadas++; bytes += A.ultimaRespuesta; assert(r.ok, nombre + ' · ' + f + ': ' + r.error);
+      respuestas.push({ escenario: nombre, funcion: f, datos: r.datos }); return r.datos; });
   } finally { perfil.activo = false; }
   const r = Object.assign({ nombre, llamadas, kb: Math.round(bytes / 102.4) / 10, nota: nota || '' }, resumen(perfil.ops));
   if (perfil.pila) imprimirDetalle(nombre, perfil.ops);
@@ -263,3 +267,7 @@ resultados.forEach(r => {
 });
 console.log('\nPesos (s): ' + TIPOS.map(t => t + ' ' + PESOS[t]).join(' · ') + ' · fijo por llamada ' + FIJO);
 if (opcion('--json')) fs.writeFileSync(opcion('--json'), JSON.stringify(resultados, null, 1));
+if (opcion('--respuestas')) fs.writeFileSync(opcion('--respuestas'), JSON.stringify(respuestas, null, 1));
+// --estado archivo.json: todas las pestañas de todos los libros al terminar (para comprobar que se escribió lo mismo)
+if (opcion('--estado')) fs.writeFileSync(opcion('--estado'), JSON.stringify(Object.keys(A.libros).sort().map(id =>
+  ({ libro: A.libros[id].nombre, pestanas: Object.keys(A.libros[id].pest).sort().map(n => ({ n, filas: A.libros[id].pest[n].m })) })), null, 1));
