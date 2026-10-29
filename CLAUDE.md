@@ -23,6 +23,16 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 
 **Helgen Energy** es la submarca de paneles solares: mismo folio y diseño, pero sus propios Términos y Condiciones.
 
+**CAPRI — incremento 4 (construido el 28/10/2026; sin publicar: §9).** La app se llama ahora **CAPRI** (Cotizaciones ·
+Aprobaciones · Pagos · Requisiciones · Inventario). Agrega: **permisos por persona** en un libro privado de Administración
+(super admin raíz = leo@, página de Permisos, **delegación** de aprobaciones o compras por fechas); cuentas **`@helgen.services`**
+que entran con un **código por correo** y solo ven Requisiciones; **sesión de 30 días**; **avisos por correo** en cada relevo
+(desde efrain@, sin montos); **solicitud de cotización en PDF** y envío de la orden al proveedor; pantalla de **Pendientes**;
+**anular** cualquier registro (super admin, con motivo y cascada); "lo que ya pediste" como sugerencias; y el **enlace con el
+centro de mando de Drogheda** (`drogheda.helgen.online`): CAPRI le avisa las órdenes de proyectos ligados (firmado HMAC, sin
+montos), quien recibe marca "En camino"/"Lo recogí", el material se recibe allá (entra al inventario del sitio) y CAPRI trae esas
+recepciones cada 15 min para cerrar la requisición. Detalle en §4.8, §5 (Administración), §6.15 y `docs/incremento-4*.md`.
+
 ## 2. Datos clave (IDs y URLs)
 
 | Qué | Valor |
@@ -125,7 +135,8 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
   dato 6 h; con `revisar` (solo `sincronizar`) relee la hoja si pasaron `cadaSeg` (marca `R_<nombre>`) y si la huella MD5 cambió con la
   misma versión, sube la versión. Fuentes: `proyectosCache_` (5 min), `contratosCache_`, `catalogoCache_`, `clientesCache_` (10 min);
   `configLigera_`. `REVISAR_A_MANO_` asegura esas fuentes antes de armar una clave. `MEMO_` = lo leído en la petición (propiedades,
-  fuentes); `doPost` lo limpia. `enRol_` lee de `propiedades_()`.
+  fuentes); `doPost` lo limpia. Roles: `tieneRol_(rol)` (Permisos del libro de Administración, o Script Properties mientras no
+  exista; §4.8).
 - En caché por versión: `listarProyectos`, `listarProyectosCobranza/Compras/Requisicion`, `misRequisiciones` (por correo),
   `listarRequisiciones` (por filtro), `resumenCobranzaGeneral`, historial (folio con clave). Las vistas de detalle no.
 
@@ -345,6 +356,48 @@ Autocompletado con `<datalist>`: clientes (en "Nombre"), proyectos activos (`PRY
 descripción y por clave, unidades SAT.
 Capa de sesión y `fetch` en `<script id="api-web">` (§10.2).
 
+### 4.8 CAPRI — incremento 4 (`Code.js` §1.2 y §6; interfaz `<script id="mod-…">`)
+Detalle completo, por módulo, en `docs/incremento-4.md` (contrato entre módulos) y `docs/incremento-4-<módulo>.md`.
+- **Módulos.** `MODULOS_ = [modIdentidad_(), modAnular_(), modCorreos_(), modCentroMando_(), modPantallas_()]`; cada uno devuelve
+  `{nombre, api, cambios, solo, publicas, bootstrap, sincronizar, preparar}` y `deModulos_` los suma a `API_FUNCIONES`, `CAMBIOS_API`,
+  `FUNCIONES_SOLO_REQUISICION` y `FUNCIONES_PUBLICAS`. **Una función nueva de un módulo se declara en su `mod*_()`, no en las listas.**
+  En la interfaz: `registrarModulo({nombre, alBootstrap, alSincronizar, contexto, alPermisos, alVerTab})` y `avisarModulos(evento, x)`.
+- **Roles (base, §1.2).** `ROLES_CAPRI` = ventas, requisicion, solo_requisicion, aprobaciones (antes `ROL_OPERACIONES`), compras,
+  cobranza, desbloqueo, superadmin. `rolesEfectivos(correo, ctx)` (pura: propios + delegados vigentes), `tieneRol_`, `esSuperAdmin_`,
+  `exigirSuperAdmin_`, `correosConRol_(rol)` (a quién avisar: rol en su fila o por delegación; el super admin **no** entra solo por
+  serlo), `excepcionSuperAdmin_(regla, folio, motivo)` (motivo ≥ 10, a la Bitacora de Administración). `doPost`: públicas sin
+  sesión → `verificarSesion_` (Google o sesión CAPRI `capri.…`) → `exigirAcceso_` (desactivada o sin alta = `codigo: 'ACCESO'`) →
+  solo requisiciones → `FUNCIONES_VENTAS` exige ventas. Una @helgen.tech sin fila en Permisos conserva ventas
+  (`PERMISOS_SOLO_LISTADOS = '1'` lo quita). `prepararCapri()` (editor): libro de Administración, `SUPER_ADMIN`, migra roles de
+  Script Properties a Permisos y corre `preparar()` de cada módulo (secreto de sesión, correo de prueba, sitios con código,
+  `PortalPendientes`, activador).
+- **A · Identidad.** `listarUsuarios`, `guardarUsuario` (raíz protegido; nadie se desactiva ni se quita super admin a sí mismo),
+  `listarDelegaciones`, `crearDelegacion`, `cancelarDelegacion` (`DEL-AAAA-NNNN`, ≤ 90 días, solo roles propios delegables, la
+  puede cancelar quien la recibe). Públicas `solicitarCodigo` / `verificarCodigo` (6 dígitos, 10 min, un uso; 5 pedidos por hora;
+  5 fallos = bloqueo 15 min) → sesión `capri.<datos>.<firma HMAC con SESION_SECRETO>` de 30 días, renovada en bootstrap/sincronizar
+  (`sesionCapri`). `aprobarRequisicion` y `autorizarPropuesta` aceptan `motivoExcepcion` (super admin que aprueba lo suyo).
+- **B · Correos y proveedores.** `notificar_(tipo, datos)` forma el aviso; `doPost` (o el activador) llama
+  `enviarCorreosPendientes_()` al terminar bien; `EVENTOS_CORREO`, `destinatariosAviso` (pura), `infoDeAviso_`, `contenidoAviso`
+  (nunca montos, proveedores ni folio de orden; `limpiarTextoAviso`), bitácora en la pestaña `Correos`. Para el proveedor:
+  `solicitudCotizacion(reqFolio, opciones)` (PDF sin precios ni cliente + liga `mailto:`) y `pdfOrdenCompra(folioOc)`.
+  `listarCorreos(filtro)` solo super admin.
+- **C · Centro de mando.** `avisarPortal_(tipo, folioOc)` forma el aviso (oc.autorizada, oc.pagada, oc.en_camino, oc.cancelada,
+  req.cerrada; `evento_id` = `<OC>:<tipo>:<n>`) en `PortalPendientes` dentro del candado; `conAvisoPortal_(resultado)` lo manda al
+  soltarlo (si falla: "Guardado. El centro de mando se actualizará en unos minutos."). `proyectoLigado_(folio)` (única revisión;
+  exige `PORTAL_URL` + `PORTAL_SECRETO` + `PORTAL_PROYECTOS`). `marcarEnCamino` (envío o "Lo recogí"), `misArticulos` (lo que ya
+  pidió, más usado primero), `itemsInventario` (caché 6 h), `traerRecepcionesPortal` (cierra completas, anota parciales, ignora
+  cerradas/canceladas/anuladas; copia a `MovimientosInventario` solo la diferencia), `estadoCentroMando` / `consultarCentroMando`,
+  `cadaQuinceMinutos` (activador: reintenta avisos, trae recepciones, calienta caché y manda correos), `probarCentroMando()` (editor).
+  En proyectos ligados el sitio con código es obligatorio y quien pide ya no registra la recepción en CAPRI (compras sí, como
+  respaldo con motivo, que no llega al inventario del sitio).
+- **D · Pantallas.** Nombre CAPRI, navegación por grupos (Pendientes, Ventas, Compras, Cobranza, Administración + liga a
+  Inventario), contadores, menú de teléfono (≤ 640 px). `pendientes(todos)` (`itemsPendientes`, `conteosPendientes` puras); la
+  carga abre **Pendientes**. Ligas `#req=REQ-…` y `#pend`.
+- **E · Anular.** `previsualizarAnulacion(folio)`, `anular(folio, motivo, idSolicitud)` (super admin; cascada completa; estado
+  `Anulada`; archivos renombrados "ANULADO — …"; avisos a los involucrados y `oc.cancelada` al centro de mando), `listarAnulados`.
+  `esAnulado_` / `foliosAnulados_` / `ocVigente`: listas, totales y pendientes saltan lo anulado; `buscarReq_` y `buscarOrden_`
+  lo rechazan (tercer parámetro `conAnuladas` solo para avisar la cancelación). Contratos: `CONTRATO PRY-AAAA-NNNN`.
+
 ## 5. Dónde se guardan los datos
 
 **Todo en la carpeta maestra "Cotizador Helgen"** de Mi unidad:
@@ -457,6 +510,20 @@ relee las propiedades en cada llamada (comprobado el 28/10/2026 al agregar a ala
 Versiones (23/10/2026, §6.14): `VER_proyectos`, `VER_contratos`, `VER_cotizaciones`, `VER_catalogo`, `VER_requisiciones`, `VER_oc`,
 `VER_pagosCobranza`, `VER_pagosProveedores` (se crean y suben solas; no editarlas: si se borran, solo se recalcula el caché).
 **Un cambio de rol (`ROL_*`, `SOLO_REQUISICION`) se aplica sin recargar la página** en la siguiente consulta (≤ 20 s).
+
+**CAPRI (incremento 4; aún sin publicar).** Libro privado **"CAPRI — Administración"** (`ADMIN_DB_ID`, carpeta `ADMIN_FOLDER_ID`;
+lo crea `prepararCapri()`, restringido como los de cobranza y compras) con `Permisos` (correo, nombre, roles, activo, sitio…;
+**desde que existe, los roles salen de aquí y ya no de las propiedades `ROL_*`**), `Delegaciones`, `Correos` (cada aviso enviado
+o fallido), `Anulaciones` (una fila por registro anulado, con su copia en JSON) y `Bitacora`. En el libro de compras: pestaña
+`PortalPendientes` (avisos al centro de mando: Pendiente / Enviado), columnas `paqueteria`, `guia`, `fecha_estimada`,
+`en_camino_en`, `en_camino_por` en `OrdenesCompra`, `inventario_item` en `RequisicionesRenglones` y estado de requisición
+`En camino`; estado `Anulada` en las hojas que lo admiten. Config `SITIOS`: `VER | Veracruz (ICAVE) | dirección` (el formato
+viejo, solo nombres, sigue sirviendo; `preparar()` lo convierte). Script Properties nuevas: `SUPER_ADMIN` (leo@), `ADMIN_DB_ID`,
+`ADMIN_FOLDER_ID`, `SESION_SECRETO` (lo crea `prepararCapri`; cambiarlo cierra todas las sesiones @helgen.services),
+`PERMISOS_SOLO_LISTADOS` (opcional), `PORTAL_URL`, `PORTAL_SECRETO` (= `COTIZADOR_SECRETO` del centro de mando; **nunca** en el
+código ni en el chat), `PORTAL_PROYECTOS` (`{"PRY-2026-0002": "drogheda"}`), `PORTAL_PRUEBA` (`1` = avisos de prueba) y las que
+escribe CAPRI (`PORTAL_ULTIMA_CONSULTA`, `PORTAL_ULTIMO_OK`, `PORTAL_ERROR_CONSULTA`, `VER_permisos`, `VER_anulaciones`).
+Sin `PORTAL_SECRETO` el enlace está apagado y todo funciona como antes.
 
 ## 6. Decisiones tomadas (y por qué)
 
@@ -689,7 +756,31 @@ Versiones (23/10/2026, §6.14): `VER_proyectos`, `VER_contratos`, `VER_cotizacio
 - La consulta corre como el dueño (cuota de efrain@): ~3 llamadas por minuto por navegador visible. La verificación del token sigue
   en caché (10 min).
 - Idea no hecha: un activador diario (p. ej. 7:00) que llene el caché para que la primera carga del día no sea en frío (requiere
-  autorizar un permiso nuevo de Google, `script.scriptapp`).
+  autorizar un permiso nuevo de Google, `script.scriptapp`). **Hecho en CAPRI** con `cadaQuinceMinutos` (§4.8, §6.15).
+
+### 6.15 CAPRI — incremento 4 (spec aprobado por Leo el 28/10/2026; construido con 5 módulos en paralelo e integrado)
+Spec: "CAPRI — increment 4 spec" (Claude Docs `https://claude.ai/artifact/2kb6Dpz1MDVdZ5Y26oKjtA`). Decisiones de Leo:
+- `@helgen.services` solo Requisiciones (por ahora); entran con código por correo (no Google): así no hay que darlos de alta en
+  OAuth. Una sesión CAPRI nunca autentica una @helgen.tech.
+- Super admin: aprueba y autoriza lo suyo **solo con motivo** (queda en la Bitacora de Administración); anula "todo" (ventas,
+  cobranza y compras), con motivo, vista previa de la cascada y **una página central** (Administración → Anular), no un botón en
+  cada pantalla. Lo anulado se esconde de listas, totales y pendientes y queda en la página de anulados; restaurar no existe.
+- Correos desde efrain@ (la cuenta que corre la API), nombre "CAPRI Helgen", Reply-To = quien hizo el cambio; nadie recibe aviso de
+  lo que él mismo hizo; un correo por grupo de destinatarios. El super admin **no** recibe los avisos de aprobaciones y compras
+  solo por serlo (integración: si no, le llegaría todo).
+- Delegación por rango de fechas (≤ 90 días), solo aprobaciones y compras.
+- Sugerencias: solo lo que **la misma persona** ya pidió (no lo de otros).
+- **El centro de mando es el sistema del inventario; CAPRI lo alimenta.** El receptor asignado marca "Lo recogí"/En camino en
+  CAPRI; el usuario del sitio recibe en `drogheda.helgen.online` (entra al inventario del sitio) y CAPRI trae esa recepción para
+  cerrar. Receptores por sitio: Alán (VER), Jesús Honorato (ZLO), Miguel (ESE), Antonio (LZC), Jesús Romero (QRO).
+- Avisos al centro de mando: se guardan siempre (Pendiente → Enviado) dentro del candado y se mandan al soltarlo (una llamada HTTP
+  nunca retiene el candado); un aviso que falla bloquea los siguientes de la misma orden (orden garantizado) y se reintenta cada 15
+  min sin límite (no hay botón de descartar: cambiar su `estado` a mano). Nunca montos (se revisa antes de guardar).
+- Por qué es lento (explicado a Leo el 28/10/2026): ~1.7 s fijos por llamada de Apps Script, 385 KB de código cargados en cada
+  llamada (9 s la primera tras publicar), lecturas de Sheets de 0.3–1.7 s por pestaña con caché que se invalida con cualquier
+  cambio, PDF ~15 s, un solo candado para todas las escrituras y la consulta cada 20 s como efrain@. Plan de mudanza en dos
+  etapas (servidor propio con Sheets/Drive, luego PostgreSQL con Drive para archivos): documento "CAPRI — server deployment plan"
+  (`https://claude.ai/artifact/RQt4VfJF4Q1xqozM81sAA2`).
 
 ## 7. Reglas del proyecto (no romper)
 1. Los totales SIEMPRE se recalculan en el servidor (`normalizarCotizacion`). El navegador solo muestra una vista previa.
@@ -719,11 +810,20 @@ Versiones (23/10/2026, §6.14): `VER_proyectos`, `VER_contratos`, `VER_cotizacio
     21/10/2026; §2 y §8 "Manual del Cotizador"). Los dos deben contar lo mismo; si no se pudo actualizar el manual, decirlo.
 15. Toda función nueva que escriba datos va en `CAMBIOS_API` con las colecciones que cambia (si no, los demás navegadores no se
     enteran y su caché queda viejo hasta 6 h). Lo que la interfaz recibe de `sincronizar` respeta los mismos roles que las funciones.
+    En un módulo de CAPRI (§4.8) eso se declara en su `cambios`.
+16. (CAPRI) Desde que existe el libro de Administración, la regla 10 se lee así: cuenta @helgen.tech con token de Google **o**
+    @helgen.services con sesión CAPRI firmada; además la cuenta debe estar activa en Permisos (`exigirAcceso_`). Los roles salen
+    de Permisos, nunca del navegador.
+17. (CAPRI) Un correo de aviso nunca lleva montos, proveedores ni folio de orden de compra; un aviso al centro de mando nunca lleva
+    montos. Ninguna llamada HTTP (centro de mando) ni envío de correo dentro de `conCandado_`: se forman dentro y se mandan al
+    terminar (`conAvisoPortal_`, `enviarCorreosPendientes_`).
 
 ## 8. Cómo trabajar
 
 ```bash
-# Pruebas (Node, servicios de Google simulados). Correr las nueve antes de subir.
+# Pruebas (Node, servicios de Google simulados). Antes de subir: todas (menos SAT) + sintaxis de la interfaz:
+bash tests/todas.sh
+# Una por una (CAPRI agrega permisos, identidad, correos, centro, pantallas y anular, con el arnés tests/arnes.js):
 mkdir -p /tmp/salida-pdf && node tests/cotizacion.test.js Code.js /tmp/salida-pdf   # folios, idempotencia, marcas, Config, clientes, USD; deja helgen.html / energy.html / usd.html / oc.html
 node tests/catalogo.test.js .                                  # catálogo: migración, alta, edición, duplicados
 node tests/sat.test.js . "$HOME/Library/CloudStorage/GoogleDrive-efrain@helgen.tech/Mi unidad/Cotizador Helgen/Catálogos SAT"
@@ -809,6 +909,38 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
   rechaza el cambio, decirlo y anotarlo en §9 como pendiente.
 
 ## 9. Pendientes e ideas
+- **CAPRI — incremento 4: construido e integrado el 28/10/2026, SIN PUBLICAR** (rama `incremento-4`; 5 módulos A–E + integración;
+  `bash tests/todas.sh` en verde: 16 revisiones; revisión independiente hecha, §6.15). No se probó en PRUEBAS ni en el navegador
+  real. **Pasos para publicar (Efrain, con Leo):**
+  1. Revisar y hacer merge del PR a `main`. Respaldar la base de datos, el libro de compras y el de cobranza (como siempre, §2).
+  2. Recomendado: probar antes en PRUEBAS (anular toca todos los libros; el enlace con el centro de mando con `PORTAL_PRUEBA=1`).
+  3. `npx clasp push --force` y comparar el editor con `clasp clone`.
+  4. **Desde el editor, `prepararCapri()` ANTES del deploy**: pide los permisos nuevos (mandar correo, activadores); crea el
+     libro de Administración, migra los roles de Script Properties a Permisos, `SUPER_ADMIN` = leo@, `SESION_SECRETO`, convierte
+     `SITIOS` a códigos, crea `PortalPendientes`, instala `cadaQuinceMinutos` y manda "[CAPRI] Correo de prueba" a efrain@. Si el
+     registro dice que no se pudo mandar la prueba, **no publicar** (con un permiso sin autorizar fallan todas las llamadas, §6.8).
+     Dejar el libro y la carpeta de Administración en Restringido (efrain@ y leo@) y comprobarlo.
+  5. `npx clasp deploy --deploymentId AKfycbwBjF7…` (API primero) y luego `npx --yes wrangler@4 deploy`.
+  6. Leo, en Administración → Permisos: revisar los roles migrados, ponerles nombre, dar el rol **Aprobaciones** (antes
+     `ROL_OPERACIONES`), dar de alta las cuentas @helgen.services con su sitio (Alán en VER en lugar de Paola) y probar la entrada
+     con código. Revisar los códigos en Config `SITIOS` (VER, ZLO, ESE, LZC, QRO).
+  7. Enlace con el centro de mando (apagado hasta este paso): Leo genera el secreto con `openssl rand -hex 32` y lo pone en
+     `PORTAL_SECRETO` (CAPRI) y `COTIZADOR_SECRETO` (drogheda.helgen.online), más `PORTAL_URL = https://drogheda.helgen.online` y
+     `PORTAL_PROYECTOS = {"PRY-2026-0002": "drogheda"}`. Correr `probarCentroMando()` desde el editor; ronda con `PORTAL_PRUEBA=1`
+     (requisición de DROGHEDA hasta la orden, "Lo recogí", recepción en el centro de mando, cierre solo); borrar `PORTAL_PRUEBA`.
+  8. OAuth: con @helgen.services entrando por código ya no hace falta agregarlas a usuarios de prueba; pasar la pantalla de
+     consentimiento a "En producción" o "Interna" sigue pendiente (§10.1).
+  - **Mientras no se publique:** el material que llegue para DROGHEDA se registra a mano en `drogheda.helgen.online` (CAPRI no
+    avisa todavía al centro de mando).
+  - Preguntas abiertas con el centro de mando: ¿`recibido` por renglón es acumulado (lo supone CAPRI) o por recepción?;
+    `proyecto_clave` va como "drogheda" (valor de `PORTAL_PROYECTOS`), no "DRO"; `solicitante`/`autorizo` van como correo; un aviso
+    rechazado (p. ej. 400 por sitio desconocido) se reintenta sin límite y detiene los siguientes de esa orden; cancelar un pago a
+    proveedor no avisa (el contrato no tiene ese tipo).
+  - Textos que todavía dicen "operaciones" dentro de Requisiciones y Compras (la pestaña ya dice Aprobaciones).
+  - **Manual del Cotizador sin actualizar** (regla 14): el documento no está compartido con la cuenta de Leo en Claude Docs; lo
+    actualiza quien lo tenga (Efrain) con §4.8, §5 y este punto.
+  - Ideas que quedaron fuera: restaurar lo anulado, botones de anular en cada pantalla, resumen diario por correo, mandar la orden
+    desde CAPRI con el PDF adjunto, existencias por sitio desde el centro de mando.
 - **Facturas de proveedor y requisiciones con operaciones: publicadas el 28/10/2026** (API @12 + interfaz; PR 2 y 3, merge `56a923e`).
   Hechos: las 11 pruebas en Node pasaron (incluye `tests/facturas.test.js` y `tests/operaciones.test.js`), editor real comparado antes
   (= `d56dd38`, @11) y después (= repo) con `clasp clone`, respaldos (§2), `clasp push`, `clasp deploy` @12, `wrangler deploy`. Sin

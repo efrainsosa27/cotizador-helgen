@@ -1,7 +1,10 @@
-# Cotizador Helgen
+# CAPRI (antes Cotizador Helgen)
+
+**CAPRI** = **C**otizaciones · **A**probaciones · **P**agos · **R**equisiciones · **I**nventario.
 
 App web interna de **Helgen Servicios Especializados** (y su submarca **Helgen Energy**) para cotizar, llevar proyectos,
-cobrar a clientes y comprar a proveedores. Solo entran cuentas `@helgen.tech`.
+cobrar a clientes y comprar a proveedores. Entran cuentas `@helgen.tech` (con Google) y, solo para requisiciones,
+`@helgen.services` (con un código por correo).
 
 | | |
 |---|---|
@@ -35,14 +38,26 @@ cobrar a clientes y comprar a proveedores. Solo entran cuentas `@helgen.tech`.
 Cada rol ve solo lo suyo: quien pide material no ve montos; compras no ve el contrato ni el margen; el margen solo lo ve
 cobranza. Los permisos los revisa el servidor en cada llamada.
 
+**Incremento 4 (CAPRI; ver `CLAUDE.md` §4.8 y `docs/incremento-4*.md`)**
+
+- **Permisos** por persona en una página de Administración, con **super admin** y **delegación** por fechas.
+- **Avisos por correo** a quien sigue en cada relevo (sin montos, proveedores ni folio de orden).
+- **Solicitud de cotización en PDF** para el proveedor y envío de la orden de compra por correo.
+- **Pendientes**: lo que espera a cada persona, al entrar.
+- **Anular** cualquier registro (super admin, con motivo y vista previa de todo lo que arrastra).
+- **Centro de mando de Drogheda** (`drogheda.helgen.online`): en proyectos ligados, CAPRI avisa cada orden (firmado, sin
+  montos), quien recibe marca "En camino" o "Lo recogí", el material se recibe en el centro de mando (entra al inventario
+  del sitio) y CAPRI trae la recepción cada 15 minutos para cerrar la requisición.
+
 ## Cómo está armado
 
 | Parte | Tecnología | Dónde |
 |---|---|---|
 | Interfaz | Una página estática (`web/cotizador/index.html`) | Cloudflare Worker con archivos estáticos (`wrangler.jsonc`) |
-| Sesión | Google Identity Services; el servidor verifica el token de Google en cada llamada | Cliente OAuth en Google Cloud |
+| Sesión | Google Identity Services (@helgen.tech) o sesión CAPRI firmada tras un código por correo (@helgen.services); el servidor la verifica en cada llamada | Cliente OAuth en Google Cloud; secreto `SESION_SECRETO` |
 | API y lógica | Google Apps Script (`Code.js`), llamada por `doPost` | Proyecto de Apps Script (se publica con `clasp`) |
-| Datos | Google Sheets: base de datos (cotizaciones, proyectos, config), catálogo, libro de cobranza y libro de compras | Google Drive (los libros de cobranza y compras están restringidos) |
+| Datos | Google Sheets: base de datos (cotizaciones, proyectos, config), catálogo, libro de cobranza, libro de compras y libro de Administración (permisos, delegaciones, correos, anulaciones) | Google Drive (cobranza, compras y Administración están restringidos) |
+| Tareas de fondo | Activador de Apps Script cada 15 min (`cadaQuinceMinutos`): avisos pendientes al centro de mando, recepciones, caché y correos | Proyecto de Apps Script |
 | Archivos | PDF de cotizaciones y órdenes, comprobantes, cotizaciones de proveedores, facturas | Google Drive |
 | Pruebas | Node con los servicios de Google simulados | `tests/` |
 
@@ -61,8 +76,7 @@ npm install          # instala clasp (solo hace falta para publicar)
 Antes de proponer un cambio, corre las pruebas (no tocan Google; usan simulacros):
 
 ```bash
-mkdir -p /tmp/salida-pdf && node tests/cotizacion.test.js Code.js /tmp/salida-pdf
-for t in catalogo sesion proyectos interfaz cobranza compras requisiciones facturas; do node tests/$t.test.js . || break; done
+bash tests/todas.sh   # todas las pruebas (menos SAT) y la sintaxis de la interfaz
 # La de claves SAT necesita la carpeta "Catálogos SAT" de Drive:
 node tests/sat.test.js . "<ruta a Mi unidad>/Cotizador Helgen/Catálogos SAT"
 ```
@@ -72,7 +86,10 @@ Reglas que no se rompen (lista completa en `CLAUDE.md` §7):
 - Los totales siempre los calcula el servidor; el navegador solo muestra una vista previa.
 - Nunca se suman importes de monedas distintas.
 - Los datos de cobranza solo van en su libro; los de compras, en el suyo. Nunca en la base de datos general (la lee todo el dominio).
-- Toda función nueva que escriba datos va en `CAMBIOS_API`; toda función que llame la interfaz, en `API_FUNCIONES`.
+- Toda función nueva que escriba datos va en `CAMBIOS_API`; toda función que llame la interfaz, en `API_FUNCIONES` (en un
+  módulo de CAPRI, en su `mod*_()`: `api`, `cambios`, `solo`).
+- Ningún correo de aviso lleva montos, proveedores ni folio de orden; ningún aviso al centro de mando lleva montos.
+- Nada de llamadas HTTP ni correos dentro del candado de escritura: se forman dentro y salen al terminar.
 - Textos de la interfaz, comentarios y mensajes de commit en español de México.
 - Nunca subir secretos (API keys, tokens, `.clasprc.json`).
 
@@ -95,7 +112,8 @@ Pasos completos y precauciones en `CLAUDE.md` §8.
    npx clasp deploy --deploymentId <ID del deployment de CLAUDE.md §2> -d "qué cambió"
    ```
    Si el cambio usa un servicio nuevo de Google: `clasp push`, autorizar corriendo una función desde el editor, y hasta
-   entonces `clasp deploy`.
+   entonces `clasp deploy`. **CAPRI (incremento 4):** después del `push`, correr `prepararCapri()` desde el editor (pide
+   mandar correo y el activador; manda un correo de prueba a efrain@) **antes** del `deploy`. Pasos completos en `CLAUDE.md` §9.
 4. **Interfaz** (si cambió algo en `web/`):
    ```bash
    npx --yes wrangler@4 deploy
@@ -122,3 +140,5 @@ Pasos completos y precauciones en `CLAUDE.md` §8.
   (`CLAUDE.md` §10.1).
 - Los roles (cobranza, compras, requisiciones) se dan en las Script Properties del proyecto de Apps Script (`CLAUDE.md` §5).
   Para abrir los PDF de compras o cobranza, además hay que compartir esa carpeta en Drive con la persona.
+- **Con CAPRI publicado**, los roles se dan en **Administración → Permisos** (solo super admin) y las cuentas
+  `@helgen.services` no necesitan estar en OAuth (entran con código).
