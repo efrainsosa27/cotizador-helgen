@@ -12,6 +12,8 @@
 //     configLigera_ se reusa también en las escrituras y se olvida al escribir; carpetaArea_ busca y revisa la carpeta una vez.
 //  5. Escribir en una pestaña olvida solo lo leído de esa pestaña (las demás siguen guardadas); escribir en el libro (crear o
 //     borrar una pestaña) o en algo que no es una pestaña olvida todo.
+//  6. Las vistas de compras (requisición y órdenes del proyecto) toman moneda y línea del caché de contratos: sin leer Contratos
+//     si nada cambió y con la moneda nueva en cuanto cobranza marca otra cotización aceptada.
 // Uso: node tests/rapidez.test.js .
 'use strict';
 const assert = require('assert');
@@ -239,6 +241,30 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   leerTodo();
   assert.deepEqual([lecturas('Requisiciones'), lecturas('Proyectos'), lecturas('RequisicionesEventos')], [1, 1, 1]);
   void props;
+}
+
+// ================= 6. Vistas de compras con el caché de contratos =================
+{
+  const A = crear({ perfil: true });
+  const { ok, perfil } = A;
+  A.P.exigirDocumentosParaPagar_ = function () {};
+  const P1 = ok('ana', 'crearProyecto', { nombre: 'Uno', cliente: { nombre: 'Luis' }, idSolicitud: 'p1' }).folio;
+  const folio = ok('obrero', 'guardarRequisicion', { proyectoFolio: P1, sitio: 'Querétaro', renglones: [{ descripcion: 'Cable', cantidad: 1 }],
+    cotizacion: { nombre: 'c.pdf', datos: A.PDF }, idSolicitud: 'q1' }).folio;
+  const cot = (moneda, n) => ok('ana', 'guardarCotizacion', { cliente: { nombre: 'Luis' }, items: [{ descripcion: 'Servicio', cantidad: 1, precio: 100 }],
+    proyectoFolio: P1, moneda, tipoCambio: moneda === 'USD' ? 18 : '', idSolicitud: 'c' + n }).folio;
+  const cMxn = cot('MXN', 1), cUsd = cot('USD', 2);
+  assert.equal(ok('pedro', 'getRequisicion', folio).moneda, 'MXN', 'sin aceptada: MXN');
+  ok('efrain', 'marcarAceptada', P1, cUsd);
+  let v = ok('pedro', 'getRequisicion', folio);
+  assert.deepEqual([v.moneda, v.sinContrato], ['USD', false], 'la aceptada nueva se ve de inmediato (sube la versión de contratos)');
+  perfil.ops = [];
+  v = ok('pedro', 'getRequisicion', folio);
+  assert.equal(v.moneda, 'USD');
+  assert.equal(perfil.ops.filter(o => o.tipo === 'lee' && /\/Contratos$/.test(o.hoja)).length, 0, 'no lee Contratos si nada cambió');
+  ok('efrain', 'marcarAceptada', P1, cMxn);
+  assert.equal(ok('pedro', 'getRequisicion', folio).moneda, 'MXN');
+  assert.equal(ok('pedro', 'getComprasProyecto', P1).moneda, 'MXN', 'órdenes por proyecto: igual');
 }
 
 console.log('rapidez: todo bien');

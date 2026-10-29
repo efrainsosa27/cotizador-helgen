@@ -2675,7 +2675,8 @@ function datosProyectoCompras_(p) {
  * puedeFacturar). Sin montos del contrato ni margen.
  */
 function vistaCompras_(libro, proyecto) {
-  const m = monedaDeProyecto_(contratosDelLibro_()[proyecto.folio.toUpperCase()] || null);
+  // Rapidez: moneda y línea del caché de contratos (como listarProyectosCompras; en una escritura se lee de la hoja)
+  const m = monedaDeProyecto_(contratosCache_()[proyecto.folio.toUpperCase()] || null);
   const facturas = facturasDelLibro_(libro);
   return {
     proyecto: datosProyectoCompras_(proyecto),
@@ -3449,7 +3450,8 @@ function vistaRequisicion_(libro, folioReq) {
   const f = req.folio.toUpperCase();
   const flujo = flujoOperaciones_();
   const proyecto = buscarProyecto_(hojaProyectos_(), req.proyectoFolio);
-  const c = monedaDeProyecto_(contratosDelLibro_()[req.proyectoFolio.toUpperCase()] || null);
+  // Rapidez: moneda y línea del caché de contratos por versión (en una escritura, contratosCache_ lee la hoja)
+  const c = monedaDeProyecto_(contratosCache_()[req.proyectoFolio.toUpperCase()] || null);
   let orden = null;
   if (req.ocFolio) { orden = buscarOrden_(libro, req.ocFolio).orden; delete orden.fila; }
   const pagos = req.ocFolio ? pagosDeOrden_(libro, req.ocFolio).map(x => { delete x.fila; return x; }) : [];
