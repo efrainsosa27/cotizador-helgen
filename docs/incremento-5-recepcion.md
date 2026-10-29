@@ -192,7 +192,8 @@ Sin montos, proveedor ni folio de orden (reglas de B). Fuera de doPost (activado
 ## 8. Decisiones tomadas aquí (revisar al integrar)
 
 1. **"Ver foto" para quien pidió solo si tiene acceso a la carpeta de compras en Drive** (`accesoFotos_`: editores, lectores
-   o dueño de `Cotizador Helgen — Compras`, en caché 1 h). Si Drive no contesta, no se muestra (contrato §3).
+   o dueño de `Cotizador Helgen — Compras`, en caché 1 h). Si Drive no contesta, no se muestra (contrato §3). Revisión 5b: la
+   misma regla en `listarDevoluciones` (la foto del problema), que antes se la daba a quien pide sin revisar el acceso.
 2. **"Recibí el material" y el cierre de compras escriben entradas por compra** (antes el flujo de siempre no dejaba
    movimientos). Sin eso no hay avance por renglón ni nada que devolver. El cierre de compras no exige fotos (cierra en lugar
    de otra persona).

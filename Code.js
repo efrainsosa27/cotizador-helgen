@@ -11030,23 +11030,29 @@ function listarDevoluciones(filtro) {
     });
   }
   const proyectos = mapaProyectos_(), ordenes = ordenesPorFolio_(libro);
+  // Revisión 5b: quien pide ve "Ver foto" solo si tiene acceso a la carpeta de compras (como en Mis requisiciones, accesoFotos_)
+  const verFoto = compras || accesoFotos_(yo);
   return devolucionesDelLibro_(libro).filter(dv => !esAnulado_(dv.folio) && !esAnulado_(dv.reqFolio) && !esAnulado_(dv.ocFolio) &&
     (compras || mias[dv.reqFolio.toUpperCase()]) && (!estado || dv.estado === estado) && (!reqF || dv.reqFolio.toUpperCase() === reqF))
-    .map(dv => devolucionParaVista_(dv, proyectos, ordenes, compras))
+    .map(dv => devolucionParaVista_(dv, proyectos, ordenes, compras, verFoto))
     .filter(dv => !q || textoNormal([dv.folio, dv.reqFolio, dv.proyectoVisible, dv.proyectoNombre, dv.descripcion, dv.tipo, dv.reporto,
       dv.ocFolio || ''].join(' ')).includes(q))
     .reverse().slice(0, 300);
 }
 
-/** Lo que la interfaz ve de una devolución (sin montos; la orden y la nota de compras solo para compras). */
-function devolucionParaVista_(dv, proyectos, ordenes, compras) {
+/**
+ * Lo que la interfaz ve de una devolución (sin montos; la orden y la nota de compras solo para compras). verFoto: la liga a la foto
+ * (compras siempre; quien pide solo con acceso a la carpeta de compras, accesoFotos_). Sin verFoto, como compras.
+ */
+function devolucionParaVista_(dv, proyectos, ordenes, compras, verFoto) {
+  const conFoto = verFoto === undefined ? !!compras : !!verFoto;
   const p = proyectos[dv.proyectoFolio.toUpperCase()];
   const o = ordenes[dv.ocFolio.toUpperCase()];
   const ren = o && o.renglones ? o.renglones[dv.renglon - 1] : null;
   const x = { folio: dv.folio, fecha: dv.fecha, reqFolio: dv.reqFolio, proyectoFolio: dv.proyectoFolio,
     proyectoVisible: p ? p.folioVisible : dv.proyectoFolio, proyectoNombre: p ? p.nombre : '', renglon: dv.renglon,
     descripcion: dv.descripcion, cantidad: dv.cantidad, unidad: ren ? ren.unidad || '' : '', tipo: dv.tipo, comentario: dv.comentario,
-    fotoUrl: /^https?:/.test(dv.fotoUrl) ? dv.fotoUrl : '', fotoPendiente: dv.fotoId.indexOf(MARCA_FOTO_CENTRO) === 0,
+    fotoUrl: conFoto && /^https?:/.test(dv.fotoUrl) ? dv.fotoUrl : '', fotoPendiente: dv.fotoId.indexOf(MARCA_FOTO_CENTRO) === 0,
     origen: dv.origen, reporto: dv.reportoEmail, estado: dv.estado, resolucion: dv.resolucion, guia: dv.guia,
     resolvio: dv.resolvioEmail, fechaResolucion: dv.fechaResolucion };
   if (compras) Object.assign(x, { ocFolio: dv.ocFolio, notaResolucion: dv.notaResolucion, puedeResolver: dv.estado === DEV_ABIERTA });

@@ -15,6 +15,7 @@
 //     aprobaciones); la tabla de devoluciones de Compras se desliza en el teléfono.
 //  A. (Revisión 5b) Tarjetas escritas con puntos, dobles espacios, "/" o "_" entre grupos, y formas 4-4-4-(1…4) y Diners 4-6-4;
 //     fechas y folios siguen separados.
+//  E. (Revisión 5b) listarDevoluciones no da a quien pide la liga de la foto sin acceso a la carpeta de compras (accesoFotos_).
 // Uso: node tests/revision5.test.js .
 'use strict';
 const assert = require('assert');
@@ -357,6 +358,23 @@ aprobaciones(false);
     falla('efrain', 'registrarPagoProveedor', [pago(s.req, { metodo: 'Tarjeta de crédito', referencia: ref })], /parece un número de tarjeta/);
   }
   assert.equal(H('PagosProveedores').length, antes, 'ninguna referencia con tarjeta llegó a la hoja');
+}
+
+// ================= E. "Ver foto" de una devolución para quien pide =================
+{
+  const s = siempre(true);
+  ok('obrero', 'cerrarRequisicion', s.req, '', { renglones: [{ renglon: 1, foto: F }, { renglon: 2, foto: F }] });
+  ok('obrero', 'reportarProblema', s.req, { renglon: 1, cantidad: 2, tipo: 'Dañado', comentario: 'Rollo aplastado', foto: F, idSolicitud: id('d') });
+  const dv = ultimaDev();
+  const fotoDe = quien => (ok(quien, 'listarDevoluciones', { req: s.req }).find(x => x.folio === dv) || {}).fotoUrl;
+  assert(/^https:\/\//.test(fotoDe('pedro')), 'compras sí ve la foto');
+  assert.equal(fotoDe('obrero'), '', 'quien pidió sin acceso a la carpeta de compras: sin liga (antes la recibía)');
+  const carpeta = A.carpetas[props.COMPRAS_FOLDER_ID];
+  carpeta.getEditors = () => []; carpeta.getViewers = () => [{ getEmail: () => 'Obrero@helgen.tech' }]; carpeta.getOwner = () => ({ getEmail: () => 'efrain@helgen.tech' });
+  for (const k of Object.keys(A.cache)) delete A.cache[k];
+  assert(/^https:\/\//.test(fotoDe('obrero')), 'con acceso (lector de la carpeta) sí');
+  delete carpeta.getEditors; delete carpeta.getViewers; delete carpeta.getOwner;
+  for (const k of Object.keys(A.cache)) delete A.cache[k];
 }
 
 console.log('revision5: ok');
