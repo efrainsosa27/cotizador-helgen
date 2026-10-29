@@ -1,0 +1,90 @@
+// HTTP: el mismo contrato que el doPost de Apps Script. La interfaz solo cambia API_URL.
+//   POST /api (o /)  cuerpo text/plain {"funcion", "args", "token"} → 200 {"ok", "datos" | "error", "codigo"?}
+//   GET  /salud      estado del servicio (solo desde 127.0.0.1 o con la cabecera de nginx; sin datos de CAPRI)
+// CORS: solo los orígenes de la interfaz (Cloudflare y la copia local de pruebas). nginx pone TLS y el límite por IP.
+'use strict';
+const http = require('http');
+
+function correoDelToken(token) {
+  // Solo para el registro (sin verificar; la verificación la hace Code.js): ayuda a saber de quién era una llamada lenta
+  try {
+    const t = String(token || '');
+    const partes = t.split('.');
+    const carga = JSON.parse(Buffer.from(partes[t.startsWith('capri.') ? 1 : 1], 'base64url').toString('utf8'));
+    return String(carga.email || carga.e || '').slice(0, 120);
+  } catch (e) { return ''; }
+}
+
+function crearServidorHttp(servicio, o) {
+  const op = o || {};
+  const origenes = new Set(op.origenes || []);
+  const limite = op.limiteBytes || 50 * 1024 * 1024;
+  const registro = servicio.registro;
+
+  const responder = (res, codigo, cuerpo, extra) => {
+    const texto = typeof cuerpo === 'string' ? cuerpo : JSON.stringify(cuerpo);
+    res.writeHead(codigo, Object.assign({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff', 'Content-Length': Buffer.byteLength(texto) }, extra || {}));
+    res.end(texto);
+  };
+
+  const servidor = http.createServer((req, res) => {
+    const origen = req.headers.origin;
+    const cors = origen && origenes.has(origen) ? { 'Access-Control-Allow-Origin': origen, Vary: 'Origin' } : {};
+    const ruta = (req.url || '/').split('?')[0];
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, Object.assign({ 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Max-Age': '86400' }, cors));
+      res.end();
+      return;
+    }
+    if (req.method === 'GET' && ruta === '/salud') {
+      const local = req.socket.remoteAddress === '127.0.0.1' || req.socket.remoteAddress === '::1' || req.socket.remoteAddress === '::ffff:127.0.0.1';
+      if (!local && !req.headers['x-capri-salud']) { responder(res, 200, { ok: true }); return; }
+      responder(res, 200, servicio.salud());
+      return;
+    }
+    if (req.method !== 'POST' || (ruta !== '/api' && ruta !== '/' && ruta !== '/exec')) {
+      responder(res, 404, { ok: false, error: 'No existe esa dirección. La API de CAPRI recibe POST en /api.' }, cors);
+      return;
+    }
+    const llego = Date.now();
+    const trozos = [];
+    let bytes = 0, demasiado = false;
+    req.on('data', d => {
+      bytes += d.length;
+      if (bytes > limite) { demasiado = true; req.destroy(); return; }
+      trozos.push(d);
+    });
+    req.on('error', () => {});
+    req.on('close', () => {
+      if (demasiado && !res.headersSent) {
+        responder(res, 413, { ok: false, error: 'Los archivos pesan demasiado para una sola llamada (máx. ' + Math.round(limite / 1048576) + ' MB).' }, cors);
+      }
+    });
+    req.on('end', () => {
+      if (demasiado) return;
+      const cuerpo = Buffer.concat(trozos).toString('utf8');
+      let token = '';
+      try { token = (/"token"\s*:\s*"([^"]{0,4096})"/.exec(cuerpo) || [])[1] || ''; } catch (e) { token = ''; }
+      servicio.peticion(cuerpo).then(r => {
+        responder(res, 200, r.texto, cors);
+        const ok = r.texto.startsWith('{"ok":true');
+        const codigo = ok ? undefined : ((/"codigo":"([A-Z_]+)"/.exec(r.texto.slice(-200)) || [])[1]);
+        const m = r.metricas || {};
+        registro('info', 'llamada', { funcion: r.funcion, usuario: correoDelToken(token), ok, codigo, ms: Date.now() - llego,
+          msCola: m.msCola, msTrabajo: m.ms && Math.round(m.ms), cpuMs: m.cpuMs && Math.round(m.cpuMs), rpc: m.rpc,
+          confirmaciones: m.confirmaciones, entrada: bytes, salida: r.texto.length, trabajador: m.trabajador });
+      }, e => {
+        responder(res, 200, { ok: false, error: 'Error interno del servidor: ' + e.message }, cors);
+        registro('error', 'llamada', { error: e.message });
+      });
+    });
+  });
+  servidor.requestTimeout = op.requestTimeoutMs || 300000;
+  servidor.headersTimeout = 60000;
+  servidor.keepAliveTimeout = 65000;
+  return servidor;
+}
+
+module.exports = { crearServidorHttp, correoDelToken };
