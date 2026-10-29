@@ -262,8 +262,8 @@ aprobaciones(false);
   assert.equal(rs.estado, 'Recibida');
   let v = ok('pedro', 'getRequisicion', s.req);
   assert.deepEqual([v.puedePagar, v.porPagar.total, v.porPagar.descontado, v.porPagar.totalOrden], [true, 696, 928, 1624], JSON.stringify(v.porPagar));
-  falla('efrain', 'registrarPagoProveedor', [pago(s.req, { monto: 1624 })],
-    /debe ser igual al total por pagar \(\$696\.00 MXN: la orden de \$1,624\.00 menos \$928\.00 de material devuelto sin reponer\)/);
+  falla('efrain', 'registrarPagoProveedor', [pago(s.req, { monto: 1624 })], // P (incremento 6): mensaje de saldo (se admiten pagos parciales)
+    /pasa el saldo de la orden: faltan \$696\.00 MXN por pagar \(total por pagar \$696\.00 MXN: la orden de \$1,624\.00 menos \$928\.00 de material devuelto sin reponer; tolerancia ±1\.00\)/);
   let pg = pagar(s.req, { monto: 696 });
   assert.deepEqual([pg.vista.requisicion.estado, pg.vista.orden.estado], ['Cerrada', 'Recibida'], 'pagada por lo que se quedó: se cierra');
   // Devolución parcial: 10 de 80 → 70 × $10 + 12 × $50 = $1,300 + IVA $208 = $1,508 (±1.00 como siempre)

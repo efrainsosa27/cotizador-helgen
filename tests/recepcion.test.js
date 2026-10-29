@@ -365,7 +365,8 @@ cs = correosNuevos();
 assert.deepEqual(cs.map(m => m.subject.split(' · ')[1]).sort(), ['Material recibido', 'Problema con material']);
 cs.forEach(revisarCorreo);
 vc = ok('pedro', 'getRequisicion', s2.req);
-assert.deepEqual([vc.puedeCerrar, vc.puedePagar, vc.puedeCancelarPago], [false, false, false]);
+// P (incremento 6): el pago de una retenida sí se cancela (solo una Cerrada lo impide): la orden volvería a Emitida y la requisición seguiría Recibida
+assert.deepEqual([vc.puedeCerrar, vc.puedePagar, vc.puedeCancelarPago], [false, false, true]);
 falla('pedro', 'cerrarRequisicionCompras', [s2.req, 'Cierro yo'], /la devolución DEV-\d{4}-0004 de REQ-\d{4}-\d{4} está abierta/i);
 rs = ok('pedro', 'resolverDevolucion', DEV('0004'), { resolucion: 'Conservar', nota: 'Se usa así' });
 assert.deepEqual([rs.estado, rs.vista.requisicion.estado, rs.vista.orden.estado], ['Cerrada', 'Cerrada', 'Recibida'], 'sin devoluciones abiertas se cierra sola');

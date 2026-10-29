@@ -201,8 +201,8 @@ const leer=o=>ctx.leerCfdi(cfdi(o));
   assert.strictEqual(r.abiertas.find(a=>a.folio==='F8').dias,0,'vence hoy = por vencer');
   assert.strictEqual(r.abiertas[0].proveedor,'Proveedor OC-2');
   assert.deepStrictEqual(r.totales,[
-    {moneda:'MXN',facturas:4,porVencer:1171.6,d1a30:580,d31a60:0,d61a90:0,d90mas:232,vencido:812,total:1983.6},
-    {moneda:'USD',facturas:1,porVencer:0,d1a30:0,d31a60:100,d61a90:0,d90mas:0,vencido:100,total:100}],'un total por moneda; nunca MXN + USD');
+    {moneda:'MXN',facturas:4,saldos:0,porVencer:1171.6,d1a30:580,d31a60:0,d61a90:0,d90mas:232,vencido:812,total:1983.6},
+    {moneda:'USD',facturas:1,saldos:0,porVencer:0,d1a30:0,d31a60:100,d61a90:0,d90mas:0,vencido:100,total:100}],'un total por moneda; nunca MXN + USD (saldos: P, incremento 6)');
   assert.deepStrictEqual(r.faltantes.map(x=>[x.folio,x.faltante,x.pagada]),[['OC-4',1000,true],['OC-2',300,false],['OC-6',500,false]],
     'pagadas primero, luego por fecha; OC-1 y OC-3 completas, OC-5 cancelada');
   assert.deepStrictEqual(r.repPendientes,{n:1,folios:['F4']});

@@ -143,23 +143,26 @@ for(const acc of Object.keys(validas)) for(const e of ESTADOS){
 }
 for(const e of ['Cerrada','Rechazada','Cancelada']) for(const acc of Object.keys(validas)) assert.throws(()=>P.transicionReq(e,acc),/no se puede/,'final: '+e);
 assert.throws(()=>P.transicionReq('Solicitada','borrar'),/Acción no válida/);
-// Pago a proveedor: total de la OC ±1.00, tipo de cambio si la moneda es otra
+// Pago a proveedor: hasta el total de la OC +1.00 (P, incremento 6: también parcial), tipo de cambio si la moneda es otra
 const ORDEN={moneda:'MXN',total:2320,fechaOrden:'2026-10-20',hoy:'2026-10-22'};
 const pp=P.normalizarPagoProveedor({fecha:'2026-10-21',monto:'2320.9',metodo:'transferencia',referencia:' SPEI 9 '},ORDEN);
 assert.deepEqual([pp.fecha,pp.monto,pp.monedaPago,pp.tipoCambio,pp.montoAplicado,pp.metodo,pp.referencia],['2026-10-21',2320.9,'MXN','',2320.9,'Transferencia','SPEI 9']);
 assert.equal(P.normalizarPagoProveedor({fecha:'2026-10-21',monto:2319,metodo:'Efectivo'},ORDEN).referencia,'','efectivo sin referencia');
 assert.equal(P.normalizarPagoProveedor({fecha:'2026-10-21',monto:125.41,monedaPago:'USD',tipoCambio:18.5,metodo:'Cheque',referencia:'1'},ORDEN).montoAplicado,2320.09);
-for(const [mal,re] of [[{monto:2321.01},/debe ser igual al total de la orden \(\$2,320\.00 MXN\)/],[{monto:2318.99},/igual al total/],
+assert.equal(P.normalizarPagoProveedor({fecha:'2026-10-21',monto:2318.99,metodo:'Transferencia',referencia:'R'},ORDEN).montoAplicado,2318.99,'P: un monto menor es un pago parcial');
+assert.throws(()=>P.normalizarPagoProveedor({fecha:'2026-10-21',monto:1500,metodo:'Transferencia',referencia:'R'},{...ORDEN,pagado:821.01}),
+  /pasa el saldo de la orden: faltan \$1,498\.99 MXN por pagar \(total de la orden \$2,320\.00 MXN; ya se pagaron \$821\.01 MXN; tolerancia ±1\.00\)/,'P: con lo ya pagado');
+for(const [mal,re] of [[{monto:2321.01},/pasa el saldo de la orden: faltan \$2,320\.00 MXN por pagar \(total de la orden \$2,320\.00 MXN; tolerancia ±1\.00\)/],
   [{monto:0},/mayor a 0/],[{monedaPago:'USD',monto:125.41},/La orden es en MXN y el pago en USD: captura el tipo de cambio/],[{metodo:'Bitcoin'},/método de pago/],
   [{referencia:''},/referencia/],[{fecha:'2026-10-23'},/no puede ser futura/],[{fecha:'2026-10-19'},/anterior a la orden/],[{fecha:''},/obligatoria/]]){
   assert.throws(()=>P.normalizarPagoProveedor({fecha:'2026-10-21',monto:2320,metodo:'Transferencia',referencia:'R',...mal},ORDEN),re,JSON.stringify(mal));
 }
-// Total de sus facturas (ya cubren la orden): se acepta si es menor (retenciones); nunca más que el total de la orden
+// Total de sus facturas (ya cubren la orden): se acepta si es menor (retenciones; lo completa saldoOrdenCompra); nunca más que el total de la orden
 assert.equal(P.normalizarPagoProveedor({fecha:'2026-10-21',monto:2088,metodo:'Transferencia',referencia:'R'},{...ORDEN,totalFacturado:2088}).montoAplicado,2088);
 assert.throws(()=>P.normalizarPagoProveedor({fecha:'2026-10-21',monto:2900,metodo:'Transferencia',referencia:'R'},{...ORDEN,totalFacturado:2900}),
-  /igual al total de la orden \(\$2,320\.00 MXN\)\.$/,'un total de facturas mayor que el de la orden no se acepta');
-assert.throws(()=>P.normalizarPagoProveedor({fecha:'2026-10-21',monto:1740,metodo:'Transferencia',referencia:'R'},{...ORDEN,facturadoParcial:1740}),
-  /todavía no cubren la orden/);
+  /pasa el saldo de la orden: faltan \$2,320\.00 MXN por pagar \(total de la orden \$2,320\.00 MXN; tolerancia ±1\.00\)\.$/,'un total de facturas mayor que el de la orden no se acepta');
+// P (incremento 6): con facturas a medias, pagar lo facturado es un pago parcial (ya no se rechaza; no completa la orden: saldoOrdenCompra)
+assert.equal(P.normalizarPagoProveedor({fecha:'2026-10-21',monto:1740,metodo:'Transferencia',referencia:'R'},{...ORDEN,facturadoParcial:1740}).montoAplicado,1740);
 assert.deepEqual([P.nombreArchivoReq(REQ('0001'),'Cotización','pdf',1),P.nombreArchivoReq(REQ('0001'),'Comprobante pago','jpg',2)],
   [REQ('0001')+' — Cotización.pdf',REQ('0001')+' — Comprobante pago (2).jpg']);
 assert.throws(()=>P.validarArchivo([],'la cotización del proveedor','La cotización'),/Adjunta la cotización del proveedor/);
@@ -310,7 +313,7 @@ falla('obrero','cerrarRequisicion',[REQ('0001'),''],/está autorizada: no se pue
 const pago=(extra)=>({reqFolio:REQ('0001'),fecha:HOY_ISO,monto:1392,monedaPago:'MXN',metodo:'Transferencia',referencia:'SPEI 55',
   comprobante:{nombre:'spei.pdf',datos:PDF},idSolicitud:'pg'+(++nId),...extra});
 falla('pedro','registrarPagoProveedor',[pago({comprobante:null})],/Adjunta el comprobante de pago/);
-falla('pedro','registrarPagoProveedor',[pago({monto:1000})],/debe ser igual al total de la orden \(\$1,392\.00 MXN\)/);
+falla('pedro','registrarPagoProveedor',[pago({monto:1393.01})],/pasa el saldo de la orden: faltan \$1,392\.00 MXN por pagar/); // P: 1,000 ya sería un pago parcial
 falla('pedro','registrarPagoProveedor',[pago({monto:75.25,monedaPago:'USD'})],/tipo de cambio/);
 falla('pedro','registrarPagoProveedor',[pago({referencia:''})],/referencia/);
 falla('pedro','registrarPagoProveedor',[pago({reqFolio:'',ocFolio:'OC-2000-0001'})],/No existe la orden/);

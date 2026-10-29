@@ -2348,7 +2348,9 @@ const HOJAS_COMPRAS = {
       // Incremento 4 (centro de mando): En camino (paquetería, guía, fecha estimada, cuándo y quién lo marcó)
       'paqueteria', 'guia', 'fecha_estimada', 'en_camino_en', 'en_camino_por',
       // Incremento 5 (F): forma de pago de la orden (FORMAS_PAGO_OC; se busca por nombre; vacía en órdenes de antes)
-      'forma_pago'],
+      'forma_pago',
+      // Incremento 6 (P): plan de pagos opcional (JSON [{concepto, porcentaje}], suma 100; se busca por nombre; vacío = sin plan)
+      'plan_pago'],
     numeros: [15, 16, 17, 18, 20, 21],
   },
   // dias_credito (H): crédito habitual del proveedor; precarga las órdenes nuevas (la orden guarda el suyo en AJ). Desde el
@@ -2394,7 +2396,9 @@ const HOJAS_COMPRAS = {
   PagosProveedores: {
     enc: ['folio', 'fecha_pago', 'fecha_registro', 'oc_folio', 'req_folio', 'proyecto_folio', 'monto', 'moneda_pago',
       'tipo_cambio', 'monto_aplicado', 'moneda_oc', 'metodo', 'referencia', 'comprobante_id', 'comprobante_url',
-      'registro_email', 'registro_nombre', 'estado', 'cancelado_por', 'fecha_cancelacion', 'motivo_cancelacion'],
+      'registro_email', 'registro_nombre', 'estado', 'cancelado_por', 'fecha_cancelacion', 'motivo_cancelacion',
+      // Incremento 6 (P): Anticipo · Parcial · Liquidación (vacía en pagos de antes: eran el pago completo de la orden)
+      'tipo'],
     numeros: [7, 9, 10],
   },
   Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
@@ -2455,6 +2459,8 @@ function ordenDesdeFila_(r, fila) {
     paqueteria: String(r[colOc_('paqueteria') - 1] || ''), guia: String(r[colOc_('guia') - 1] || ''),
     fechaEstimada: fechaIso_(r[colOc_('fecha_estimada') - 1]), enCaminoEn: fechaTexto_(r[colOc_('en_camino_en') - 1]),
     enCaminoPor: String(r[colOc_('en_camino_por') - 1] || ''),
+    // P (incremento 6): plan de pagos (null = sin plan; una celda que no se entiende se ignora)
+    planPago: planDeCelda(r[colOc_('plan_pago') - 1]),
   };
 }
 
@@ -2526,15 +2532,22 @@ function datosProyectoCompras_(p) {
 function vistaCompras_(libro, proyecto) {
   const m = monedaDeProyecto_(contratosDelLibro_()[proyecto.folio.toUpperCase()] || null);
   const facturas = facturasDelLibro_(libro);
+  const ordenes = ordenesDeProyecto_(libro, proyecto.folio);
+  // P (incremento 6): lo pagado y el saldo de cada orden (varios pagos; compras sí ve montos)
+  const pagos = ordenes.length ? pagosProvPorOc_(libro) : {}, movs = ordenes.length ? movimientosPorOc_(libro) : {};
   return {
     proyecto: datosProyectoCompras_(proyecto),
     moneda: m.moneda,
     marca: m.marca,
     sinContrato: m.sinContrato,
-    ordenes: ordenesDeProyecto_(libro, proyecto.folio).map(o => Object.assign(sinFila_(o), {
-      facturas: facturasDeOrden_(facturas, o.folio), puedeFacturar: o.estado !== OC_CANCELADA,
-      totalFacturado: totalFacturadoDeOrden(facturas, o.folio),
-    })).reverse(),
+    ordenes: ordenes.map(o => {
+      const s = saldoDeOrden_(libro, o, movs[o.folio.toUpperCase()] || [], facturas, pagos[o.folio.toUpperCase()] || []);
+      return Object.assign(sinFila_(o), {
+        facturas: facturasDeOrden_(facturas, o.folio), puedeFacturar: o.estado !== OC_CANCELADA,
+        totalFacturado: totalFacturadoDeOrden(facturas, o.folio),
+        pagado: s.pagado, saldo: s.saldo, pagadaParcial: o.estado === OC_EMITIDA && !s.completo && s.pagado > 0, siguiente: s.siguiente,
+      });
+    }).reverse(),
     hoy: hoyIso_(),
   };
 }
@@ -2598,11 +2611,13 @@ function emitirOrdenCompra_(libro, d0, proyecto, reqFolio, firma) {
     reqFolio || '', oc.diasCredito,
   ];
   // F (incremento 5): forma de pago en su columna (por nombre, al final; las del centro de mando quedan vacías)
-  while (filaOc.length < colOc_('forma_pago')) filaOc.push('');
+  while (filaOc.length < colOc_('plan_pago')) filaOc.push('');
   filaOc[colOc_('forma_pago') - 1] = oc.formaPago;
+  filaOc[colOc_('plan_pago') - 1] = oc.planPago ? JSON.stringify(oc.planPago) : ''; // P (incremento 6): plan de pagos opcional
   hoja.appendRow(filaOc);
   bitacora_(libro, 'Emitir orden de compra', proyecto.folio, folio + (reqFolio ? ' · ' + reqFolio : '') + ' · ' +
     proveedor.razonSocial + ' · ' + formatoMoneda(oc.total) + ' ' + oc.moneda + ' · ' + oc.formaPago + ' · ' +
+    (oc.planPago ? 'plan: ' + textoPlanPago(oc.planPago) + ' · ' : '') +
     (oc.diasCredito ? 'crédito ' + oc.diasCredito + ' días' : 'contado') + (oc.tipoCambio ? ' · TC ' + oc.tipoCambio + ' = ' +
     formatoMoneda(oc.subtotalProyecto) + ' ' + oc.monedaProyecto + ' sin IVA' : '') + ' · ' + (MARCAS[c.marca] || 'sin contrato'), '', HOJAS_COMPRAS);
   // avisoProveedor (F): documentos que le faltan al proveedor (no bloquea la orden; sin CSF y carátula no se le podrá pagar)
@@ -2645,6 +2660,11 @@ function cancelarOrdenCompra(folioOc, motivo, confirmado) {
     if (orden.estado === OC_CANCELADA) throw new Error('La orden ' + orden.folio + ' ya está cancelada.');
     if (orden.estado === OC_PAGADA) throw new Error('La orden ' + orden.folio + ' ya está pagada: no se puede cancelar.');
     if (orden.estado !== OC_EMITIDA) throw new Error('La orden ' + orden.folio + ' ya se recibió: no se puede cancelar.');
+    // P (incremento 6): una orden Emitida con pagos parciales tampoco (primero se cancelan sus pagos)
+    const pagadas = pagosDeOrden_(libro, orden.folio).filter(p => p.estado === 'Vigente').map(p => p.folio);
+    if (pagadas.length) {
+      throw new Error('La orden ' + orden.folio + ' tiene pagos registrados (' + pagadas.join(', ') + '): cancélalos primero.');
+    }
     const reqDeOrden = orden.reqFolio ? buscarReq_(libro, orden.reqFolio).req : null;
     if (reqDeOrden && reqDeOrden.estado === REQ_EN_CAMINO && reqDeOrden.ocFolio.toUpperCase() === orden.folio.toUpperCase()) {
       if (m.length < 10) {
@@ -3028,6 +3048,8 @@ function reqParaSolicitante_(req, ren, eventos, proyectos, x) {
       [REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO].indexOf(req.estado) !== -1 && (yo === req.solicitanteEmail || yo === recibe),
     // Centro de mando (incremento 4): dónde se recibe y el envío (sin montos ni proveedor)
     centroMando: centro ? { sitio: centro.sitio, sitioCodigo: centro.sitioCodigo } : null,
+    // P (incremento 6): etiqueta "Pagada parcial" (la orden tiene pagos que no la completan); nunca montos ni pagos
+    pagadaParcial: !!orden && pagoParcialDe_(orden),
     enCamino: orden && orden.enCaminoEn ? { paqueteria: orden.paqueteria, guia: orden.guia, fechaEstimada: orden.fechaEstimada,
       en: orden.enCaminoEn, recogido: esRecogido(orden.paqueteria) } : null,
     puedeEnCamino: porEnviar && yo === req.solicitanteEmail,
@@ -3075,9 +3097,10 @@ function misRequisicionesDeHojas_(yo, flujo) {
     const f = req.folio.toUpperCase();
     let orden = null, m = [];
     if (req.ocFolio) {
-      if (!ordenes) { ordenes = ordenesPorFolio_(libro); movs = movimientosPorOc_(libro); }
+      if (!ordenes) { ordenes = ordenesPorFolio_(libro); movs = movimientosPorOc_(libro); pagosProvPorOc_(libro); }
       orden = ordenes[req.ocFolio.toUpperCase()] || null;
       m = movs[req.ocFolio.toUpperCase()] || [];
+      if (orden) orden.pagoParcial = pagoParcialDe_(orden); // P: con un pago parcial también se recibe (recibeAntesDePagar_)
     }
     lista.push(Object.assign(reqParaSolicitante_(req, ren[f], ev[f], proyectos, { flujo: flujo, yo: yo, orden: orden, movimientos: m,
       centro: centroDeReq_(req, cfg, det) }), recepcionParaSolicitante_(libro, req, orden, m, yo))); // H: devoluciones y fotos
@@ -3251,16 +3274,20 @@ function listarRequisicionesDeHojas_(busqueda, estado) {
   const ren = renglonesDeReqs_(libro), proyectos = nombresDeProyectos_();
   const q = textoNormal(busqueda), e = String(estado || '').trim();
   const lista = [];
+  let ordenes = null; // P (incremento 6): solo si alguna tiene orden
   filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
     const req = reqDesdeFila_(r, i + 2);
     if (!req.folio || req.estado === ESTADO_ANULADA || esAnulado_(req.folio)) return;
+    if (req.ocFolio && !ordenes) { ordenes = ordenesPorFolio_(libro); pagosProvPorOc_(libro); }
+    const orden = req.ocFolio ? ordenes[req.ocFolio.toUpperCase()] : null;
     const p = proyectos[req.proyectoFolio.toUpperCase()];
     const x = { folio: req.folio, fecha: req.fecha, proyectoFolio: req.proyectoFolio, proyectoNombre: p ? p.nombre : '',
       proyectoVisible: p ? p.folioVisible : req.proyectoFolio,
       solicitante: req.solicitante, solicitanteEmail: req.solicitanteEmail, estado: req.estado, ocFolio: req.ocFolio,
       actualizado: req.actualizado, renglones: ((ren[req.folio.toUpperCase()] || {}).renglones || []).length,
-      sitio: req.sitio, prioridad: req.prioridad, fechaRequerida: req.fechaRequerida };
-    if (e && x.estado !== e) return;
+      sitio: req.sitio, prioridad: req.prioridad, fechaRequerida: req.fechaRequerida,
+      pagadaParcial: !!orden && pagoParcialDe_(orden) }; // P (incremento 6): etiqueta derivada, no un estado
+    if (e && (e === ETIQUETA_PAGADA_PARCIAL ? !x.pagadaParcial : x.estado !== e)) return;
     if (q && !textoNormal([x.folio, x.proyectoVisible, x.proyectoNombre, x.solicitante, x.solicitanteEmail, x.ocFolio].join(' ')).includes(q)) return;
     lista.push(x);
   });
@@ -3275,6 +3302,7 @@ function pagoProvDesdeFila_(r, fila) {
     metodo: String(r[11] || ''), referencia: String(r[12] || ''), comprobanteId: String(r[13] || ''),
     comprobanteUrl: String(r[14] || ''), registro: String(r[16] || r[15] || ''), estado: String(r[17] || 'Vigente'),
     canceladoPor: String(r[18] || ''), fechaCancelacion: fechaTexto_(r[19]), motivoCancelacion: String(r[20] || ''), fila: fila,
+    tipo: String(r[21] || ''), // P (incremento 6): Anticipo · Parcial · Liquidación ('' en pagos de antes)
   };
 }
 
@@ -3308,6 +3336,9 @@ function vistaRequisicion_(libro, folioReq) {
   const vigente = renglonesDeReqs_(libro)[f] || { version: 1, renglones: [] };
   const renglones = vigente.renglones;
   const movs = orden ? (movimientosPorOc_(libro)[orden.folio.toUpperCase()] || []) : [];
+  // P (incremento 6): lo esperado, lo pagado (varios pagos), el saldo y lo que sigue según el plan de pagos
+  const saldo = orden ? saldoDeOrden_(libro, orden, movs, todas, pagos) : null;
+  if (orden) orden.pagoParcial = orden.estado === OC_EMITIDA && !saldo.completo && saldo.pagado > 0;
   const avance = orden && orden.estado !== OC_CANCELADA ? avanceRecepcion(orden.renglones, movs, renglonesSinRecepcion(propuestaVigente_(req))) : null;
   const aprobados = renglonesAprobados(renglones, req.aprobacion);
   const porCotizar = req.estado === REQ_APROBADA || req.estado === REQ_COTIZADA;
@@ -3328,6 +3359,8 @@ function vistaRequisicion_(libro, folioReq) {
       : { folio: req.proyectoFolio, clave: '', folioVisible: req.proyectoFolio, nombre: '', cliente: '', estado: '', ubicacion: '' },
     moneda: c.moneda, marca: c.marca, sinContrato: c.sinContrato,
     orden: orden, pagos: pagos,
+    // P (incremento 6): saldo de la orden (esperado, pagado, saldo, siguiente según el plan), etiqueta "Pagada parcial" y tipos de pago
+    saldo: saldo, pagadaParcial: !!orden && orden.pagoParcial, tiposPago: TIPOS_PAGO_PROV,
     // Facturas de la orden (4.5): se registran desde que la orden existe hasta que se cancela
     facturas: orden ? facturasDeOrden_(todas, orden.folio) : [],
     totalFacturado: orden ? totalFacturadoDeOrden(todas, orden.folio) : 0,
@@ -3349,12 +3382,15 @@ function vistaRequisicion_(libro, folioReq) {
     puedeCotizar: flujo && porCotizar && proyectoVigente,
     puedeDevolver: flujo && req.estado === REQ_APROBADA,
     puedeSeparar: flujo && porCotizar && aprobados.length > 1,
+    // P (incremento 6): varios pagos mientras la orden tenga saldo; cualquier pago Vigente se cancela salvo con la requisición Cerrada
     puedePagar: (req.estado === REQ_AUTORIZADA || req.estado === REQ_RECIBIDA || req.estado === REQ_EN_CAMINO) && !!orden &&
-      orden.estado === OC_EMITIDA,
-    puedeCancelarPago: req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && ocPagada),
+      orden.estado === OC_EMITIDA && !saldo.completo,
+    puedeCancelarPago: !!orden && orden.estado !== OC_CANCELADA && req.estado !== REQ_CERRADA && pagos.some(x => x.estado === 'Vigente'),
     // Revisión: con una devolución abierta compras no cierra (cerrarRequisicionCompras lo rechaza): no se ofrece el botón
     puedeCerrar: (req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && ocPagada) || antesDePagar) && !devolucionAbiertaDe_(libro, req),
     recibeAntesDePagar: antesDePagar, // F: "Registrar que llegó" en vez de "Cerrar" (la requisición queda Recibida)
+    // P (incremento 6): por qué se recibe antes de pagar todo: crédito del proveedor o un pago parcial
+    recibeAntesPor: !antesDePagar ? '' : formaPagoDeOrden(orden.formaPago, orden.diasCredito) === FORMA_PAGO_CREDITO ? 'credito' : 'parcial',
     puedeRecibir: flujo && !!avance && !avance.completo && conOrden,
     puedeCancelarRecepcion: req.estado !== REQ_CERRADA && !!orden && orden.estado !== OC_CANCELADA,
     // Centro de mando (incremento 4): proyecto ligado (recibir o cerrar aquí es el respaldo de compras) y registrar el envío
@@ -3443,11 +3479,17 @@ function rechazarRequisicion(folioReq, motivo) { return revisarRequisicion_(foli
 function devolverRequisicion(folioReq, motivo) { return revisarRequisicion_(folioReq, motivo, 'devolver'); }
 
 /**
- * Pago a proveedor (uno por orden): p = {reqFolio o ocFolio, fecha, monto, monedaPago, tipoCambio, metodo, referencia,
- * comprobante: {nombre, datos}, idSolicitud}. La requisición debe estar Autorizada y su orden Emitida; el monto (convertido a
- * la moneda de la orden) debe ser el total de la orden ±1.00. La orden y la requisición pasan a Pagada.
- * F (incremento 5): sin constancia de situación fiscal y carátula bancaria del proveedor no se registra (control contra fraude:
- * se le paga a la CLABE de la carátula), salvo un super admin con motivoExcepcion ≥ 10 caracteres (Bitacora de Administración).
+ * Pago a proveedor: p = {reqFolio o ocFolio, fecha, monto, monedaPago, tipoCambio, metodo, referencia, comprobante: {nombre, datos},
+ * idSolicitud}. La requisición debe estar Autorizada, En camino o Recibida y su orden Emitida (con saldo).
+ * P (incremento 6): una orden acepta varios pagos hasta quedar completa (saldoOrdenCompra). Cada pago se valida igual que siempre
+ * (comprobante, método, referencia sin número de tarjeta, tipo de cambio si la moneda es otra) y no puede dejar lo pagado arriba de
+ * lo esperado (total de la orden, o el total por pagar con material devuelto sin reponer) + TOLERANCIA_PAGO. Su tipo lo decide el
+ * servidor: Liquidación si la completa; si no, Parcial (ya se recibió algo) o Anticipo. Un pago que no la completa no cambia estados
+ * (la orden sigue Emitida: "Pagada parcial"); el que la completa hace lo de siempre (orden y requisición a Pagada; una Recibida se
+ * cierra). oc.pagada al centro de mando solo con el primer pago Vigente; req.pagada (correo) solo al completar; con el primer pago
+ * parcial, req.pagoparcial (sin montos) a quien recibe, porque desde ahí ya puede confirmar que llegó (decisión 1).
+ * F (incremento 5): un pago por transferencia sin CSF y carátula bancaria del proveedor no se registra (control contra fraude: se
+ * le paga a la CLABE de la carátula), salvo un super admin con motivoExcepcion ≥ 10 caracteres (Bitacora de Administración).
  */
 function registrarPagoProveedor(p, motivoExcepcion) {
   exigirCompras_();
@@ -3469,26 +3511,32 @@ function registrarPagoProveedor(p, motivoExcepcion) {
     if (!reqFolio && d0.ocFolio) reqFolio = buscarOrden_(libro, d0.ocFolio).orden.reqFolio;
     if (!reqFolio) throw new Error('Esta orden no tiene requisición: no se puede registrar el pago.');
     const { hoja, req } = buscarReq_(libro, reqFolio);
-    // Con todo ya recibido (Recibida), el pago la cierra y la orden queda Recibida; En camino sigue En camino (pagada)
+    // Estados que admiten un pago (el que completa la orden los cambia como siempre; uno parcial no)
     const yaRecibida = req.estado === REQ_RECIBIDA, enCamino = req.estado === REQ_EN_CAMINO;
-    // H (incremento 5): con una devolución abierta el pago no la cierra (sigue Recibida, la orden Pagada) hasta resolverla
-    const retenida = yaRecibida ? devolucionAbiertaDe_(libro, req) : '';
-    const nuevo = transicionReq(req.estado, retenida ? 'pagarRetenida' : yaRecibida ? 'pagarRecibida' : enCamino ? 'pagarEnCamino' : 'pagar');
+    transicionReq(req.estado, yaRecibida ? 'pagarRecibida' : enCamino ? 'pagarEnCamino' : 'pagar');
     const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
     if (d0.ocFolio && String(d0.ocFolio).trim().toUpperCase() !== orden.folio.toUpperCase()) {
       throw new Error('La orden ' + String(d0.ocFolio).toUpperCase() + ' no es la de la requisición ' + req.folio + '.');
     }
     if (orden.estado !== OC_EMITIDA) throw new Error('La orden ' + orden.folio + ' está ' + orden.estado.toLowerCase() + ': no se puede pagar.');
-    if (pagosDeOrden_(libro, orden.folio).some(x => x.estado === 'Vigente')) throw new Error('La orden ' + orden.folio + ' ya tiene un pago.');
-    const fac = facturacionDeOrden(facturasDelLibro_(libro), orden);
+    const F = orden.folio.toUpperCase();
+    const movs = movimientosPorOc_(libro)[F] || [];
+    const pagos = pagosDeOrden_(libro, orden.folio);
+    const facturas = facturasDelLibro_(libro);
+    const antes = saldoDeOrden_(libro, orden, movs, facturas, pagos);
+    if (antes.completo) throw new Error('La orden ' + orden.folio + ' ya está pagada por completo: no tiene saldo por pagar.');
     // Revisión (incremento 5): lo devuelto sin reponer no se paga (p. ej. crédito del proveedor: se recibió y se devolvió antes de pagar)
-    const porPagar = totalPorPagarOrden(orden, devueltoSinReponer(movimientosPorOc_(libro)[orden.folio.toUpperCase()] || []));
-    const pago = normalizarPagoProveedor(d0, { moneda: orden.moneda, total: porPagar ? porPagar.total : orden.total, fechaOrden: orden.fecha,
-      hoy: hoyIso_(), totalFacturado: fac.completa ? fac.total : 0, facturadoParcial: fac.completa ? 0 : fac.total,
-      totalOrden: orden.total, descontado: porPagar ? porPagar.descontado : 0 });
+    const porPagar = totalPorPagarOrden(orden, devueltoSinReponer(movs));
+    const pago = normalizarPagoProveedor(d0, { moneda: orden.moneda, total: antes.esperado, pagado: antes.pagado, fechaOrden: orden.fecha,
+      hoy: hoyIso_(), totalOrden: orden.total, descontado: porPagar ? porPagar.descontado : 0 });
     // F (incremento 5): documentos del proveedor (CSF y carátula) o excepción de super admin con motivo (antes de escribir)
     exigirDocumentosParaPagar_(libro, orden, motivoExcepcion, pago.metodo);
 
+    const despues = saldoDeOrden_(libro, orden, movs, facturas, pagos.concat([{ folio: '', estado: 'Vigente', montoAplicado: pago.montoAplicado }]));
+    const completo = despues.completo;
+    const primero = !pagos.some(x => x.estado === 'Vigente');
+    const recibido = !!orden.fechaRecepcion || movs.some(m => m.tipo === TIPO_ENTRADA_COMPRA && m.estado === 'Vigente');
+    const tipoPago = tipoDePagoProv(completo, recibido);
     const hP = hojaCompras_(libro, 'PagosProveedores');
     const folio = siguienteFolio_(PREFIJO_PGP, hP, 'CONSECUTIVO_PGP_');
     const n = pagosDeOrden_(libro, orden.folio, true).length + 1; // "(n)" del archivo: también cuentan los anulados
@@ -3498,28 +3546,50 @@ function registrarPagoProveedor(p, motivoExcepcion) {
     hP.appendRow([folio, textoFecha_(pago.fecha), Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'),
       orden.folio, req.folio, req.proyectoFolio, pago.monto, pago.monedaPago, pago.tipoCambio, pago.montoAplicado, orden.moneda,
       pago.metodo, t(pago.referencia), archivo.getId(), archivo.getUrl(), t(VENDEDOR_.email),
-      t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '']);
-    hO.getRange(orden.fila, COL_ESTADO_OC).setValue(yaRecibida && !retenida ? OC_RECIBIDA : OC_PAGADA);
-    cambiarReq_(hoja, req, nuevo, {});
-    eventoReq_(libro, req.folio, nuevo, retenida ? 'Pagada; ' + textoRetenida(retenida) : // H
-      yaRecibida ? 'Pagada; el material ya estaba recibido.' : enCamino ? 'Pagada; el material va en camino.' : '');
-    bitacora_(libro, 'Registrar pago a proveedor', req.proyectoFolio, folio + ' · ' + orden.folio + ' · ' + req.folio + ' · ' +
+      t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '', tipoPago]);
+    olvidarPagosProv_();
+    let nuevo = req.estado, retenida = '';
+    if (completo) {
+      const r = aplicarPagoCompleto_(libro, hoja, req, hO, orden);
+      nuevo = r.nuevo; retenida = r.retenida;
+      eventoReq_(libro, req.folio, nuevo, (primero ? '' : 'Liquidación al proveedor. ') + (retenida ? 'Pagada; ' + textoRetenida(retenida) : // H
+        yaRecibida ? 'Pagada; el material ya estaba recibido.' : enCamino ? 'Pagada; el material va en camino.' : ''));
+    } else {
+      cambiarReq_(hoja, req, req.estado, {}); // el estado no cambia (la orden sigue Emitida): solo "actualizado"
+      // El historial lo ve quien pidió: sin montos (con el primer pago, desde aquí ya se puede confirmar que llegó)
+      eventoReq_(libro, req.folio, ETIQUETA_PAGADA_PARCIAL, (tipoPago === TIPO_PAGO_ANTICIPO ? 'Anticipo' : 'Pago parcial') + ' al proveedor' +
+        (yaRecibida ? '; falta el resto del pago.' : enCamino ? '; el material va en camino.' : primero ? '; ya se puede recibir el material.' : '.'));
+    }
+    bitacora_(libro, 'Registrar pago a proveedor', req.proyectoFolio, folio + ' · ' + orden.folio + ' · ' + req.folio + ' · ' + tipoPago + ' · ' +
       formatoMoneda(pago.monto) + ' ' + pago.monedaPago + (pago.tipoCambio ? ' · TC ' + pago.tipoCambio + ' = ' +
       formatoMoneda(pago.montoAplicado) + ' ' + orden.moneda : '') + ' · ' + pago.metodo + (porPagar ? ' · total por pagar ' +
-      formatoMoneda(porPagar.total) + ' (orden ' + formatoMoneda(orden.total) + ' − ' + formatoMoneda(porPagar.descontado) + ' devuelto sin reponer)' : ''),
-      '', HOJAS_COMPRAS);
-    avisarPortal_('oc.pagada', orden.folio);
+      formatoMoneda(porPagar.total) + ' (orden ' + formatoMoneda(orden.total) + ' − ' + formatoMoneda(porPagar.descontado) + ' devuelto sin reponer)' : '') +
+      ' · pagado ' + formatoMoneda(despues.pagado) + ' de ' + formatoMoneda(despues.esperado) + ' ' + orden.moneda +
+      (completo ? '' : ' · saldo ' + formatoMoneda(despues.saldo) + ' ' + orden.moneda), '', HOJAS_COMPRAS);
+    // Centro de mando (decisión 2): oc.pagada ("el material puede salir") con el primer pago Vigente; los siguientes no avisan nada
+    if (primero) avisarPortal_('oc.pagada', orden.folio);
     // Flujo de siempre: el pago abre la confirmación de quien recibe (con aprobaciones ya se le avisó al autorizar; en un
-    // proyecto ligado se recibe en el centro de mando)
-    if (!yaRecibida && !flujoOperaciones_() && !proyectoLigado_(req.proyectoFolio)) notificar_('req.pagada', { req: req.folio });
+    // proyecto ligado se recibe en el centro de mando). req.pagada una sola vez, al completar; con el primer pago parcial,
+    // req.pagoparcial (sin montos), salvo con crédito del proveedor (ya podía recibir antes de pagar)
+    const avisaRecibe = !yaRecibida && !flujoOperaciones_() && !proyectoLigado_(req.proyectoFolio);
+    if (avisaRecibe && completo) notificar_('req.pagada', { req: req.folio });
+    else if (avisaRecibe && primero && formaPagoDeOrden(orden.formaPago, orden.diasCredito) !== FORMA_PAGO_CREDITO) {
+      notificar_('req.pagoparcial', { req: req.folio });
+    }
     SpreadsheetApp.flush();
-    const resultado = { folio: folio, url: archivo.getUrl(), vista: vistaRequisicion_(libro, req.folio) };
+    const resultado = { folio: folio, tipo: tipoPago, completo: completo, url: archivo.getUrl(), vista: vistaRequisicion_(libro, req.folio) };
     if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
     return resultado;
   }));
 }
 
-/** Cancela un pago a proveedor (no se borra), con motivo: la orden vuelve a Emitida y la requisición a Autorizada. */
+/**
+ * Cancela un pago a proveedor (no se borra), con motivo; no si la requisición ya está Cerrada. P (incremento 6): se recalcula la
+ * orden sin ese pago. Si estaba completa (Pagada o Recibida) y ya no lo está, vuelve a Emitida y la requisición a como estaba antes
+ * del pago que la completó (Pagada → Autorizada; En camino sigue En camino; Recibida sigue Recibida, ahora con el pago pendiente).
+ * Si sigue completa (p. ej. con material devuelto sin reponer lo pagado sobra) o era un pago parcial, los estados no cambian. Al
+ * centro de mando no se le avisa nada (como hoy).
+ */
 function cancelarPagoProveedor(folioPago, motivo) {
   exigirCompras_();
   const m = motivoObligatorio_(motivo, 'Escribe el motivo de la cancelación.');
@@ -3536,15 +3606,29 @@ function cancelarPagoProveedor(folioPago, motivo) {
     if (pago.estado !== 'Vigente') throw new Error('El pago ' + pago.folio + ' ya está cancelado.');
     const { hoja, req } = buscarReq_(libro, pago.reqFolio);
     if (req.estado === REQ_CERRADA) throw new Error('La requisición ' + req.folio + ' ya está cerrada (material recibido): el pago no se puede cancelar.');
-    const nuevo = transicionReq(req.estado, req.estado === REQ_EN_CAMINO ? 'cancelarPagoEnCamino' : 'cancelarPago');
     const { hoja: hO, orden } = buscarOrden_(libro, pago.ocFolio);
+    const restantes = pagosDeOrden_(libro, orden.folio).filter(x => x.folio.toUpperCase() !== folio);
+    // La orden sin este pago, como si siguiera abierta (Emitida): ¿lo que queda la sigue cubriendo?
+    const despues = saldoDeOrden_(libro, Object.assign({}, orden, { estado: OC_EMITIDA }), null, null, restantes);
+    const completa = orden.estado === OC_PAGADA || orden.estado === OC_RECIBIDA;
+    let nuevo = req.estado;
+    if (completa && !despues.completo) {
+      nuevo = transicionReq(req.estado, req.estado === REQ_EN_CAMINO ? 'cancelarPagoEnCamino' : req.estado === REQ_RECIBIDA
+        ? 'cancelarPagoRecibida' : 'cancelarPago');
+    }
     hP.getRange(pago.fila, 18, 1, 4).setValues([['Cancelado', textoCelda(VENDEDOR_.email),
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
-    if (orden.estado === OC_PAGADA) hO.getRange(orden.fila, COL_ESTADO_OC).setValue(OC_EMITIDA);
+    olvidarPagosProv_();
+    if (completa && !despues.completo) hO.getRange(orden.fila, COL_ESTADO_OC).setValue(OC_EMITIDA);
     cambiarReq_(hoja, req, nuevo, {});
-    eventoReq_(libro, req.folio, nuevo, 'Se canceló el pago.');
+    // El historial lo ve quien pidió: sin montos ni el motivo
+    const quedan = despues.pagado > 0;
+    eventoReq_(libro, req.folio, !despues.completo && quedan ? ETIQUETA_PAGADA_PARCIAL : nuevo, !quedan ? 'Se canceló el pago.' :
+      despues.completo ? 'Se canceló un pago; la orden sigue pagada.' : 'Se canceló un pago; la orden queda pagada en parte.');
     bitacora_(libro, 'Cancelar pago a proveedor', req.proyectoFolio, pago.folio + ' · ' + orden.folio + ' · ' + req.folio + ' · ' +
-      formatoMoneda(pago.monto) + ' ' + pago.monedaPago, m, HOJAS_COMPRAS);
+      formatoMoneda(pago.monto) + ' ' + pago.monedaPago + (pago.tipo ? ' · ' + pago.tipo : '') + ' · pagado ' + formatoMoneda(despues.pagado) +
+      ' de ' + formatoMoneda(despues.esperado) + ' ' + orden.moneda + (completa && !despues.completo ? ' · ' + orden.folio + ' vuelve a Emitida' : ''),
+      m, HOJAS_COMPRAS);
     SpreadsheetApp.flush();
     return vistaRequisicion_(libro, req.folio);
   });
@@ -3631,6 +3715,7 @@ function vistaOperaciones_(libro, folioReq) {
     const o = buscarOrden_(libro, req.ocFolio).orden;
     orden = { folio: o.folio, fecha: o.fecha, estado: o.estado, proveedor: o.proveedor, total: o.total, moneda: o.moneda,
       formaPago: o.formaPago, diasCredito: o.diasCredito, // F (incremento 5): forma de pago (aprobaciones sí la ve)
+      planPago: o.planPago, pagadaParcial: pagoParcialDe_(o), // P (incremento 6): el plan y la etiqueta (sin pagos ni montos pagados)
       fechaEntrega: o.fechaEntrega, lugarEntrega: o.lugarEntrega, paqueteria: o.paqueteria, guia: o.guia,
       fechaEstimada: o.fechaEstimada, enCaminoEn: o.enCaminoEn };
     movs = movimientosPorOc_(libro)[o.folio.toUpperCase()] || [];
@@ -3754,7 +3839,7 @@ function cotizarRequisicion(folioReq, p) {
     const guardada = { version: version, fecha: ahora, elaboroEmail: yo_(), elaboroNombre: nombreYo_(), recibe: prop.recibe,
       proveedor: prop.proveedor, moneda: prop.moneda, ivaTasa: prop.ivaTasa, tipoCambio: prop.tipoCambio,
       fechaEntrega: prop.fechaEntrega, lugarEntrega: prop.lugarEntrega, condicionesPago: prop.condicionesPago,
-      diasCredito: prop.diasCredito, formaPago: prop.formaPago, notas: prop.notas, renglones: prop.renglones, subtotal: prop.subtotal, iva: prop.iva,
+      diasCredito: prop.diasCredito, formaPago: prop.formaPago, planPago: prop.planPago || null, notas: prop.notas, renglones: prop.renglones, subtotal: prop.subtotal, iva: prop.iva,
       total: prop.total, monedaProyecto: prop.monedaProyecto, subtotalProyecto: prop.subtotalProyecto, archivos: archivos };
     if (JSON.stringify(guardada).length > 45000) {
       throw new Error('La propuesta es demasiado grande para guardarse: acorta descripciones y notas, o separa renglones.');
@@ -4296,7 +4381,9 @@ function cuentasPorPagar(soloCache) {
   const calcular = () => {
     const libro = libroComprasSiExiste_();
     const ordenes = [], pagos = [];
+    let movimientos = {};
     if (libro) { // lo anulado no se debe ni cuenta (§6.E); las facturas anuladas las quita facturasDelLibro_
+      movimientos = movimientosPorOc_(libro); // P (incremento 6): el saldo de una orden con pagos parciales descuenta lo devuelto
       filasDeArea_(hojaCompras_(libro, 'OrdenesCompra'), HOJAS_COMPRAS, 'OrdenesCompra').forEach((r, i) => {
         if (String(r[0] || '').trim() && String(r[28] || '') !== ESTADO_ANULADA) ordenes.push(ordenDesdeFila_(r, i + 2));
       });
@@ -4305,7 +4392,7 @@ function cuentasPorPagar(soloCache) {
       });
     }
     const facturas = facturasDelLibro_(libro);
-    const r = antiguedadCxp({ hoy: hoy, facturas: facturas, ordenes: ordenes, pagos: pagos });
+    const r = antiguedadCxp({ hoy: hoy, facturas: facturas, ordenes: ordenes, pagos: pagos, movimientos: movimientos });
     const proyectos = mapaProyectos_(), porFolio = {}, reqDeOrden = {};
     facturas.forEach(f => { porFolio[f.folio] = f; });
     ordenes.forEach(o => { reqDeOrden[o.folio.toUpperCase()] = o.reqFolio || ''; });
@@ -4314,8 +4401,9 @@ function cuentasPorPagar(soloCache) {
       return { proyectoVisible: p ? p.folioVisible : folio, proyectoNombre: p ? p.nombre : '' };
     };
     r.abiertas.forEach(a => {
-      const f = porFolio[a.folio] || {};
-      Object.assign(a, proyecto(a.proyectoFolio), { reqFolio: f.reqFolio || '', xmlUrl: f.xmlUrl || '', pdfUrl: f.pdfUrl || '' });
+      const f = a.tipo === TIPO_CXP_SALDO ? {} : porFolio[a.folio] || {}; // P: un saldo sin factura lleva el folio de su orden
+      Object.assign(a, proyecto(a.proyectoFolio), { reqFolio: f.reqFolio || reqDeOrden[String(a.ocFolio).toUpperCase()] || '',
+        xmlUrl: f.xmlUrl || '', pdfUrl: f.pdfUrl || '' });
     });
     r.faltantes.forEach(x => Object.assign(x, proyecto(x.proyectoFolio), { reqFolio: reqDeOrden[x.folio.toUpperCase()] || '' }));
     return r;
@@ -4894,6 +4982,7 @@ function normalizarOrdenCompra(p, proyecto) {
   if (condicionesPago.length > 200) throw new Error('Las condiciones de pago deben tener máximo 200 caracteres.');
   const diasCredito = normalizarDiasCredito(d.diasCredito); // fija el vencimiento de las facturas de la orden (4.5)
   const formaPago = normalizarFormaPago(d.formaPago, diasCredito); // F (incremento 5): obligatoria; crédito exige días ≥ 1
+  const planPago = normalizarPlanPago(d.planPago); // P (incremento 6): opcional; si viene, suma 100%
   const notas = limpio(d.notas);
   if (notas.length > 1000) throw new Error('Las notas deben tener máximo 1000 caracteres.');
 
@@ -4936,7 +5025,7 @@ function normalizarOrdenCompra(p, proyecto) {
   }
   return {
     proveedor: proveedor, fechaEntrega: fechaEntrega, lugarEntrega: lugarEntrega, condicionesPago: condicionesPago,
-    diasCredito: diasCredito, formaPago: formaPago, moneda: moneda, ivaTasa: ivaTasa, renglones: renglones, subtotal: subtotal, iva: iva, total: redondear(subtotal + iva),
+    diasCredito: diasCredito, formaPago: formaPago, planPago: planPago, moneda: moneda, ivaTasa: ivaTasa, renglones: renglones, subtotal: subtotal, iva: iva, total: redondear(subtotal + iva),
     monedaProyecto: proyecto.moneda, tipoCambio: tipoCambio,
     subtotalProyecto: convertirMoneda(subtotal, moneda, proyecto.moneda, tipoCambio), notas: notas,
   };
@@ -5132,6 +5221,9 @@ const TRANSICIONES_REQ = {
   devolucionAutorizada: { de: [REQ_RECIBIDA, REQ_CERRADA], a: REQ_AUTORIZADA },
   devolucionPagada: { de: [REQ_RECIBIDA, REQ_CERRADA], a: REQ_PAGADA },
   devolucionEnCamino: { de: [REQ_RECIBIDA, REQ_CERRADA], a: REQ_EN_CAMINO },
+  // Pagos parciales (incremento 6, P): cancelar el pago que completó una orden ya recibida (p. ej. retenida por una devolución) la
+  // deja Recibida con el pago pendiente (la orden vuelve a Emitida, como con crédito del proveedor)
+  cancelarPagoRecibida: { de: [REQ_RECIBIDA], a: REQ_RECIBIDA },
 };
 const VERBOS_REQ = { autorizar: 'autorizar', rechazar: 'rechazar', devolver: 'devolver', reenviar: 'reenviar', cancelar: 'cancelar',
   pagar: 'pagar', cancelarPago: 'cancelar el pago de', cerrar: 'cerrar', cancelarOc: 'regresar a Solicitada', aprobar: 'aprobar',
@@ -5140,7 +5232,8 @@ const VERBOS_REQ = { autorizar: 'autorizar', rechazar: 'rechazar', devolver: 'de
   cancelarRecepcion: 'cancelar la recepción de', enCamino: 'marcar en camino', pagarEnCamino: 'pagar',
   cancelarPagoEnCamino: 'cancelar el pago de', cancelarRecepcionEnCamino: 'cancelar la recepción de', cancelarRecepcionPagada: 'cancelar la recepción de', cerrarEnCamino: 'cerrar',
   recibirRetenida: 'recibir', pagarRetenida: 'pagar', cerrarRetenida: 'cerrar', devolucionAutorizada: 'reabrir por una devolución',
-  devolucionPagada: 'reabrir por una devolución', devolucionEnCamino: 'reabrir por una devolución' };
+  devolucionPagada: 'reabrir por una devolución', devolucionEnCamino: 'reabrir por una devolución',
+  cancelarPagoRecibida: 'cancelar el pago de' };
 
 /**
  * Acción para regresar una requisición Recibida cuando se cancela o se anula una de sus recepciones (la orden espera material
@@ -5193,11 +5286,12 @@ function normalizarRequisicion(p) {
 }
 
 /**
- * Valida un pago a proveedor. orden = {moneda, total, totalFacturado?, facturadoParcial?, fechaOrden, hoy}. Fecha no futura
- * ni anterior a la orden; método y referencia como en cobranza; si la moneda del pago es otra, tipo de cambio obligatorio
- * (pesos por dólar). El monto en la moneda de la orden debe ser su total o, si sus facturas ya la cubren (totalFacturado;
- * ver facturacionDeOrden), el total de ellas: un proveedor que retiene impuestos factura menos que el total de la orden
- * (decisión 7). Tolerancia TOLERANCIA_PAGO (1.00). facturadoParcial solo sirve para explicar el rechazo.
+ * Valida un pago a proveedor. orden = {moneda, total (lo esperado: el total de la orden o, con material devuelto sin reponer, el
+ * total por pagar), pagado (lo que ya suman sus pagos Vigentes; 0 si no hay), fechaOrden, hoy, totalOrden?, descontado?}. Fecha no
+ * futura ni anterior a la orden; método y referencia como en cobranza (nunca un número de tarjeta); si la moneda del pago es otra,
+ * tipo de cambio obligatorio (pesos por dólar). P (incremento 6): el pago puede ser parcial (cualquier monto mayor a 0), pero lo
+ * pagado más este pago no pasa de lo esperado + TOLERANCIA_PAGO (1.00). Si la orden ya está facturada con retenciones, el pago que
+ * llega al total de sus facturas la completa (saldoOrdenCompra con orden.facturas; decisión 7 de facturas).
  */
 function normalizarPagoProveedor(p, orden) {
   const d = p || {};
@@ -5210,18 +5304,16 @@ function normalizarPagoProveedor(p, orden) {
   } catch (e) {
     throw new Error(String(e.message).replace('El proyecto es en', 'La orden es en')); // aquí la moneda de referencia es la de la orden
   }
-  const cuadra = t => Math.abs(aCentavos(pago.montoAplicado) - aCentavos(t)) <= aCentavos(TOLERANCIA_PAGO);
-  const tope = aCentavos(orden.total) + aCentavos(TOLERANCIA_PAGO);
-  const facturado = Number(orden.totalFacturado) > 0 && aCentavos(orden.totalFacturado) <= tope ? Number(orden.totalFacturado) : 0;
-  if (!cuadra(orden.total) && !(facturado > 0 && cuadra(facturado))) {
+  const esperadoCts = aCentavos(orden.total), pagadoCts = aCentavos(Number(orden.pagado) || 0);
+  if (pagadoCts + aCentavos(pago.montoAplicado) > esperadoCts + aCentavos(TOLERANCIA_PAGO)) {
     // Revisión (incremento 5): con material devuelto sin reponer, orden.total es el total por pagar (totalPorPagarOrden)
-    const neto = Number(orden.descontado) > 0;
-    throw new Error('El pago (' + formatoMoneda(pago.montoAplicado) + ' ' + orden.moneda + ') debe ser igual al ' + (neto
-      ? 'total por pagar (' + formatoMoneda(orden.total) + ' ' + orden.moneda + ': la orden de ' + formatoMoneda(orden.totalOrden) + ' menos ' +
-        formatoMoneda(orden.descontado) + ' de material devuelto sin reponer)'
-      : 'total de la orden (' + formatoMoneda(orden.total) + ' ' + orden.moneda + ')') + (facturado > 0 ? ' o al total de sus facturas (' +
-      formatoMoneda(facturado) + ' ' + orden.moneda + ')' : '') + '.' + (Number(orden.facturadoParcial) > 0 ? ' Sus facturas vigentes (' +
-      formatoMoneda(orden.facturadoParcial) + ' ' + orden.moneda + ') todavía no cubren la orden.' : ''));
+    const m = orden.moneda, neto = Number(orden.descontado) > 0;
+    throw new Error('El pago (' + formatoMoneda(pago.montoAplicado) + ' ' + m + ') pasa el saldo de la orden: faltan ' +
+      formatoMoneda(Math.max(0, esperadoCts - pagadoCts) / 100) + ' ' + m + ' por pagar (' + (neto
+        ? 'total por pagar ' + formatoMoneda(orden.total) + ' ' + m + ': la orden de ' + formatoMoneda(orden.totalOrden) + ' menos ' +
+          formatoMoneda(orden.descontado) + ' de material devuelto sin reponer'
+        : 'total de la orden ' + formatoMoneda(orden.total) + ' ' + m) +
+      (pagadoCts > 0 ? '; ya se pagaron ' + formatoMoneda(pagadoCts / 100) + ' ' + m : '') + '; tolerancia ±1.00).');
   }
   return { fecha: pago.fecha, monto: pago.monto, monedaPago: pago.monedaPago, tipoCambio: pago.tipoCambio,
     montoAplicado: pago.montoAplicado, metodo: pago.metodo, referencia: pago.referencia };
@@ -5451,6 +5543,7 @@ function ordenDePropuesta(prop) {
     proveedor: prop.proveedor, fechaEntrega: prop.fechaEntrega, lugarEntrega: prop.lugarEntrega,
     condicionesPago: prop.condicionesPago, diasCredito: prop.diasCredito, moneda: prop.moneda, tipoCambio: prop.tipoCambio,
     formaPago: formaPagoDeOrden(prop.formaPago, prop.diasCredito), // F: las propuestas de antes no la traen (regla de lectura)
+    planPago: prop.planPago || null, // P (incremento 6): el plan que vio aprobaciones (las propuestas de antes no lo traen)
     ivaTasa: prop.ivaTasa, notas: prop.notas,
     renglones: (prop.renglones || []).filter(r => r.disponibilidad !== DISP_NO).map(r => {
       const x = { clave: r.clave, descripcion: r.descripcion, unidad: r.unidad, cantidad: r.cantidad, costo: r.costo };
@@ -5726,8 +5819,8 @@ function nombreArchivoFactura(folio, proveedor, serieFolio, ext) {
 
 /**
  * Facturación de una orden: cuántas facturas vigentes, su total (con IVA y retenciones), su neto (sin IVA) y si ya la cubren
- * (neto ≥ subtotal − TOLERANCIA_FACTURA). Solo una orden facturada completa se puede pagar por el total de sus facturas: con
- * una entrega aún sin facturar, ese total es menor que lo que se debe (y cada orden tiene un solo pago).
+ * (neto ≥ subtotal − TOLERANCIA_FACTURA). Solo una orden facturada completa se liquida con el total de sus facturas: con una
+ * entrega aún sin facturar, ese total es menor que lo que se debe (desde el incremento 6 hay varios pagos: saldoOrdenCompra).
  */
 function facturacionDeOrden(facturas, orden) {
   const f = String((orden && orden.folio) || '').toUpperCase();
@@ -5859,36 +5952,76 @@ function validarFacturaProveedor(f, orden, ctx) {
 }
 
 /**
- * Cuentas por pagar. d = {facturas, ordenes, pagos, hoy}. facturas = [{folio, tipo, serieFolio, ocFolio, proyectoFolio,
+ * Cuentas por pagar. d = {facturas, ordenes, pagos, hoy, movimientos?}. facturas = [{folio, tipo, serieFolio, ocFolio, proyectoFolio,
  * moneda, subtotal, descuento, total, fechaEmision, fechaVencimiento, metodoPago, estado, nombreEmisor}], ordenes = [{folio,
- * fecha, proyectoFolio, proveedor, moneda, subtotal, estado}], pagos = [{ocFolio, estado}] (pagos a proveedores).
- * Devuelve {hoy, rangos, totales (uno por moneda; nunca suma monedas), abiertas (por vencimiento), faltantes (órdenes
- * vigentes con menos facturado que su subtotal; pagadas primero), repPendientes (PPD en órdenes pagadas: falta su REP)}.
+ * fecha, proyectoFolio, proveedor, moneda, subtotal, total, estado, …} (ordenDesdeFila_)], pagos = pagos a proveedores [{ocFolio,
+ * estado, montoAplicado}], movimientos = {FOLIO DE LA ORDEN: [movimientos]} (lo devuelto sin reponer; opcional).
+ * Una orden sin pagos debe sus facturas Vigentes completas (como siempre). P (incremento 6): una orden con pagos que todavía no la
+ * completan sigue en cuentas por pagar por su saldo (saldoOrdenCompra): lo pagado cubre sus facturas en orden de vencimiento y
+ * cada factura queda por lo que le falta (pendiente); lo que no cubre ninguna factura es una fila "Saldo" (tipo Saldo, folio = la
+ * orden) que vence con lo que sigue del plan de pagos (o recepción/entrega + días de crédito). Una orden completa no debe nada.
+ * Devuelve {hoy, rangos, totales (uno por moneda, por lo pendiente; nunca suma monedas), abiertas (por vencimiento; cada una con
+ * total, pendiente, pagado y pagoParcial), faltantes (órdenes vigentes con menos facturado que su subtotal; pagadas primero),
+ * repPendientes (PPD en órdenes con pagos: falta su REP)}.
  */
 function antiguedadCxp(d) {
   const hoy = d.hoy;
   const may = s => String(s || '').toUpperCase();
+  const tol = aCentavos(TOLERANCIA_PAGO);
   const ordenes = {};
   (d.ordenes || []).forEach(o => { ordenes[may(o.folio)] = o; });
-  const pagadas = {};
-  (d.pagos || []).forEach(p => { if (p.estado === 'Vigente') pagadas[may(p.ocFolio)] = true; });
+  const pagadas = {}, pagosPorOc = {};
+  (d.pagos || []).forEach(p => {
+    const f = may(p.ocFolio);
+    (pagosPorOc[f] = pagosPorOc[f] || []).push(p);
+    if (p.estado === 'Vigente') pagadas[f] = true;
+  });
+  const movs = d.movimientos || {};
   const vigentes = (d.facturas || []).filter(f => f.estado === FPR_VIGENTE);
+  const facturasPorOc = {};
+  vigentes.forEach(f => { const k = may(f.ocFolio); (facturasPorOc[k] = facturasPorOc[k] || []).push(f); });
+  const porVencimiento = (a, b) => a.fechaVencimiento < b.fechaVencimiento ? -1 : a.fechaVencimiento > b.fechaVencimiento ? 1 :
+    (a.folio < b.folio ? -1 : 1);
 
-  const abiertas = [], totales = {};
-  vigentes.forEach(f => {
-    const o = ordenes[may(f.ocFolio)];
-    if (!ocVigente(o) || pagadas[may(f.ocFolio)]) return; // sin orden, cancelada o anulada: no se debe
-    const dias = diasEntre(f.fechaVencimiento, hoy);
+  const abiertas = [], totales = {}, completas = {};
+  const agregar = (x, factura) => {
+    const dias = diasEntre(x.fechaVencimiento, hoy);
     const rango = RANGOS_CXP.find(r => dias <= r.hasta);
-    abiertas.push({ folio: f.folio, tipo: f.tipo, serieFolio: f.serieFolio, ocFolio: o.folio, proyectoFolio: o.proyectoFolio,
-      proveedor: o.proveedor || f.nombreEmisor || '', fechaEmision: f.fechaEmision, fechaVencimiento: f.fechaVencimiento,
-      dias: dias, rango: rango.clave, moneda: f.moneda, total: redondear(f.total) });
-    const t = totales[f.moneda] || (totales[f.moneda] = { moneda: f.moneda, facturas: 0, centavos: {}, total: 0 });
-    t.facturas++;
-    t.centavos[rango.clave] = (t.centavos[rango.clave] || 0) + aCentavos(f.total);
+    abiertas.push(Object.assign(x, { dias: dias, rango: rango.clave }));
+    const t = totales[x.moneda] || (totales[x.moneda] = { moneda: x.moneda, facturas: 0, saldos: 0, centavos: {}, total: 0 });
+    if (factura) t.facturas++; else t.saldos++;
+    t.centavos[rango.clave] = (t.centavos[rango.clave] || 0) + aCentavos(x.pendiente);
+  };
+  const filaFactura = (f, o, pendienteCts, cubiertoCts, parcial) => ({ folio: f.folio, tipo: f.tipo, serieFolio: f.serieFolio, ocFolio: o.folio,
+    proyectoFolio: o.proyectoFolio, proveedor: o.proveedor || f.nombreEmisor || '', fechaEmision: f.fechaEmision,
+    fechaVencimiento: f.fechaVencimiento, moneda: f.moneda, total: redondear(f.total), pendiente: pendienteCts / 100,
+    pagado: cubiertoCts / 100, pagoParcial: parcial });
+  const folios = Object.keys(facturasPorOc).concat(Object.keys(pagadas).filter(k => !facturasPorOc[k]));
+  folios.forEach(k => {
+    const o = ordenes[k];
+    if (!ocVigente(o)) return; // sin orden, cancelada o anulada: no se debe
+    const fs = (facturasPorOc[k] || []).slice().sort(porVencimiento);
+    if (!pagadas[k]) { fs.forEach(f => agregar(filaFactura(f, o, aCentavos(f.total), 0, false), true)); return; }
+    const s = saldoOrdenCompra(Object.assign({}, o, { facturas: fs }), pagosPorOc[k], Array.isArray(movs) ?
+      movs.filter(m => may(m.ocFolio) === k) : movs[k] || []);
+    if (s.completo) { completas[k] = true; return; }
+    let pagado = aCentavos(s.pagado), resto = aCentavos(s.saldo);
+    fs.forEach(f => {
+      const total = aCentavos(f.total), cubre = Math.min(total, pagado), pendiente = Math.min(total - cubre, resto);
+      pagado -= cubre; resto -= pendiente;
+      if (pendiente > 0) agregar(filaFactura(f, o, pendiente, cubre, true), true);
+    });
+    if (resto > tol) {
+      // Lo que no cubre ninguna factura vence por el plan o la entrega (no por las facturas: esas ya tienen su fila)
+      const sig = saldoOrdenCompra(Object.assign({}, o, { facturas: null }), pagosPorOc[k], Array.isArray(movs) ?
+        movs.filter(m => may(m.ocFolio) === k) : movs[k] || []).siguiente || s.siguiente || {};
+      agregar({ folio: o.folio, tipo: TIPO_CXP_SALDO, serieFolio: sig.concepto || 'Saldo', ocFolio: o.folio, proyectoFolio: o.proyectoFolio,
+        proveedor: o.proveedor || '', fechaEmision: o.fecha || '', fechaVencimiento: sig.vence || o.fecha || hoy, moneda: o.moneda,
+        total: resto / 100, pendiente: resto / 100, pagado: s.pagado, pagoParcial: true }, false);
+    }
   });
   const listaTotales = Object.keys(totales).sort((a, b) => (a === 'MXN' ? -1 : b === 'MXN' ? 1 : a < b ? -1 : 1)).map(m => {
-    const t = totales[m], r = { moneda: m, facturas: t.facturas };
+    const t = totales[m], r = { moneda: m, facturas: t.facturas, saldos: t.saldos };
     let suma = 0, vencido = 0;
     RANGOS_CXP.forEach(g => {
       const c = t.centavos[g.clave] || 0;
@@ -5898,8 +6031,7 @@ function antiguedadCxp(d) {
     r.vencido = vencido / 100; r.total = suma / 100;
     return r;
   });
-  abiertas.sort((a, b) => a.fechaVencimiento < b.fechaVencimiento ? -1 : a.fechaVencimiento > b.fechaVencimiento ? 1 :
-    (a.folio < b.folio ? -1 : 1));
+  abiertas.sort(porVencimiento);
 
   const facturadoPorOrden = {};
   vigentes.forEach(f => { const k = may(f.ocFolio); facturadoPorOrden[k] = (facturadoPorOrden[k] || 0) + aCentavos(netoFactura(f)); });
@@ -5908,8 +6040,8 @@ function antiguedadCxp(d) {
     .map(o => {
       const facturado = facturadoPorOrden[may(o.folio)] || 0, falta = aCentavos(o.subtotal) - facturado;
       return { folio: o.folio, fecha: o.fecha, proyectoFolio: o.proyectoFolio, proveedor: o.proveedor, estado: o.estado,
-        pagada: !!pagadas[may(o.folio)], moneda: o.moneda, subtotal: redondear(o.subtotal), facturado: facturado / 100,
-        faltante: falta / 100, centavos: falta };
+        pagada: !!pagadas[may(o.folio)], pagoParcial: !!pagadas[may(o.folio)] && o.estado === OC_EMITIDA && !completas[may(o.folio)],
+        moneda: o.moneda, subtotal: redondear(o.subtotal), facturado: facturado / 100, faltante: falta / 100, centavos: falta };
     })
     .filter(x => x.centavos > aCentavos(TOLERANCIA_FACTURA))
     .sort((a, b) => (a.pagada !== b.pagada ? (a.pagada ? -1 : 1) : String(a.fecha) < String(b.fecha) ? -1 : 1))
@@ -5919,6 +6051,8 @@ function antiguedadCxp(d) {
   return { hoy: hoy, rangos: RANGOS_CXP.map(r => ({ clave: r.clave, etiqueta: r.etiqueta })), totales: listaTotales,
     abiertas: abiertas, faltantes: faltantes, repPendientes: { n: rep.length, folios: rep } };
 }
+/** Tipo de la fila de cuentas por pagar de un saldo sin factura (P, incremento 6; folio = la orden de compra). */
+const TIPO_CXP_SALDO = 'Saldo';
 
 // ---- Búsqueda en catálogos del SAT (c_ClaveProdServ / c_ClaveUnidad) ----
 
@@ -6401,6 +6535,7 @@ function construirHtmlOrdenCompra(d, cfg, logoUrl) {
     '</table></td><td style="width:50%;padding:0;"><table>' +
     dato('Fecha de entrega', fechaLarga(d.fechaEntrega)) + dato('Lugar de entrega', d.lugarEntrega) +
     dato('Forma de pago', d.formaPago) + dato('Condiciones de pago', d.condicionesPago) + // forma de pago: F, incremento 5
+    dato('Plan de pagos', textoPlanPago(d.planPago, d.total, usd ? 'USD' : '')) + // P (incremento 6): opcional
     '</table></td></tr></table>' +
 
     // Módulo 2: Conceptos
@@ -7708,6 +7843,8 @@ function destinatariosAviso(tipo, d, info, roles) {
     case 'req.encamino': return [{ quien: 'solicitante', para: [sol] }, { quien: 'recibe', para: [rec] }];
     // Flujo de siempre: con la orden pagada, quien recibe ya puede confirmar que llegó (revisión 28/10/2026)
     case 'req.pagada': return [{ quien: 'recibe', para: [rec] }].concat(rec !== sol ? [{ quien: 'solicitante', para: [sol] }] : []);
+    // P (incremento 6): el primer pago parcial (anticipo) también abre "Recibí el material"; mismos destinatarios, sin montos
+    case 'req.pagoparcial': return [{ quien: 'recibe', para: [rec] }].concat(rec !== sol ? [{ quien: 'solicitante', para: [sol] }] : []);
     case 'req.recibida': {
       // Recibido en el sitio (centro de mando): compras y, con su propio texto, quien pidió y quien recibe
       if (i.centroMando) return [{ quien: 'compras', para: co }, { quien: 'sitio', para: [sol, rec] }];
@@ -7808,6 +7945,11 @@ function contenidoAviso(tipo, quien, info) {
     case 'req.pagada':
       req('Pagada, por recibir', 'Compras pagó al proveedor. ' + (quien === 'recibe' ? 'Cuando llegue el material, confirma en CAPRI ' +
         'que lo recibiste.' : 'Lo recibe ' + (i.recibeNombre || i.recibeEmail) + '; cuando llegue, lo confirma en CAPRI.'));
+      break;
+    case 'req.pagoparcial': // P (incremento 6): nunca el monto ni el porcentaje
+      req('Pagada parcial, por recibir', 'Compras registró un pago parcial al proveedor: el material ya se puede recibir. ' +
+        (quien === 'recibe' ? 'Cuando llegue, confirma en CAPRI que lo recibiste.' : 'Lo recibe ' + (i.recibeNombre || i.recibeEmail) +
+        '; cuando llegue, lo confirma en CAPRI.'));
       break;
     case 'req.recibida': {
       const donde = i.sitioRecepcion || i.sitio;
@@ -9057,7 +9199,8 @@ function pendientes(todos) {
  * filtran por rol en itemsPendientes). Una lectura de Requisiciones y otra de OrdenesCompra; en caché por versión para todos.
  */
 function basePendientes_() {
-  return enCache_('pendientes', ['requisiciones', 'oc', 'pagosProveedores', 'proyectos', 'anulaciones'], TTL_CACHE, () => {
+  // facturasProveedor (P, incremento 6): el saldo de una orden con pagos parciales y su vencimiento dependen de sus facturas
+  return enCache_('pendientes', ['requisiciones', 'oc', 'pagosProveedores', 'proyectos', 'anulaciones', 'facturasProveedor'], TTL_CACHE, () => {
     const libro = libroComprasSiExiste_(); // solo lee: el libro lo crea la primera requisición
     if (!libro) return [];
     const proyectos = mapaProyectos_(), abiertas = [];
@@ -9068,9 +9211,17 @@ function basePendientes_() {
       if (ESTADOS_PENDIENTES.indexOf(q.estado) !== -1 && !esAnulado_(q.folio)) abiertas.push({ q: q, desde: marcaPendiente_(r[12], q.fecha) });
     });
     const ordenes = abiertas.some(x => x.q.ocFolio) ? ordenesPorFolio_(libro) : {};
+    // P (incremento 6): saldo de las órdenes Emitidas con pagos (pagos, movimientos y facturas se leen una vez y solo si hace falta)
+    const pagosOc = pagosProvPorOc_(libro);
+    let movs = null, facturas = null;
+    const saldo = oc => {
+      if (!movs) { movs = movimientosPorOc_(libro); facturas = facturasDelLibro_(libro); }
+      return saldoDeOrden_(libro, oc, movs[oc.folio.toUpperCase()] || [], facturas, pagosOc[oc.folio.toUpperCase()] || []);
+    };
     return abiertas.map(x => {
       const q = x.q, p = proyectos[q.proyectoFolio.toUpperCase()], prop = propuestaVigente_(q);
       const oc = q.ocFolio ? ordenes[q.ocFolio.toUpperCase()] || null : null;
+      const s = oc && oc.estado === OC_EMITIDA && (pagosOc[oc.folio.toUpperCase()] || []).some(y => y.estado === 'Vigente') ? saldo(oc) : null;
       return { folio: q.folio, fecha: q.fecha, desde: x.desde, proyectoFolio: q.proyectoFolio,
         proyectoVisible: p ? p.folioVisible : q.proyectoFolio, proyectoNombre: p ? p.nombre : '',
         solicitanteEmail: q.solicitanteEmail, solicitante: q.solicitante, estado: q.estado, motivo: q.motivo, sitio: q.sitio,
@@ -9079,7 +9230,9 @@ function basePendientes_() {
         propuesta: prop ? { proveedor: prop.proveedor ? prop.proveedor.razonSocial : '', total: prop.total, moneda: prop.moneda } : null,
         // formaPago y diasCredito (F): con crédito del proveedor se recibe antes de pagar (recibeAntesDePagar_)
         oc: oc ? { folio: oc.folio, estado: oc.estado, proveedor: oc.proveedor, total: oc.total, moneda: oc.moneda,
-          formaPago: oc.formaPago, diasCredito: oc.diasCredito, recibida: !!oc.fechaRecepcion } : null };
+          formaPago: oc.formaPago, diasCredito: oc.diasCredito, recibida: !!oc.fechaRecepcion,
+          // P (incremento 6): pagos parciales (con montos: itemsPendientes solo los muestra a compras)
+          pagoParcial: !!s && !s.completo, pagado: s ? s.pagado : 0, saldo: s ? s.saldo : null, siguiente: s ? s.siguiente : null } : null };
     });
   });
 }
@@ -9149,8 +9302,11 @@ function itemsPendientes(base, o) {
     const k = String(f.ocFolio || '').toUpperCase();
     (facturas[k] = facturas[k] || []).push(f);
   });
-  const textoVence = f => Number(f.dias) > 0 ? 'factura vencida hace ' + f.dias + ' día' + (f.dias === 1 ? '' : 's')
-    : Number(f.dias) === 0 ? 'factura vence hoy' : 'factura vence el ' + fecha(f.fechaVencimiento);
+  // P (incremento 6): una fila "Saldo" de cuentas por pagar es lo que falta de una orden con pagos parciales (sin factura)
+  const queVence = f => f.tipo === TIPO_CXP_SALDO ? 'saldo' : 'factura';
+  const textoVence = f => Number(f.dias) > 0 ? queVence(f) + ' vencid' + (f.tipo === TIPO_CXP_SALDO ? 'o' : 'a') + ' hace ' + f.dias + ' día' + (f.dias === 1 ? '' : 's')
+    : Number(f.dias) === 0 ? queVence(f) + ' vence hoy' : queVence(f) + ' vence el ' + fecha(f.fechaVencimiento);
+  const debe = f => f.pendiente != null ? f.pendiente : f.total;
 
   (base || []).forEach(q => {
     const suya = q.solicitanteEmail === yo, recibe = q.recibeEmail || q.solicitanteEmail;
@@ -9182,13 +9338,18 @@ function itemsPendientes(base, o) {
       if (oc && oc.estado === OC_EMITIDA && [REQ_AUTORIZADA, REQ_EN_CAMINO, REQ_RECIBIDA].indexOf(q.estado) !== -1) {
         const fs = facturas[String(oc.folio).toUpperCase()] || [];
         fs.forEach(f => { anotadas[f.folio] = true; });
-        const recibida = q.estado === REQ_RECIBIDA, encamino = q.estado === REQ_EN_CAMINO;
+        const recibida = q.estado === REQ_RECIBIDA, encamino = q.estado === REQ_EN_CAMINO, parcial = !!oc.pagoParcial;
+        const sig = parcial && oc.siguiente ? oc.siguiente : null;
         agregar(q, 'compras', { tipo: recibida ? 'pagarRecibida' : 'pagar',
-          titulo: recibida ? 'Recibida, falta pagar' : encamino ? 'En camino, falta pagar' : 'Orden por pagar',
-          accion: recibida || encamino ? 'Pagar' : 'Enviar y pagar', destino: 'com',
+          titulo: parcial ? (recibida ? 'Recibida, falta el saldo' : encamino ? 'En camino, falta el saldo' : 'Pagada parcial, falta el saldo')
+            : recibida ? 'Recibida, falta pagar' : encamino ? 'En camino, falta pagar' : 'Orden por pagar',
+          accion: recibida || encamino || parcial ? 'Pagar' : 'Enviar y pagar', destino: 'com',
           urgente: q.prioridad === 'Urgente' || fs.some(f => Number(f.dias) > 0),
-          // F (incremento 5): la forma de pago (con crédito, se paga al vencer la factura)
-          detalle: [proyecto(q), oc.folio, oc.proveedor, dinero(oc.total, oc.moneda), oc.formaPago].concat(fs.map(textoVence)) }, 'Compras');
+          // F (incremento 5): la forma de pago (con crédito, se paga al vencer la factura); P (incremento 6): con pagos parciales, el
+          // saldo y lo que sigue del plan
+          detalle: [proyecto(q), oc.folio, oc.proveedor, parcial ? 'saldo ' + dinero(oc.saldo, oc.moneda) + ' de ' + dinero(oc.total, oc.moneda)
+            : dinero(oc.total, oc.moneda), oc.formaPago, sig && sig.concepto !== 'Saldo' ? 'sigue: ' + sig.concepto + ' ' + dinero(sig.monto, oc.moneda) +
+            (sig.vence ? ' (vence el ' + fecha(sig.vence) + ')' : '') : ''].concat(fs.map(textoVence)) }, 'Compras');
       }
       if (oc && q.estado === REQ_PAGADA && ligado(q.proyectoFolio)) {
         agregar(q, 'compras', { tipo: 'encamino', titulo: 'Por marcar En camino', accion: 'Marcar En camino', destino: 'com',
@@ -9229,11 +9390,12 @@ function itemsPendientes(base, o) {
   Object.keys(facturas).forEach(k => facturas[k].forEach(f => {
     if (anotadas[f.folio]) return;
     const vencida = Number(f.dias) > 0;
+    const saldo = f.tipo === TIPO_CXP_SALDO; // P (incremento 6): lo que falta de una orden con pagos parciales, sin factura
     items.push(Object.assign({ tipo: 'factura', seccion: 'compras', folio: f.folio, req: f.reqFolio || '',
-      titulo: vencida ? 'Factura vencida' : 'Factura por vencer', sitio: '', desde: f.fechaVencimiento, dias: 0,
+      titulo: saldo ? (vencida ? 'Saldo vencido' : 'Saldo por vencer') : vencida ? 'Factura vencida' : 'Factura por vencer', sitio: '', desde: f.fechaVencimiento, dias: 0,
       vence: f.fechaVencimiento, diasVencida: Number(f.dias) || 0, prioridad: '', urgente: vencida,
       accion: f.reqFolio ? 'Abrir y pagar' : 'Ver cuentas por pagar', destino: f.reqFolio ? 'com' : 'cxp',
-      detalle: [f.proveedor, f.serieFolio || '', dinero(f.total, f.moneda), f.ocFolio, f.proyectoVisible].filter(Boolean).join(' · '),
+      detalle: [f.proveedor, f.serieFolio || '', dinero(debe(f), f.moneda), saldo ? '' : f.ocFolio, f.proyectoVisible].filter(Boolean).join(' · '),
       orden: marcaOrdenable(f.fechaVencimiento) }, todos ? { para: 'Compras' } : {}));
   }));
 
@@ -9638,14 +9800,20 @@ function planAnulacion_(d, objetivo) {
           ? ': se retira la propuesta (conserva su número de versión) y compras la cotiza de nuevo.'
           : ': queda pendiente de autorizar de nuevo.') });
     } else if (r.clave === 'pgp' && r.x.estado === 'Vigente' && !enPlan('oc', r.x.ocFolio)) {
-      // La orden se puede pagar otra vez (vuelve al estado que tenía antes del pago)
+      // La orden se puede pagar otra vez (vuelve al estado que tenía antes del pago que la completó). P (incremento 6): con varios
+      // pagos se recalcula sin este (y sin los demás de la cascada); si los que quedan la siguen cubriendo, nada cambia
       const o = ordenDe(r.x.ocFolio), q = reqDe(r.x.reqFolio);
-      const oc = o && vivo(o) && (o.estado === OC_PAGADA || o.estado === OC_RECIBIDA) ? OC_EMITIDA : '';
-      const rq = q && vivo(q) ? (q.estado === REQ_PAGADA ? REQ_AUTORIZADA : q.estado === REQ_CERRADA ? REQ_RECIBIDA : '') : '';
+      const quedan = d.pgp.filter(x => may(x.ocFolio) === may(r.x.ocFolio) && vivo(x) && !enPlan('pgp', x.folio));
+      const s = o ? saldoOrdenCompra(Object.assign({}, o, { estado: OC_EMITIDA, facturas: d.fpr.filter(x => may(x.ocFolio) === may(o.folio) && vivo(x)) }),
+        quedan, d.movs.filter(m => may(m.ocFolio) === may(o.folio) && vivo(m))) : null;
+      const cubierta = !!s && s.completo && s.pagado > 0;
+      const oc = !cubierta && o && vivo(o) && (o.estado === OC_PAGADA || o.estado === OC_RECIBIDA) ? OC_EMITIDA : '';
+      const rq = !cubierta && q && vivo(q) ? (q.estado === REQ_PAGADA ? REQ_AUTORIZADA : q.estado === REQ_CERRADA ? REQ_RECIBIDA : '') : '';
       plan.efectos.push({ clave: 'pagoProveedor', pago: r.x, orden: oc ? o : null, oc: oc, req: rq ? q : null, a: rq,
         texto: [o ? o.folio + (oc ? ' pasa de ' + o.estado + ' a ' + oc : ' sigue ' + o.estado) : '',
           q ? q.folio + (rq ? ' pasa de ' + q.estado + ' a ' + rq : ' sigue ' + q.estado) : ''].filter(Boolean).join('; ') +
-          ': la orden queda por pagar otra vez.' });
+          (cubierta ? ': los demás pagos la siguen cubriendo.' : s && s.pagado > 0 ? ': la orden queda pagada en parte (saldo ' +
+            formatoMoneda(s.saldo) + ' ' + (o.moneda || 'MXN') + ').' : ': la orden queda por pagar otra vez.') });
     } else if (r.clave === 'rec' && r.x.filas.some(m => m.estado === 'Vigente' && m.tipo === TIPO_ENTRADA_COMPRA) && !enPlan('oc', r.x.ocFolio)) {
       // (Solo entradas por compra: "Lo recogí" no cuenta como recepción y anularlo no regresa la requisición)
       // La orden espera el material otra vez (como cancelarRecepcion: una Recibida vuelve a En camino, Pagada o Autorizada según
@@ -9805,6 +9973,7 @@ function aplicarAnulacion_(d, plan, m) {
       marcar(hojaCom('OrdenesCompra'), x.fila, COL_ESTADO_OC, COL_ESTADO_OC + 3, !!x.canceladoPor);
     } else if (r.clave === 'pgp') {
       marcar(hojaCom('PagosProveedores'), x.fila, 18, 19, !!x.canceladoPor);
+      olvidarPagosProv_(); // P (incremento 6): lo que se lea después sale de la hoja
     } else if (r.clave === 'fpr') {
       marcar(hojaCom('FacturasProveedor'), x.fila, COL_ESTADO_FPR, COL_ESTADO_FPR + 1, !!x.canceladoPor);
     } else if (r.clave === 'rec') {
@@ -9995,13 +10164,14 @@ EVENTOS_CORREO.push('proveedor.banco');
 // -- Forma de pago --
 
 /**
- * ¿Se puede recibir el material antes de pagarlo? Sí, si la forma de pago de la orden es Crédito del proveedor (órdenes de antes:
- * si tienen días de crédito; formaPagoDeOrden). Es la única regla: la usan "Recibí el material" (reqParaSolicitante_,
- * cerrarRequisicion / cerrarReq_), la vista de compras (vistaRequisicion_) y Pendientes (itemsPendientes). orden = {formaPago,
- * diasCredito} (la de ordenDesdeFila_ o la de basePendientes_). Sin orden: no.
+ * ¿Se puede recibir el material antes de pagarlo todo? Sí, si la forma de pago de la orden es Crédito del proveedor (órdenes de
+ * antes: si tienen días de crédito; formaPagoDeOrden) o, desde el incremento 6 (P, decisión 1), si la orden tiene algún pago Vigente
+ * y todavía no está completa (anticipo o pago parcial: pagoParcialDe_). Es la única regla: la usan "Recibí el material"
+ * (reqParaSolicitante_, cerrarRequisicion / cerrarReq_), la vista de compras (vistaRequisicion_) y Pendientes (itemsPendientes).
+ * orden = {estado, formaPago, diasCredito, pagoParcial?} (la de ordenDesdeFila_ o la de basePendientes_). Sin orden: no.
  */
 function recibeAntesDePagar_(orden) {
-  return !!orden && formaPagoDeOrden(orden.formaPago, orden.diasCredito) === FORMA_PAGO_CREDITO;
+  return !!orden && (formaPagoDeOrden(orden.formaPago, orden.diasCredito) === FORMA_PAGO_CREDITO || pagoParcialDe_(orden));
 }
 
 /** Requisición con orden Emitida (sin pagar ni recibir) que se puede recibir ya: Autorizada o En camino con crédito del proveedor. */
@@ -10026,10 +10196,11 @@ function recibirSinPagar_(libro, hoja, req, nota, motivo) {
   const t = textoCelda;
   cambiarReq_(hoja, req, nuevo, { notasRecepcion: nota, motivo: motivo || req.motivo });
   hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(VENDEDOR_.email)]]); // sigue Emitida
-  eventoReq_(libro, req.folio, nuevo, [motivo ? 'Recibida por compras: ' + motivo : 'Material recibido', 'falta el pago al proveedor', nota]
-    .filter(Boolean).join(' · '));
+  const parcial = formaPagoDeOrden(orden.formaPago, orden.diasCredito) !== FORMA_PAGO_CREDITO; // P (incremento 6): con un pago parcial
+  eventoReq_(libro, req.folio, nuevo, [motivo ? 'Recibida por compras: ' + motivo : 'Material recibido',
+    parcial ? 'falta el resto del pago al proveedor' : 'falta el pago al proveedor', nota].filter(Boolean).join(' · '));
   notificar_('req.recibida', { req: req.folio, nota: nota }); // correo a compras: "Falta registrar el pago" (6.B)
-  bitacora_(libro, 'Recibir antes de pagar (crédito del proveedor)', req.proyectoFolio, req.folio + ' · ' + orden.folio +
+  bitacora_(libro, parcial ? 'Recibir antes de pagar todo (pago parcial)' : 'Recibir antes de pagar (crédito del proveedor)', req.proyectoFolio, req.folio + ' · ' + orden.folio +
     ' recibida el ' + hoyIso_() + ' sin pagar' + (nota ? ' · ' + nota : ''), motivo || '', HOJAS_COMPRAS);
   return true;
 }
@@ -11126,6 +11297,8 @@ function resolverDevolucion(folioDev, d) {
       avisarPortal_('oc.devolucion', orden.folio, { devolucion: { folio: dev.folio, renglon: dev.renglon, cantidad: dev.cantidad, tipo: dev.tipo,
         resolucion: r.resolucion, nota: r.nota, origen: dev.origenClave ? 'centro' : 'capri' } });
     }
+    // P (incremento 6): si lo devuelto sin reponer deja la orden cubierta por sus pagos parciales, queda pagada (antes de cerrar)
+    if (efecto.movimiento && cantidadMov > 1e-9) nuevo = completarPagoTrasDevolucion_(libro, hoja, req, hO, orden, dev.folio) || nuevo;
     nuevo = cerrarRetenida_(libro, hoja, req, hO, orden) || completarTrasDevolucion_(libro, hoja, req, hO, orden, dev.folio) || nuevo;
     SpreadsheetApp.flush();
     const resultado = { folio: dev.folio, estado: nuevo, vista: vistaRequisicion_(libro, req.folio),
@@ -11573,4 +11746,244 @@ function claveProblemaPortal(ocFolio, n, p) {
   let h = 5381;
   for (let i = 0; i < texto.length; i++) h = ((h * 33) ^ texto.charCodeAt(i)) >>> 0;
   return String(ocFolio).toUpperCase() + ':' + Number(n) + ':c:' + h.toString(16);
+}
+
+// ---- 6.P Pagos parciales a proveedores (incremento 6; contrato en docs/incremento-6.md §1–2) ----
+// Spec aprobado por Leo (decisiones 1–3, con sus valores por omisión). Una orden acepta varios pagos (PGP-) hasta quedar
+// completa; cada pago guarda su tipo (Anticipo antes de recibir, Parcial, Liquidación el que la completa). Sin estado nuevo: la
+// orden sigue Emitida hasta completar (entonces Pagada, o Recibida si ya se recibió) y la interfaz muestra la etiqueta derivada
+// "Pagada parcial" (también a quien pidió, sin montos). Con cualquier pago Vigente se puede recibir (decisión 1: recibeAntesDePagar_);
+// el primer pago avisa oc.pagada al centro de mando (decisión 2); el plan de pagos es opcional y se captura al autorizar (decisión 3).
+// Todo pago sigue las reglas de siempre (comprobante, método, guardia de tarjeta, documentos para transferencia, tipo de cambio,
+// idempotencia, candado). R (reportes) usa saldoOrdenCompra (pura) para los pagos esperados del flujo de efectivo.
+
+const TIPO_PAGO_ANTICIPO = 'Anticipo', TIPO_PAGO_PARCIAL = 'Parcial', TIPO_PAGO_LIQUIDACION = 'Liquidación';
+const TIPOS_PAGO_PROV = [TIPO_PAGO_ANTICIPO, TIPO_PAGO_PARCIAL, TIPO_PAGO_LIQUIDACION];
+/** Etiqueta derivada (no es un estado: la orden sigue Emitida) de una orden con pagos que todavía no la completan. */
+const ETIQUETA_PAGADA_PARCIAL = 'Pagada parcial';
+const MAX_ETAPAS_PLAN = 10;
+const MAX_CONCEPTO_PLAN = 60;
+
+// Aviso por correo a quien recibe (6.B): el primer pago parcial abre "Recibí el material" (sin montos, como req.pagada)
+EVENTOS_CORREO.push('req.pagoparcial');
+
+// -- Lógica pura (Node) --
+
+/**
+ * Plan de pagos de una orden (opcional; se captura al autorizar o en la propuesta): null (sin plan) o [{concepto, porcentaje}].
+ * Acepta el arreglo o su JSON. Renglones vacíos (sin concepto ni porcentaje) se ignoran; si no queda ninguno, null. De 1 a
+ * MAX_ETAPAS_PLAN etapas, concepto obligatorio (máx. 60, sin repetir), porcentaje > 0 con 2 decimales y suma exacta de 100%.
+ */
+function normalizarPlanPago(plan) {
+  let lista = plan;
+  if (typeof lista === 'string') {
+    const s = lista.trim();
+    if (!s) return null;
+    try { lista = JSON.parse(s); } catch (e) { throw new Error('El plan de pagos no es válido.'); }
+  }
+  if (lista == null) return null;
+  if (!Array.isArray(lista)) throw new Error('El plan de pagos no es válido.');
+  const vacio = v => v === '' || v == null || String(v).trim() === '';
+  const etapas = lista.filter(e => e && typeof e === 'object' && !(vacio(e.concepto) && vacio(e.porcentaje)));
+  if (!etapas.length) return null;
+  if (etapas.length > MAX_ETAPAS_PLAN) throw new Error('El plan de pagos admite máximo ' + MAX_ETAPAS_PLAN + ' etapas.');
+  const vistos = {};
+  const limpio = etapas.map((e, i) => {
+    const concepto = String(e.concepto == null ? '' : e.concepto).trim().replace(/\s+/g, ' ');
+    const txt = e.porcentaje, porcentaje = Number(txt);
+    if (!concepto) throw new Error('La etapa ' + (i + 1) + ' del plan de pagos no tiene concepto (p. ej. Anticipo).');
+    if (concepto.length > MAX_CONCEPTO_PLAN) {
+      throw new Error('El concepto "' + concepto.slice(0, 20) + '…" del plan de pagos debe tener máximo ' + MAX_CONCEPTO_PLAN + ' caracteres.');
+    }
+    const k = textoNormal(concepto);
+    if (vistos[k]) throw new Error('El concepto "' + concepto + '" está repetido en el plan de pagos.');
+    vistos[k] = true;
+    if (vacio(txt) || !isFinite(porcentaje) || porcentaje <= 0) throw new Error('El porcentaje de "' + concepto + '" debe ser mayor a 0.');
+    if (Math.abs(redondear(porcentaje) - porcentaje) > 1e-9) throw new Error('El porcentaje de "' + concepto + '" admite máximo 2 decimales.');
+    return { concepto: concepto, porcentaje: redondear(porcentaje) };
+  });
+  const suma = limpio.reduce((s, e) => s + Math.round(e.porcentaje * 100), 0);
+  if (suma !== 10000) throw new Error('Los porcentajes del plan de pagos deben sumar 100% (suman ' + redondear(suma / 100) + '%).');
+  return limpio;
+}
+
+/** Plan guardado en la celda plan_pago (JSON); null si está vacía o no es válida (una celda editada a mano no rompe la orden). */
+function planDeCelda(v) {
+  try { return normalizarPlanPago(v instanceof Date ? '' : v); } catch (e) { return null; }
+}
+
+/** "Anticipo 50% ($580.00) · Contra entrega 50% ($580.00)" (montos solo si viene el total). '' sin plan. */
+function textoPlanPago(plan, total, moneda) {
+  if (!Array.isArray(plan) || !plan.length) return '';
+  const montos = total > 0 ? montosDeEsquema(plan.map(e => ({ etapa: e.concepto, porcentaje: e.porcentaje })), total) : null;
+  return plan.map((e, i) => e.concepto + ' ' + e.porcentaje + '%' +
+    (montos ? ' (' + formatoMoneda(montos[i].monto) + (moneda ? ' ' + moneda : '') + ')' : '')).join(' · ');
+}
+
+/** Tipo de un pago a proveedor: Liquidación si completa la orden; si no, Parcial si ya se recibió algo y Anticipo si no. */
+function tipoDePagoProv(completo, recibido) {
+  return completo ? TIPO_PAGO_LIQUIDACION : recibido ? TIPO_PAGO_PARCIAL : TIPO_PAGO_ANTICIPO;
+}
+
+/** Fecha "AAAA-MM-DD" + días, o '' si la fecha no es válida. */
+function fechaMasDias_(fecha, dias) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(fecha || '')) ? sumarDias(fecha, diasCreditoGuardados(dias)) : '';
+}
+
+/**
+ * Saldo de una orden de compra (contrato docs/incremento-6.md §1; lo usa R para el flujo de efectivo). orden = {folio, moneda,
+ * total, estado, renglones, ivaTasa, fecha, fechaEntrega, fechaRecepcion, diasCredito, planPago} (ordenDesdeFila_); pagos = filas
+ * de PagosProveedores de ESA orden (pagoProvDesdeFila_, cualquier estado); movimientos = MovimientosInventario de la orden (lo
+ * devuelto sin reponer, regla del incremento 5). Devuelve {esperado, pagado, saldo, completo, vigentes: [{folio, fecha,
+ * montoAplicado, tipo}], siguiente: {concepto, monto, vence, etapa?, etapas?} | null} y además moneda, etapas (el plan con lo
+ * cubierto de cada una), porFacturas y cancelada.
+ * - esperado = totalPorPagarOrden(orden, devueltoSinReponer(movimientos)) o el total; pagado = Σ monto_aplicado de los Vigentes
+ *   (en la moneda de la orden); saldo = max(0, esperado − pagado) en centavos; completo = saldo ≤ TOLERANCIA_PAGO.
+ * - Opcional orden.facturas (FacturasProveedor de la orden): si sus Vigentes ya cubren la orden y su total es menor (retenciones;
+ *   decisión 7 de facturas), el saldo se mide contra ese total (porFacturas) y el vencimiento sale de la factura que sigue por
+ *   pagar (FIFO por vencimiento).
+ * - Una orden Pagada o Recibida con algún pago Vigente cuenta como completa (el servidor ya lo decidió al registrar el pago que la
+ *   completó, también por el total de sus facturas); una Cancelada o Anulada no espera nada.
+ * - siguiente: la etapa del plan que sigue (montos del plan sobre lo esperado, la última absorbe los centavos), o el saldo si no hay
+ *   plan. vence: la factura que sigue por pagar; si no hay, la primera etapa de un plan de varias = la fecha de la orden (anticipo)
+ *   y lo demás = recepción (o entrega, o la orden) + días de crédito.
+ */
+function saldoOrdenCompra(orden, pagos, movimientos) {
+  const o = orden || {};
+  const may = s => String(s || '').trim().toUpperCase();
+  const tol = aCentavos(TOLERANCIA_PAGO);
+  const vigentes = (pagos || []).filter(p => p && p.estado === 'Vigente' && (!o.folio || !p.ocFolio || may(p.ocFolio) === may(o.folio)))
+    .map(p => ({ folio: String(p.folio || ''), fecha: String(p.fecha || ''), montoAplicado: redondear(Number(p.montoAplicado) || 0),
+      tipo: TIPOS_PAGO_PROV.indexOf(p.tipo) !== -1 ? p.tipo : TIPO_PAGO_LIQUIDACION })); // filas de antes (sin tipo): eran el pago completo
+  const pagadoCts = vigentes.reduce((s, p) => s + aCentavos(p.montoAplicado), 0);
+  const cancelada = o.estado === OC_CANCELADA || o.estado === ESTADO_ANULADA;
+  const porPagar = cancelada ? null : totalPorPagarOrden(o, devueltoSinReponer(movimientos));
+  const esperadoCts = cancelada ? 0 : aCentavos(porPagar ? porPagar.total : Number(o.total) || 0);
+  // Facturas que ya cubren la orden con un total menor (retenciones): se liquida con su total
+  let porFacturasCts = 0, venceFactura = '';
+  const facturas = Array.isArray(o.facturas) ? o.facturas.filter(f => f && f.estado === FPR_VIGENTE &&
+    (!o.folio || !f.ocFolio || may(f.ocFolio) === may(o.folio))) : null;
+  if (facturas && facturas.length && !cancelada) {
+    const fac = facturacionDeOrden(facturas, { folio: o.folio, subtotal: o.subtotal });
+    const totalFac = aCentavos(fac.total);
+    if (fac.completa && totalFac > 0 && totalFac < esperadoCts) porFacturasCts = totalFac;
+    // La factura que sigue por pagar: los pagos cubren las facturas en orden de vencimiento
+    let acum = 0;
+    const siguienteFac = facturas.slice().sort((a, b) => String(a.fechaVencimiento) < String(b.fechaVencimiento) ? -1 :
+      String(a.fechaVencimiento) > String(b.fechaVencimiento) ? 1 : (String(a.folio) < String(b.folio) ? -1 : 1))
+      .find(f => { acum += aCentavos(f.total); return acum - pagadoCts > tol; });
+    venceFactura = siguienteFac ? String(siguienteFac.fechaVencimiento || '') : '';
+  }
+  const objetivoCts = porFacturasCts || esperadoCts;
+  const saldoCts = Math.max(0, objetivoCts - pagadoCts);
+  const completo = cancelada || saldoCts <= tol || ((o.estado === OC_PAGADA || o.estado === OC_RECIBIDA) && vigentes.length > 0);
+  const plan = Array.isArray(o.planPago) && o.planPago.length ? o.planPago : null;
+  // Etapas del plan: monto de cada una (sobre lo que se debe) y lo que ya cubren los pagos, en orden
+  let etapas = null;
+  if (plan) {
+    let previo = 0;
+    etapas = montosDeEsquema(plan.map(e => ({ etapa: e.concepto, porcentaje: e.porcentaje })), objetivoCts / 100).map((e, i) => {
+      const montoCts = aCentavos(e.monto), cubiertoCts = Math.min(montoCts, Math.max(0, pagadoCts - previo));
+      previo += montoCts;
+      return { etapa: i + 1, concepto: e.etapa, porcentaje: e.porcentaje, monto: montoCts / 100, cubierto: cubiertoCts / 100,
+        acumulado: previo / 100, completa: montoCts - cubiertoCts <= tol };
+    });
+  }
+  const base = o.fechaRecepcion || o.fechaEntrega || o.fecha;
+  let siguiente = null;
+  if (!completo) {
+    if (etapas) {
+      const k = Math.max(0, etapas.findIndex(e => aCentavos(e.acumulado) - pagadoCts > tol));
+      const e = etapas[k] || etapas[etapas.length - 1];
+      siguiente = { concepto: e.concepto, monto: Math.min(saldoCts, Math.max(0, aCentavos(e.acumulado) - pagadoCts)) / 100,
+        vence: venceFactura || (k === 0 && etapas.length > 1 ? String(o.fecha || '') : fechaMasDias_(base, o.diasCredito)),
+        etapa: e.etapa, etapas: etapas.length };
+    } else {
+      siguiente = { concepto: 'Saldo', monto: saldoCts / 100, vence: venceFactura || fechaMasDias_(base, o.diasCredito) };
+    }
+  }
+  return { moneda: String(o.moneda || 'MXN'), esperado: esperadoCts / 100, pagado: pagadoCts / 100, saldo: completo ? 0 : saldoCts / 100,
+    completo: completo, vigentes: vigentes, siguiente: siguiente, etapas: etapas, porFacturas: porFacturasCts / 100, cancelada: cancelada };
+}
+
+// -- Servidor --
+
+/**
+ * {FOLIO DE LA ORDEN: [pagos sin los anulados]} del libro de compras, leído una vez por petición (MEMO_.pagosProv). Quien registra
+ * o cancela un pago llama olvidarPagosProv_() para que lo que se lea después en la misma petición salga de la hoja.
+ */
+function pagosProvPorOc_(libro) {
+  const id = libro ? String(libro.getId()) : ''; // openById da otro objeto en cada llamada: se compara el id
+  if (MEMO_.pagosProv && MEMO_.pagosProv.id === id) return MEMO_.pagosProv.mapa;
+  const mapa = {};
+  if (libro && libro.getSheetByName('PagosProveedores')) {
+    filasDeArea_(hojaCompras_(libro, 'PagosProveedores'), HOJAS_COMPRAS, 'PagosProveedores').forEach((r, i) => {
+      if (!String(r[0] || '').trim() || String(r[17] || '') === ESTADO_ANULADA) return;
+      const p = pagoProvDesdeFila_(r, i + 2), f = p.ocFolio.toUpperCase();
+      (mapa[f] = mapa[f] || []).push(p);
+    });
+  }
+  MEMO_.pagosProv = { id: id, mapa: mapa };
+  return mapa;
+}
+function olvidarPagosProv_() { MEMO_.pagosProv = null; }
+
+/**
+ * ¿Orden con pago parcial? Emitida (sin completar) con algún pago Vigente. Usa orden.pagoParcial si quien la armó ya lo calculó; si
+ * no, lo busca en los pagos del libro (una lectura por petición).
+ */
+function pagoParcialDe_(orden) {
+  if (!orden || orden.estado !== OC_EMITIDA) return false;
+  if (typeof orden.pagoParcial === 'boolean') return orden.pagoParcial;
+  try {
+    // Ya leídos en esta petición (las listas los cargan antes de recorrer sus órdenes); si no, una lectura
+    const mapa = MEMO_.pagosProv ? MEMO_.pagosProv.mapa : pagosProvPorOc_(libroComprasSiExiste_());
+    return (mapa[String(orden.folio || '').toUpperCase()] || []).some(p => p.estado === 'Vigente');
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Saldo de una orden con lo que hay en el libro (o lo que ya se leyó: movs, facturas y pagos de esa orden). */
+function saldoDeOrden_(libro, orden, movs, facturas, pagos) {
+  const f = String(orden.folio || '').toUpperCase();
+  const fs = (facturas || facturasDelLibro_(libro)).filter(x => String(x.ocFolio || '').toUpperCase() === f);
+  return saldoOrdenCompra(Object.assign({}, orden, { facturas: fs }), pagos || pagosDeOrden_(libro, orden.folio),
+    movs || movimientosPorOc_(libro)[f] || []);
+}
+
+/**
+ * El pago que completa una orden (o una devolución que deja lo ya pagado como completo): la requisición pasa como con el pago de
+ * siempre (Autorizada → Pagada, En camino sigue En camino, Recibida → Cerrada, o sigue Recibida si hay una devolución abierta) y la
+ * orden a Pagada (Recibida si ya se recibió todo y no hay devolución abierta). Dentro del candado. Devuelve {nuevo, yaRecibida,
+ * enCamino, retenida}.
+ */
+function aplicarPagoCompleto_(libro, hoja, req, hO, orden) {
+  const yaRecibida = req.estado === REQ_RECIBIDA, enCamino = req.estado === REQ_EN_CAMINO;
+  const retenida = yaRecibida ? devolucionAbiertaDe_(libro, req) : '';
+  const nuevo = transicionReq(req.estado, retenida ? 'pagarRetenida' : yaRecibida ? 'pagarRecibida' : enCamino ? 'pagarEnCamino' : 'pagar');
+  const estadoOc = yaRecibida && !retenida ? OC_RECIBIDA : OC_PAGADA;
+  hO.getRange(orden.fila, COL_ESTADO_OC).setValue(estadoOc);
+  orden.estado = estadoOc;
+  cambiarReq_(hoja, req, nuevo, {});
+  return { nuevo: nuevo, yaRecibida: yaRecibida, enCamino: enCamino, retenida: retenida };
+}
+
+/**
+ * Resolver una devolución ("Devolver al proveedor" o "Cancelar renglón") baja lo que se espera: si lo que ya se pagó en parcialidades
+ * ahora cubre la orden, queda pagada como si llegara el pago que la completa (si no, la requisición se quedaría sin poder pagarse
+ * ni cerrarse). Solo con algún pago Vigente. Devuelve el estado nuevo o ''.
+ */
+function completarPagoTrasDevolucion_(libro, hoja, req, hO, orden, folioDev) {
+  if (orden.estado !== OC_EMITIDA || [REQ_AUTORIZADA, REQ_EN_CAMINO, REQ_RECIBIDA].indexOf(req.estado) === -1) return '';
+  const pagos = pagosDeOrden_(libro, orden.folio);
+  if (!pagos.some(p => p.estado === 'Vigente')) return '';
+  const s = saldoDeOrden_(libro, orden, null, null, pagos);
+  if (!s.completo) return '';
+  const r = aplicarPagoCompleto_(libro, hoja, req, hO, orden);
+  eventoReq_(libro, req.folio, r.nuevo, 'Pagada: con la devolución ' + folioDev + ', lo que ya se pagó cubre la orden.' +
+    (r.retenida ? ' ' + textoRetenida(r.retenida) : ''));
+  bitacora_(libro, 'Orden pagada por devolución', req.proyectoFolio, req.folio + ' · ' + orden.folio + ' · ' + folioDev + ' · pagado ' +
+    formatoMoneda(s.pagado) + ' de ' + formatoMoneda(s.esperado) + ' ' + orden.moneda + ' · ' + r.nuevo, '', HOJAS_COMPRAS);
+  return r.nuevo;
 }
