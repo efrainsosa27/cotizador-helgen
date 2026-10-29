@@ -561,4 +561,136 @@ assert.equal(Object.keys(CM.eventos).length, eventosAntes, 'sin ligar: ningún a
 const sinc = ok('pedro', 'sincronizar', { requisiciones: 0 }, { devoluciones: { estado: 'Abierta' } });
 assert(Array.isArray(sinc.devoluciones));
 assert.equal(ok('obrero', 'sincronizar', { requisiciones: 0 }, { devoluciones: { estado: 'Abierta' } }).devoluciones, undefined, 'solo compras');
-console.log('OK recepción con fotos y devoluciones');
+
+// ================= Interfaz (mod-recepcion sobre la app, conectada al servidor simulado de arriba) =================
+const fs = require('fs'), path = require('path'), vm = require('vm');
+const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
+const fuente = n => scripts.find(s => s.id === n).src;
+const modRec = fuente('mod-recepcion');
+assert(/accept="image\/\*" capture="environment"/.test(modRec), 'la foto se toma con la cámara trasera');
+assert(/LADO_MAX = 1600, CALIDAD = 0\.72/.test(modRec) && /toDataURL\('image\/jpeg', CALIDAD\)/.test(modRec), 'comprimir: 1600 px, JPEG 0.72');
+function montar(quien, permisos) {
+  const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const token = 'h.' + b64({ email: quien + '@helgen.tech', given_name: quien, exp: Math.floor(Date.now() / 1000) + 3600 }) + '.f';
+  function elemento(tag) {
+    const e = { tag, value: '', textContent: '', className: '', title: '', src: '', placeholder: '', disabled: false, hijos: [], oyentes: {}, _clases: new Set(), porClase: {},
+      classList: { add: c => e._clases.add(c), remove: c => e._clases.delete(c), contains: c => e._clases.has(c), toggle: (c, f) => f ? e._clases.add(c) : e._clases.delete(c) },
+      addEventListener: (t, f) => (e.oyentes[t] = e.oyentes[t] || []).push(f), disparar: t => (e.oyentes[t] || []).forEach(f => f({ target: e })),
+      focus() {}, remove() {}, click() {}, appendChild: h => e.hijos.push(h), prepend: h => e.hijos.unshift(h), contains: () => false,
+      querySelector: sel => e.porClase[sel] || (e.porClase[sel] = elemento('input')), querySelectorAll: sel => sel === 'tr' ? e.hijos : [] };
+    let h = ''; Object.defineProperty(e, 'innerHTML', { get: () => h, set: v => { h = v; if (v === '') e.hijos.length = 0; } });
+    return e;
+  }
+  const porId = {}, oyentesDoc = {};
+  const document = { getElementById: id => porId[id] || (porId[id] = elemento('div')), querySelector: () => ({ src: 'data:logo' }), createElement: t => elemento(t),
+    visibilityState: 'visible', activeElement: null, body: elemento('body'),
+    addEventListener: (t, f) => (oyentesDoc[t] = oyentesDoc[t] || []).push(f), dispatchEvent: ev => (oyentesDoc[ev.type] || []).forEach(f => f(ev)) };
+  document.getElementById('login').classList.add('oculto');
+  const almacen = { cotizadorHelgenSesion: token }, llamadas = [];
+  // Todo va al servidor simulado como esta persona; la carga inicial también
+  async function fetch(url, o) {
+    const c = JSON.parse(o.body); llamadas.push(c);
+    const datos = c.funcion === 'sincronizar' ? { ok: true, datos: { versiones: {}, permisos: permisos, soloRequisicion: false, cambios: [] } } : A.post(quien, c.funcion, ...c.args);
+    return { ok: true, json: async () => datos };
+  }
+  class FileReader { readAsDataURL(f) { this.result = 'data:' + f.type + ';base64,' + f.b64; setImmediate(() => this.onload()); } }
+  const dialogos = { confirmar: true };
+  const ctx = { document, fetch, console, JSON, Date, Math, Number, String, Array, Object, Promise, Proxy, Error, Uint8Array, TextDecoder, FileReader,
+    atob: s => Buffer.from(s, 'base64').toString('binary'), crypto: { randomUUID: () => 'id-' + Math.random() },
+    sessionStorage: { getItem: k => almacen[k] ?? null, setItem: (k, v) => almacen[k] = v, removeItem: k => delete almacen[k] },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, confirm: () => dialogos.confirmar, prompt: () => null,
+    CustomEvent: class { constructor(type, o) { this.type = type; this.detail = o && o.detail; } },
+    setTimeout, clearTimeout, setInterval: () => 0, scrollTo() {} };
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  ['api-web', undefined, 'mod-centro', 'mod-recepcion'].forEach(n => vm.runInContext(scripts.find(s => s.id === n).src, ctx));
+  return { ctx, $: id => document.getElementById(id), llamadas, dialogos, run: c => vm.runInContext(c, ctx) };
+}
+const esperar = async (k = 20) => { for (let i = 0; i < k; i++) await new Promise(r => setImmediate(r)); };
+const archivo = n => ({ name: n || 'IMG_0001.HEIC', type: 'image/jpeg', size: 2048, b64: FOTO });
+(async () => {
+  // ---- Quien pidió: "Recibí el material" con una foto por renglón ----
+  const s5 = siempre(P2, true), s6 = siempre(P2, true);
+  const U = montar('obrero', { requisicion: true, compras: false, ventas: true, superadmin: false });
+  await esperar();
+  const { $ } = U;
+  U.run('pintarMisReq(' + JSON.stringify(ok('obrero', 'misRequisiciones')) + ')');
+  assert(/recibiMaterial\('REQ-/.test($('reqLista').innerHTML), 'botón "Recibí el material"');
+  U.run("recibiMaterial('" + s5.req + "')");
+  const p = 'rcp-' + s5.req.replace(/[^A-Za-z0-9]/g, '');
+  let forma = $('rcpCaja-' + s5.req).innerHTML;
+  assert(/Recibí el material/.test(forma) && new RegExp('id="' + p + 'F1" type="file" accept="image/\\*" capture="environment"').test(forma) &&
+    new RegExp('id="' + p + 'F2"').test(forma) && /Problema/.test(forma), 'una foto por renglón y "Problema"');
+  assert.equal(U.run('REC_ABIERTA'), s5.req, 'la sincronización no borra lo capturado');
+  $(p + 'F1').files = [archivo()];
+  U.run("enviarRecepcion('" + p + "')");
+  await esperar();
+  assert(/Falta la foto de &quot;Tubo conduit 3\/4&quot;|Falta la foto de "Tubo conduit 3\/4"/.test($('aviso').innerHTML), $('aviso').innerHTML);
+  assert(!U.llamadas.some(c => c.funcion === 'cerrarRequisicion'), 'sin todas las fotos no se manda');
+  $(p + 'F2').files = [archivo('tubo.png')];
+  U.run("enviarRecepcion('" + p + "')");
+  await esperar();
+  const cierre = U.llamadas.find(c => c.funcion === 'cerrarRequisicion');
+  assert.deepEqual([cierre.args[0], cierre.args[1], cierre.args[2].renglones.map(r => r.renglon + ':' + r.foto.mime + ':' + r.foto.nombre)],
+    [s5.req, '', ['1:image/jpeg:IMG_0001.HEIC', '2:image/jpeg:tubo.png']]);
+  assert.equal(cierre.args[2].renglones[0].foto.datos, FOTO, 'base64 sin prefijo');
+  assert(/cerrada: material recibido/.test($('aviso').innerHTML), $('aviso').innerHTML);
+  assert.equal(mia('obrero', s5.req).estado, 'Cerrada');
+  // ---- Reportar problema después ----
+  assert(/RECEPCION\.abrirReporte\('REQ-/.test($('devCaja-' + s5.req).innerHTML), '"Reportar problema" en lo recibido');
+  U.run("RECEPCION.abrirReporte('" + s5.req + "','req')");
+  const k = 'dvrreq' + s5.req.replace(/[^A-Za-z0-9]/g, '');
+  assert(/Reportar problema/.test($('devForm-' + s5.req).innerHTML) && /recibido sin reportar: 80 M/.test($('devForm-' + s5.req).innerHTML));
+  $(k + 'R').value = '1'; $(k + 'T').value = 'Dañado'; $(k + 'K').value = '5'; $(k + 'C').value = 'Rollo aplastado';
+  U.run('RECEPCION.enviarReporte()');
+  await esperar();
+  assert(/Toma una foto del problema/.test($('aviso').innerHTML) && !U.llamadas.some(c => c.funcion === 'reportarProblema'));
+  $(k + 'F').files = [archivo()];
+  U.run('RECEPCION.enviarReporte()');
+  await esperar();
+  const rep = U.llamadas.find(c => c.funcion === 'reportarProblema');
+  assert.deepEqual([rep.args[0], rep.args[1].renglon, rep.args[1].tipo, rep.args[1].cantidad, rep.args[1].comentario, rep.args[1].foto.mime],
+    [s5.req, 1, 'Dañado', '5', 'Rollo aplastado', 'image/jpeg']);
+  const devUi = /devolución <b>(DEV-\d{4}-\d{4})<\/b>/.exec($('aviso').innerHTML)[1];
+  assert(new RegExp(devUi + '</b> · Dañado · 5 de Cable THW 10').test($('devCaja-' + s5.req).innerHTML), $('devCaja-' + s5.req).innerHTML);
+  // ---- "Lo recogí": una foto por renglón ----
+  U.run('pintarMisReq(' + JSON.stringify(ok('obrero', 'misRequisiciones')) + ')');
+  U.run("centroRecogi('" + s6.req + "')");
+  const q = 'rcp-' + s6.req.replace(/[^A-Za-z0-9]/g, '');
+  assert(/Lo recogí/.test($('rcpCaja-' + s6.req).innerHTML) && !/Problema<\/button>/.test($('rcpCaja-' + s6.req).innerHTML));
+  $(q + 'F1').files = [archivo()]; $(q + 'F2').files = [archivo()];
+  U.run("enviarRecepcion('" + q + "')");
+  await esperar();
+  const enc = U.llamadas.find(c => c.funcion === 'marcarEnCamino');
+  assert.deepEqual([enc.args[0], enc.args[1].recogido, enc.args[1].renglones.length], [s6.req, true, 2]);
+  assert.equal(mia('obrero', s6.req).estado, 'En camino');
+
+  // ---- Compras: fotos, devoluciones de la requisición y resolver; la lista de devoluciones ----
+  const C = montar('pedro', { compras: true, requisicion: true, ventas: true, superadmin: false });
+  await esperar();
+  C.run('aplicarPermisos(' + JSON.stringify({ compras: true, requisicion: true, ventas: true, superadmin: false }) + ', false)');
+  assert(!C.$('comModDevoluciones').classList.contains('oculto'), 'compras ve la lista de devoluciones');
+  C.$('devEstado').value = 'Abierta'; // la primera opción del select
+  C.run("RECEPCION.cargarDevoluciones()");
+  await esperar();
+  assert(new RegExp(devUi).test(C.$('devLista').innerHTML) && /RECEPCION\.abrirResolver/.test(C.$('devLista').innerHTML));
+  C.run('abrirReqCom(' + JSON.stringify(s5.req) + ')');
+  await esperar();
+  const caja = C.$('rcDevoluciones');
+  assert(!caja.classList.contains('oculto') && /Fotos de lo que llegó/.test(caja.innerHTML) && /Ver foto/.test(caja.innerHTML) && new RegExp(devUi).test(caja.innerHTML));
+  C.run("RECEPCION.abrirResolver('" + devUi + "','com')");
+  const kr = 'dvscom' + devUi.replace(/[^A-Za-z0-9]/g, '');
+  assert(/Resolver DEV-/.test(C.$('rcDevResolver').innerHTML) && /Rollo aplastado/.test(C.$('rcDevResolver').innerHTML));
+  C.$(kr + 'Res').value = 'Devolver al proveedor';
+  C.run('RECEPCION.resolver()');
+  assert(/nota de la devolución/.test(C.$('aviso').innerHTML), 'devolver pide nota');
+  C.$(kr + 'Res').value = 'Conservar';
+  C.run('RECEPCION.resolver()');
+  await esperar();
+  const res = C.llamadas.find(c => c.funcion === 'resolverDevolucion');
+  assert.deepEqual([res.args[0], res.args[1].resolucion], [devUi, 'Conservar']);
+  assert(/resuelta: Conservar/.test(C.$('aviso').innerHTML), C.$('aviso').innerHTML);
+  assert(!new RegExp(devUi).test(C.$('devLista').innerHTML), 'sale de las abiertas');
+  console.log('OK recepción con fotos y devoluciones');
+})().catch(e => { console.error(e); process.exit(1); });
