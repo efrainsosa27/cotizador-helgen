@@ -91,7 +91,8 @@ function verificarTokenGoogle_(idToken) {
  */
 const MODULOS_ = [modIdentidad_(), modAnular_(), modCorreos_(), modCentroMando_(), modPantallas_(),
   modProveedores_(), // incremento 5: F · Proveedores y forma de pago (§6.F)
-  modRecepcion_()]; // incremento 5: H · recepción con fotos y devoluciones (§6.H)
+  modRecepcion_(), // incremento 5: H · recepción con fotos y devoluciones (§6.H)
+  modReportes_()]; // incremento 6: R · reportes de CxC y CxP, flujo y margen; fecha esperada por etapa (§6.R)
 /** Une un campo de todos los módulos: objetos con Object.assign, listas con concat. */
 function deModulos_(campo, inicial) {
   return MODULOS_.reduce((acc, m) => Array.isArray(inicial) ? acc.concat(m[campo] || []) : Object.assign(acc, m[campo] || {}), inicial);
@@ -1696,7 +1697,10 @@ const HOJAS_COBRANZA = {
       'aceptada_por', 'fecha_aceptacion', 'fecha_firma', 'firmado_por', 'actualizado'],
     numeros: [5, 6, 7],
   },
-  Esquemas: { enc: ['proyecto_folio', 'orden', 'etapa', 'porcentaje', 'monto'], numeros: [2, 4, 5] },
+  // R (incremento 6): fecha_esperada = fecha en que se espera cobrar la etapa (AAAA-MM-DD, opcional; la cambia cobranza aun con
+  // el contrato firmado porque no cambia montos: guardarFechasEsperadas, §6.R). Se lee por nombre (colEsq_) y escribirEsquema_
+  // la conserva por el nombre de la etapa al reescribir el esquema.
+  Esquemas: { enc: ['proyecto_folio', 'orden', 'etapa', 'porcentaje', 'monto', 'fecha_esperada'], numeros: [2, 4, 5] },
   Pagos: {
     enc: ['folio', 'fecha_pago', 'fecha_registro', 'proyecto_folio', 'monto', 'moneda_pago', 'tipo_cambio',
       'monto_aplicado', 'moneda_proyecto', 'metodo', 'referencia', 'etapa_orden', 'etapa', 'aplicacion (JSON)',
@@ -1707,6 +1711,8 @@ const HOJAS_COBRANZA = {
   Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
 };
 const ESTADO_ACEPTADA = 'Aceptada', ESTADO_FIRMADO = 'Firmado';
+/** Columna (desde 1) de un encabezado de Esquemas (R, incremento 6: fecha_esperada se busca por nombre). */
+const colEsq_ = nombre => HOJAS_COBRANZA.Esquemas.enc.indexOf(nombre) + 1;
 
 /** Error de permisos: doPost lo manda con codigo 'PERMISO'. */
 function errorPermiso_(mensaje) {
@@ -1897,10 +1903,11 @@ function datosCobranza_(libro, folio) {
   filasCobranza_(hC, 'Contratos').forEach((r, i) => {
     if (String(r[0]).toUpperCase() === f && String(r[7] || '') !== ESTADO_ANULADA) contrato = contratoDesdeFila_(r, i + 2);
   });
+  const cF = colEsq_('fecha_esperada') - 1; // R (incremento 6)
   const etapas = filasCobranza_(hE, 'Esquemas')
     .filter(r => String(r[0]).toUpperCase() === f)
     .sort((a, b) => Number(a[1]) - Number(b[1]))
-    .map(r => ({ etapa: String(r[2]), porcentaje: Number(r[3]) }));
+    .map(r => ({ etapa: String(r[2]), porcentaje: Number(r[3]), fechaEsperada: fechaIso_(r[cF]) }));
   const pagos = [];
   filasCobranza_(hP, 'Pagos').forEach((r, i) => {
     if (String(r[3]).toUpperCase() === f && String(r[18] || '') !== ESTADO_ANULADA) pagos.push(pagoDesdeFila_(r, i + 2));
@@ -1965,14 +1972,24 @@ function bitacora_(libro, accion, folio, detalle, motivo, hojas) {
   ]);
 }
 
-/** Reescribe las etapas del proyecto en "Esquemas" (borra las anteriores) con sus montos. */
+/**
+ * Reescribe las etapas del proyecto en "Esquemas" (borra las anteriores) con sus montos. R (incremento 6): conserva la fecha
+ * esperada de cada etapa por su nombre (sin acentos ni mayúsculas); una etapa nueva o renombrada queda sin fecha (nunca se
+ * le pasa la fecha de otra etapa).
+ */
 function escribirEsquema_(hoja, folio, etapas, total) {
   const f = String(folio).toUpperCase();
   const filas = filasCobranza_(hoja, 'Esquemas');
+  const cF = colEsq_('fecha_esperada') - 1, fechas = {};
   for (let i = filas.length - 1; i >= 0; i--) {
-    if (String(filas[i][0]).toUpperCase() === f) hoja.deleteRow(i + 2);
+    if (String(filas[i][0]).toUpperCase() === f) {
+      const fecha = fechaIso_(filas[i][cF]);
+      if (fecha) fechas[textoNormal(filas[i][2])] = fecha;
+      hoja.deleteRow(i + 2);
+    }
   }
-  montosDeEsquema(etapas, total).forEach((e, i) => hoja.appendRow([f, i + 1, textoCelda(e.etapa), e.porcentaje, e.monto]));
+  montosDeEsquema(etapas, total).forEach((e, i) => hoja.appendRow([f, i + 1, textoCelda(e.etapa), e.porcentaje, e.monto,
+    textoFecha_(fechas[textoNormal(e.etapa)] || '')]));
 }
 
 /** Respuesta para la pestaña Cobranza: proyecto, cotizaciones, contrato, esquema con avance y pagos. */
@@ -1996,6 +2013,8 @@ function vistaCobranza_(libro, proyecto) {
     puedeFirmar: proyecto.estado !== 'Cancelado' && !!c && c.estado === ESTADO_ACEPTADA,
     puedePagar: !!c && c.estado === ESTADO_FIRMADO,
     puedeDesbloquear: !!c && c.estado === ESTADO_FIRMADO && esAdminDesbloqueo_(),
+    // R (incremento 6): fechas esperadas de cobro (esquema[i].fechaEsperada): con aceptada o firmado, no en un proyecto cancelado
+    fechasEditables: !!c && d.etapas.length > 0 && proyecto.estado !== 'Cancelado',
     // Solo llega al rol de cobranza (vistaCobranza_ se llama después de exigirCobranza_)
     margen: c ? margenDeContrato_(c) : margenSinContrato_(proyecto.folio),
     metodos: METODOS_COBRO,
@@ -11986,4 +12005,571 @@ function completarPagoTrasDevolucion_(libro, hoja, req, hO, orden, folioDev) {
   bitacora_(libro, 'Orden pagada por devolución', req.proyectoFolio, req.folio + ' · ' + orden.folio + ' · ' + folioDev + ' · pagado ' +
     formatoMoneda(s.pagado) + ' de ' + formatoMoneda(s.esperado) + ' ' + orden.moneda + ' · ' + r.nuevo, '', HOJAS_COMPRAS);
   return r.nuevo;
+}
+
+// ---- 6.R Reportes de CxC y CxP, flujo de 13 semanas y margen; fecha esperada por etapa (incremento 6) ----
+// Contrato: docs/incremento-6.md §1 y §3; detalle: docs/incremento-6-reportes.md. Spec aprobado por Leo con sus valores por
+// omisión (decisiones 4 y 5). Solo lectura: lo único que escribe es la fecha esperada de las etapas de cobranza
+// (guardarFechasEsperadas). Permisos en el servidor en cada llamada (permisosReportes_): CxC y margen → cobranza; CxP → compras;
+// flujo → super admin (que tiene todos los roles). Compras nunca recibe montos de contrato ni margen. MXN y USD nunca se suman
+// ni se comparan: todo va por moneda. Fuera: lo cancelado y lo anulado (ocVigente, esAnulado_, estado Anulada), los proyectos
+// Cancelados (CxC, flujo y margen; ver porPagarProveedores para CxP) y los registros de prueba (foliosPrueba_, CLAUDE.md §5).
+// En caché por versión de sus colecciones (enCache_) y, los que dependen del día, por día.
+// Punto de integración con el módulo P (pagos parciales): saldoOrdenCompra_() usa saldoOrdenCompra (P, contrato §1) en cuanto
+// exista; mientras tanto, saldoOrdenCompraProvisional (misma firma y forma, reglas de hoy).
+
+function modReportes_() {
+  // Aquí solo listas literales: este módulo se arma al cargar el archivo, antes de las const de más abajo
+  return { nombre: 'Reportes',
+    api: { guardarFechasEsperadas: guardarFechasEsperadas, reporteCxc: reporteCxc, reporteCxp: reporteCxp,
+      reporteFlujo: reporteFlujo, reporteMargen: reporteMargen },
+    // La fecha esperada vive en Esquemas, que es parte de 'contratos' (como guardarEsquema)
+    cambios: { guardarFechasEsperadas: ['contratos'] },
+    solo: [], publicas: [],
+    // El reporte abierto (ctx.reporte) se vuelve a mandar si cambió algo de lo que usa y esta persona lo puede ver. El cambio de
+    // día lo pide la interfaz (sincronizar no llega a los módulos cuando no cambió ninguna colección).
+    sincronizar(permisos, ctx, algo, r, errores) {
+      const tipo = String(ctx.reporte || ''), def = REPORTES_[tipo];
+      if (!def || !permisosReportes_()[tipo] || !algo.apply(null, def.colecciones)) return;
+      r.reporte = { tipo: tipo, datos: intentar_(errores, 'Reporte', def.fn) };
+    },
+  };
+}
+
+/** Qué reportes ve el usuario de la sesión (la pestaña Reportes sale si ve alguno; cada reporte lo vuelve a revisar). */
+function permisosReportes_() {
+  const cob = esCobranza_();
+  return { cxc: cob, cxp: esCompras_(), flujo: esSuperAdmin_(), margen: cob };
+}
+
+function exigirReporte_(tipo) {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + '.');
+  if (!permisosReportes_()[tipo]) throw errorPermiso_('No tienes permiso para ver este reporte.');
+}
+
+/** Colecciones de cada reporte (su caché y su sincronización) y si dependen del día. */
+const REPORTES_ = {
+  cxc: { colecciones: ['proyectos', 'contratos', 'pagosCobranza', 'anulaciones'], porDia: true, fn: () => reporteCxc() },
+  cxp: { colecciones: ['proyectos', 'oc', 'pagosProveedores', 'facturasProveedor', 'requisiciones', 'anulaciones'], porDia: true,
+    fn: () => reporteCxp() },
+  flujo: { colecciones: ['proyectos', 'contratos', 'pagosCobranza', 'oc', 'pagosProveedores', 'facturasProveedor', 'requisiciones',
+    'anulaciones'], porDia: true, fn: () => reporteFlujo() },
+  margen: { colecciones: ['proyectos', 'contratos', 'oc', 'anulaciones'], porDia: false, fn: () => reporteMargen() },
+};
+
+/** Valor del reporte en caché (por versión de sus colecciones, por día si depende de él y por la lista de pruebas) o calcularlo. */
+function reporteEnCache_(tipo, calcular) {
+  const def = REPORTES_[tipo];
+  const prueba = Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, foliosPrueba_().join(','))).slice(0, 10);
+  return enCache_('REP_' + tipo + '_' + (def.porDia ? hoyIso_() : '') + '_' + prueba, def.colecciones, TTL_CACHE, calcular);
+}
+
+/**
+ * Antigüedad de cuentas por cobrar (cobranza y super admin): saldo de cada etapa de los contratos firmados, por cliente y
+ * proyecto, en No vencido · 1–30 · 31–60 · 61–90 · > 90 días · Sin fecha, según la fecha esperada de la etapa. El saldo de cada
+ * etapa sale de resumenCobranza (el mismo reparto que la vista del proyecto). Ver antiguedadCxc.
+ */
+function reporteCxc() {
+  exigirReporte_('cxc');
+  return reporteEnCache_('cxc', () => antiguedadCxc(datosReportes_({ cobranza: true })));
+}
+
+/**
+ * Antigüedad de cuentas por pagar (compras y super admin): saldo de cada orden vigente por proveedor y orden, en los mismos rangos.
+ * Saldo con saldoOrdenCompra (módulo P); fechas: plan de P, facturas o entrega + crédito (porPagarProveedores). Sin montos de
+ * contrato.
+ */
+function reporteCxp() {
+  exigirReporte_('cxp');
+  return reporteEnCache_('cxp', () => {
+    const d = datosReportes_({ compras: true });
+    return antiguedadPorPagar(d, saldoOrdenCompra_());
+  });
+}
+
+/** Flujo de efectivo de 13 semanas (solo super admin): cobros esperados (etapas) contra pagos esperados (órdenes), por moneda. */
+function reporteFlujo() {
+  exigirReporte_('flujo');
+  return reporteEnCache_('flujo', () => {
+    const d = datosReportes_({ cobranza: true, compras: true });
+    return flujoSemanal({ hoy: d.hoy, semanas: SEMANAS_FLUJO, cobros: etapasPorCobrar(d), pagos: porPagarProveedores(d, saldoOrdenCompra_()) });
+  });
+}
+
+/** Margen por proyecto (cobranza y super admin): contratado sin IVA − órdenes de compra no canceladas, por línea de negocio. */
+function reporteMargen() {
+  exigirReporte_('margen');
+  return reporteEnCache_('margen', () => margenPorProyecto(datosReportes_({ cobranza: true, compras: true })));
+}
+
+/**
+ * PUNTO DE INTEGRACIÓN CON EL MÓDULO P: la función saldoOrdenCompra(orden, pagos, movimientos) de P (docs/incremento-6.md §1).
+ * Mientras P no esté en esta rama se usa saldoOrdenCompraProvisional (misma firma y misma forma, con las reglas de hoy). Al
+ * integrar no hay que cambiar nada aquí: en cuanto exista saldoOrdenCompra se usa esa; después se puede borrar la provisional.
+ */
+function saldoOrdenCompra_() {
+  return typeof saldoOrdenCompra === 'function' ? saldoOrdenCompra : saldoOrdenCompraProvisional;
+}
+
+/**
+ * Folios de prueba que no van en ningún reporte (CLAUDE.md §5: se identifican por folio, no por texto): los fijos de
+ * FOLIOS_PRUEBA_REPORTES más los de la Script Property opcional FOLIOS_PRUEBA (separados por coma), sin publicar de nuevo.
+ */
+function foliosPrueba_() {
+  const extra = String(propiedades_().FOLIOS_PRUEBA || '').split(/[\s,;]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
+  return FOLIOS_PRUEBA_REPORTES.concat(extra);
+}
+
+/**
+ * Todo lo que leen los reportes, de las hojas y sin crear nada (filasSiHay_: un libro o una pestaña que no existe = vacío). que =
+ * {cobranza: contratos, esquemas con fecha esperada y pagos de clientes; compras: órdenes, pagos a proveedores, movimientos y
+ * facturas}. Lo anulado no se lee (estado Anulada o esAnulado_); proyectos = los que no están anulados.
+ */
+function datosReportes_(que) {
+  const d = { hoy: hoyIso_(), proyectos: proyectosVisibles_(), prueba: foliosPrueba_() };
+  if (que.cobranza) {
+    const lc = libroCobranzaSiExiste_();
+    const cF = colEsq_('fecha_esperada') - 1;
+    d.contratos = filasSiHay_(lc, HOJAS_COBRANZA, 'Contratos').map((r, i) => contratoDesdeFila_(r, i + 2))
+      .filter(c => c.proyectoFolio.trim() && c.estado !== ESTADO_ANULADA);
+    d.esquemas = filasSiHay_(lc, HOJAS_COBRANZA, 'Esquemas').filter(r => String(r[0] || '').trim())
+      .map(r => ({ proyectoFolio: String(r[0]), orden: Number(r[1]), etapa: String(r[2]), porcentaje: Number(r[3]), fechaEsperada: fechaIso_(r[cF]) }));
+    d.pagos = filasSiHay_(lc, HOJAS_COBRANZA, 'Pagos').filter(r => String(r[0] || '').trim()).map((r, i) => pagoDesdeFila_(r, i + 2))
+      .filter(p => p.estado !== ESTADO_ANULADA && !esAnulado_(p.folio));
+  }
+  if (que.compras) {
+    const lo = libroComprasSiExiste_();
+    d.ordenes = filasSiHay_(lo, HOJAS_COMPRAS, 'OrdenesCompra')
+      .map((r, i) => String(r[0] || '').trim() && String(r[28] || '') !== ESTADO_ANULADA && !esAnulado_(r[0]) ? ordenDesdeFila_(r, i + 2) : null)
+      .filter(Boolean);
+    d.pagosProv = filasSiHay_(lo, HOJAS_COMPRAS, 'PagosProveedores').filter(r => String(r[0] || '').trim())
+      .map((r, i) => pagoProvDesdeFila_(r, i + 2)).filter(p => p.estado !== ESTADO_ANULADA && !esAnulado_(p.folio));
+    d.movimientos = lo && lo.getSheetByName('MovimientosInventario') ? movimientosPorOc_(lo) : {};
+    d.facturas = lo && lo.getSheetByName('FacturasProveedor') ? facturasDelLibro_(lo).filter(f => !esAnulado_(f.folio)) : [];
+  }
+  return d;
+}
+
+/**
+ * Fechas esperadas de cobro de las etapas de un proyecto (decisión 4). Solo cobranza; con la cotización aceptada o el contrato
+ * firmado (no cambian montos: se pueden cambiar después de firmar); no en un proyecto cancelado. fechas = [{orden, etapa, fecha:
+ * 'AAAA-MM-DD' o '' (sin fecha)}]: las etapas que no vienen no cambian. La etapa debe ser la que vio la persona (mismo número y
+ * nombre): si el esquema cambió mientras tanto, error y no se escribe nada. Escribe solo la columna fecha_esperada de esas filas
+ * y deja en la Bitacora de cobranza lo que cambió (antes → después). Devuelve la vista del proyecto (vistaCobranza_).
+ */
+function guardarFechasEsperadas(proyectoFolio, fechas) {
+  exigirCobranza_();
+  const lista = normalizarFechasEsperadas(fechas);
+  const libro = libroCobranza_();
+  return conCandado_(() => {
+    const proyecto = proyectoParaCobranza_(proyectoFolio);
+    if (proyecto.estado === 'Cancelado') throw new Error('El proyecto ' + proyecto.folioVisible + ' está cancelado.');
+    const d = datosCobranza_(libro, proyecto.folio);
+    if (!d.contrato) throw new Error('Primero marca la cotización aceptada del proyecto.');
+    const hoja = d.hojas.esquemas, f = proyecto.folio.toUpperCase(), cF = colEsq_('fecha_esperada');
+    const filas = {};
+    filasCobranza_(hoja, 'Esquemas').forEach((r, i) => {
+      if (String(r[0]).toUpperCase() === f) filas[Number(r[1])] = { fila: i + 2, etapa: String(r[2]), fecha: fechaIso_(r[cF - 1]) };
+    });
+    const cambios = [];
+    lista.forEach(x => {
+      const e = filas[x.orden];
+      if (!e || textoNormal(e.etapa) !== textoNormal(x.etapa)) {
+        throw new Error('El esquema de pagos de ' + proyecto.folioVisible + ' cambió mientras capturabas. Actualiza la vista y vuelve a ' +
+          'capturar las fechas.');
+      }
+      if (e.fecha !== x.fecha) cambios.push({ e: e, x: x });
+    });
+    cambios.forEach(c => hoja.getRange(c.e.fila, cF).setValue(textoFecha_(c.x.fecha)));
+    if (cambios.length) {
+      bitacora_(libro, 'Fechas esperadas de cobro', proyecto.folio, cambios.map(c => c.e.etapa + ': ' + (c.e.fecha || 'sin fecha') +
+        ' → ' + (c.x.fecha || 'sin fecha')).join(' · '));
+      SpreadsheetApp.flush();
+    }
+    return vistaCobranza_(libro, proyecto);
+  });
+}
+
+// ---- Reportes: lógica pura (sin servicios de Google; se prueba en Node) ----
+
+/** Registros de prueba en las hojas reales (CLAUDE.md §5). Un proyecto con su clave (PRY-AAAA-NNNN-XXX) también cuenta. */
+const FOLIOS_PRUEBA_REPORTES = ['HLG-2026-0005', 'HLG-2026-0006', 'PRY-2026-0001'];
+const SEMANAS_FLUJO = 13;
+/** Rangos de antigüedad por días de atraso (las mismas claves que RANGOS_CXP de cuentas por pagar) + "Sin fecha". */
+const RANGOS_REPORTE = [
+  { clave: 'porVencer', etiqueta: 'No vencido', hasta: 0 },
+  { clave: 'd1a30', etiqueta: '1–30 días', hasta: 30 },
+  { clave: 'd31a60', etiqueta: '31–60 días', hasta: 60 },
+  { clave: 'd61a90', etiqueta: '61–90 días', hasta: 90 },
+  { clave: 'd90mas', etiqueta: 'Más de 90 días', hasta: Infinity },
+];
+const RANGO_SIN_FECHA = { clave: 'sinFecha', etiqueta: 'Sin fecha' };
+/** De dónde sale la fecha de un pago esperado a proveedor (porPagarProveedores). */
+const FUENTES_VENCE = { plan: 'Plan de pagos', factura: 'Factura', estimada: 'Estimada (entrega + crédito)', '': 'Sin fecha' };
+
+/** ¿"AAAA-MM-DD" es una fecha real? */
+function fechaIsoValida(s) {
+  const m = String(s == null ? '' : s).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return false;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
+}
+
+/** ¿El folio está en la lista de prueba? lista = foliosPrueba_() (por omisión, los fijos). Acepta el proyecto con clave. */
+function esFolioPrueba(folio, lista) {
+  const f = folioInterno(folio);
+  return !!f && (lista || FOLIOS_PRUEBA_REPORTES).map(x => folioInterno(x)).indexOf(f) !== -1;
+}
+
+/**
+ * Valida lo que manda la interfaz para guardarFechasEsperadas: [{orden (1…10), etapa, fecha}] sin etapas repetidas; fecha =
+ * 'AAAA-MM-DD' real de 2020 a 2100 (puede ser pasada o futura) o '' = sin fecha. Devuelve [{orden, etapa, fecha}].
+ */
+function normalizarFechasEsperadas(fechas) {
+  if (!Array.isArray(fechas) || !fechas.length) throw new Error('No hay fechas para guardar.');
+  if (fechas.length > MAX_ETAPAS) throw new Error('El esquema de pagos admite máximo ' + MAX_ETAPAS + ' etapas.');
+  const vistas = {};
+  return fechas.map(x => {
+    const orden = Number(x && x.orden), etapa = String((x && x.etapa) || '').trim().replace(/\s+/g, ' ');
+    if (!Number.isInteger(orden) || orden < 1 || orden > MAX_ETAPAS) throw new Error('Etapa no válida.');
+    if (vistas[orden]) throw new Error('La etapa ' + orden + ' está repetida.');
+    vistas[orden] = true;
+    const s = String(x.fecha == null ? '' : x.fecha).trim();
+    if (s && (!fechaIsoValida(s) || s < '2020-01-01' || s > '2100-12-31')) {
+      throw new Error('La fecha esperada de "' + (etapa || 'etapa ' + orden) + '" no es válida (AAAA-MM-DD).');
+    }
+    return { orden: orden, etapa: etapa, fecha: s };
+  });
+}
+
+/** Días de atraso y rango de una fecha contra hoy ("AAAA-MM-DD"). Sin fecha válida: {dias: null, rango: 'sinFecha'}. Hoy = no vencido. */
+function rangoAntiguedad(fecha, hoy) {
+  if (!fechaIsoValida(fecha)) return { dias: null, rango: RANGO_SIN_FECHA.clave };
+  const dias = diasEntre(fecha, hoy);
+  return { dias: dias, rango: RANGOS_REPORTE.find(r => dias <= r.hasta).clave };
+}
+
+/** Monedas en orden: MXN primero, luego las demás alfabéticamente. */
+function ordenMonedas(a, b) {
+  return a === b ? 0 : a === 'MXN' ? -1 : b === 'MXN' ? 1 : a < b ? -1 : 1;
+}
+
+/**
+ * Lo que falta cobrar de cada etapa de los contratos firmados, como partidas con fecha. d = {contratos (contratoDesdeFila_),
+ * esquemas [{proyectoFolio, orden, etapa, porcentaje, fechaEsperada}], pagos (cobranza; cualquier estado), proyectos
+ * [{folio, folioVisible, nombre, cliente, clienteId, estado}], prueba}. El saldo de cada etapa sale de resumenCobranza (mismo
+ * reparto que la vista del proyecto: pagos Vigentes en orden de registro, el excedente pasa a la siguiente etapa; todo en la
+ * moneda del contrato, aunque el pago haya sido en otra). Solo contratos Firmados (uno por firmar todavía no se cobra), de
+ * proyectos que existen, no Cancelados ni de prueba; solo etapas con saldo. Partida = {proyectoFolio, folioVisible, nombre,
+ * cliente, clienteId, estadoProyecto, marca, moneda, orden, etapa, montoEtapa, pagadoEtapa, monto (saldo), fecha (esperada o '')}.
+ */
+function etapasPorCobrar(d) {
+  const may = s => String(s || '').trim().toUpperCase();
+  const prueba = d.prueba || FOLIOS_PRUEBA_REPORTES;
+  const proyectos = {}, esquemas = {}, pagos = {};
+  (d.proyectos || []).forEach(p => { proyectos[may(p.folio)] = p; });
+  (d.esquemas || []).forEach(e => { (esquemas[may(e.proyectoFolio)] = esquemas[may(e.proyectoFolio)] || []).push(e); });
+  (d.pagos || []).forEach(p => { (pagos[may(p.proyectoFolio)] = pagos[may(p.proyectoFolio)] || []).push(p); });
+  const partidas = [];
+  (d.contratos || []).forEach(c => {
+    const folio = may(c.proyectoFolio), p = proyectos[folio];
+    if (c.estado !== ESTADO_FIRMADO || !p || p.estado === 'Cancelado' || esFolioPrueba(folio, prueba) || esFolioPrueba(c.cotizacion, prueba)) return;
+    const filas = (esquemas[folio] || []).slice().sort((a, b) => a.orden - b.orden);
+    const etapas = filas.length ? filas.map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje })) : [{ etapa: 'Total', porcentaje: 100 }];
+    resumenCobranza(c, etapas, pagos[folio] || []).etapas.forEach((e, i) => {
+      const cts = aCentavos(e.saldo);
+      if (cts <= 0) return;
+      const fecha = filas[i] && fechaIsoValida(filas[i].fechaEsperada) ? filas[i].fechaEsperada : '';
+      partidas.push({ proyectoFolio: p.folio, folioVisible: p.folioVisible || p.folio, nombre: p.nombre || '', cliente: p.cliente || '',
+        clienteId: p.clienteId || '', estadoProyecto: p.estado, marca: c.marca, moneda: c.moneda, orden: i + 1, etapa: e.etapa,
+        montoEtapa: e.monto, pagadoEtapa: e.pagado, monto: cts / 100, fecha: fecha });
+    });
+  });
+  return partidas;
+}
+
+/**
+ * (Lógica pura) Lo que falta pagar a proveedores, como partidas con fecha: una o más por orden vigente con saldo. d = {ordenes
+ * (ordenDesdeFila_), pagosProv (PagosProveedores, cualquier estado), movimientos ({OC: [MovimientosInventario]}), facturas
+ * (FacturasProveedor), proyectos, prueba}; saldoFn = saldoOrdenCompra (módulo P) o saldoOrdenCompraProvisional. Cuánto: el saldo
+ * de saldoFn (en la moneda de la orden; nada si está completo). Cuándo (fuente):
+ *  1. 'plan': el "siguiente" de P cuando es un pago del plan (trae fecha en vence y es MENOR que el saldo; el contrato dice que
+ *     sin plan "siguiente" es el saldo completo); el resto del saldo, en la fecha estimada pero nunca antes que ese pago.
+ *  2. 'factura': si no, las facturas Vigentes de la orden en su moneda (vencimiento = emisión + días de crédito), de la que vence
+ *     primero a la última; lo ya pagado cubre primero las que vencen antes.
+ *  3. 'estimada': lo que ninguna factura cubre, en la fecha de entrega (o de la orden) + días de crédito de la orden.
+ * Las órdenes de proyectos de prueba no cuentan. Las de un proyecto Cancelado sí: se le sigue debiendo al proveedor mientras la
+ * orden no se cancele (estadoProyecto lo dice). Partida = {ocFolio, reqFolio, proyectoFolio, proyectoVisible, proyectoNombre,
+ * estadoProyecto, proveedorId, proveedor, moneda, esperado, pagado, saldoOrden, monto, fecha, fuente, referencia}.
+ */
+function porPagarProveedores(d, saldoFn) {
+  const may = s => String(s || '').trim().toUpperCase();
+  const prueba = d.prueba || FOLIOS_PRUEBA_REPORTES, fn = saldoFn || saldoOrdenCompraProvisional;
+  const proyectos = {}, pagos = {}, facturas = {};
+  (d.proyectos || []).forEach(p => { proyectos[may(p.folio)] = p; });
+  (d.pagosProv || []).forEach(p => { (pagos[may(p.ocFolio)] = pagos[may(p.ocFolio)] || []).push(p); });
+  (d.facturas || []).filter(f => f.estado === FPR_VIGENTE).forEach(f => { (facturas[may(f.ocFolio)] = facturas[may(f.ocFolio)] || []).push(f); });
+  const movs = d.movimientos || {};
+  const partidas = [];
+  (d.ordenes || []).forEach(o => {
+    if (!ocVigente(o) || esFolioPrueba(o.proyectoFolio, prueba)) return;
+    // Con las facturas de la orden (P): con retenciones el saldo se mide contra lo facturado, igual que Cuentas por pagar
+    const k = may(o.folio), s = fn(Object.assign({}, o, { facturas: facturas[k] || [] }), pagos[k] || [], movs[k] || []);
+    if (!s || s.completo || aCentavos(s.saldo) <= 0) return;
+    const p = proyectos[may(o.proyectoFolio)] || {};
+    const base = { ocFolio: o.folio, reqFolio: o.reqFolio || '', proyectoFolio: o.proyectoFolio, proyectoVisible: p.folioVisible || o.proyectoFolio,
+      proyectoNombre: p.nombre || '', estadoProyecto: p.estado || '', proveedorId: o.proveedorId || '', proveedor: o.proveedor || '',
+      moneda: o.moneda, esperado: redondear(s.esperado), pagado: redondear(s.pagado), saldoOrden: redondear(s.saldo) };
+    tramosPorPagar(o, s, facturas[k] || []).forEach(t => partidas.push(Object.assign({}, base,
+      { monto: t.cts / 100, fecha: t.fecha, fuente: t.fuente, referencia: t.referencia })));
+  });
+  return partidas;
+}
+
+/** Fecha estimada de pago de una orden: entrega (o la fecha de la orden) + sus días de crédito; '' si no tiene fecha válida. */
+function fechaEstimadaOrden(o) {
+  const base = fechaIsoValida(o.fechaEntrega) ? o.fechaEntrega : fechaIsoValida(o.fecha) ? o.fecha : '';
+  return base ? sumarDias(base, diasCreditoGuardados(o.diasCredito)) : '';
+}
+
+/** (Lógica pura) Tramos {cts, fecha, fuente, referencia} del saldo de una orden (reglas en porPagarProveedores). */
+function tramosPorPagar(o, s, facturas) {
+  let restante = aCentavos(s.saldo);
+  const tramos = [], estimada = fechaEstimadaOrden(o);
+  const sig = s.siguiente;
+  // Un pago del plan (P): menor que el saldo y con fecha. Sin plan, "siguiente" es el saldo completo y mandan las facturas, aunque
+  // P le ponga fecha (así lo que se factura sale con la fecha de su factura)
+  if (sig && fechaIsoValida(sig.vence) && aCentavos(sig.monto) > 0 && aCentavos(sig.monto) < restante) {
+    const c = Math.min(aCentavos(sig.monto), restante);
+    tramos.push({ cts: c, fecha: sig.vence, fuente: 'plan', referencia: String(sig.concepto || 'Siguiente pago') });
+    restante -= c;
+    if (restante > 0) {
+      const f = estimada && estimada > sig.vence ? estimada : sig.vence;
+      tramos.push({ cts: restante, fecha: f, fuente: 'plan', referencia: 'Resto del plan de pagos' });
+    }
+    return tramos;
+  }
+  let pagado = aCentavos(s.pagado);
+  facturas.filter(f => f.moneda === o.moneda && fechaIsoValida(f.fechaVencimiento))
+    .sort((a, b) => a.fechaVencimiento < b.fechaVencimiento ? -1 : a.fechaVencimiento > b.fechaVencimiento ? 1 : (a.folio < b.folio ? -1 : 1))
+    .forEach(f => {
+      const total = aCentavos(f.total), cubierto = Math.min(pagado, total);
+      pagado -= cubierto;
+      const abierto = Math.min(total - cubierto, restante);
+      if (abierto <= 0) return;
+      tramos.push({ cts: abierto, fecha: f.fechaVencimiento, fuente: 'factura', referencia: f.folio });
+      restante -= abierto;
+    });
+  if (restante > 0) tramos.push({ cts: restante, fecha: estimada, fuente: estimada ? 'estimada' : '', referencia: 'Sin factura' });
+  return tramos;
+}
+
+/**
+ * (Lógica pura) Saldo de una orden con las reglas de HOY (un pago por orden), con la firma y la forma exactas de
+ * saldoOrdenCompra del módulo P (docs/incremento-6.md §1). Solo mientras P no esté integrado (saldoOrdenCompra_ elige):
+ * esperado = totalPorPagarOrden(orden, devueltoSinReponer(movimientos)) o el total de la orden; pagado = Σ monto_aplicado de los
+ * pagos Vigentes; saldo = max(0, esperado − pagado); completo = saldo ≤ TOLERANCIA_PAGO; siguiente = el saldo, sin fecha.
+ */
+function saldoOrdenCompraProvisional(orden, pagos, movimientos) {
+  const o = orden || {};
+  const porPagar = totalPorPagarOrden(o, devueltoSinReponer(movimientos || []));
+  const esperado = redondear(porPagar ? porPagar.total : Number(o.total) || 0);
+  const vigentes = (pagos || []).filter(p => p.estado === 'Vigente')
+    .map(p => ({ folio: p.folio, fecha: p.fecha, montoAplicado: redondear(p.montoAplicado), tipo: p.tipo || '' }));
+  const pagadoCts = vigentes.reduce((s, p) => s + aCentavos(p.montoAplicado), 0);
+  const saldo = Math.max(0, aCentavos(esperado) - pagadoCts) / 100;
+  const completo = aCentavos(saldo) <= aCentavos(TOLERANCIA_PAGO);
+  return { esperado: esperado, pagado: pagadoCts / 100, saldo: saldo, completo: completo, vigentes: vigentes,
+    siguiente: completo ? null : { concepto: 'Saldo', monto: saldo, vence: '' } };
+}
+
+/**
+ * (Lógica pura) Antigüedad en dos niveles (cliente → proyecto, proveedor → orden). partidas = [{moneda, monto, fecha, …}];
+ * nivel1(x) y nivel2(x) → {clave, datos}. Cada partida toma sus días de atraso y su rango (rangoAntiguedad). Un grupo es de UNA
+ * moneda (un cliente con proyectos en MXN y en USD sale dos veces): nunca se suman ni se comparan monedas. Devuelve {hoy, rangos
+ * [{clave, etiqueta}] (con "Sin fecha"), totales (uno por moneda, MXN primero: rangos, vencido, total, grupos, partidas), grupos
+ * [{…datos, moneda, rangos, vencido, total, detalle: [{…datos, moneda, rangos, vencido, total, partidas}]}]}. Grupos: por moneda,
+ * del más vencido al menos y del mayor saldo al menor; detalle por su clave; partidas por fecha (sin fecha al final).
+ */
+function antiguedadEnGrupos(partidas, hoy, nivel1, nivel2) {
+  const claves = RANGOS_REPORTE.map(r => r.clave).concat(RANGO_SIN_FECHA.clave);
+  const vacio = () => { const o = { tot: 0 }; claves.forEach(k => { o[k] = 0; }); return o; };
+  const sumar = (o, rango, cts) => { o[rango] += cts; o.tot += cts; };
+  const cerrar = o => {
+    const r = {};
+    claves.forEach(k => { r[k] = o[k] / 100; });
+    r.vencido = (o.tot - o.porVencer - o.sinFecha) / 100;
+    r.total = o.tot / 100;
+    return r;
+  };
+  const grupos = {}, totales = {};
+  (partidas || []).forEach(x0 => {
+    const cts = aCentavos(x0.monto);
+    if (cts <= 0) return;
+    const x = Object.assign({}, x0, { monto: cts / 100 }, rangoAntiguedad(x0.fecha, hoy));
+    const g1 = nivel1(x), g2 = nivel2(x), k1 = x.moneda + '|' + g1.clave;
+    const G = grupos[k1] || (grupos[k1] = { datos: g1.datos, moneda: x.moneda, suma: vacio(), detalle: {} });
+    const D = G.detalle[g2.clave] || (G.detalle[g2.clave] = { clave: g2.clave, datos: g2.datos, suma: vacio(), partidas: [] });
+    const T = totales[x.moneda] || (totales[x.moneda] = { suma: vacio(), grupos: {}, partidas: 0 });
+    [G.suma, D.suma, T.suma].forEach(o => sumar(o, x.rango, cts));
+    D.partidas.push(x);
+    T.grupos[k1] = true;
+    T.partidas++;
+  });
+  const porFecha = (a, b) => (a.fecha || '9') < (b.fecha || '9') ? -1 : (a.fecha || '9') > (b.fecha || '9') ? 1 : 0;
+  const listaGrupos = Object.keys(grupos).map(k => {
+    const G = grupos[k];
+    const detalle = Object.keys(G.detalle).sort().map(c => {
+      const D = G.detalle[c];
+      return Object.assign({}, D.datos, { moneda: G.moneda }, cerrar(D.suma), { partidas: D.partidas.sort(porFecha) });
+    });
+    return Object.assign({}, G.datos, { moneda: G.moneda }, cerrar(G.suma), { detalle: detalle });
+  }).sort((a, b) => ordenMonedas(a.moneda, b.moneda) || b.vencido - a.vencido || b.total - a.total ||
+    (textoNormal(a.nombreGrupo) < textoNormal(b.nombreGrupo) ? -1 : 1));
+  return {
+    hoy: hoy, rangos: RANGOS_REPORTE.map(r => ({ clave: r.clave, etiqueta: r.etiqueta })).concat([RANGO_SIN_FECHA]),
+    totales: Object.keys(totales).sort(ordenMonedas).map(m => Object.assign({ moneda: m }, cerrar(totales[m].suma),
+      { grupos: Object.keys(totales[m].grupos).length, partidas: totales[m].partidas })),
+    grupos: listaGrupos,
+  };
+}
+
+/**
+ * (Lógica pura) Antigüedad de cuentas por cobrar: etapasPorCobrar agrupadas por cliente (clienteId o, sin él, su nombre) y
+ * proyecto. d = {hoy, contratos, esquemas, pagos, proyectos, prueba}. Ver antiguedadEnGrupos (grupos = clientes, detalle =
+ * proyectos, partidas = etapas).
+ */
+function antiguedadCxc(d) {
+  return antiguedadEnGrupos(etapasPorCobrar(d), d.hoy,
+    x => ({ clave: x.clienteId || textoNormal(x.cliente), datos: { nombreGrupo: x.cliente || 'Sin cliente', cliente: x.cliente, clienteId: x.clienteId } }),
+    x => ({ clave: x.proyectoFolio, datos: { folio: x.proyectoFolio, folioVisible: x.folioVisible, nombre: x.nombre, marca: x.marca,
+      estadoProyecto: x.estadoProyecto } }));
+}
+
+/**
+ * (Lógica pura) Antigüedad de cuentas por pagar: porPagarProveedores agrupadas por proveedor (su id o, sin él, su nombre) y orden.
+ * d = {hoy, ordenes, pagosProv, movimientos, facturas, proyectos, prueba}; saldoFn = saldoOrdenCompra (P) o la provisional.
+ */
+function antiguedadPorPagar(d, saldoFn) {
+  return antiguedadEnGrupos(porPagarProveedores(d, saldoFn), d.hoy,
+    x => ({ clave: x.proveedorId || textoNormal(x.proveedor), datos: { nombreGrupo: x.proveedor || 'Sin proveedor', proveedor: x.proveedor,
+      proveedorId: x.proveedorId } }),
+    x => ({ clave: x.ocFolio, datos: { ocFolio: x.ocFolio, reqFolio: x.reqFolio, proyectoFolio: x.proyectoFolio, proyectoVisible: x.proyectoVisible,
+      proyectoNombre: x.proyectoNombre, estadoProyecto: x.estadoProyecto, esperado: x.esperado, pagado: x.pagado } }));
+}
+
+/** Lunes ("AAAA-MM-DD") de la semana de una fecha. */
+function lunesDe(fechaIso) {
+  const m = String(fechaIso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const dia = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay(); // 0 = domingo
+  return sumarDias(fechaIso, -(dia === 0 ? 6 : dia - 1));
+}
+
+/**
+ * (Lógica pura) Flujo de efectivo semanal. d = {hoy, semanas (13), cobros (etapasPorCobrar), pagos (porPagarProveedores)}. Semana
+ * 1 = de lunes a domingo de la semana de hoy; las demás, las siguientes. Lo vencido (fecha anterior a hoy) cae en la semana 1 y
+ * se marca (cobrosVencidos / pagosVencidos y vencido en la partida); lo que vence hoy no está vencido. Sin fecha y después de la
+ * semana 13: aparte (no entran al neto). Por moneda (MXN primero; nunca se suman): por semana cobros, pagos, neto = cobros −
+ * pagos y acumulado = suma de los netos desde la semana 1 (sin saldo inicial de bancos). Devuelve {hoy, inicio, fin, semanas
+ * [{n, desde, hasta}], monedas [{moneda, semanas [{n, desde, hasta, cobros, pagos, neto, acumulado, cobrosVencidos,
+ * pagosVencidos}], sinFecha {cobros, pagos}, despues {cobros, pagos}, totales {cobros, pagos, neto}}], partidas}.
+ */
+function flujoSemanal(d) {
+  const n = d.semanas || SEMANAS_FLUJO, inicio = lunesDe(d.hoy);
+  const semanas = Array.from({ length: n }, (_, i) => ({ n: i + 1, desde: sumarDias(inicio, 7 * i), hasta: sumarDias(inicio, 7 * i + 6) }));
+  const fin = semanas[n - 1].hasta;
+  const monedas = {}, partidas = [];
+  const de = m => monedas[m] || (monedas[m] = { moneda: m,
+    s: semanas.map(() => ({ cobros: 0, pagos: 0, cobrosVencidos: 0, pagosVencidos: 0 })),
+    sinFecha: { cobros: 0, pagos: 0 }, despues: { cobros: 0, pagos: 0 } });
+  const meter = (x, tipo, folio, detalle) => {
+    const cts = aCentavos(x.monto);
+    if (cts <= 0) return;
+    const M = de(x.moneda), campo = tipo === 'cobro' ? 'cobros' : 'pagos';
+    let semana = null, vencido = false, donde = 'semana';
+    if (!fechaIsoValida(x.fecha)) { M.sinFecha[campo] += cts; donde = 'sinFecha'; }
+    else if (x.fecha < d.hoy) { semana = 1; vencido = true; M.s[0][campo] += cts; M.s[0][campo + 'Vencidos'] += cts; }
+    else if (x.fecha > fin) { M.despues[campo] += cts; donde = 'despues'; }
+    else { semana = Math.floor(diasEntre(inicio, x.fecha) / 7) + 1; M.s[semana - 1][campo] += cts; }
+    partidas.push({ tipo: tipo, moneda: x.moneda, monto: cts / 100, fecha: fechaIsoValida(x.fecha) ? x.fecha : '', semana: semana,
+      vencido: vencido, donde: donde, folio: folio, detalle: detalle, proyectoVisible: x.folioVisible || x.proyectoVisible || '',
+      fuente: x.fuente || '' });
+  };
+  (d.cobros || []).forEach(x => meter(x, 'cobro', x.folioVisible || x.proyectoFolio, (x.cliente ? x.cliente + ' · ' : '') + x.etapa));
+  (d.pagos || []).forEach(x => meter(x, 'pago', x.ocFolio, (x.proveedor || '') + (x.referencia ? ' · ' + x.referencia : '')));
+  const lista = Object.keys(monedas).sort(ordenMonedas).map(m => {
+    const M = monedas[m];
+    let acum = 0, tc = 0, tp = 0;
+    const filas = M.s.map((x, i) => {
+      const neto = x.cobros - x.pagos;
+      acum += neto; tc += x.cobros; tp += x.pagos;
+      return { n: i + 1, desde: semanas[i].desde, hasta: semanas[i].hasta, cobros: x.cobros / 100, pagos: x.pagos / 100,
+        neto: neto / 100, acumulado: acum / 100, cobrosVencidos: x.cobrosVencidos / 100, pagosVencidos: x.pagosVencidos / 100 };
+    });
+    return { moneda: m, semanas: filas, sinFecha: { cobros: M.sinFecha.cobros / 100, pagos: M.sinFecha.pagos / 100 },
+      despues: { cobros: M.despues.cobros / 100, pagos: M.despues.pagos / 100 },
+      totales: { cobros: tc / 100, pagos: tp / 100, neto: (tc - tp) / 100 } };
+  });
+  const orden = { semana: 0, despues: 1, sinFecha: 2 };
+  partidas.sort((a, b) => ordenMonedas(a.moneda, b.moneda) || orden[a.donde] - orden[b.donde] || (a.semana || 0) - (b.semana || 0) ||
+    (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0) || (a.tipo === b.tipo ? 0 : a.tipo === 'cobro' ? -1 : 1));
+  return { hoy: d.hoy, inicio: inicio, fin: fin, semanas: semanas, monedas: lista, partidas: partidas };
+}
+
+/**
+ * (Lógica pura) Margen por proyecto y por línea de negocio. d = {contratos, proyectos, ordenes, prueba, costosExtra}. Por contrato
+ * (aceptado o firmado) de un proyecto que existe, no Cancelado ni de prueba: contratado = subtotal sin IVA; costos = órdenes de
+ * compra no canceladas ni anuladas (costosDeOrdenes) + costosExtra[folio] (incremento 7: gastos y nómina, [{concepto, moneda,
+ * monto, cantidad}], siempre en la moneda del contrato); margen con margenProyecto (un costo en otra moneda = margenError: el
+ * renglón se muestra pero no suma). Totales por línea (Helgen, Helgen Energy) y moneda, solo de los Firmados sin error (los "Por
+ * firmar" se muestran y no suman, como en el resumen de cobranza), con el total de cada concepto. Devuelve {conceptos (en orden
+ * de aparición, "Órdenes de compra" primero), totales [{marca, moneda, proyectos, contratado, costos [{concepto, monto}],
+ * totalCostos, margen, porcentaje, porFirmar, conError}], proyectos [{folio, folioVisible, nombre, cliente, estadoProyecto,
+ * marca, moneda, estadoContrato, cotizacion, contratado, costos, totalCostos, margen, porcentaje, margenError, ordenes}]}.
+ */
+function margenPorProyecto(d) {
+  const may = s => String(s || '').trim().toUpperCase();
+  const prueba = d.prueba || FOLIOS_PRUEBA_REPORTES, extra = d.costosExtra || {};
+  const proyectos = {}, ordenes = {};
+  (d.proyectos || []).forEach(p => { proyectos[may(p.folio)] = p; });
+  (d.ordenes || []).filter(ocVigente).forEach(o => { (ordenes[may(o.proyectoFolio)] = ordenes[may(o.proyectoFolio)] || []).push(o); });
+  const conceptos = ['Órdenes de compra'], filas = [];
+  (d.contratos || []).forEach(c => {
+    const folio = may(c.proyectoFolio), p = proyectos[folio];
+    if (!p || p.estado === 'Cancelado' || esFolioPrueba(folio, prueba) || esFolioPrueba(c.cotizacion, prueba)) return;
+    if (c.estado !== ESTADO_FIRMADO && c.estado !== ESTADO_ACEPTADA) return;
+    const ocs = ordenes[folio] || [];
+    const costos = costosDeOrdenes(ocs, c.moneda).concat(extra[folio] || extra[p.folio] || []);
+    costos.forEach(x => { if (conceptos.indexOf(x.concepto) === -1) conceptos.push(x.concepto); });
+    let m = null, error = '';
+    try { m = margenProyecto(c.subtotal, c.moneda, costos); } catch (e) { error = e.message; }
+    filas.push({ folio: p.folio, folioVisible: p.folioVisible || p.folio, nombre: p.nombre || '', cliente: p.cliente || '',
+      estadoProyecto: p.estado, marca: c.marca, moneda: c.moneda, estadoContrato: c.estado === ESTADO_FIRMADO ? 'Firmado' : 'Por firmar',
+      cotizacion: c.cotizacion, contratado: redondear(c.subtotal),
+      costos: m ? m.costos : costos.map(x => ({ concepto: x.concepto, moneda: x.moneda, monto: redondear(x.monto), cantidad: x.cantidad || 0 })),
+      totalCostos: m ? m.totalCostos : null, margen: m ? m.margen : null, porcentaje: m ? m.porcentaje : null, margenError: error,
+      ordenes: ocs.length });
+  });
+  const marcas = ['helgen', 'energy'];
+  const ordenMarca = (a, b) => (marcas.indexOf(a) === -1 ? 9 : marcas.indexOf(a)) - (marcas.indexOf(b) === -1 ? 9 : marcas.indexOf(b));
+  filas.sort((a, b) => ordenMarca(a.marca, b.marca) || ordenMonedas(a.moneda, b.moneda) ||
+    (a.estadoContrato === b.estadoContrato ? 0 : a.estadoContrato === 'Firmado' ? -1 : 1) || (a.folio < b.folio ? -1 : 1));
+  const tot = {};
+  filas.forEach(x => {
+    const k = x.marca + '|' + x.moneda;
+    const t = tot[k] || (tot[k] = { marca: x.marca, moneda: x.moneda, proyectos: 0, contratado: 0, costos: {}, totalCostos: 0, porFirmar: 0, conError: 0 });
+    if (x.estadoContrato !== 'Firmado') { t.porFirmar++; return; }
+    if (x.margenError) { t.conError++; return; }
+    t.proyectos++;
+    t.contratado += aCentavos(x.contratado);
+    x.costos.forEach(cc => { t.costos[cc.concepto] = (t.costos[cc.concepto] || 0) + aCentavos(cc.monto); t.totalCostos += aCentavos(cc.monto); });
+  });
+  const totales = Object.keys(tot).map(k => tot[k]).sort((a, b) => ordenMarca(a.marca, b.marca) || ordenMonedas(a.moneda, b.moneda)).map(t => {
+    const margen = t.contratado - t.totalCostos;
+    return { marca: t.marca, moneda: t.moneda, proyectos: t.proyectos, contratado: t.contratado / 100,
+      costos: conceptos.filter(c => t.costos[c] != null).map(c => ({ concepto: c, monto: t.costos[c] / 100 })),
+      totalCostos: t.totalCostos / 100, margen: margen / 100,
+      porcentaje: t.contratado > 0 ? Math.round(margen / t.contratado * 1000) / 10 : null, porFirmar: t.porFirmar, conError: t.conError };
+  });
+  return { conceptos: conceptos, totales: totales, proyectos: filas };
 }
