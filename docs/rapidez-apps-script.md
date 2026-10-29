@@ -165,6 +165,18 @@ tabla se midieron al hacer cada commit (con el perfil de ese momento); la tabla 
   en ese rato la vista muestra la moneda de antes, pero autorizar con ella se rechaza («El proyecto es en USD y la orden en MXN:
   captura el tipo de cambio…»), así que no hay monto equivocado. Prueba: §13.
 
+- **Revisión 5 · la versión siempre sube.** `subirVersiones_` era leer-sumar-escribir con el candado de script y, si no lo
+  conseguía en 10 s, **no subía** (solo un aviso en el registro). El candado se queda 9–19 s con un PDF, así que pasaba en horas de
+  trabajo, y Rapidez 6 depende de la subida (tras guardar una cotización la interfaz pide `sincronizar` en lugar de `getClientes`):
+  sin ella, ni quien guardó ni los demás veían al cliente nuevo hasta otra escritura. Se eligió quitar el candado en lugar de
+  reintentar: cada colección toma un valor que no se repite (`versionNueva_`: segundos × 10⁶ + 6 cifras al azar; mayor que el
+  anterior conocido) y se escribe sin leer-sumar-escribir, así que dos subidas a la vez dan valores distintos y ninguna se pierde
+  (con reintentos, un PDF largo todavía podía agotarlos y además se alargaba cada llamada). Se revisaron todos los usos: las
+  versiones solo se comparan por igualdad (clave de caché `K_…`, `sincronizar`, la huella `H_` de `fuenteConHuella_`; la interfaz
+  solo las guarda y las regresa) y siguen siendo enteros exactos (≈1.8 × 10¹⁵), así que nada más cambia; las pruebas que piden
+  «subió» (`>`) siguen valiendo porque una subida seguida sale mayor. Riesgo que queda: dos subidas de la misma colección en el
+  mismo segundo con las mismas 6 cifras (1 en un millón) darían la misma versión. Prueba: §15.
+
 ### 5.2 Dentro de una petición (`MEMO_`)
 
 - **Rapidez 3 y 5 · `MEMO_.filas`.** Garantía: nunca se usa una fila guardada después de que algo pudo cambiarla.
@@ -300,7 +312,8 @@ más, solo cuando alguien editó la hoja a mano). Prueba: §12.
 
 ## 10. Pruebas y cómo publicar
 
-- `bash tests/todas.sh` en verde (incluye `tests/rapidez.test.js`, 10 secciones, una por mejora con comportamiento sutil).
+- `bash tests/todas.sh` en verde (incluye `tests/rapidez.test.js`: 10 secciones, una por mejora con comportamiento sutil, y una
+  por cada hallazgo de la revisión independiente).
 - Simulacros extendidos con métodos que existen en Apps Script: `getSheetId`/`getName` (arnés), `getId` (cotizacion, sesion).
 - **No publicado.** Esta rama sale de `incremento-5` (sin publicar): publicar las dos juntas o `incremento-5` primero. API:
   `npx clasp push --force` y nueva versión del deployment como facilities@ (§8 de CLAUDE.md). Interfaz (solo Rapidez 6):

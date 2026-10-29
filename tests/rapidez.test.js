@@ -33,6 +33,8 @@
 //     autorizar con la moneda vieja se rechaza (el servidor lee la hoja al escribir).
 // 14. Candados anidados: soltar un candado_ de adentro no suelta el de afuera (el arnés simula un solo candado por ejecución,
 //     que se suelta completo).
+// 15. La versión siempre sube: aunque otra ejecución tenga el candado (subirVersiones_ ya no lo usa), y dos subidas a la vez
+//     de la misma colección dan valores distintos.
 // Uso: node tests/rapidez.test.js .
 'use strict';
 const assert = require('assert');
@@ -569,6 +571,47 @@ const compras = A => {
   perfil.ops = [];
   correr('conCandado_(() => 1)');
   assert.equal(perfil.ops.filter(o => o.tipo === 'candado').length, 1, 'el siguiente toma el candado de verdad');
+}
+
+// ================= 15. La versión siempre sube (aunque otra ejecución tenga el candado) =================
+{
+  const A = crear();
+  const { ok, correr, props, plain } = A;
+  // Otra ejecución tiene el candado más de 10 s (un PDF, una orden): antes subirVersiones_ se rendía y no subía la versión
+  let ocupado = false;
+  const original = A.ctx.LockService.getScriptLock;
+  A.ctx.LockService.getScriptLock = () => {
+    const l = original(), tryLock = l.tryLock;
+    l.tryLock = ms => (ocupado && ms === 10000 ? false : tryLock.call(l, ms));
+    return l;
+  };
+  const vers = ok('ana', 'bootstrap').versiones;
+  ocupado = true;
+  ok('ana', 'guardarCotizacion', { cliente: { nombre: 'Cliente Nuevo SA', empresa: 'Nueva' }, items: [{ descripcion: 'S', cantidad: 1, precio: 100 }],
+    idSolicitud: 'c1' });
+  ocupado = false;
+  assert.notEqual(String(props.VER_cotizaciones || 0), String(vers.cotizaciones), 'subió la versión de cotizaciones');
+  const s = ok('ana', 'sincronizar', vers, {});
+  assert(s.cambios.indexOf('cotizaciones') !== -1 && s.clientes.some(c => /Cliente Nuevo SA/.test(c.etiqueta || c.nombre)),
+    'la consulta (lo que pide la interfaz tras guardar) trae al cliente nuevo');
+  assert(ok('efrain', 'bootstrap').clientes.some(c => /Cliente Nuevo SA/.test(c.etiqueta || c.nombre)), 'y otra persona también');
+  // Sin leer-sumar-escribir: dos ejecuciones que suben la misma colección en el mismo segundo y con la misma versión leída sacan
+  // valores distintos (la lista que alguien guardó entre las dos no se reusa); seguidas, cada una es mayor que la anterior
+  const DateReal = A.ctx.Date, fijo = DateReal.now();
+  A.ctx.Date = class extends DateReal { static now() { return fijo; } };
+  try {
+    correr('MEMO_ = {}; VERSIONES_ = null;');
+    const leida = plain(correr('propiedades_()'));
+    const sube = () => { correr('MEMO_ = { props: ' + JSON.stringify(leida) + " }; subirVersiones_(['oc'])"); return props.VER_oc; };
+    const x = sube(), y = sube();
+    assert(x !== y && x !== leida.VER_oc && y !== leida.VER_oc, 'distintas: ' + [leida.VER_oc, x, y]);
+    correr('MEMO_ = {};');
+    const vs = [1, 2, 3].map(() => { correr("subirVersiones_(['oc'])"); return Number(props.VER_oc); });
+    assert(vs[0] > Number(y) && vs[1] > vs[0] && vs[2] > vs[1], 'seguidas, crecen: ' + vs);
+    assert(vs.every(Number.isSafeInteger), 'enteros exactos (viajan como número a la interfaz)');
+  } finally {
+    A.ctx.Date = DateReal;
+  }
 }
 
 console.log('rapidez: todo bien');

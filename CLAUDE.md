@@ -134,9 +134,11 @@ o son lógica pura (sección 5 del archivo, sin servicios de Google, probables e
   `requisicion` (`ctx.req`), `comprasProyecto` (`ctx.comProyecto`), `cobProyectos`, `cobranzaProyecto` (`ctx.cobProyecto`), `resumen`
   (`ctx.cobResumen`). Con `SOLO_REQUISICION` nunca manda lo demás aunque el contexto lo pida.
 - Versiones: `COLECCIONES` (proyectos, contratos, cotizaciones, catalogo, requisiciones, oc, pagosCobranza, pagosProveedores) en
-  Script Properties `VER_<colección>`; `CAMBIOS_API` dice qué sube cada función; `doPost` llama `subirVersiones_` (con el candado de
-  script) **después** de que la escritura terminó bien (no si devolvió `{confirmar}`). Durante una escritura `SIN_CACHE_` = lo que
-  devuelve sale de la hoja. **Toda función nueva que escriba debe agregarse a `CAMBIOS_API`.**
+  Script Properties `VER_<colección>`; `CAMBIOS_API` dice qué sube cada función; `doPost` llama `subirVersiones_` **después** de que
+  la escritura terminó bien (no si devolvió `{confirmar}`). Durante una escritura `SIN_CACHE_` = lo que devuelve sale de la hoja.
+  **Toda función nueva que escriba debe agregarse a `CAMBIOS_API`.** Desde la revisión de rapidez (rama `rapidez-apps-script`) la
+  versión no es un contador: `versionNueva_` = segundos × 1 000 000 + 6 cifras al azar, sin candado (antes, con el candado
+  ocupado más de 10 s no subía). **Las versiones solo se comparan por igualdad**: nunca restarlas ni usar su orden.
 - Caché: `enCache_(base, colecciones, ttl, fn)` (clave = base + versiones; sin `fn` solo lee), `leerCache_`/`guardarCache_` (JSON en trozos
   de 30 000 caracteres), `TTL_CACHE` = 6 h. `fuenteConHuella_(nombre, colección, cadaSeg, leer, revisar)` para hojas editables a mano:
   dato 6 h; con `revisar` (solo `sincronizar`) relee la hoja si pasaron `cadaSeg` (marca `R_<nombre>`) y si la huella MD5 cambió con la
@@ -547,7 +549,8 @@ en los usuarios de prueba de OAuth (§10.1; agregadas por el usuario el 23/10/20
 por coma, nombre exacto sin acento: `SOLO_REQUISICION`, no `SOLO_REQUISICIÓN`) y a los usuarios de prueba de OAuth. El servidor
 relee las propiedades en cada llamada (comprobado el 28/10/2026 al agregar a alan@ y daniel@).
 Versiones (23/10/2026, §6.14): `VER_proyectos`, `VER_contratos`, `VER_cotizaciones`, `VER_catalogo`, `VER_requisiciones`, `VER_oc`,
-`VER_pagosCobranza`, `VER_pagosProveedores` (se crean y suben solas; no editarlas: si se borran, solo se recalcula el caché).
+`VER_pagosCobranza`, `VER_pagosProveedores` (se crean y suben solas; no editarlas: si se borran, solo se recalcula el caché;
+desde la revisión de rapidez son números largos —hora + cifras al azar—, no contadores).
 **Un cambio de rol (`ROL_*`, `SOLO_REQUISICION`) se aplica sin recargar la página** en la siguiente consulta (≤ 20 s).
 
 **CAPRI (incremento 4; aún sin publicar).** Libro privado **"CAPRI — Administración"** (`ADMIN_DB_ID`, carpeta `ADMIN_FOLDER_ID`;

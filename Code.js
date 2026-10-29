@@ -597,21 +597,31 @@ function versiones_(releer) {
 }
 
 /**
- * Sube la versión de las colecciones con el candado de script (nunca se pierde un aumento). Se llama después de escribir,
- * así quien lea la versión nueva ya encuentra los datos nuevos. No llamarla con el candado tomado.
+ * Valor nuevo para la versión de una colección: segundos × 1 000 000 + seis cifras al azar. No se lee-suma-escribe, así que no
+ * necesita candado: dos ejecuciones que suben la misma colección a la vez sacan valores distintos (salvo una en un millón si es
+ * en el mismo segundo). Sale mayor que la anterior que se conoce (si esa ya va adelantada, se sigue desde ella), aunque nada
+ * depende del orden: las versiones solo se comparan por igualdad (claves de caché, sincronizar, la huella de fuenteConHuella_).
+ * Es un entero exacto de JavaScript (viaja como número a la interfaz) hasta el año 2255.
+ */
+function versionNueva_(anterior) {
+  const seg = Math.max(Math.floor(Date.now() / 1000), Math.floor((Number(anterior) || 0) / 1e6) + 1);
+  return seg * 1e6 + Math.floor(Math.random() * 1e6);
+}
+
+/**
+ * Sube la versión de las colecciones (versionNueva_). Nunca se salta: antes era leer-sumar-escribir con el candado de script y,
+ * si otra ejecución lo tenía más de 10 s (un PDF, una orden), no subía y los demás navegadores no se enteraban del cambio hasta
+ * la siguiente escritura (hasta 6 h). Se llama después de escribir, así quien lea la versión nueva ya encuentra los datos nuevos.
  */
 function subirVersiones_(colecciones) {
   if (!colecciones || !colecciones.length) return;
-  const lock = candado_();
-  if (!lock.tryLock(10000)) { console.warn('Sin candado: no subió la versión de ' + colecciones.join(', ')); return; }
   try {
-    const props = PropertiesService.getScriptProperties();
+    const actuales = propiedades_(); // solo para que la nueva salga mayor; la unicidad no depende de esto
     const nuevas = {};
-    colecciones.forEach(c => { nuevas['VER_' + c] = String((Number(props.getProperty('VER_' + c)) || 0) + 1); });
-    props.setProperties(nuevas);
+    colecciones.forEach(c => { nuevas['VER_' + c] = String(versionNueva_(actuales['VER_' + c])); });
+    PropertiesService.getScriptProperties().setProperties(nuevas);
   } finally {
-    lock.releaseLock();
-    VERSIONES_ = null; MEMO_.props = null;
+    VERSIONES_ = null; MEMO_.props = null; // la siguiente lectura de versiones las relee (y olvida las filas: versiones_)
   }
 }
 
