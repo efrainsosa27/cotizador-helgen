@@ -493,8 +493,9 @@ assert(!('cxp' in ok('tania','sincronizar',vSync,{cxp:true})),'sin compras no re
 // --- Pago igual al total facturado (con retenciones): se acepta; la factura sale de cuentas por pagar ---
 const pago3=extra=>({ocFolio:OC('0003'),fecha:HOY_ISO,monedaPago:'MXN',metodo:'Transferencia',referencia:'SPEI 3',comprobante:{nombre:'p.pdf',datos:PDF},
   idSolicitud:'pf'+(++nId),...extra});
-// P (incremento 6): un monto menor ya no se rechaza (sería un pago parcial); lo que pasa del total de la orden + 1.00, sí
-falla('pedro','registrarPagoProveedor',[pago3({monto:2147.01})],/pasa el saldo de la orden: faltan \$2,146\.00 MXN por pagar \(total de la orden \$2,146\.00 MXN; tolerancia ±1\.00\)/);
+// P (incremento 6): un monto menor ya no se rechaza (sería un pago parcial); lo que pasa del total de sus facturas + 1.00, sí
+// (revisión del incremento 6: antes el tope era el total de la orden, 2,146, y se podía pagar de más contra las facturas)
+falla('pedro','registrarPagoProveedor',[pago3({monto:1962.01})],/pasa el saldo de la orden: faltan \$1,961\.00 MXN por pagar \(total de sus facturas \$1,961\.00 MXN: está facturada completa con retenciones; tolerancia ±1\.00\)/);
 v=ok('pedro','registrarPagoProveedor',pago3({monto:1961})).vista;
 assert.deepEqual([v.orden.estado,v.requisicion.estado],['Pagada','Pagada']);
 cx=ok('pedro','cuentasPorPagar');

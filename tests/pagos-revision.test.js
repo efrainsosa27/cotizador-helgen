@@ -6,6 +6,7 @@
 //  2. Idempotencia del pago: el mismo idSolicitud con otro contenido se rechaza; la hoja recuerda el idSolicitud (columna
 //     id_solicitud + huella) aunque se pierda el caché; el caché guarda poco y nunca falla después de escribir (el caché simulado
 //     del arnés, como el de Apps Script, no acepta valores de más de 100 KB); lo mismo al autorizar con muchos proveedores.
+//  3. El tope de un pago es el saldo contra el total de las facturas cuando ya la cubren con retenciones (antes, el total de la orden).
 // Uso: node tests/pagos-revision.test.js .
 'use strict';
 const assert = require('assert');
@@ -196,6 +197,32 @@ const aMano = () => ['requisiciones', 'oc', 'pagosProveedores'].forEach(c => { p
   const a2 = post('efrain', 'autorizarRequisicion', folio, datos);
   assert.deepEqual([a2.ok, a2.datos.ocFolio], [true, a1.datos.ocFolio]);
   assert.equal(H('OrdenesCompra').filter(r => r[col('OrdenesCompra', 'req_folio')] === folio).length, 1, 'una sola orden');
+}
+
+// ================= 3. El tope del pago respeta el total de las facturas con retenciones (r8) =================
+{
+  // Orden de 1,624 facturada completa con retenciones por 1,484: el tope es 1,484 (+1.00), no 1,624
+  const s = siempre();
+  facturar(s.oc, 1400, 84);
+  const v = vista(s.req);
+  assert.deepEqual([v.saldo.esperado, v.saldo.porFacturas, v.saldo.saldo], [1624, 1484, 1484]);
+  const r = post('pedro', 'registrarPagoProveedor', pago(s.req, { monto: 1600 }));
+  assert.equal(r.ok, false, '1,600 pasa el total de las facturas');
+  assert(/pasa el saldo de la orden: faltan \$1,484\.00 MXN por pagar \(total de sus facturas \$1,484\.00 MXN/.test(r.error), r.error);
+  assert.equal(pagar(s.req, 1485).tipo, 'Liquidación', 'dentro de la tolerancia (+1.00)');
+  // En partes: 1,000 y luego 625 (el saldo es 484): se rechaza; 484 la liquida
+  const t = siempre();
+  facturar(t.oc, 1400, 84);
+  pagar(t.req, 1000);
+  falla('pedro', 'registrarPagoProveedor', [pago(t.req, { monto: 625 })], /faltan \$484\.00 MXN por pagar \(total de sus facturas \$1,484\.00 MXN: está facturada completa con retenciones; ya se pagaron \$1,000\.00 MXN/);
+  const l = pagar(t.req, 484);
+  assert.deepEqual([l.tipo, l.vista.requisicion.estado, l.vista.saldo.pagado], ['Liquidación', 'Pagada', 1484]);
+  // Pura: el tope es el saldo contra porFacturas (o lo esperado)
+  const base = { moneda: 'MXN', total: 1624, pagado: 1000, fechaOrden: HOY_ISO, hoy: HOY_ISO, totalOrden: 1624 };
+  const datos = m => ({ fecha: HOY_ISO, monto: m, monedaPago: 'MXN', metodo: 'Transferencia', referencia: 'X' });
+  assert.equal(P.normalizarPagoProveedor(datos(625), base).montoAplicado, 625, 'sin facturas: 1,000 + 625 = 1,625 (±1.00)');
+  assert.throws(() => P.normalizarPagoProveedor(datos(625), Object.assign({}, base, { porFacturas: 1484 })), /total de sus facturas/);
+  assert.equal(P.normalizarPagoProveedor(datos(485), Object.assign({}, base, { porFacturas: 1484 })).montoAplicado, 485);
 }
 
 console.log('OK pagos-revision');

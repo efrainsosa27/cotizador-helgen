@@ -3781,7 +3781,7 @@ function registrarPagoProveedor(p, motivoExcepcion) {
     // Revisión (incremento 5): lo devuelto sin reponer no se paga (p. ej. crédito del proveedor: se recibió y se devolvió antes de pagar)
     const porPagar = totalPorPagarOrden(orden, devueltoSinReponer(movs));
     const pago = normalizarPagoProveedor(d0, { moneda: orden.moneda, total: antes.esperado, pagado: antes.pagado, fechaOrden: orden.fecha,
-      hoy: hoyIso_(), totalOrden: orden.total, descontado: porPagar ? porPagar.descontado : 0 });
+      hoy: hoyIso_(), totalOrden: orden.total, descontado: porPagar ? porPagar.descontado : 0, porFacturas: antes.porFacturas });
     // F (incremento 5): documentos del proveedor (CSF y carátula) o excepción de super admin con motivo (antes de escribir)
     exigirDocumentosParaPagar_(libro, orden, motivoExcepcion, pago.metodo);
 
@@ -5591,8 +5591,9 @@ function normalizarRequisicion(p) {
  * total por pagar), pagado (lo que ya suman sus pagos Vigentes; 0 si no hay), fechaOrden, hoy, totalOrden?, descontado?}. Fecha no
  * futura ni anterior a la orden; método y referencia como en cobranza (nunca un número de tarjeta); si la moneda del pago es otra,
  * tipo de cambio obligatorio (pesos por dólar). P (incremento 6): el pago puede ser parcial (cualquier monto mayor a 0), pero lo
- * pagado más este pago no pasa de lo esperado + TOLERANCIA_PAGO (1.00). Si la orden ya está facturada con retenciones, el pago que
- * llega al total de sus facturas la completa (saldoOrdenCompra con orden.facturas; decisión 7 de facturas).
+ * pagado más este pago no pasa de lo esperado + TOLERANCIA_PAGO (1.00). Si la orden ya está facturada completa con retenciones
+ * (orden.porFacturas de saldoOrdenCompra; decisión 7 de facturas), el tope es el total de sus facturas (revisión del incremento 6:
+ * antes se medía contra el total de la orden y aceptaba pagar de más).
  */
 function normalizarPagoProveedor(p, orden) {
   const d = p || {};
@@ -5605,15 +5606,20 @@ function normalizarPagoProveedor(p, orden) {
   } catch (e) {
     throw new Error(String(e.message).replace('El proyecto es en', 'La orden es en')); // aquí la moneda de referencia es la de la orden
   }
-  const esperadoCts = aCentavos(orden.total), pagadoCts = aCentavos(Number(orden.pagado) || 0);
+  // Revisión del incremento 6: el tope es el saldo contra lo que la deja completa (saldoOrdenCompra): el total de sus facturas si
+  // ya la cubren con retenciones (porFacturas) o lo esperado
+  const porFacturasCts = aCentavos(Number(orden.porFacturas) || 0);
+  const esperadoCts = porFacturasCts || aCentavos(orden.total), pagadoCts = aCentavos(Number(orden.pagado) || 0);
   if (pagadoCts + aCentavos(pago.montoAplicado) > esperadoCts + aCentavos(TOLERANCIA_PAGO)) {
     // Revisión (incremento 5): con material devuelto sin reponer, orden.total es el total por pagar (totalPorPagarOrden)
     const m = orden.moneda, neto = Number(orden.descontado) > 0;
     throw new Error('El pago (' + formatoMoneda(pago.montoAplicado) + ' ' + m + ') pasa el saldo de la orden: faltan ' +
-      formatoMoneda(Math.max(0, esperadoCts - pagadoCts) / 100) + ' ' + m + ' por pagar (' + (neto
-        ? 'total por pagar ' + formatoMoneda(orden.total) + ' ' + m + ': la orden de ' + formatoMoneda(orden.totalOrden) + ' menos ' +
-          formatoMoneda(orden.descontado) + ' de material devuelto sin reponer'
-        : 'total de la orden ' + formatoMoneda(orden.total) + ' ' + m) +
+      formatoMoneda(Math.max(0, esperadoCts - pagadoCts) / 100) + ' ' + m + ' por pagar (' + (porFacturasCts
+        ? 'total de sus facturas ' + formatoMoneda(porFacturasCts / 100) + ' ' + m + ': está facturada completa con retenciones'
+        : neto
+          ? 'total por pagar ' + formatoMoneda(orden.total) + ' ' + m + ': la orden de ' + formatoMoneda(orden.totalOrden) + ' menos ' +
+            formatoMoneda(orden.descontado) + ' de material devuelto sin reponer'
+          : 'total de la orden ' + formatoMoneda(orden.total) + ' ' + m) +
       (pagadoCts > 0 ? '; ya se pagaron ' + formatoMoneda(pagadoCts / 100) + ' ' + m : '') + '; tolerancia ±1.00).');
   }
   return { fecha: pago.fecha, monto: pago.monto, monedaPago: pago.monedaPago, tipoCambio: pago.tipoCambio,
