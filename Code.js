@@ -6573,6 +6573,15 @@ function exigirNoLigado_(req) {
   if (c) throw new Error('El material de ' + req.folio + ' se recibe en el centro de mando (' + c.sitio + '): allá lo registra quien recibe en el sitio.');
 }
 
+/** ¿Lo anuló un super admin? (esAnulado_ es del módulo de anular; si todavía no está, nada está anulado). */
+function anuladoCentro_(folio) {
+  try {
+    return !!folio && typeof esAnulado_ === 'function' && !!esAnulado_(folio);
+  } catch (e) {
+    return false;
+  }
+}
+
 /** Lo que un aviso por correo puede llevar de una requisición (sin propuesta, montos ni proveedor). */
 function reqParaAviso_(req) {
   return { folio: req.folio, proyectoFolio: req.proyectoFolio, solicitanteEmail: req.solicitanteEmail, solicitante: req.solicitante,
@@ -6639,6 +6648,8 @@ function avisarPortal_(tipo, folioOc) {
     const orden = buscarOrden_(libro, folioOc).orden;
     const clave = cfg.proyectos[folioInterno(orden.proyectoFolio)];
     if (!clave) return '';
+    // Lo anulado ya no se avisa, salvo el propio aviso de cancelación que manda el módulo de anular
+    if (tipo !== 'oc.cancelada' && (anuladoCentro_(orden.folio) || anuladoCentro_(orden.reqFolio))) return '';
     const req = orden.reqFolio ? buscarReq_(libro, orden.reqFolio).req : null;
     const hoja = hojaCompras_(libro, 'PortalPendientes');
     const prefijo = (orden.folio + ':' + tipo + ':').toUpperCase();
@@ -6905,6 +6916,7 @@ function aplicarRecepcionPortal_(libro, x, det, res) {
   }
   const { hoja: hO, orden } = encontrada;
   if (orden.estado === OC_CANCELADA || !orden.reqFolio) { res.ignoradas.push(ocFolio + ' (cancelada o sin requisición)'); return; }
+  if (anuladoCentro_(orden.folio) || anuladoCentro_(orden.reqFolio)) { res.ignoradas.push(ocFolio + ' (anulada)'); return; }
   const { hoja, req } = buscarReq_(libro, orden.reqFolio);
   if ([REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO, REQ_RECIBIDA].indexOf(req.estado) === -1 ||
       req.ocFolio.toUpperCase() !== orden.folio.toUpperCase()) {

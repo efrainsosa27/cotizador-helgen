@@ -529,4 +529,165 @@ como(null);
 assert.deepEqual(plain(P.cadaQuinceMinutos()).recepciones, { activo: false });
 assert.equal(llamadasCM(), n0, 'sin secreto: nada sale');
 assert.equal(mia('obrero', r9.req).puedeRecibir, true, 'y se recibe en CAPRI como antes');
-console.log('OK centro de mando');
+
+// ---- Anulado (módulo E: esAnulado_): ni recepciones ni avisos de lo anulado ----
+props.PORTAL_SECRETO = SECRETO;
+const r10 = hastaOrden(P1);
+correr('var ANULADOS = []; function esAnulado_(f) { return ANULADOS.indexOf(String(f || "").toUpperCase()) !== -1; }');
+correr('ANULADOS.push(' + JSON.stringify(r10.oc) + ')');
+ok('obrero', 'marcarEnCamino', r10.req, { paqueteria: 'DHL', guia: '2', fechaEstimada: MANANA, idSolicitud: id('e') });
+assert(!CM.eventos[r10.oc + ':oc.en_camino:1'] && !filaPend(r10.oc + ':oc.en_camino:1'), 'lo anulado no se avisa');
+CM.recepciones = [{ oc_folio: r10.oc, req_folio: r10.req, sitio: 'ZLO', completa: true, recibio: 'jesush', cuando: cuando,
+  renglones: [{ n: 1, pedido: 80, recibido: 80 }, { n: 2, pedido: 12, recibido: 12 }] }];
+como(null);
+tr = plain(P.traerRecepcionesPortal());
+assert.deepEqual([tr.cerradas, tr.ignoradas], [[], [r10.oc + ' (anulada)']]);
+assert.equal(mia('obrero', r10.req).estado, 'En camino', 'no se cierra');
+
+// ================= Interfaz (módulo mod-centro con la página, DOM y fetch simulados) =================
+(async () => {
+  const fs = require('fs'), vm = require('vm'), path = require('path');
+  const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+  const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
+  const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const token = 'h.' + b64({ email: 'obrero@helgen.tech', given_name: 'Juan', exp: Math.floor(Date.now() / 1000) + 3600 }) + '.f';
+  const esperar = async (n = 10) => { for (let i = 0; i < n; i++) await new Promise(r => setImmediate(r)); };
+  function montar(datos) {
+    function el(tag) {
+      const e = { tag, value: '', textContent: '', className: '', src: '', placeholder: '', disabled: false, checked: false, type: '', min: '', hijos: [],
+        oyentes: {}, _c: new Set(), porClase: {},
+        classList: { add: c => e._c.add(c), remove: c => e._c.delete(c), contains: c => e._c.has(c), toggle: (c, f) => f ? e._c.add(c) : e._c.delete(c) },
+        addEventListener: (t, f) => (e.oyentes[t] = e.oyentes[t] || []).push(f), disparar: t => (e.oyentes[t] || []).forEach(f => f({ target: e })),
+        focus() {}, remove() {}, appendChild: h => e.hijos.push(h), prepend: h => e.hijos.unshift(h), contains: () => false, closest: () => null,
+        insertAdjacentHTML: (w, h) => { e.innerHTML += h; },
+        querySelector: s => e.porClase[s] || (e.porClase[s] = el('input')), querySelectorAll: s => s === 'tr' ? e.hijos : s === 'input' ? Object.values(e.porClase) : [] };
+      let h = ''; Object.defineProperty(e, 'innerHTML', { get: () => h, set: v => { h = v; if (v === '') e.hijos.length = 0; } });
+      return e;
+    }
+    const porId = {}, oyentes = {};
+    const document = { getElementById: i => porId[i] || (porId[i] = el('div')), querySelector: () => ({ src: 'data:' }), createElement: t => el(t),
+      visibilityState: 'visible', activeElement: null, addEventListener: (t, f) => (oyentes[t] = oyentes[t] || []).push(f),
+      dispatchEvent: ev => (oyentes[ev.type] || []).forEach(f => f(ev)) };
+    ['login', 'tabCob', 'tabCom', 'reqCentro', 'comCentro', 'rcCentro'].forEach(i => document.getElementById(i).classList.add('oculto'));
+    ['reqTabla', 'ocTabla'].forEach(i => document.getElementById(i).classList.add('sin-item')); // como en el HTML
+    const llamadas = [], respuestas = { bootstrap: { ok: true, datos: datos },
+      sincronizar: () => ({ ok: true, datos: { versiones: {}, permisos: datos.permisos, soloRequisicion: !!datos.soloRequisicion, cambios: [] } }) };
+    const dialogos = { confirmar: true, prompt: null, vistos: [] };
+    const ctx = { document, console, JSON, Date, Math, Number, String, Array, Object, Promise, Proxy, Error, Uint8Array, TextDecoder,
+      FileReader: class { readAsDataURL(f) { this.result = 'data:' + f.type + ';base64,' + f.b64; setImmediate(() => this.onload()); } },
+      fetch: async (url, o) => { const c = JSON.parse(o.body); llamadas.push(c); const r = respuestas[c.funcion]; const d = typeof r === 'function' ? r(c) : r;
+        return { ok: true, json: async () => d || { ok: false, error: 'sin respuesta simulada: ' + c.funcion } }; },
+      atob: s => Buffer.from(s, 'base64').toString('binary'), crypto: { randomUUID: () => 'id-' + Math.random() },
+      sessionStorage: { getItem: k => k === 'cotizadorHelgenSesion' ? token : null, setItem() {}, removeItem() {} },
+      localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+      confirm: m => { dialogos.vistos.push(m); return dialogos.confirmar; }, prompt: m => { dialogos.vistos.push(m); return dialogos.prompt; },
+      CustomEvent: class { constructor(type, o) { this.type = type; this.detail = o && o.detail; } },
+      setTimeout, clearTimeout, setInterval: () => 0, scrollTo() {} };
+    ctx.window = ctx;
+    vm.createContext(ctx);
+    ['api-web', undefined, 'mod-centro'].forEach(i => vm.runInContext(scripts.find(s => s.id === i).src, ctx));
+    return { $: i => document.getElementById(i), llamadas, respuestas, dialogos, run: c => vm.runInContext(c, ctx) };
+  }
+
+  const PRYS = [{ folio: P1, clave: 'DRO', folioVisible: P1 + '-DRO', nombre: 'DROGHEDA', estado: 'Activo' },
+    { folio: P2, clave: 'CAL', folioVisible: P2 + '-CAL', nombre: 'Casa del Lago', estado: 'Activo' }];
+  const RQ = { folio: 'REQ-' + ANIO + '-0050', fecha: HOY_ISO, proyectoFolio: P1, proyectoNombre: 'DROGHEDA', proyectoVisible: P1 + '-DRO', estado: 'Autorizada',
+    sitio: 'Manzanillo (TIMSA)', renglones: [{ renglon: 1, descripcion: 'Cable THW 10', cantidad: 80, unidad: 'M', notas: '', item: 'CAB-THW-10' }], eventos: [],
+    recepciones: [], recibe: 'rosa@helgen.tech', centroMando: { sitio: 'ZLO · Manzanillo (TIMSA)', sitioCodigo: 'ZLO' }, enCamino: null,
+    puedeEnCamino: true, puedeRecoger: true, puedeRecibir: false, puedeCerrar: false };
+  const U = montar({ soloRequisicion: true, ivaTasa: 0.16, catalogo: [{ clave: 'CAB', descripcion: 'Cable THW 10', unidad: 'M' }], tipoCambio: null, clientes: [], proyectos: [],
+    marcas: {}, permisos: { cobranza: false, desbloqueo: false, compras: false, requisicion: true, operaciones: false, flujoOperaciones: false, ventas: false },
+    sitios: ['Querétaro', 'Manzanillo (TIMSA)'], sitiosDetalle: [{ codigo: 'QRO', nombre: 'Querétaro' }, { codigo: 'ZLO', nombre: 'Manzanillo (TIMSA)' }],
+    req: { proyectos: PRYS, mias: [RQ] },
+    centro: { activo: true, ligados: [P1], items: [{ codigo: 'CAB-THW-10', descripcion: 'Cable THW calibre 10', unidad: 'M' }],
+      misArticulos: [{ descripcion: 'Cable THW 10', unidad: 'M', item: 'CAB-THW-10', veces: 3 }] } });
+  await esperar(20);
+  const $ = U.$;
+  assert(/value="Manzanillo \(TIMSA\)">ZLO · Manzanillo \(TIMSA\)</.test($('reqSitio').innerHTML), 'el sitio se ve con su código y se guarda el nombre');
+  assert(/^<option value="Cable THW 10" label="Ya lo pediste 3 veces · M">$/.test($('reqCatalogo').innerHTML), 'primero lo que ya pidió (sin repetir el catálogo)');
+  assert(/value="CAB-THW-10" label="Cable THW calibre 10 · M"/.test($('centroItems').innerHTML));
+  assert(!U.llamadas.some(c => c.funcion === 'misArticulos' || c.funcion === 'itemsInventario'), 'ya venían en la carga inicial');
+  // Tarjeta de la requisición ligada: dónde se recibe y los botones
+  const caja = $('cmCaja-' + RQ.folio).innerHTML;
+  assert(/Se recibe en el <b>centro de mando<\/b> \(ZLO · Manzanillo \(TIMSA\)\)/.test(caja) && /centroRecogi\('REQ-/.test(caja) && /centroAbrirEnvio\('REQ-[^']+','req'\)/.test(caja));
+  // Proyecto ligado: columna de ítem, sitio obligatorio y "lo que ya pediste" llena unidad e ítem
+  $('reqProyecto').value = P1 + '-DRO — DROGHEDA'; $('reqProyecto').disparar('change');
+  assert(!$('reqTabla').classList.contains('sin-item') && !$('reqCentro').classList.contains('oculto'));
+  assert.equal($('reqLblSitio').textContent, 'Sitio donde se necesita *');
+  const fila = $('reqFilas').hijos[0];
+  fila.querySelector('.desc').value = 'cable thw 10'; fila.querySelector('.desc').disparar('change');
+  assert.deepEqual([fila.querySelector('.uni').value, fila.querySelector('.item').value], ['M', 'CAB-THW-10']);
+  $('reqArchivo').files = [{ name: 'c.pdf', type: 'application/pdf', size: 100, b64: 'JVBE' }];
+  U.run('enviarRequisicion()'); await esperar();
+  assert(/Elige el sitio/.test($('aviso').innerHTML) && !U.llamadas.some(c => c.funcion === 'guardarRequisicion'), 'sitio obligatorio en el ligado');
+  $('reqSitio').value = 'Manzanillo (TIMSA)';
+  U.respuestas.guardarRequisicion = () => ({ ok: true, datos: { folio: 'REQ-' + ANIO + '-0051', requisiciones: [RQ] } });
+  U.respuestas.misArticulos = { ok: true, datos: [] };
+  U.run('enviarRequisicion()'); await esperar(20);
+  const gr = U.llamadas.find(c => c.funcion === 'guardarRequisicion').args[0];
+  assert.deepEqual(gr.renglones, [{ descripcion: 'cable thw 10', cantidad: '1', unidad: 'M', notas: '', item: 'CAB-THW-10' }]);
+  assert(U.llamadas.some(c => c.funcion === 'misArticulos'), 'después de pedir, se actualiza "lo que ya pediste"');
+  // Proyecto sin ligar: sin columna de ítem y sin ítem en lo que se manda
+  $('reqProyecto').value = P2 + '-CAL — Casa del Lago'; $('reqProyecto').disparar('change');
+  assert($('reqTabla').classList.contains('sin-item') && $('reqCentro').classList.contains('oculto'));
+  $('reqFilas').hijos[0].querySelector('.desc').value = 'Cable'; $('reqFilas').hijos[0].querySelector('.item').value = 'CAB-THW-10';
+  assert.deepEqual(Object.keys(U.run('leerRenglonesReq()')[0]), ['descripcion', 'cantidad', 'unidad', 'notas'], 'sin ligar no manda ítem');
+  // Registrar el envío
+  U.respuestas.marcarEnCamino = c => ({ ok: true, datos: { folio: c.args[0], estado: 'En camino', requisiciones: [Object.assign({}, RQ, { estado: 'En camino',
+    enCamino: { paqueteria: c.args[1].recogido ? 'Recogido por Juan' : 'DHL', guia: '1', fechaEstimada: MANANA } })],
+    avisoPortal: 'Guardado. El centro de mando se actualizará en unos minutos.' } });
+  U.run("centroAbrirEnvio('" + RQ.folio + "','req')");
+  const p = 'cmfreq' + RQ.folio.replace(/[^A-Za-z0-9]/g, '');
+  assert(/Registrar el envío/.test($('cmForm-req-' + RQ.folio).innerHTML));
+  $(p + 'Paq').value = 'DHL'; $(p + 'Fecha').value = MANANA;
+  U.run("centroEnviar('" + p + "')"); await esperar();
+  assert(/número de guía/.test($('aviso').innerHTML), 'guía obligatoria');
+  $(p + 'Guia').value = '1';
+  U.run("centroEnviar('" + p + "')"); await esperar(20);
+  const mc = U.llamadas.filter(c => c.funcion === 'marcarEnCamino')[0].args;
+  assert.deepEqual([mc[0], mc[1].paqueteria, mc[1].guia, mc[1].fechaEstimada, mc[1].traeProveedor], [RQ.folio, 'DHL', '1', MANANA, false]);
+  assert(/va en camino/.test($('aviso').innerHTML) && /se actualizará en unos minutos/.test($('aviso').innerHTML));
+  assert(/<b>En camino:<\/b> Enviado por DHL · guía 1/.test($('cmCaja-' + RQ.folio).innerHTML));
+  U.run("centroRecogi('" + RQ.folio + "')"); await esperar(20);
+  assert.equal(U.llamadas.filter(c => c.funcion === 'marcarEnCamino')[1].args[1].recogido, true, '"Lo recogí"');
+
+  // Compras: proyecto ligado, envío, respaldo, columna de ítem y estado del enlace; cancelar una orden en camino pide confirmar
+  const C = montar({ ivaTasa: 0.16, catalogo: [], tipoCambio: null, clientes: [], proyectos: [], marcas: {},
+    permisos: { cobranza: false, desbloqueo: false, compras: true, requisicion: false, operaciones: false, flujoOperaciones: true, ventas: false },
+    sitios: ['Manzanillo (TIMSA)'], sitiosDetalle: [{ codigo: 'ZLO', nombre: 'Manzanillo (TIMSA)' }], centro: { activo: true, ligados: [P1], items: null } });
+  C.respuestas.estadoCentroMando = { ok: true, datos: { activo: true, servidor: 'drogheda.test', ligados: [{ folio: P1, proyecto: 'drogheda' }], pendientes: 2,
+    masAntiguo: '28/10/2026 10:00', ultimoError: 'El centro de mando respondió 500', ultimoOk: '28/10/2026 10:15', errorConsulta: '', activador: true } };
+  C.respuestas.listarRequisiciones = { ok: true, datos: [] }; C.respuestas.cuentasPorPagar = { ok: true, datos: null }; C.respuestas.listarProyectosCompras = { ok: true, datos: [] };
+  await esperar(20);
+  C.run("verTab('com')"); await esperar(20);
+  assert(!C.$('comCentro').classList.contains('oculto') && /2 aviso\(s\) pendiente\(s\)/.test(C.$('comCentro').innerHTML) && /centroConsultar\(\)/.test(C.$('comCentro').innerHTML));
+  const OC = { folio: 'OC-' + ANIO + '-0009', fecha: HOY_ISO, estado: 'Pagada', proveedor: 'Ferretera', total: 1856, moneda: 'MXN', fechaEntrega: MANANA, lugarEntrega: 'Puerto',
+    condicionesPago: 'Contado', diasCredito: 0, renglones: [], paqueteria: 'DHL', guia: '123', fechaEstimada: MANANA, enCaminoEn: '28/10/2026 11:00', enCaminoPor: 'obrero@helgen.tech' };
+  const V = { requisicion: { folio: RQ.folio, fecha: HOY_ISO, proyectoFolio: P1, solicitante: 'Juan', solicitanteEmail: 'obrero@helgen.tech', estado: 'En camino', motivo: '',
+      cotizacionId: '', cotizacionUrl: '', ocFolio: OC.folio, sitio: 'Manzanillo (TIMSA)', recibeEmail: 'rosa@helgen.tech' },
+    renglones: [], eventos: [], proyecto: { folio: P1, folioVisible: P1 + '-DRO', nombre: 'DROGHEDA', cliente: 'ICAVE', estado: 'Activo', ubicacion: 'Puerto' }, moneda: 'MXN',
+    marca: 'helgen', orden: OC, pagos: [], proveedores: [], facturas: [], totalFacturado: 0, facturaCompleta: false, puedeFacturar: true, hoy: HOY_ISO,
+    avance: [{ renglon: 1, descripcion: 'Cable', unidad: 'M', pedido: 80, recibido: 0, pendiente: 80 }], recepciones: [], recepcionCompleta: false,
+    puedeRecibir: true, puedeCerrar: true, puedeCancelarPago: true, puedePagar: false, puedeEnCamino: true,
+    centroMando: { proyecto: 'drogheda', sitioCodigo: 'ZLO', sitio: 'ZLO · Manzanillo (TIMSA)' } };
+  C.respuestas.getRequisicion = { ok: true, datos: V };
+  C.respuestas.itemsInventario = { ok: true, datos: { activo: true, items: [{ codigo: 'TUB-1', descripcion: 'Tubo', unidad: 'PZA' }] } };
+  C.run("abrirReqCom('" + RQ.folio + "')"); await esperar(20);
+  const rc = C.$('rcCentro').innerHTML;
+  assert(!C.$('rcCentro').classList.contains('oculto') && /Proyecto ligado al <b>centro de mando<\/b> \(drogheda\)/.test(rc) && /Enviado por DHL · guía 123/.test(rc) &&
+    /solo el respaldo/.test(rc) && /Corregir el envío/.test(rc));
+  assert.equal(C.$('rcCierreTitulo').textContent, 'Respaldo: cerrar aquí (el centro de mando no funciona)');
+  assert(/Respaldo: registrar la recepción aquí/.test(C.$('rcAvance').innerHTML));
+  assert(!C.$('ocTabla').classList.contains('sin-item') && C.run('ITEMS_OC') === true);
+  assert(C.llamadas.some(c => c.funcion === 'itemsInventario') && /TUB-1/.test(C.$('centroItems').innerHTML), 'pide los ítems para la orden');
+  C.respuestas.cancelarOrdenCompra = c => ({ ok: true, datos: c.args[2] === true ? {} : { confirmar: true, mensaje: 'El material ya va en camino. ¿Cancelar?' } });
+  C.respuestas.getRequisicion = { ok: true, datos: Object.assign({}, V, { orden: null, centroMando: null, puedeEnCamino: false }) };
+  C.dialogos.prompt = 'El proveedor no surtió a tiempo';
+  C.run("cancelarOcDesdeReq('" + OC.folio + "')"); await esperar(20);
+  const cc = C.llamadas.filter(c => c.funcion === 'cancelarOrdenCompra').map(c => c.args);
+  assert.deepEqual(cc, [[OC.folio, 'El proveedor no surtió a tiempo'], [OC.folio, 'El proveedor no surtió a tiempo', true]], 'confirma y vuelve a llamar');
+  assert(C.dialogos.vistos.includes('El material ya va en camino. ¿Cancelar?'));
+  await esperar(20);
+  assert(C.$('rcCentro').classList.contains('oculto') && C.$('ocTabla').classList.contains('sin-item'), 'sin ligar: nada del centro de mando');
+  console.log('OK centro de mando');
+})().catch(e => { console.error(e); process.exit(1); });
