@@ -648,6 +648,8 @@
           <thead><tr><th>Folio</th><th>Fecha</th><th>Requisición</th><th>Proveedor</th><th class="num">Total</th><th class="num">Facturado</th><th>Entrega</th><th>Estado</th><th>PDF</th><th></th></tr></thead>
           <tbody id="ocLista"></tbody>
         </table>
+        <!-- correos: enviar una orden de la lista al proveedor (mod-correos) -->
+        <div id="ocEnviarCaja" class="sat oculto"></div>
       </div>
       <div class="modulo">
         <h2>3 · Cuentas por pagar</h2>
@@ -716,6 +718,8 @@
               <button type="button" id="btnRcAclarar" class="btn btn-sec" onclick="revisarReqCom('devolverRequisicion')">Pedir aclaración a quien pidió</button>
               <button type="button" id="btnRcSeparar" class="btn btn-sec" onclick="separarReqCom()">Separar renglones (otro proveedor)</button>
             </div>
+            <!-- correos: solicitud de cotización a proveedores (mod-correos) -->
+            <div id="rcSolicitud" class="sat oculto"></div>
           </div>
           <div>
             <div class="nota" style="margin-bottom:6px">Cotización del proveedor · <a id="rcCotLink" href="#" target="_blank">Abrir en Drive</a></div>
@@ -788,6 +792,8 @@
       <div id="comModPago" class="modulo oculto">
         <h2>3 · Orden, facturas, pago y cierre</h2>
         <div id="rcOrden" class="tiles"></div>
+        <!-- correos: enviar la orden al proveedor (mod-correos) -->
+        <div id="rcEnviarOc" class="sat oculto"></div>
         <div id="rcRecepcion" class="sat oculto">
           <div class="sat-titulo">Recepción en sitio</div>
           <div id="rcAvance"></div>
@@ -3707,6 +3713,286 @@
 
 <script id="mod-correos">
   // Correos y proveedores: solicitud de cotización en PDF, botones Gmail / correo, bitácora de avisos
+  // No edita el código de Compras: envuelve pintarReqCom (detalle de la requisición) y pintarCompras (órdenes por proyecto) para
+  // pintar sus cajas, y usa registrarModulo para la bitácora de Administración. Lo que necesitan los onclick va en window.CORREOS.
+  (function () {
+    const MAX_LIGA_CORREO = 1800;
+    /**
+     * Copia exacta de correoConLigas (Code.js): rehace las ligas de Gmail y mailto: cuando se cambia el correo del proveedor.
+     * La prueba (tests/correos.test.js) compara las dos.
+     */
+    function correoConLigas(para, asunto, partes, max) {
+      const tope = max || MAX_LIGA_CORREO, p = partes || {};
+      const inicio = p.inicio || [], lista = p.lista || [], fin = p.fin || [];
+      const to = String(para == null ? '' : para).trim(), su = String(asunto == null ? '' : asunto);
+      const gmail = b => 'https://mail.google.com/mail/?view=cm&fs=1&to=' + encodeURIComponent(to) + '&su=' + encodeURIComponent(su) +
+        '&body=' + encodeURIComponent(b);
+      const mailto = b => 'mailto:' + encodeURIComponent(to).replace(/%40/g, '@') + '?subject=' + encodeURIComponent(su) +
+        '&body=' + encodeURIComponent(b).replace(/%0A/g, '%0D%0A');
+      const largo = b => Math.max(gmail(b).length, mailto(b).length);
+      const armar = n => inicio.concat(lista.slice(0, n), n < lista.length ? ['… y ' + (lista.length - n) +
+        ' partida(s) más: ver el PDF adjunto.'] : [], fin).join('\n');
+      let n = lista.length, cuerpo = armar(n);
+      while (n > 0 && largo(cuerpo) > tope) cuerpo = armar(--n);
+      let recortado = n < lista.length;
+      if (largo(cuerpo) > tope) {
+        const marca = '\n… ver el PDF adjunto.';
+        let t = cuerpo;
+        while (t && largo(t + marca) > tope) t = t.slice(0, Math.max(0, t.length - 40));
+        cuerpo = t + marca;
+        recortado = true;
+      }
+      return { para: to, asunto: su, cuerpo: cuerpo, gmail: gmail(cuerpo), mailto: mailto(cuerpo), recortado: recortado };
+    }
+
+    // Estados en que compras puede pedir cotización (ESTADOS_SOLICITUD_COTIZACION en Code.js; el servidor lo vuelve a revisar)
+    const ESTADOS_SOLICITUD = ['Aprobada', 'Cotizada', 'Autorizada', 'En camino', 'Pagada', 'Recibida'];
+    let SOL = null;          // solicitud de cotización abierta: {folio, huella, abierta, aprobados, proveedores, res}
+    const ENVIO = {};        // envío de orden por caja ('Rc' detalle de la requisición, 'Lista' órdenes por proyecto): {folio, correo, res}
+    const CAJA_OC = { Rc: 'rcEnviarOc', Lista: 'ocEnviarCaja' };
+
+    /** Descarga el PDF que mandó el servidor (base64): quien compra puede no tener acceso a la carpeta de Drive. */
+    function descargar(r) {
+      if (!r || !r.datos) { mostrarError('Primero genera el PDF.'); return; }
+      const bytes = Uint8Array.from(atob(r.datos), c => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: r.mime || 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = r.nombre || 'documento.pdf';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    }
+
+    /** Botones "Descargar PDF", "Abrir en Gmail" y "Abrir en mi correo" con el correo ya armado. */
+    function pintarBotones(id, pref, r, ligas, accionDescargar) {
+      const ancla = 'display:inline-block;text-decoration:none';
+      $(id).innerHTML = '<div class="acciones">' +
+        '<button type="button" class="btn" onclick="' + accionDescargar + '">Descargar PDF</button>' +
+        '<a id="' + pref + 'Gmail" class="btn btn-sec" style="' + ancla + '" target="_blank" rel="noopener" href="' + esc(ligas.gmail) + '">Abrir en Gmail</a>' +
+        '<a id="' + pref + 'Mailto" class="btn btn-sec" style="' + ancla + '" href="' + esc(ligas.mailto) + '">Abrir en mi correo</a></div>' +
+        '<div class="nota" id="' + pref + 'Nota"></div>';
+      ponerLigas(pref, r, ligas);
+    }
+    function ponerLigas(pref, r, ligas) {
+      if ($(pref + 'Gmail')) $(pref + 'Gmail').href = ligas.gmail;
+      if ($(pref + 'Mailto')) $(pref + 'Mailto').href = ligas.mailto;
+      if ($(pref + 'Nota')) $(pref + 'Nota').innerHTML = esc(r.nombre) + ' · <b>Descarga el PDF y adjúntalo</b> al correo: el navegador no ' +
+        'puede adjuntarlo solo. El correo sale de tu buzón, así que la respuesta del proveedor te llega a ti.' +
+        (ligas.para ? '' : ' Falta el correo del proveedor: escríbelo arriba o agrégalo en el correo.') +
+        (ligas.recortado ? ' La lista del correo se recortó (el PDF lleva todas las partidas).' : '');
+    }
+    /** Las ligas se rehacen con el correo que esté escrito (mismo texto que armó el servidor). */
+    const ligasDe = (r, correo) => correoConLigas(correo, r.correo.asunto, r.correo.partes);
+
+    // ---- Solicitud de cotización (detalle de la requisición, solo compras) ----
+    function pintarSolicitud(v) {
+      const caja = $('rcSolicitud');
+      if (!caja) return;
+      const rq = v.requisicion || {}, aprob = v.aprobados || [];
+      const visible = !!(PERMISOS.compras && aprob.length && ESTADOS_SOLICITUD.indexOf(rq.estado) !== -1);
+      caja.classList.toggle('oculto', !visible);
+      if (!visible) { SOL = null; caja.innerHTML = ''; return; }
+      const huella = rq.folio + '|' + JSON.stringify(aprob.map(a => [a.renglon, a.cantidad, a.unidad, a.descripcion, a.notas]));
+      if (SOL && SOL.huella === huella) { SOL.proveedores = v.proveedores || SOL.proveedores; return; } // sigue lo que se capturó
+      SOL = { folio: rq.folio, huella: huella, abierta: false, aprobados: aprob, proveedores: v.proveedores || [], res: null };
+      pintarCajaSolicitud();
+    }
+    function pintarCajaSolicitud() {
+      const caja = $('rcSolicitud');
+      let h = '<div class="sat-titulo">Solicitud de cotización a proveedores</div>' +
+        '<div class="nota">PDF con los renglones aprobados para pedir precio a un proveedor: sin cliente, proyecto ni precios. ' +
+        'No cambia la requisición.</div>';
+      if (!SOL.abierta) {
+        caja.innerHTML = h + '<div class="acciones">' + botonChico('Preparar solicitud de cotización', 'CORREOS.abrirSolicitud()') + '</div>';
+        return;
+      }
+      h += '<div style="overflow-x:auto"><table style="margin-top:8px;font-size:12px"><thead><tr><th></th><th>#</th>' +
+        '<th>Descripción (la ve el proveedor)</th><th class="num">Cant.</th><th>Unidad</th><th>Notas</th></tr></thead><tbody>' +
+        SOL.aprobados.map(a => '<tr><td><input type="checkbox" id="corSolInc-' + esc(a.renglon) + '" checked style="width:auto" title="Incluir"></td>' +
+          '<td>' + esc(a.renglon) + '</td><td><input id="corSolDesc-' + esc(a.renglon) + '" maxlength="500" value="' + esc(a.descripcion) + '"></td>' +
+          '<td class="num">' + esc(a.cantidad) + '</td><td>' + esc(a.unidad) + '</td>' +
+          '<td><input id="corSolNotas-' + esc(a.renglon) + '" maxlength="300" value="' + esc(a.notas) + '" placeholder="Sin notas"></td></tr>').join('') +
+        '</tbody></table></div>' +
+        '<div class="nota">Quita la marca de lo que no va y cambia el texto si lleva datos internos. La cantidad es la aprobada.</div>' +
+        '<div class="grid" style="margin-top:10px">' +
+        '<div><label>Proveedor (opcional)</label><input id="corSolProv" list="corSolProveedores" maxlength="150" autocomplete="off" ' +
+        'placeholder="Escribe o elige un proveedor"><datalist id="corSolProveedores">' + (SOL.proveedores || []).map(p =>
+          '<option value="' + esc(p.etiqueta || p.razonSocial) + '" label="' + esc(p.correo || 'Sin correo') + '">').join('') + '</datalist></div>' +
+        '<div><label>Correo del proveedor</label><input id="corSolCorreo" type="email" maxlength="100" autocomplete="off"></div></div>' +
+        '<div style="margin-top:10px"><label>Notas para el proveedor (opcional, salen en el PDF)</label>' +
+        '<textarea id="corSolNotasProv" rows="2" maxlength="1000"></textarea></div>' +
+        '<div class="acciones"><button type="button" id="btnCorSol" class="btn" onclick="CORREOS.generarSolicitud()">Generar PDF</button>' +
+        botonChico('Cerrar', 'CORREOS.cerrarSolicitud()') + '</div><div id="corSolRes"></div>';
+      caja.innerHTML = h;
+      SOL.aprobados.forEach(a => { // también como propiedad (igual que el HTML): lo que se lee al generar
+        $('corSolInc-' + a.renglon).checked = true;
+        $('corSolDesc-' + a.renglon).value = a.descripcion || '';
+        $('corSolNotas-' + a.renglon).value = a.notas || '';
+      });
+      $('corSolProv').addEventListener('input', autollenarProveedor);
+      $('corSolProv').addEventListener('change', autollenarProveedor);
+      $('corSolCorreo').addEventListener('input', () => { if (SOL && SOL.res) ponerLigas('corSol', SOL.res, ligasDe(SOL.res, $('corSolCorreo').value)); });
+    }
+    /** Proveedor de la lista que coincide con lo escrito (por etiqueta o razón social). */
+    function proveedorEscrito() {
+      const t = String($('corSolProv').value || '').trim().toLowerCase();
+      return t ? (SOL.proveedores || []).find(p => String(p.etiqueta || '').toLowerCase() === t || String(p.razonSocial || '').toLowerCase() === t) : null;
+    }
+    function autollenarProveedor() {
+      const p = proveedorEscrito();
+      if (p && p.correo) { $('corSolCorreo').value = p.correo; if (SOL.res) ponerLigas('corSol', SOL.res, ligasDe(SOL.res, p.correo)); }
+    }
+    function abrirSolicitud() { if (!SOL) return; SOL.abierta = true; SOL.res = null; pintarCajaSolicitud(); }
+    function cerrarSolicitud() { if (!SOL) return; SOL.abierta = false; SOL.res = null; pintarCajaSolicitud(); }
+    function generarSolicitud() {
+      if (!SOL) return;
+      const renglones = SOL.aprobados.map(a => ({ renglon: a.renglon, incluir: !!$('corSolInc-' + a.renglon).checked,
+        descripcion: $('corSolDesc-' + a.renglon).value, notas: $('corSolNotas-' + a.renglon).value }));
+      if (!renglones.some(r => r.incluir)) { mostrarError('Elige al menos un renglón para la solicitud de cotización.'); return; }
+      const p = proveedorEscrito();
+      const datos = { renglones: renglones, notas: $('corSolNotasProv').value,
+        proveedor: { nombre: p ? p.razonSocial : String($('corSolProv').value || '').trim(), correo: String($('corSolCorreo').value || '').trim() } };
+      const b = $('btnCorSol');
+      if (b.disabled) return;
+      b.disabled = true; b.textContent = 'Generando…';
+      const folio = SOL.folio;
+      google.script.run.withSuccessHandler(r => {
+        b.disabled = false; b.textContent = 'Generar PDF';
+        if (!SOL || SOL.folio !== folio) return;
+        SOL.res = r;
+        pintarBotones('corSolRes', 'corSol', r, ligasDe(r, $('corSolCorreo').value), 'CORREOS.descargarSolicitud()');
+      }).withFailureHandler(err => { b.disabled = false; b.textContent = 'Generar PDF'; mostrarError(err); })
+        .solicitudCotizacion(folio, datos);
+    }
+
+    // ---- Enviar la orden al proveedor (detalle de la requisición y órdenes por proyecto, solo compras) ----
+    function pintarEnvioOc(k, orden) {
+      const caja = $(CAJA_OC[k]);
+      if (!caja) return;
+      const visible = !!(PERMISOS.compras && orden && orden.estado !== 'Cancelada');
+      caja.classList.toggle('oculto', !visible);
+      if (!visible) { delete ENVIO[k]; caja.innerHTML = ''; return; }
+      if (ENVIO[k] && ENVIO[k].folio === orden.folio) return; // sigue lo que se capturó
+      ENVIO[k] = { folio: orden.folio, correo: orden.correo || '', res: null };
+      caja.innerHTML = '<div class="sat-titulo">Enviar orden al proveedor · ' + esc(orden.folio) + '</div>' +
+        '<div class="nota">Descarga el PDF de la orden y abre tu correo con el texto listo' + (orden.proveedor ? ' para ' + esc(orden.proveedor) : '') +
+        '; adjunta el PDF antes de mandarlo.</div>' +
+        '<div class="grid" style="margin-top:8px"><div><label>Correo del proveedor</label><input id="corOcCorreo' + k + '" type="email" ' +
+        'maxlength="100" autocomplete="off" value="' + esc(orden.correo) + '"></div></div>' +
+        '<div class="acciones"><button type="button" id="btnCorOc' + k + '" class="btn btn-sec" onclick="CORREOS.prepararOc(\'' + k + '\')">' +
+        'Preparar PDF y correo</button>' + (k === 'Lista' ? botonChico('Cerrar', 'CORREOS.cerrarOcLista()') : '') + '</div>' +
+        '<div id="corOcRes' + k + '"></div>';
+      $('corOcCorreo' + k).value = orden.correo || '';
+      $('corOcCorreo' + k).addEventListener('input', () => {
+        const e = ENVIO[k];
+        if (e && e.res) ponerLigas('corOc' + k, e.res, ligasDe(e.res, $('corOcCorreo' + k).value));
+      });
+    }
+    function prepararOc(k) {
+      const e = ENVIO[k];
+      if (!e) return;
+      const b = $('btnCorOc' + k);
+      if (b.disabled) return;
+      b.disabled = true;
+      google.script.run.withSuccessHandler(r => {
+        b.disabled = false;
+        if (ENVIO[k] !== e) return;
+        e.res = r;
+        pintarBotones('corOcRes' + k, 'corOc' + k, r, ligasDe(r, $('corOcCorreo' + k).value), "CORREOS.descargarOc('" + k + "')");
+      }).withFailureHandler(err => { b.disabled = false; mostrarError(err); }).pdfOrdenCompra(e.folio);
+    }
+    /** Desde "Órdenes por proyecto": la caja debajo de la tabla, con la orden elegida. */
+    function enviarOcLista(folio) {
+      const o = ((COM && COM.ordenes) || []).find(x => x.folio === folio);
+      if (!o) return;
+      delete ENVIO.Lista;
+      pintarEnvioOc('Lista', o);
+    }
+    function cerrarOcLista() { pintarEnvioOc('Lista', null); }
+
+    // Se pinta junto con las vistas de Compras (sin editar su código)
+    const pintarReqComBase = window.pintarReqCom;
+    if (typeof pintarReqComBase === 'function') {
+      window.pintarReqCom = function (v) {
+        const r = pintarReqComBase.apply(this, arguments);
+        try { pintarSolicitud(v); pintarEnvioOc('Rc', v.orden); } catch (e) { console.error('Correos: ' + e.message); }
+        return r;
+      };
+    }
+    const pintarComprasBase = window.pintarCompras;
+    if (typeof pintarComprasBase === 'function') {
+      window.pintarCompras = function (v) {
+        const r = pintarComprasBase.apply(this, arguments);
+        try { botonesEnviarLista(v); } catch (e) { console.error('Correos: ' + e.message); }
+        return r;
+      };
+    }
+    /** Botón "Enviar" en cada orden vigente de la lista (si la tabla no tiene la forma esperada, no agrega nada). */
+    function botonesEnviarLista(v) {
+      const ordenes = (v && v.ordenes) || [];
+      if (ENVIO.Lista && !ordenes.some(o => o.folio === ENVIO.Lista.folio && o.estado !== 'Cancelada')) cerrarOcLista();
+      if (!PERMISOS.compras || !ordenes.length) return;
+      const filas = String($('ocLista').innerHTML).split('</tr>');
+      if (filas.length !== ordenes.length + 1) return;
+      $('ocLista').innerHTML = filas.map((f, i) => {
+        const o = ordenes[i];
+        if (!o || o.estado === 'Cancelada' || f.indexOf(esc(o.folio)) === -1) return f;
+        const j = f.lastIndexOf('</td>');
+        return j === -1 ? f : f.slice(0, j) + botonChico('Enviar', "CORREOS.enviarOcLista('" + esc(o.folio) + "')") + f.slice(j);
+      }).join('</tr>');
+    }
+
+    // ---- Bitácora de correos (Administración, solo super admin) ----
+    let LOG_LISTO = false;
+    function pintarAdminCorreos() {
+      const caja = $('adminCorreos');
+      if (!caja || LOG_LISTO) return;
+      LOG_LISTO = true;
+      caja.innerHTML = '<div class="modulo"><h2>Correos enviados</h2>' +
+        '<div class="acciones" style="margin-top:0">' +
+        '<input id="corLogBuscar" placeholder="Buscar por correo, folio, asunto o error…" style="flex:1;min-width:220px">' +
+        '<select id="corLogEstado" style="width:auto"><option value="">Todos los estados</option><option>Enviado</option>' +
+        '<option>Error</option><option>Sin enviar</option><option>Sin destinatarios</option></select>' +
+        '<button type="button" class="btn btn-sec" onclick="CORREOS.cargarCorreos()">Buscar</button></div>' +
+        '<div id="corLogInfo" class="nota" style="margin-top:8px"></div>' +
+        '<div style="overflow-x:auto"><table style="font-size:12px;margin-top:6px"><thead><tr><th>Fecha</th><th>Para</th><th>Asunto</th>' +
+        '<th>Aviso</th><th>Folio</th><th>Estado</th><th>Quién</th></tr></thead><tbody id="corLogLista"></tbody></table></div>' +
+        '<div class="nota" style="margin-top:8px">Los 200 más recientes primero. Salen de la cuenta de la API con el nombre "CAPRI Helgen"; ' +
+        'si un envío falla, el cambio sigue guardado y la persona lo ve en Pendientes.</div></div>';
+      $('corLogBuscar').addEventListener('keydown', e => { if (e.key === 'Enter') cargarCorreos(); });
+    }
+    function cargarCorreos() {
+      pintarAdminCorreos();
+      $('corLogInfo').textContent = 'Cargando…';
+      google.script.run.withSuccessHandler(pintarListaCorreos).withFailureHandler(mostrarError)
+        .listarCorreos({ texto: $('corLogBuscar').value, estado: $('corLogEstado').value });
+    }
+    const CHIP_CORREO = { Enviado: 'firmado', Error: 'cancelado', 'Sin enviar': 'aceptada' };
+    function pintarListaCorreos(r) {
+      const l = (r && r.correos) || [];
+      $('corLogInfo').textContent = r && r.sinLibro ? 'Todavía no existe el libro de Administración (prepararCapri).'
+        : l.length + (r.total > l.length ? ' de ' + r.total : '') + ' correo(s).';
+      $('corLogLista').innerHTML = l.length ? l.map(c => '<tr><td style="white-space:nowrap">' + esc(fechaMx(c.fecha)) + '</td><td>' +
+        esc(c.para).replace(/, /g, '<br>') + '</td><td>' + esc(c.asunto) + '</td><td>' + esc(c.tipo) + '</td><td style="white-space:nowrap">' +
+        esc(c.folio) + '</td><td><span class="chip ' + (CHIP_CORREO[c.estado] || '') + '">' + esc(c.estado) + '</span>' +
+        (c.error ? '<div class="nota">' + esc(c.error) + '</div>' : '') + '</td><td>' + esc(c.actor) + '</td></tr>').join('')
+        : '<tr><td colspan="7" class="nota">No hay correos con ese filtro.</td></tr>';
+    }
+
+    window.CORREOS = { correoConLigas: correoConLigas, abrirSolicitud: abrirSolicitud, cerrarSolicitud: cerrarSolicitud,
+      generarSolicitud: generarSolicitud, descargarSolicitud: () => descargar(SOL && SOL.res), prepararOc: prepararOc,
+      descargarOc: k => descargar(ENVIO[k] && ENVIO[k].res), enviarOcLista: enviarOcLista, cerrarOcLista: cerrarOcLista,
+      cargarCorreos: cargarCorreos };
+
+    registrarModulo({
+      nombre: 'Correos',
+      alPermisos(p) {
+        const caja = $('adminCorreos');
+        if (caja) caja.classList.toggle('oculto', !(p && p.superadmin));
+        if (!(p && p.superadmin) && caja) { caja.innerHTML = ''; LOG_LISTO = false; }
+      },
+      alVerTab(t) { if (t === 'admin' && PERMISOS.superadmin) cargarCorreos(); },
+    });
+  })();
 </script>
 
 <script id="mod-centro">

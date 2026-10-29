@@ -2604,6 +2604,7 @@ function cancelarOrdenCompra(folioOc, motivo) {
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
     bitacora_(libro, 'Cancelar orden de compra', orden.proyectoFolio, orden.folio + ' · ' + orden.proveedor + ' · ' +
       formatoMoneda(orden.total) + ' ' + orden.moneda, m, HOJAS_COMPRAS);
+    notificar_('oc.cancelada', { req: orden.reqFolio, oc: orden.folio, proyecto: orden.proyectoFolio, nota: m }); // correo (6.B)
     if (orden.reqFolio) {
       const { hoja: hR, req } = buscarReq_(libro, orden.reqFolio);
       if (req.estado === REQ_AUTORIZADA && req.ocFolio.toUpperCase() === orden.folio.toUpperCase()) {
@@ -3051,6 +3052,7 @@ function guardarRequisicion(p) {
       bitacora_(libro, 'Solicitar requisición', proyecto.folio, folio + ' · ' + renglones.length + ' renglón(es)' +
         (sitio ? ' · ' + sitio : '') + (archivo ? '' : ' · sin cotización'), '', HOJAS_COMPRAS);
     }
+    notificar_('req.solicitada', { req: folio, reenviada: reenvio }); // correo a quien la revisa (6.B)
     SpreadsheetApp.flush();
     const resultado = { folio: folio, requisiciones: misRequisiciones() };
     if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
@@ -3068,8 +3070,10 @@ function cancelarRequisicion(folioReq, motivo) {
     if (req.solicitanteEmail !== String(VENDEDOR_.email).toLowerCase()) {
       throw errorPermiso_('Solo quien hizo la requisición ' + req.folio + ' puede cancelarla.');
     }
+    const antes = req.estado;
     cambiarReq_(hoja, req, transicionReq(req.estado, 'cancelar'), { motivo: m });
     eventoReq_(libro, req.folio, REQ_CANCELADA, m);
+    notificar_('req.cancelada', { req: req.folio, antes: antes, nota: m }); // correo a quien la esperaba (6.B)
     bitacora_(libro, 'Cancelar requisición', req.proyectoFolio, req.folio, m, HOJAS_COMPRAS);
     SpreadsheetApp.flush();
     return misRequisiciones();
@@ -3084,6 +3088,7 @@ function cerrarReq_(libro, hoja, req, nota, motivo) {
   cambiarReq_(hoja, req, nuevo, { notasRecepcion: nota, motivo: motivo || req.motivo });
   hO.getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(hoyIso_()), textoCelda(VENDEDOR_.email)]]);
   eventoReq_(libro, req.folio, REQ_CERRADA, [motivo ? 'Cerrada por compras: ' + motivo : 'Material recibido', nota].filter(Boolean).join(' · '));
+  notificar_('req.recibida', { req: req.folio, nota: nota }); // correo a compras (6.B)
   bitacora_(libro, 'Cerrar requisición', req.proyectoFolio, req.folio + ' · ' + orden.folio + ' recibida el ' + hoyIso_() +
     (nota ? ' · ' + nota : ''), motivo || '', HOJAS_COMPRAS);
 }
@@ -3254,6 +3259,7 @@ function autorizarRequisicion(folioReq, oc) {
     const r = emitirOrdenCompra_(libro, d0, proyecto, req.folio);
     cambiarReq_(hoja, req, nuevo, { motivo: '', ocFolio: r.folio, revisar: true });
     eventoReq_(libro, req.folio, nuevo, '');
+    notificar_('req.autorizada', { req: req.folio }); // correo a quien pidió, quien recibe y compras (6.B)
     bitacora_(libro, 'Autorizar requisición', proyecto.folio, req.folio + ' · ' + r.folio, '', HOJAS_COMPRAS);
     SpreadsheetApp.flush();
     const resultado = { folio: req.folio, ocFolio: r.folio, url: r.url, total: r.total, moneda: r.moneda,
@@ -3282,6 +3288,7 @@ function revisarRequisicion_(folioReq, motivo, accion) {
     const nuevo = transicionReq(req.estado, accion);
     cambiarReq_(hoja, req, nuevo, { motivo: m, revisar: true });
     eventoReq_(libro, req.folio, nuevo, m);
+    notificar_(accion === 'rechazar' ? 'req.rechazada' : 'req.devuelta', { req: req.folio, nota: m }); // correo a quien pidió (6.B)
     bitacora_(libro, (accion === 'rechazar' ? 'Rechazar' : 'Devolver') + ' requisición' + (flujo ? (porCompras ? ' (compras)' : ' (operaciones)') : ''),
       req.proyectoFolio, req.folio, m, HOJAS_COMPRAS);
     SpreadsheetApp.flush();
@@ -3522,6 +3529,7 @@ function aprobarRequisicion(folioReq, d, motivoExcepcion) {
       (bajas.length ? ' · cantidad ajustada: ' + bajas.map(x => x.renglon + ' (' + x.cantidad + ' de ' + pedida[x.renglon] + ')').join(', ') : '') +
       (rech.length ? ' · rechazado(s): ' + rech.map(x => x.renglon + ' (' + x.comentario + ')').join('; ') : '') + (a.nota ? ' · ' + a.nota : '');
     eventoReq_(libro, req.folio, nuevo, nota);
+    notificar_('req.aprobada', { req: req.folio }); // correo a compras (6.B)
     bitacora_(libro, 'Aprobar requisición', req.proyectoFolio, req.folio + ' · ' + nota, '', HOJAS_COMPRAS);
     SpreadsheetApp.flush();
     return vistaOperaciones_(libro, req.folio);
@@ -3585,6 +3593,7 @@ function cotizarRequisicion(folioReq, p) {
     // El historial lo ve quien pidió: sin proveedor ni montos
     eventoReq_(libro, req.folio, nuevo, (version > 1 ? 'Propuesta corregida (versión ' + version + '): ' : 'Propuesta de compra: ') +
       resumen + '. Espera el visto bueno de operaciones.');
+    notificar_('req.cotizada', { req: req.folio, version: version }); // correo a aprobaciones (6.B)
     bitacora_(libro, 'Propuesta de compra', proyecto.folio, req.folio + ' · v' + version + ' · ' + prop.proveedor.razonSocial + ' · ' +
       formatoMoneda(prop.total) + ' ' + prop.moneda + ' · ' + resumen + ' · recibe ' + prop.recibe, '', HOJAS_COMPRAS);
     SpreadsheetApp.flush();
@@ -3639,6 +3648,7 @@ function autorizarPropuesta(folioReq, version, idSolicitud, huella, motivoExcepc
     cambiarReq_(hoja, req, nuevo, { motivo: '', ocFolio: r.folio, revisar: true });
     camposReq_(hoja, req, { voboEmail: yo, fechaVobo: ahoraTexto_() });
     eventoReq_(libro, req.folio, nuevo, 'Visto bueno de operaciones: se emitió la orden de compra.');
+    notificar_('req.autorizada', { req: req.folio }); // correo a quien pidió, quien recibe y compras (6.B)
     bitacora_(libro, 'Visto bueno de operaciones', req.proyectoFolio, req.folio + ' · propuesta v' + prop.version + ' · ' + r.folio, '', HOJAS_COMPRAS);
     SpreadsheetApp.flush();
     const resultado = { folio: req.folio, ocFolio: r.folio, vista: vistaOperaciones_(libro, req.folio) };
@@ -3656,6 +3666,7 @@ function regresarACompras(folioReq, motivo) {
     const { hoja, req } = buscarReq_(libro, folioReq);
     cambiarReq_(hoja, req, transicionReq(req.estado, 'regresarACompras'), { motivo: m });
     eventoReq_(libro, req.folio, REQ_APROBADA, 'Operaciones regresó la propuesta a compras para ajustarla.');
+    notificar_('req.regresada', { req: req.folio, nota: m }); // correo a compras (6.B)
     bitacora_(libro, 'Regresar propuesta a compras', req.proyectoFolio, req.folio, m, HOJAS_COMPRAS);
     SpreadsheetApp.flush();
     return vistaOperaciones_(libro, req.folio);
@@ -3796,6 +3807,7 @@ function registrarRecepcion(p) {
     eventoReq_(libro, req.folio, nuevo, 'Recepción ' + folio + ' en ' + rec.sitio + ' (' +
       (rec.completo ? (faltante ? 'última, con faltante' : 'completa') : 'parcial') + '): ' + lista + (propio ? '' : ' · registrada por compras') +
       (rec.notas ? ' · ' + rec.notas : ''));
+    notificar_('req.recibida', { req: req.folio, parcial: !rec.completo, sitio: rec.sitio, nota: rec.notas }); // correo a compras (6.B)
     bitacora_(libro, 'Registrar recepción', req.proyectoFolio, folio + ' · ' + req.folio + ' · ' + orden.folio + ' · ' + rec.sitio + ' · ' +
       lista + (rec.completo ? ' · ' + nuevo : ' · parcial'), propio ? '' : rec.notas, HOJAS_COMPRAS);
     SpreadsheetApp.flush();
@@ -6896,19 +6908,56 @@ function correoCodigo(nombre, codigo, para) {
 }
 
 // ---- 6.B Correos y proveedores: avisos en cada relevo, solicitud de cotización en PDF y botones de correo ----
+// Avisos: cada cambio de estado llama notificar_(tipo, datos) al terminar; doPost llama enviarCorreosPendientes_ cuando la
+// función terminó bien (fuera del candado). Un aviso nunca lleva montos, proveedores ni folio de orden de compra (un correo se
+// reenvía más fácil que una pantalla): folio de la requisición, proyecto, sitio, qué se necesita, quién lo hizo y una nota
+// (limpia: sin montos, folios de orden ni el nombre del proveedor). Salen de la cuenta que corre la API (efrain@) con el nombre
+// "CAPRI Helgen" y Reply-To = quien hizo el cambio. Nadie recibe aviso de lo que él mismo hizo. Cada envío (y cada falla, con su
+// error) queda en la pestaña Correos del libro de Administración; una falla nunca deshace el cambio.
+//
+// datos que espera cada evento (lo que no venga se lee de la hoja). req = "REQ-AAAA-NNNN" o el objeto de buscarReq_ (también se
+// acepta folio = "REQ-…"); nota = texto opcional; quien = quién actuó cuando no hay sesión (p. ej. el centro de mando).
+//   req.solicitada {req, reenviada?}                 → aprobaciones, menos quien pidió (sin el flujo de aprobaciones: compras)
+//   req.aprobada   {req}                             → compras (con la nota de aprobaciones)
+//   req.devuelta   {req, nota}                       → quien pidió
+//   req.rechazada  {req, nota}                       → quien pidió
+//   req.cotizada   {req, version?}                   → aprobaciones, menos quien pidió y quien preparó la propuesta
+//   req.regresada  {req, nota}                       → compras
+//   req.autorizada {req}                             → quien pidió, quien recibe (con la entrega esperada) y compras
+//   req.encamino   {req, fechaEsperada?, paqueteria?, guia?, nota?, quien?}  → quien pidió y quien recibe
+//   req.recibida   {req, parcial?, sitio?, nota?, quien?}  → compras; si la registró otra persona, también quien pidió y quien recibe
+//   req.cancelada  {req, antes (estado previo), nota}  → quien la esperaba: Solicitada → aprobaciones (o compras); Devuelta →
+//                                                      quien la devolvió
+//   oc.cancelada   {req?, oc?, proyecto?, nota?}     → quien pidió (sin el motivo) y compras (con el motivo); el folio de la
+//                                                      orden solo va a la bitácora de correos, nunca al correo
+//   delegacion     {a, de, roles, desde, hasta}      → el delegado (a)
+//   usuario.alta   {correo, nombre?}                 → la persona nueva (liga y cómo entrar)
+//   anulado        {para: [correos] | "a@…, b@…", folio, tipo?, req?, nota?}  → los correos de para (un folio de orden se
+//                                                      cambia por "la orden de compra de REQ-…")
+// Fuera de doPost (p. ej. un activador) se llama enviarCorreosPendientes_() después de notificar_.
 
 function modCorreos_() {
-  return { nombre: 'Correos', api: {}, cambios: {}, solo: [], publicas: [] };
+  return { nombre: 'Correos',
+    api: { solicitudCotizacion: solicitudCotizacion, pdfOrdenCompra: pdfOrdenCompra, listarCorreos: listarCorreos },
+    // solicitudCotizacion guarda un PDF y una línea de Bitacora, pero no cambia ninguna colección que vea la interfaz
+    cambios: {}, solo: [], publicas: [], preparar: prepararCorreos_ };
 }
 
 /** Eventos de aviso (tipo de notificar_). Quién recibe cada uno lo decide el módulo de correos (tabla del spec, sección 5). */
 const EVENTOS_CORREO = ['req.solicitada', 'req.aprobada', 'req.devuelta', 'req.rechazada', 'req.cotizada', 'req.regresada',
   'req.autorizada', 'req.encamino', 'req.recibida', 'req.cancelada', 'oc.cancelada', 'delegacion', 'usuario.alta', 'anulado'];
 
+/** Dirección de CAPRI (la liga de cada aviso abre la requisición con #req=REQ-…). */
+const URL_AVISOS_CAPRI = 'https://cotizador-helgen.cotizador-helgen.workers.dev/cotizador/';
+const REMITENTE_AVISOS = 'CAPRI Helgen';
+/** Largo máximo de la liga de Gmail o mailto: con el cuerpo del correo (más largo, algunos navegadores la cortan). */
+const MAX_LIGA_CORREO = 1800;
+/** Estados en que compras puede pedir cotización a proveedores (desde Aprobada, mientras haya renglones aprobados). */
+const ESTADOS_SOLICITUD_COTIZACION = [REQ_APROBADA, REQ_COTIZADA, REQ_AUTORIZADA, REQ_EN_CAMINO, REQ_PAGADA, REQ_RECIBIDA];
+
 /**
  * Pide un aviso por correo. Solo lo forma en la cola de la petición (MEMO_.correos): doPost llama enviarCorreosPendientes_
- * cuando la función ya terminó bien (fuera del candado). Nunca lanza error. datos: {folio, req, oc, nota, para: [correos
- * extra], ...}; nunca montos ni proveedores para quien pide o recibe.
+ * cuando la función ya terminó bien (fuera del candado). Nunca lanza error. datos: ver la tabla de arriba.
  */
 function notificar_(tipo, datos) {
   try {
@@ -6918,9 +6967,682 @@ function notificar_(tipo, datos) {
   }
 }
 
-/** Manda los avisos de la cola (módulo de correos). Sin implementar: se descartan. */
+/**
+ * Manda los avisos de la cola: arma cada correo (por grupo de destinatarios), lo manda con MailApp si alcanza la cuota del día
+ * y registra cada envío o falla en Correos (libro de Administración, si ya existe). Nunca lanza error: el cambio ya se guardó.
+ * Devuelve los registros (para pruebas).
+ */
 function enviarCorreosPendientes_() {
+  const cola = (MEMO_ && MEMO_.correos) || [];
   MEMO_.correos = [];
+  const registros = [];
+  if (!cola.length) return registros;
+  let cuota = null;
+  try { cuota = Number(MailApp.getRemainingDailyQuota()); } catch (e) { cuota = null; }
+  const memo = {};
+  cola.forEach(aviso => {
+    const d = aviso.datos || {}, actor = String(aviso.actor || '').toLowerCase();
+    let correos;
+    try {
+      correos = correosDeAviso_(aviso, memo);
+    } catch (e) {
+      registros.push({ para: '', asunto: '', tipo: aviso.tipo, folio: folioDeAviso(d), estado: 'Error', error: e.message, actor: actor });
+      return;
+    }
+    if (!correos.length) {
+      registros.push({ para: '', asunto: '', tipo: aviso.tipo, folio: folioDeAviso(d), estado: 'Sin destinatarios',
+        error: 'Nadie más debía recibirlo (quien lo hizo no recibe aviso).', actor: actor });
+    }
+    correos.forEach(c => {
+      const r = { para: c.para.join(', '), asunto: c.asunto, tipo: aviso.tipo, folio: c.folio, estado: 'Enviado', error: '', actor: actor };
+      if (cuota !== null && !(cuota >= c.para.length)) {
+        r.estado = 'Sin enviar';
+        r.error = 'Se acabó la cuota diaria de correos de Google (quedan ' + (isFinite(cuota) ? cuota : 0) + ').';
+      } else {
+        try {
+          const m = { to: c.para.join(','), subject: c.asunto, htmlBody: c.html, body: c.texto, name: REMITENTE_AVISOS };
+          if (correoCapri(actor)) m.replyTo = actor;
+          MailApp.sendEmail(m);
+          if (cuota !== null) cuota -= c.para.length;
+        } catch (e) {
+          r.estado = 'Error';
+          r.error = e && e.message ? e.message : String(e);
+        }
+      }
+      registros.push(r);
+    });
+  });
+  registrarCorreos_(registros);
+  return registros;
+}
+
+/** Escribe los envíos en Correos (libro de Administración). Sin libro (antes de prepararCapri) no hace nada. Nunca lanza error. */
+function registrarCorreos_(registros) {
+  if (!registros || !registros.length) return;
+  try {
+    const libro = libroAdminSiExiste_();
+    if (!libro) return;
+    const hoja = hojaAdmin_(libro, 'Correos'), t = textoCelda, fecha = "'" + ahoraTexto_();
+    registros.forEach(r => hoja.appendRow([fecha, t(r.para), t(r.asunto), t(r.tipo), t(r.folio || ''), t(r.estado),
+      t(String(r.error || '').slice(0, 500)), t(r.actor || '')]));
+  } catch (e) {
+    console.warn('No se registraron los correos: ' + e.message);
+  }
+}
+
+/**
+ * Correos de un aviso: [{para: [correos], asunto, html, texto, folio}], uno por grupo de destinatarios (cada grupo recibe su
+ * propio texto). Solo cuentas de CAPRI, sin quien hizo el cambio, sin cuentas desactivadas y sin repetir a nadie (gana el
+ * primer grupo: quien pidió antes que su rol).
+ */
+function correosDeAviso_(aviso, memo) {
+  const tipo = aviso.tipo, d = aviso.datos || {}, actor = String(aviso.actor || '').toLowerCase();
+  if (EVENTOS_CORREO.indexOf(tipo) === -1) throw new Error('Tipo de aviso desconocido: ' + tipo + '.');
+  const info = infoDeAviso_(tipo, d, actor, memo);
+  const roles = {};
+  ['aprobaciones', 'compras'].forEach(r => { roles[r] = correosConRol_(r); });
+  const vistos = {};
+  if (actor) vistos[actor] = true;
+  const activo = c => {
+    if (tipo === 'usuario.alta') return true; // recién dada de alta: puede no estar todavía en lo leído en esta petición
+    const u = usuarioCapri_(c);
+    return !(u && u.activo === false);
+  };
+  return destinatariosAviso(tipo, d, info, roles).map(g => {
+    const para = [];
+    (g.para || []).forEach(x => {
+      const c = correoCapri(x);
+      if (!c || vistos[c] || !activo(c)) return;
+      vistos[c] = true;
+      para.push(c);
+    });
+    return { quien: g.quien, para: para };
+  }).filter(g => g.para.length).map(g => {
+    const x = contenidoAviso(tipo, g.quien, info);
+    return { para: g.para, asunto: x.asunto, html: construirHtmlAviso(x), texto: textoAviso(x), folio: info.folio || folioDeAviso(d) };
+  });
+}
+
+/**
+ * Lo que dice un aviso: la requisición (releída de la hoja: ya con el cambio), su proyecto, quién actuó y la nota limpia.
+ * memo = lecturas ya hechas en esta tanda (libro de compras, requisiciones).
+ */
+function infoDeAviso_(tipo, d, actor, memo) {
+  const yo = VENDEDOR_ && String(VENDEDOR_.email).toLowerCase() === actor;
+  const info = { tipo: tipo, actorCorreo: actor, actorNombre: actor ? (yo ? nombreYo_() : nombreDeCorreo_(actor)) : '',
+    quien: String(d.quien || '').trim(), fecha: ahoraTexto_(), flujo: flujoOperaciones_(), nota: '' };
+  const proveedores = [];
+  const folioReq = folioReqDeDatos(d);
+  let req = null;
+  if (folioReq) {
+    try {
+      if (memo.libro === undefined) memo.libro = libroComprasSiExiste_();
+      if (!memo.libro) throw new Error('No existe el libro de compras.');
+      req = buscarReq_(memo.libro, folioReq).req;
+    } catch (e) {
+      if (tipo !== 'anulado') throw e; // sin la requisición no se sabe a quién avisar; un anulado trae sus destinatarios
+      info.folio = folioReq;
+    }
+  }
+  if (req) {
+    const p = mapaProyectos_()[String(req.proyectoFolio).toUpperCase()];
+    const prop = req.propuesta || {};
+    if (prop.proveedor && prop.proveedor.razonSocial) proveedores.push(prop.proveedor.razonSocial);
+    let orden = null;
+    const folioOc = req.ocFolio || (/^OC-/i.test(String(d.oc || '')) ? String(d.oc) : '');
+    if (folioOc) {
+      try { orden = buscarOrden_(memo.libro, folioOc).orden; } catch (e) { orden = null; }
+      if (orden && orden.proveedor) proveedores.push(orden.proveedor);
+    }
+    Object.assign(info, {
+      folio: req.folio, estado: req.estado, proyectoNombre: p ? p.nombre : '', proyectoVisible: p ? p.folioVisible : req.proyectoFolio,
+      sitio: req.sitio, fechaRequerida: req.fechaRequerida, prioridad: req.prioridad, solicitante: req.solicitante,
+      solicitanteEmail: req.solicitanteEmail, recibeEmail: req.recibeEmail || req.solicitanteEmail,
+      revisoEmail: String(req.reviso || '').toLowerCase(), elaboroPropuesta: String(prop.elaboroEmail || '').toLowerCase(),
+      notaAprobacion: req.aprobacion && req.aprobacion.nota ? req.aprobacion.nota : '',
+      entrega: orden && orden.estado !== OC_CANCELADA ? orden.fechaEntrega : (prop.fechaEntrega || ''),
+    });
+    info.recibeNombre = info.recibeEmail === info.solicitanteEmail ? info.solicitante : nombreDeCorreo_(info.recibeEmail);
+  } else if (d.proyecto) {
+    const p = mapaProyectos_()[folioInterno(d.proyecto)];
+    Object.assign(info, { proyectoNombre: p ? p.nombre : '', proyectoVisible: p ? p.folioVisible : String(d.proyecto) });
+  }
+  const limpiar = t => limpiarTextoAviso(t, proveedores);
+  info.nota = limpiar(d.nota);
+  info.notaAprobacion = limpiar(info.notaAprobacion);
+  ['reenviada', 'parcial'].forEach(k => { info[k] = !!d[k]; });
+  info.version = Number(d.version) || 0;
+  info.antes = String(d.antes || '');
+  info.sitioRecepcion = String(d.sitio || '');
+  info.fechaEsperada = String(d.fechaEsperada || '');
+  info.paqueteria = limpiar(d.paqueteria);
+  info.guia = limpiar(d.guia);
+  if (tipo === 'delegacion') {
+    Object.assign(info, { delegado: correoCapri(d.a), de: correoCapri(d.de), deNombre: nombreDeCorreo_(d.de),
+      roles: rolesDeTexto(d.roles).map(r => NOMBRES_ROLES[r]), desde: String(d.desde || ''), hasta: String(d.hasta || '') });
+  }
+  if (tipo === 'usuario.alta') {
+    Object.assign(info, { nuevo: correoCapri(d.correo), nuevoNombre: String(d.nombre || '').trim() || nombreDeCorreo_(d.correo) });
+  }
+  if (tipo === 'anulado') {
+    const folio = String(d.folio || d.oc || '').trim(); // el folio de una orden nunca va en el correo
+    info.anuladoFolio = /^OC-/i.test(folio) ? '' : folio;
+    info.anuladoTipo = String(d.tipo || '').trim();
+    info.anuladoOc = /^OC-/i.test(folio) || /orden/i.test(info.anuladoTipo);
+  }
+  return info;
+}
+
+// ---- Solicitud de cotización (PDF para el proveedor) y orden de compra para mandar al proveedor ----
+
+/**
+ * Solicitud de cotización de una requisición (solo compras), desde que está aprobada: PDF con los renglones aprobados que elija
+ * compras (cantidad aprobada, unidad, descripción —la de compras si la cambió— y notas), lugar y fecha de entrega y el contacto
+ * de compras; nunca el cliente, el proyecto, un presupuesto ni precios. Se guarda (privado) en la carpeta de requisiciones del
+ * proyecto y queda en la Bitacora de compras; no cambia la requisición.
+ * opciones = {renglones: [{renglon, incluir, descripcion, notas?}], proveedor: {nombre, correo} (opcional), notas}.
+ * Devuelve {folio, nombre, mime, datos (PDF en base64, para "Descargar PDF" sin acceso a Drive), url, renglones,
+ * correo: {para, asunto, cuerpo, gmail, mailto, recortado, partes}}.
+ */
+function solicitudCotizacion(reqFolio, opciones) {
+  exigirCompras_();
+  const libro = libroComprasSiExiste_();
+  if (!libro) throw new Error('Todavía no hay requisiciones.');
+  const { req } = buscarReq_(libro, reqFolio);
+  if (ESTADOS_SOLICITUD_COTIZACION.indexOf(req.estado) === -1) {
+    throw new Error('La requisición ' + req.folio + ' está ' + String(req.estado).toLowerCase() +
+      ': la solicitud de cotización se hace desde que está aprobada.');
+  }
+  const vigente = renglonesDeReqs_(libro)[req.folio.toUpperCase()] || { renglones: [] };
+  const aprobados = renglonesAprobados(vigente.renglones, req.aprobacion);
+  if (!aprobados.length) throw new Error('La requisición ' + req.folio + ' no tiene renglones aprobados.');
+  const sol = normalizarSolicitudCotizacion(opciones, aprobados);
+  const cfg = getConfig_();
+  const d = { folio: req.folio, fecha: Utilities.formatDate(new Date(), 'America/Mexico_City', 'dd/MM/yyyy'), proveedor: sol.proveedor,
+    renglones: sol.renglones, notas: sol.notas, sitio: sitioDeSolicitud_(req.sitio), fechaRequerida: req.fechaRequerida,
+    contacto: { nombre: nombreYo_(), correo: yo_() } };
+  const crudo = Utilities.newBlob(construirHtmlSolicitudCotizacion(d, cfg, logoDataUrl_(cfg.LOGO_FILE_ID)), 'text/html',
+    req.folio + '.html').getAs('application/pdf');
+  const r = conCandado_(() => {
+    const previas = filasDeArea_(hojaCompras_(libro, 'Bitacora'), HOJAS_COMPRAS, 'Bitacora')
+      .filter(x => String(x[2]) === 'Solicitud de cotización' && String(x[4]).indexOf(req.folio + ' ') === 0).length;
+    const nombre = nombreArchivoReq(req.folio, 'Solicitud de cotización', 'pdf', previas + 1);
+    const pdf = crudo.setName(nombre);
+    const archivo = privado_(carpetaRequisiciones_(req.proyectoFolio).createFile(pdf));
+    bitacora_(libro, 'Solicitud de cotización', req.proyectoFolio, req.folio + ' · ' + sol.renglones.length + ' renglón(es)' +
+      (sol.proveedor.nombre ? ' · para ' + sol.proveedor.nombre : '') + ' · ' + nombre, '', HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    return { pdf: pdf, archivo: archivo, nombre: nombre };
+  });
+  const partes = textosSolicitudCotizacion(d, cfg);
+  return { folio: req.folio, nombre: r.nombre, mime: 'application/pdf', datos: Utilities.base64Encode(r.pdf.getBytes()),
+    url: r.archivo.getUrl(), renglones: sol.renglones.length,
+    correo: Object.assign(correoConLigas(sol.proveedor.correo, partes.asunto, partes), { partes: partes }) };
+}
+
+/** {nombre, direccion} del sitio de la requisición (Config → SITIOS; la dirección es el tercer campo, opcional). */
+function sitioDeSolicitud_(sitio) {
+  const s = String(sitio || '').trim();
+  if (!s) return { nombre: '', direccion: '' };
+  const det = sitiosDetalle_();
+  const codigo = codigoDeSitio(s, det);
+  const x = det.find(v => textoNormal(v.nombre) === textoNormal(s)) || (codigo && det.find(v => v.codigo === codigo));
+  return { nombre: x ? x.nombre : s, direccion: x ? x.direccion : '' };
+}
+
+/**
+ * PDF de una orden de compra para mandarla al proveedor (solo compras; Cancelada no): {folio, nombre, mime, datos (base64),
+ * correo: {para (el correo del proveedor de la orden), asunto, cuerpo, gmail, mailto, recortado, partes}}. Solo lee.
+ */
+function pdfOrdenCompra(folioOc) {
+  exigirCompras_();
+  const libro = libroComprasSiExiste_();
+  if (!libro) throw new Error('Todavía no hay órdenes de compra.');
+  const { hoja, orden } = buscarOrden_(libro, folioOc);
+  if (orden.estado === OC_CANCELADA) throw new Error('La orden ' + orden.folio + ' está cancelada: no se manda al proveedor.');
+  const id = String(hoja.getRange(orden.fila, 24).getValue() || '').trim(); // pdf_id
+  if (!id) throw new Error('La orden ' + orden.folio + ' no tiene PDF.');
+  const blob = DriveApp.getFileById(id).getBlob();
+  const cfg = getConfig_();
+  const partes = textosOrdenCompra({ folio: orden.folio, proveedor: { nombre: orden.proveedor, contacto: orden.contacto },
+    renglones: orden.renglones, fechaEntrega: orden.fechaEntrega, lugarEntrega: orden.lugarEntrega,
+    contacto: { nombre: nombreYo_(), correo: yo_() } }, cfg);
+  return { folio: orden.folio, nombre: blob.getName() || nombreArchivoOc(orden.folio, orden.proveedor), mime: 'application/pdf',
+    datos: Utilities.base64Encode(blob.getBytes()),
+    correo: Object.assign(correoConLigas(orden.correo, partes.asunto, partes), { partes: partes }) };
+}
+
+/**
+ * Bitácora de correos para Administración (solo super admin): los 200 más recientes primero. filtro = texto (busca en para,
+ * asunto, tipo, folio, estado, error y quién) o {texto, estado}. Devuelve {correos: [...], total (con el filtro), sinLibro?}.
+ */
+function listarCorreos(filtro) {
+  exigirSuperAdmin_();
+  const libro = libroAdminSiExiste_();
+  if (!libro) return { correos: [], total: 0, sinLibro: true };
+  const f = filtro && typeof filtro === 'object' ? filtro : { texto: filtro };
+  const q = textoNormal(f.texto), estado = String(f.estado || '').trim();
+  const fecha = v => v instanceof Date ? Utilities.formatDate(v, 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss') : String(v || '');
+  const lista = filasDeArea_(hojaAdmin_(libro, 'Correos'), HOJAS_ADMIN, 'Correos')
+    .filter(r => String(r[0] || '').trim() || String(r[1] || '').trim() || String(r[3] || '').trim())
+    .map(r => ({ fecha: fecha(r[0]), para: String(r[1] || ''), asunto: String(r[2] || ''), tipo: String(r[3] || ''),
+      folio: String(r[4] || ''), estado: String(r[5] || ''), error: String(r[6] || ''), actor: String(r[7] || '') }))
+    .reverse()
+    .filter(c => (!estado || c.estado === estado) &&
+      (!q || textoNormal([c.para, c.asunto, c.tipo, c.folio, c.estado, c.error, c.actor].join(' ')).includes(q)));
+  return { correos: lista.slice(0, 200), total: lista.length };
+}
+
+/**
+ * prepararCapri lo corre desde el editor: manda un correo de prueba a la cuenta que corre el script, para que Google pida el
+ * permiso de mandar correos antes de publicar (sin ese permiso cada aviso fallaría). Si falla, lo dice en el registro.
+ */
+function prepararCorreos_() {
+  let yo = '';
+  try { yo = Session.getEffectiveUser ? String(Session.getEffectiveUser().getEmail() || '') : ''; } catch (e) { yo = ''; }
+  if (!yo) { console.log('Correos: no se pudo saber la cuenta que corre el script; no se mandó la prueba.'); return; }
+  const x = { asunto: '[CAPRI] Correo de prueba', titulo: 'Los avisos de CAPRI ya pueden salir', que: 'Este correo confirma ' +
+    'que CAPRI tiene permiso para mandar avisos desde ' + yo + '. No hay que hacer nada.', filas: [], nota: '',
+    boton: { texto: 'Abrir CAPRI', url: URL_AVISOS_CAPRI }, pie: 'Aviso automático de CAPRI (Helgen).' };
+  try {
+    MailApp.sendEmail({ to: yo, subject: x.asunto, htmlBody: construirHtmlAviso(x), body: textoAviso(x), name: REMITENTE_AVISOS });
+    registrarCorreos_([{ para: yo, asunto: x.asunto, tipo: 'prueba', folio: '', estado: 'Enviado', error: '', actor: yo }]);
+    console.log('Correos: prueba enviada a ' + yo + ' (quedan ' + MailApp.getRemainingDailyQuota() + ' destinatarios en la cuota de hoy).');
+  } catch (e) {
+    console.error('Correos: NO se pudo mandar la prueba a ' + yo + ': ' + e.message + '. Sin este permiso los avisos no salen.');
+  }
+}
+
+// ---- Correos: lógica pura (sin servicios de Google; se prueba en Node) ----
+
+/** Folio de la requisición de un aviso ("REQ-…"), de datos.req (texto u objeto) o datos.folio; '' si no hay. */
+function folioReqDeDatos(d) {
+  const x = d || {};
+  const cand = [x.req && typeof x.req === 'object' ? x.req.folio : x.req, x.folio];
+  const f = cand.map(v => String(v == null ? '' : v).trim().toUpperCase()).find(v => /^REQ-\d{4}-\d+$/.test(v));
+  return f || '';
+}
+
+/** Folio para la bitácora de correos (la requisición o, si no hay, el folio que traiga el aviso, también el de la orden). */
+function folioDeAviso(d) {
+  const x = d || {};
+  return folioReqDeDatos(x) || String(x.oc || x.folio || '').trim();
+}
+
+/**
+ * Quita de una nota lo que no debe ir en un correo: folios de orden de compra, montos ("$1,500", "1500 MXN", "300 dólares") y
+ * los nombres de los proveedores de esa requisición. Máximo 500 caracteres.
+ */
+function limpiarTextoAviso(texto, proveedores) {
+  let t = String(texto == null ? '' : texto).replace(/\s+/g, ' ').trim();
+  if (!t) return '';
+  t = t.replace(/\bOC-\d{4}-\d+\b/gi, 'la orden de compra')
+    .replace(/(?:US\$|MX\$|\$)\s*\d[\d.,]*(?:\s*(?:MXN|USD|M\.N\.|pesos|d[oó]lares))?/gi, '[monto]')
+    .replace(/\b\d[\d.,]*\s*(?:MXN|USD|pesos|d[oó]lares)(?![a-z])/gi, '[monto]');
+  (proveedores || []).forEach(p => {
+    const n = String(p || '').replace(/\s+/g, ' ').trim();
+    if (n.length >= 3) t = t.replace(new RegExp(n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '[proveedor]');
+  });
+  return t.slice(0, 500);
+}
+
+/**
+ * A quién va cada aviso, por grupos (cada grupo recibe su propio texto; el primero gana si alguien está en dos): [{quien,
+ * para: [correos]}]. info = infoDeAviso_ (solicitanteEmail, recibeEmail, revisoEmail, elaboroPropuesta, actorCorreo, flujo,
+ * antes…); roles = {aprobaciones: [...], compras: [...]} (correosConRol_: con super admin y delegaciones).
+ */
+function destinatariosAviso(tipo, d, info, roles) {
+  const x = d || {}, i = info || {}, r = roles || {};
+  const sol = i.solicitanteEmail || '', rec = i.recibeEmail || sol, ap = r.aprobaciones || [], co = r.compras || [];
+  const sinSol = l => l.filter(c => c !== sol);
+  const revisan = i.flujo ? { quien: 'aprobaciones', para: sinSol(ap) } : { quien: 'compras', para: sinSol(co) };
+  switch (tipo) {
+    case 'req.solicitada': return [revisan];
+    case 'req.aprobada': return [{ quien: 'compras', para: co }];
+    case 'req.devuelta': case 'req.rechazada': return [{ quien: 'solicitante', para: [sol] }];
+    case 'req.cotizada': return [{ quien: 'aprobaciones', para: sinSol(ap).filter(c => c !== i.elaboroPropuesta) }];
+    case 'req.regresada': return [{ quien: 'compras', para: co }];
+    case 'req.autorizada': return [{ quien: 'solicitante', para: [sol] }, { quien: 'recibe', para: [rec] }, { quien: 'compras', para: co }];
+    case 'req.encamino': return [{ quien: 'solicitante', para: [sol] }, { quien: 'recibe', para: [rec] }];
+    case 'req.recibida': {
+      const enSuLugar = !!i.actorCorreo && i.actorCorreo !== sol && i.actorCorreo !== rec;
+      return [{ quien: 'compras', para: co }].concat(enSuLugar
+        ? [{ quien: 'solicitante', para: [sol] }, { quien: 'recibe', para: [rec] }] : []);
+    }
+    case 'req.cancelada':
+      if (String(x.antes || i.antes || '') === REQ_DEVUELTA) return [{ quien: 'revisor', para: [i.revisoEmail] }];
+      return [{ quien: 'revisor', para: revisan.para }];
+    case 'oc.cancelada': return (sol ? [{ quien: 'solicitante', para: [sol] }] : []).concat([{ quien: 'compras', para: co }]);
+    case 'delegacion': return [{ quien: 'delegado', para: [x.a] }];
+    case 'usuario.alta': return [{ quien: 'nuevo', para: [x.correo] }];
+    case 'anulado': {
+      const lista = Array.isArray(x.para) ? x.para : String(x.para || '').split(/[\s,;]+/);
+      return [{ quien: 'involucrado', para: lista }];
+    }
+  }
+  return [];
+}
+
+/** "2026-11-05" → "05/11/2026" (otros textos, igual). */
+function fechaCorreo(iso) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})(.*)$/);
+  return m ? m[3] + '/' + m[2] + '/' + m[1] + m[4].slice(0, 6) : String(iso || '');
+}
+
+/**
+ * Texto de un aviso para un grupo: {asunto, titulo, que (lo que se necesita), filas: [[etiqueta, valor]], nota, boton: {texto,
+ * url}, pie}. Asunto "[CAPRI] REQ-2026-0005 · Por aprobar · DROGHEDA · Manzanillo (TIMSA)". Nunca montos, proveedores ni folio
+ * de orden: info solo trae lo que puede ir (ver infoDeAviso_).
+ */
+function contenidoAviso(tipo, quien, info) {
+  const i = info || {};
+  const enCapri = i.folio ? URL_AVISOS_CAPRI + '#req=' + encodeURIComponent(i.folio) : URL_AVISOS_CAPRI;
+  const quienHizo = i.actorNombre ? i.actorNombre + (i.actorCorreo && i.actorNombre !== i.actorCorreo ? ' (' + i.actorCorreo + ')' : '')
+    : (i.quien || '');
+  const filasReq = () => [
+    ['Proyecto', [i.proyectoVisible, i.proyectoNombre].filter(Boolean).join(' · ')],
+    ['Sitio', i.sitio], ['Se necesita', fechaCorreo(i.fechaRequerida)], ['Prioridad', i.prioridad], ['Pidió', i.solicitante],
+    ['Lo hizo', i.actorCorreo && i.actorCorreo === i.solicitanteEmail ? '' : quienHizo], ['Cuándo', fechaCorreo(i.fecha)]];
+  const x = { asunto: '', titulo: '', que: '', filas: [], nota: '', boton: { texto: i.folio ? 'Abrir ' + i.folio + ' en CAPRI' : 'Abrir CAPRI', url: enCapri },
+    pie: 'Aviso automático de CAPRI (Helgen). ' + (i.actorNombre ? 'Si respondes, tu respuesta le llega a ' + i.actorNombre + '. ' : '') +
+      'No reenvíes este correo fuera de Helgen.' };
+  const req = (etiqueta, que, nota) => {
+    x.asunto = '[CAPRI] ' + [i.folio, etiqueta, i.proyectoNombre, i.sitio].filter(Boolean).join(' · ');
+    x.titulo = [i.folio, etiqueta].filter(Boolean).join(' · ');
+    x.que = que; x.filas = filasReq(); x.nota = nota || '';
+  };
+  const recibeEsSol = !i.recibeEmail || i.recibeEmail === i.solicitanteEmail;
+  const entrega = i.entrega ? ' Entrega esperada: ' + fechaCorreo(i.entrega) + '.' : '';
+  switch (tipo) {
+    case 'req.solicitada':
+      if (quien === 'compras') req(i.reenviada ? 'Corregida, por autorizar' : 'Por autorizar', 'Revisa la requisición y la cotización ' +
+        'del proveedor para autorizarla (emitir la orden de compra), devolverla o rechazarla.');
+      else req(i.reenviada ? 'Corregida, por aprobar' : 'Por aprobar', (i.reenviada ? 'Quien la pidió la corrigió y la volvió a enviar. ' : '') +
+        'Revisa la requisición y aprueba o rechaza cada renglón.');
+      break;
+    case 'req.aprobada':
+      req('Aprobada, por cotizar', 'Aprobaciones aprobó la requisición. Pide cotización a los proveedores y manda la propuesta de compra.',
+        i.notaAprobacion);
+      break;
+    case 'req.devuelta':
+      req('Devuelta para corregir', 'Te regresaron la requisición: corrígela con lo que dice la nota y vuelve a enviarla.', i.nota);
+      break;
+    case 'req.rechazada':
+      req('Rechazada', 'Tu requisición no se va a comprar. El motivo está en la nota.', i.nota);
+      break;
+    case 'req.cotizada':
+      req('Propuesta por revisar', 'Compras mandó la propuesta de compra' + (i.version > 1 ? ' (versión ' + i.version + ')' : '') +
+        '. Revísala en CAPRI y dale el visto bueno o regrésala a compras.');
+      break;
+    case 'req.regresada':
+      req('Propuesta regresada', 'Aprobaciones regresó la propuesta para ajustarla. Corrígela y vuelve a mandarla.', i.nota);
+      break;
+    case 'req.autorizada':
+      if (quien === 'compras') req('Autorizada, enviar orden', 'Ya hay orden de compra: mándala al proveedor desde la requisición ' +
+        'en CAPRI ("Enviar orden al proveedor") y registra su factura y su pago.' + entrega);
+      else if (quien === 'recibe') req('Material por recibir', 'Se autorizó la compra. Tú recibes el material' +
+        (i.sitio ? ' en ' + i.sitio : '') + '.' + entrega + ' Cuando llegue, regístralo en CAPRI.');
+      else req('Autorizada', 'Se autorizó la compra de tu requisición.' + entrega + (recibeEsSol ? ' Cuando llegue, regístralo en CAPRI.'
+        : ' Lo recibe ' + (i.recibeNombre || i.recibeEmail) + '.'));
+      break;
+    case 'req.encamino':
+      req('En camino', 'El material de esta requisición ya va en camino' + (i.fechaEsperada ? '; llegada esperada el ' +
+        fechaCorreo(i.fechaEsperada) : '') + '.' + (quien === 'recibe' || recibeEsSol ? ' Cuando llegue, regístralo en CAPRI.' : ''), i.nota);
+      x.filas.splice(2, 0, ['Paquetería', i.paqueteria], ['Guía', i.guia]);
+      break;
+    case 'req.recibida': {
+      const donde = i.sitioRecepcion || i.sitio;
+      if (quien === 'compras') {
+        req(i.parcial ? 'Recepción parcial' : 'Material recibido', 'Se registró la recepción ' + (i.parcial ? 'parcial' : 'completa') +
+          ' del material' + (donde ? ' en ' + donde : '') + '.' + (i.estado === REQ_RECIBIDA ? ' Falta registrar el pago.' :
+          i.estado === REQ_CERRADA ? ' La requisición quedó cerrada.' : ''), i.nota);
+      } else {
+        req('Recepción registrada', 'Se registró en tu lugar la recepción ' + (i.parcial ? 'parcial' : 'completa') + ' del material' +
+          (donde ? ' en ' + donde : '') + '. Revisa en CAPRI que sea correcta.', i.nota);
+      }
+      break;
+    }
+    case 'req.cancelada':
+      req('Cancelada', 'Quien la pidió canceló la requisición: ya no necesitas revisarla.', i.nota);
+      break;
+    case 'oc.cancelada':
+      if (i.folio) {
+        if (quien === 'solicitante') req('Orden cancelada', 'Se canceló la orden de compra de tu requisición; compras la va a ' +
+          'comprar de nuevo. No tienes que hacer nada.');
+        else req('Orden cancelada', 'Se canceló la orden de compra de esta requisición' + (i.estado === REQ_APROBADA ? '; hay que ' +
+          'cotizarla de nuevo.' : i.estado === REQ_SOLICITADA ? '; queda pendiente de autorizar de nuevo.' : '.'), i.nota);
+      } else {
+        x.asunto = '[CAPRI] Orden de compra cancelada' + (i.proyectoNombre ? ' · ' + i.proyectoNombre : '');
+        x.titulo = 'Orden de compra cancelada';
+        x.que = 'Se canceló una orden de compra' + (i.proyectoVisible ? ' del proyecto ' + i.proyectoVisible : '') + '. El detalle está en CAPRI.';
+        x.filas = [['Proyecto', [i.proyectoVisible, i.proyectoNombre].filter(Boolean).join(' · ')], ['Lo hizo', quienHizo],
+          ['Cuándo', fechaCorreo(i.fecha)]];
+        x.nota = i.nota;
+      }
+      break;
+    case 'delegacion': {
+      const roles = (i.roles || []).join(' y ') || 'sus funciones';
+      x.asunto = '[CAPRI] Te delegaron ' + roles + ' del ' + fechaCorreo(i.desde) + ' al ' + fechaCorreo(i.hasta);
+      x.titulo = 'Te delegaron ' + roles;
+      x.que = (i.deNombre || i.de || 'Alguien') + ' te dejó ' + roles + ' del ' + fechaCorreo(i.desde) + ' al ' + fechaCorreo(i.hasta) +
+        '. En esas fechas verás sus pendientes en CAPRI y recibirás sus avisos.';
+      x.filas = [['De', i.deNombre && i.de && i.deNombre !== i.de ? i.deNombre + ' (' + i.de + ')' : i.de], ['Lo registró', quienHizo]];
+      break;
+    }
+    case 'usuario.alta': {
+      const servicios = dominioDe(i.nuevo) === DOMINIO_SERVICIOS;
+      x.asunto = '[CAPRI] Ya tienes acceso a CAPRI';
+      x.titulo = (i.nuevoNombre && i.nuevoNombre !== i.nuevo ? i.nuevoNombre + ', te' : 'Te') + ' damos la bienvenida a CAPRI';
+      x.que = 'Ya tienes acceso a CAPRI, la herramienta interna de Helgen para requisiciones, compras y cotizaciones.';
+      x.filas = [['Tu cuenta', i.nuevo], ['Cómo entrar', servicios
+        ? 'Abre la liga, escribe tu correo @' + DOMINIO_SERVICIOS + ' y te llegará un código por correo para entrar.'
+        : 'Abre la liga y entra con "Acceder con Google" usando tu cuenta @' + DOMINIO_HELGEN + '.'], ['Te dio de alta', quienHizo]];
+      x.boton = { texto: 'Abrir CAPRI', url: URL_AVISOS_CAPRI };
+      break;
+    }
+    case 'anulado': {
+      const que = i.anuladoOc ? 'la orden de compra' + (i.folio ? ' de ' + i.folio : '') : (i.anuladoTipo ? i.anuladoTipo + ' ' : 'el registro ') +
+        (i.anuladoFolio || i.folio || '');
+      x.asunto = '[CAPRI] ' + [i.anuladoOc ? (i.folio ? i.folio + ' · Orden de compra anulada' : 'Orden de compra anulada')
+        : (i.anuladoFolio || i.folio || 'Registro') + ' · Anulado', i.proyectoNombre].filter(Boolean).join(' · ');
+      x.titulo = 'Se anuló ' + que.trim();
+      x.que = 'Un super admin anuló ' + que.trim() + '. Ya no cuenta en listas ni totales de CAPRI.';
+      x.filas = [['Proyecto', [i.proyectoVisible, i.proyectoNombre].filter(Boolean).join(' · ')], ['Lo hizo', quienHizo],
+        ['Cuándo', fechaCorreo(i.fecha)]];
+      x.nota = i.nota;
+      break;
+    }
+  }
+  x.filas = x.filas.filter(f => f && f[1]);
+  return x;
+}
+
+/** HTML del aviso (tablas e inline CSS, como el PDF; el botón también tiene borde por si el correo quita el fondo). */
+function construirHtmlAviso(x) {
+  const e = escaparHtml, AZUL = '#2C3C5B', AQUA = '#51F3DA', TEAL = '#0AC5A8', GRIS = '#6B7280';
+  const filas = (x.filas || []).filter(f => f && f[1]).map(f =>
+    '<tr><td style="padding:3px 14px 3px 0;color:' + GRIS + ';white-space:nowrap;vertical-align:top;">' + e(f[0]) + '</td>' +
+    '<td style="padding:3px 0;vertical-align:top;">' + e(f[1]) + '</td></tr>').join('');
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"></head>' +
+    '<body style="margin:0;padding:16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#1F2937;">' +
+    '<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;max-width:580px;border-collapse:collapse;">' +
+    '<tr><td style="padding:0 0 8px;border-bottom:3px solid ' + AQUA + ';font-weight:bold;letter-spacing:2px;color:' + AZUL + ';">CAPRI · HELGEN</td></tr>' +
+    '<tr><td style="padding:16px 0 6px;font-size:18px;font-weight:bold;color:' + AZUL + ';">' + e(x.titulo) + '</td></tr>' +
+    '<tr><td style="padding:0 0 12px;line-height:1.5;">' + e(x.que) + '</td></tr>' +
+    (filas ? '<tr><td><table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">' + filas + '</table></td></tr>' : '') +
+    (x.nota ? '<tr><td style="padding:12px 0 0;"><table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;"><tr>' +
+      '<td style="border-left:3px solid ' + TEAL + ';padding:6px 10px;line-height:1.5;"><b>Nota:</b> ' + e(x.nota) + '</td></tr></table></td></tr>' : '') +
+    (x.boton ? '<tr><td style="padding:20px 0;"><a href="' + e(x.boton.url) + '" style="display:inline-block;padding:10px 18px;' +
+      'background:' + TEAL + ';border:2px solid ' + AZUL + ';border-radius:6px;color:' + AZUL + ';font-weight:bold;text-decoration:none;">' +
+      e(x.boton.texto) + '</a></td></tr>' : '') +
+    '<tr><td style="padding:12px 0 0;border-top:1px solid #E5E7EB;color:' + GRIS + ';font-size:12px;line-height:1.5;">' + e(x.pie) + '</td></tr>' +
+    '</table></body></html>';
+}
+
+/** El mismo aviso en texto plano (para quien no ve HTML). */
+function textoAviso(x) {
+  return [x.titulo, '', x.que, ''].concat((x.filas || []).filter(f => f && f[1]).map(f => f[0] + ': ' + f[1]))
+    .concat(x.nota ? ['', 'Nota: ' + x.nota] : [], x.boton ? ['', x.boton.texto + ': ' + x.boton.url] : [], ['', x.pie]).join('\n');
+}
+
+/**
+ * Lo que compras escoge para la solicitud de cotización, sobre los renglones aprobados (renglonesAprobados). o = {renglones:
+ * [{renglon, incluir, descripcion, notas}], proveedor: {nombre, correo}, notas}. Sin renglones en o, van todos como están.
+ * Descripción y notas que compras cambió (vacías = las de la requisición; notas: "" las quita); al menos un renglón.
+ * Devuelve {renglones: [{renglon, descripcion, cantidad (la aprobada), unidad, notas}], proveedor: {nombre, correo}, notas}.
+ */
+function normalizarSolicitudCotizacion(o, aprobados) {
+  const x = o || {};
+  const limpio = s => String(s == null ? '' : s).trim().replace(/\s+/g, ' ');
+  const porRenglon = {};
+  (Array.isArray(x.renglones) ? x.renglones : []).forEach(r => {
+    if (!r) return;
+    const n = Number(r.renglon);
+    if (!(aprobados || []).some(a => a.renglon === n)) throw new Error('El renglón ' + r.renglon + ' no está aprobado: no va en la solicitud.');
+    porRenglon[n] = r;
+  });
+  const renglones = (aprobados || []).filter(a => !porRenglon[a.renglon] || porRenglon[a.renglon].incluir !== false).map(a => {
+    const r = porRenglon[a.renglon] || {};
+    const descripcion = limpio(r.descripcion) || a.descripcion;
+    if (descripcion.length > 500) throw new Error('La descripción del renglón ' + a.renglon + ' debe tener máximo 500 caracteres.');
+    const notas = r.notas == null ? limpio(a.notas) : limpio(r.notas);
+    if (notas.length > 300) throw new Error('Las notas del renglón ' + a.renglon + ' deben tener máximo 300 caracteres.');
+    return { renglon: a.renglon, descripcion: descripcion, cantidad: a.cantidad, unidad: a.unidad, notas: notas };
+  });
+  if (!renglones.length) throw new Error('Elige al menos un renglón para la solicitud de cotización.');
+  const p = x.proveedor || {};
+  const nombre = limpio(p.nombre || p.razonSocial).slice(0, 150);
+  const correo = limpio(p.correo).toLowerCase();
+  if (correo && !/^[^\s@,;<>]+@[^\s@,;<>]+\.[a-z]{2,}$/i.test(correo)) throw new Error('El correo del proveedor no es válido.');
+  const notas = String(x.notas == null ? '' : x.notas).trim();
+  if (notas.length > 1000) throw new Error('Las notas para el proveedor deben tener máximo 1000 caracteres.');
+  return { renglones: renglones, proveedor: { nombre: nombre, correo: correo }, notas: notas };
+}
+
+/**
+ * HTML del PDF "Solicitud de cotización" (mismas reglas que el de la orden: tablas, inline CSS, sin depender de fondos, todo
+ * texto escapado). d = {folio, fecha "dd/MM/yyyy", proveedor: {nombre, correo}, renglones (normalizarSolicitudCotizacion),
+ * notas, sitio: {nombre, direccion}, fechaRequerida, contacto: {nombre, correo}}. Datos fiscales de Helgen (Config). Nunca
+ * cliente, proyecto, presupuesto ni precios.
+ */
+function construirHtmlSolicitudCotizacion(d, cfg, logoUrl) {
+  const e = escaparHtml, c = cfg || {};
+  const AZUL = '#2C3C5B', AQUA = '#51F3DA', TEAL = '#0AC5A8', GRIS = '#6B7280';
+  const logo = logoUrl ? '<img src="' + logoUrl + '" style="height:44px;">'
+    : '<div style="font-size:26px;font-weight:bold;color:' + AZUL + ';">Helgen</div>';
+  const docFila = (k, v, fuerte) => v ? '<tr><td style="padding:1px 10px 1px 0;color:' + GRIS + ';text-align:right;">' + k + '</td>' +
+    '<td style="padding:1px 0;text-align:right;color:' + AZUL + ';' + (fuerte ? 'font-weight:bold;font-size:12px;' : '') + '">' + e(v) + '</td></tr>' : '';
+  const dato = (k, v) => v ? '<tr><td class="k">' + k + '</td><td>' + e(v).replace(/\n/g, '<br>') + '</td></tr>' : '';
+  const p = d.proveedor || {}, s = d.sitio || {}, ct = d.contacto || {};
+  const filas = (d.renglones || []).map((r, i) => '<tr><td class="c">' + (i + 1) + '</td><td>' + e(r.descripcion) + '</td>' +
+    '<td class="r">' + e(r.cantidad) + '</td><td class="c">' + e(r.unidad) + '</td><td>' + e(r.notas) + '</td></tr>').join('');
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' +
+    'body{font-family:Arial,Helvetica,sans-serif;font-size:10px;color:#1F2937;margin:0;}' +
+    'table{border-collapse:collapse;width:100%;}td,th{padding:5px 6px;vertical-align:top;}' +
+    '.c{text-align:center;}.r{text-align:right;white-space:nowrap;}.k{color:' + GRIS + ';width:120px;}' +
+    '.mod{font-size:11px;font-weight:bold;color:' + AZUL + ';border-bottom:2px solid ' + TEAL + ';padding:0 0 3px 0;margin:16px 0 6px 0;}' +
+    '.partidas th{color:' + AZUL + ';font-size:9px;text-transform:uppercase;text-align:left;border-top:2px solid ' + AZUL + ';' +
+    'border-bottom:2px solid ' + AZUL + ';}.partidas td{border-bottom:1px solid #E5E7EB;}.partidas th.r{text-align:right;}.partidas th.c{text-align:center;}' +
+    '</style></head><body>' +
+    '<table><tr><td style="width:55%;padding:4px 0;vertical-align:middle;">' + logo + '</td>' +
+    '<td style="width:45%;padding:0;text-align:right;vertical-align:middle;"><table style="width:auto;margin-left:auto;">' +
+    '<tr><td colspan="2" style="font-size:18px;font-weight:bold;letter-spacing:1px;color:' + AZUL + ';padding:0 0 3px;text-align:right;">SOLICITUD DE COTIZACIÓN</td></tr>' +
+    docFila('Referencia', d.folio, true) + docFila('Fecha', d.fecha) + docFila('Se necesita', fechaCorreo(d.fechaRequerida)) +
+    '</table></td></tr></table>' +
+    '<div style="border-top:3px solid ' + AQUA + ';margin-top:8px;"></div>' +
+    '<div style="padding:6px 0 0;color:#4B5563;line-height:1.5;"><b style="color:' + AZUL + ';">' + e(c.EMPRESA_NOMBRE) + '</b> · RFC ' +
+    e(c.EMPRESA_RFC) + '<br>' + e(c.EMPRESA_DIRECCION) + '<br>' + e(c.EMPRESA_TELEFONO) + ' · ' + e(c.EMPRESA_EMAIL) + ' · ' + e(c.EMPRESA_WEB) + '</div>' +
+    (p.nombre || p.correo ? '<div style="margin-top:12px;"><span style="color:' + GRIS + ';">Para:</span> <b style="color:' + AZUL + ';">' +
+      e(p.nombre) + '</b>' + (p.correo ? ' · ' + e(p.correo) : '') + '</div>' : '') +
+    '<div style="margin-top:12px;line-height:1.5;">Le solicitamos su cotización de las partidas siguientes.</div>' +
+    '<div class="mod">1 · PARTIDAS</div>' +
+    '<table class="partidas"><tr><th class="c" style="width:22px;">#</th><th>Descripción</th><th class="r" style="width:55px;">Cantidad</th>' +
+    '<th class="c" style="width:55px;">Unidad</th><th style="width:170px;">Notas</th></tr>' + filas + '</table>' +
+    '<div class="mod">2 · ENTREGA</div><table>' +
+    dato('Lugar de entrega', [s.nombre, s.direccion].filter(Boolean).join('\n') || 'Por confirmar') +
+    dato('Se necesita', fechaCorreo(d.fechaRequerida)) + '</table>' +
+    '<div class="mod">3 · CONTACTO DE COMPRAS</div><table>' +
+    dato('Nombre', ct.nombre) + dato('Correo', ct.correo) + dato('Empresa', [c.EMPRESA_EMAIL, c.EMPRESA_TELEFONO].filter(Boolean).join(' · ')) +
+    '</table>' +
+    (d.notas ? '<div class="mod">NOTAS</div><div style="line-height:1.5;">' + e(d.notas).replace(/\n/g, '<br>') + '</div>' : '') +
+    '<table style="margin-top:18px;"><tr><td style="border-left:3px solid ' + TEAL + ';padding:8px 10px;line-height:1.5;">' +
+    '<b style="color:' + AZUL + ';">Le pedimos incluir en su cotización:</b> precio unitario de cada partida, IVA, tiempo de entrega, ' +
+    'vigencia de la cotización y condiciones de pago. Por favor indique la referencia ' + e(d.folio) + '.</td></tr></table>' +
+    '<div style="margin-top:18px;border-top:1px solid #D1D5DB;padding:6px 0 0;color:' + GRIS + ';font-size:9px;">' +
+    e(c.EMPRESA_NOMBRE) + ' &nbsp;·&nbsp; ' + e(c.EMPRESA_EMAIL) + ' &nbsp;·&nbsp; ' + e(c.EMPRESA_TELEFONO) + '</div>' +
+    '</body></html>';
+}
+
+/** Termina una oración con punto (si ya termina en punto, no agrega otro). */
+const conPuntoCorreo = t => /[.!?]$/.test(String(t)) ? String(t) : String(t) + '.';
+
+/** Firma de compras para los correos a proveedores. */
+function firmaCompras_(ct, cfg) {
+  const c = cfg || {}, x = ct || {};
+  return ['', 'Saludos,', x.nombre || '', 'Compras · ' + (c.EMPRESA_NOMBRE || 'Helgen Servicios Especializados'),
+    [c.EMPRESA_TELEFONO, x.correo || c.EMPRESA_EMAIL].filter(Boolean).join(' · ')].filter((l, i) => i < 2 || l);
+}
+
+/** Asunto y partes del cuerpo del correo de la solicitud de cotización (lista = una línea por partida; ver correoConLigas). */
+function textosSolicitudCotizacion(d, cfg) {
+  const c = cfg || {}, p = d.proveedor || {}, s = d.sitio || {};
+  const empresa = c.EMPRESA_NOMBRE || 'Helgen Servicios Especializados';
+  return {
+    asunto: 'Solicitud de cotización · ' + empresa + ' · ' + d.folio,
+    inicio: ['Buenos días' + (p.nombre ? ', ' + p.nombre : '') + ':', '', 'Les solicitamos cotización de las partidas siguientes ' +
+      '(detalle en el PDF adjunto, referencia ' + d.folio + '):', ''],
+    lista: (d.renglones || []).map((r, i) => (i + 1) + '. ' + r.cantidad + ' ' + r.unidad + ' · ' + r.descripcion),
+    fin: ['', 'Por favor incluyan precio unitario, IVA, tiempo de entrega, vigencia de la cotización y condiciones de pago.']
+      .concat(s.nombre ? [conPuntoCorreo('Entrega en ' + s.nombre + (s.direccion ? ': ' + s.direccion : ''))] : [])
+      .concat(d.fechaRequerida ? ['Se necesita para el ' + fechaCorreo(d.fechaRequerida) + '.'] : [])
+      .concat(firmaCompras_(d.contacto, c)),
+  };
+}
+
+/** Asunto y partes del cuerpo del correo con una orden de compra para el proveedor (sin montos: van en el PDF). */
+function textosOrdenCompra(d, cfg) {
+  const c = cfg || {}, p = d.proveedor || {};
+  const empresa = c.EMPRESA_NOMBRE || 'Helgen Servicios Especializados';
+  return {
+    asunto: 'Orden de compra ' + d.folio + ' · ' + empresa,
+    inicio: ['Buenos días' + (p.contacto ? ', ' + p.contacto : p.nombre ? ', ' + p.nombre : '') + ':', '',
+      'Les enviamos la orden de compra ' + d.folio + ' (PDF adjunto). Partidas:', ''],
+    lista: (d.renglones || []).map((r, i) => (i + 1) + '. ' + r.cantidad + ' ' + r.unidad + ' · ' + r.descripcion),
+    fin: ['', conPuntoCorreo('Entrega: ' + [fechaCorreo(d.fechaEntrega), d.lugarEntrega].filter(Boolean).join(' en ')),
+      'Por favor confirmen de recibido y la fecha de entrega, e indiquen el folio ' + d.folio + ' en su factura.']
+      .concat(firmaCompras_(d.contacto, c)),
+  };
+}
+
+/**
+ * Correo a un proveedor listo para "Abrir en Gmail" y "Abrir en mi correo" (mailto:). partes = {inicio, lista, fin} (líneas).
+ * Si la liga más larga pasa de max (MAX_LIGA_CORREO), se quitan partidas del final y se agrega "… y N partida(s) más: ver el
+ * PDF adjunto."; si aun así no cabe, se corta el texto y termina en "… ver el PDF adjunto.". La interfaz tiene una copia
+ * idéntica (ligasCorreo en mod-correos) para rehacer las ligas si se cambia el correo; la prueba compara las dos.
+ * Devuelve {para, asunto, cuerpo, gmail, mailto, recortado}.
+ */
+function correoConLigas(para, asunto, partes, max) {
+  const tope = max || MAX_LIGA_CORREO, p = partes || {};
+  const inicio = p.inicio || [], lista = p.lista || [], fin = p.fin || [];
+  const to = String(para == null ? '' : para).trim(), su = String(asunto == null ? '' : asunto);
+  const gmail = b => 'https://mail.google.com/mail/?view=cm&fs=1&to=' + encodeURIComponent(to) + '&su=' + encodeURIComponent(su) +
+    '&body=' + encodeURIComponent(b);
+  const mailto = b => 'mailto:' + encodeURIComponent(to).replace(/%40/g, '@') + '?subject=' + encodeURIComponent(su) +
+    '&body=' + encodeURIComponent(b).replace(/%0A/g, '%0D%0A');
+  const largo = b => Math.max(gmail(b).length, mailto(b).length);
+  const armar = n => inicio.concat(lista.slice(0, n), n < lista.length ? ['… y ' + (lista.length - n) +
+    ' partida(s) más: ver el PDF adjunto.'] : [], fin).join('\n');
+  let n = lista.length, cuerpo = armar(n);
+  while (n > 0 && largo(cuerpo) > tope) cuerpo = armar(--n);
+  let recortado = n < lista.length;
+  if (largo(cuerpo) > tope) {
+    const marca = '\n… ver el PDF adjunto.';
+    let t = cuerpo;
+    while (t && largo(t + marca) > tope) t = t.slice(0, Math.max(0, t.length - 40));
+    cuerpo = t + marca;
+    recortado = true;
+  }
+  return { para: to, asunto: su, cuerpo: cuerpo, gmail: gmail(cuerpo), mailto: mailto(cuerpo), recortado: recortado };
 }
 
 // ---- 6.C Centro de mando (drogheda.helgen.online): sitios con código, ítems, En camino, avisos firmados, recepciones ----
