@@ -10347,14 +10347,17 @@ function pasaLuhn(d) {
   return d.length > 0 && s % 10 === 0;
 }
 
-/** Agrupaciones con que se escribe una tarjeta (largo de cada grupo): 4-4-4-4, 4-4-4-4-1…3 (19 dígitos) y American Express 4-6-5. */
-const AGRUPACIONES_TARJETA = ['4,4,4,4', '4,4,4,4,1', '4,4,4,4,2', '4,4,4,4,3', '4,6,5'];
+/**
+ * Agrupaciones con que se escribe una tarjeta (largo de cada grupo): 4-4-4-(1…4), 4-4-4-4-(1…3) (hasta 19 dígitos), American
+ * Express 4-6-5 y Diners 4-6-4.
+ */
+const AGRUPACIONES_TARJETA = ['4,4,4,1', '4,4,4,2', '4,4,4,3', '4,4,4,4', '4,4,4,4,1', '4,4,4,4,2', '4,4,4,4,3', '4,6,5', '4,6,4'];
 
 /**
  * ¿El texto trae lo que parece un número de tarjeta? Una sola regla para todo método (pago a proveedor, cobranza y la cuenta de la
- * ficha del proveedor; revisión del 29/10/2026). Candidatos: cada corrida de dígitos sin cortes y cada tramo agrupado exactamente
- * como una tarjeta (AGRUPACIONES_TARJETA, con un espacio o un guion entre grupos); nunca se juntan otros grupos (una fecha y un
- * folio quedan separados). Parece tarjeta si un candidato tiene de 13 a 19 dígitos, empieza con 3, 4, 5 o 6 (American Express,
+ * ficha del proveedor; revisión del 29/10/2026). Candidatos: cada corrida de dígitos sin cortes y cada tramo de grupos separados
+ * por espacios, puntos, guiones, diagonales o guiones bajos (uno o varios) cuyos largos tienen exactamente la forma de una tarjeta
+ * (AGRUPACIONES_TARJETA); nunca se juntan grupos de otra forma ("29-10-2026 1234567" y "30/10/2026" quedan separados). Parece tarjeta si un candidato tiene de 13 a 19 dígitos, empieza con 3, 4, 5 o 6 (American Express,
  * Visa, Mastercard, Discover/Carnet) y pasa la prueba de Luhn; una CLABE válida de 18 dígitos (STP empieza con 646) nunca es
  * tarjeta, y una corrida de 20 dígitos o más (clave de rastreo, ticket) tampoco. Nunca se pide ni se guarda un número de tarjeta
  * (contrato §1). El segundo parámetro (método) ya no cuenta: se acepta por compatibilidad.
@@ -10362,8 +10365,8 @@ const AGRUPACIONES_TARJETA = ['4,4,4,4', '4,4,4,4,1', '4,4,4,4,2', '4,4,4,4,3', 
 function pareceNumeroTarjeta(texto) {
   const s = String(texto == null ? '' : texto);
   const candidatos = (s.match(/\d+/g) || []).slice();
-  (s.match(/\d+(?:[ -]\d+)+/g) || []).forEach(cadena => {
-    const g = cadena.split(/[ -]/);
+  (s.match(/\d+(?:[ .\-\/_]+\d+)+/g) || []).forEach(cadena => {
+    const g = cadena.split(/[ .\-\/_]+/);
     for (let i = 0; i < g.length; i++) {
       for (let n = 3; n <= 5 && i + n <= g.length; n++) {
         const tramo = g.slice(i, i + n);

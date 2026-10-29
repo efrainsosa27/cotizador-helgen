@@ -118,9 +118,10 @@ Manual (Compras, Tareas frecuentes, Reglas de oro, Historial, Pendientes).
    (precarga la orden siguiente y lo actualiza la última orden emitida). Una segunda columna serían dos fuentes para el mismo dato.
    **Desviación del contrato** (columna 7 de su lista); la ficha lo expone como `diasCredito`.
 2. **Número de tarjeta** (regla corregida en la revisión del 29/10/2026; `tests/revision5.test.js` §3): **una sola regla para todo
-   método**. Candidatos: cada corrida de dígitos sin cortes y cada tramo agrupado exactamente como una tarjeta (4-4-4-4, 4-4-4-4-1…3
-   o American Express 4-6-5, con un espacio o un guion entre grupos); nunca se juntan otros grupos (en "SPEI 29-10-2026 1234567" la
-   fecha y el folio quedan separados). Se rechaza si un candidato tiene de 13 a 19 dígitos, **empieza con 3, 4, 5 o 6** y pasa la
+   método**. Candidatos: cada corrida de dígitos sin cortes y cada tramo de grupos separados por espacios, puntos, guiones,
+   diagonales o guiones bajos (uno o varios: "4111.1111.1111.1111", "4111  1111…", "4111/1111…", "5555_5555…"; revisión 5b) con
+   forma exacta de tarjeta: 4-4-4-(1…4), 4-4-4-4-(1…3), American Express 4-6-5 o Diners 4-6-4; nunca se juntan grupos de otra forma
+   (en "SPEI 29-10-2026 1234567" y "30/10/2026" la fecha y el folio quedan separados). Se rechaza si un candidato tiene de 13 a 19 dígitos, **empieza con 3, 4, 5 o 6** y pasa la
    prueba de Luhn. Una CLABE válida de 18 dígitos nunca es tarjeta (las de STP empiezan con 646) y una corrida de 20 dígitos o más
    (clave de rastreo, ticket de tienda) se permite. El mensaje pide el número de autorización o los últimos 4 dígitos. Antes: con
    tarjeta bastaba el largo (≥ 13, sin tope: se rechazaban los tickets de 20 dígitos que la interfaz pide) y con los demás métodos

@@ -411,7 +411,8 @@ Contrato entre módulos y con el centro de mando: `docs/incremento-5.md`; detall
 - **F · Proveedores y forma de pago.** `FORMAS_PAGO_OC`, columna `forma_pago` de la orden (obligatoria; las viejas se leen con
   `formaPagoDeOrden`), `recibeAntesDePagar_(orden)` (crédito del proveedor: se recibe con la orden sin pagar → Recibida; el pago la
   cierra), `METODOS_PAGO` (5; cobranza usa `METODOS_COBRO`), referencias con forma de número de tarjeta rechazadas (`pareceNumeroTarjeta`: una regla para todo método; 13–19 dígitos sin
-  cortes o agrupados como tarjeta, que empiezan con 3–6 y pasan Luhn; nunca una CLABE válida ni 20 dígitos o más).
+  cortes o agrupados como tarjeta —4-4-4-(1…4), 4-4-4-4-(1…3), 4-6-5, 4-6-4, con espacios, puntos, guiones, "/" o "_"—, que
+  empiezan con 3–6 y pasan Luhn; nunca una CLABE válida ni 20 dígitos o más).
   `listarProveedores`, `getProveedor`, `guardarProveedor` (CLABE con dígito verificador; cambio bancario exige carátula nueva, va a
   la bitácora y manda `proveedor.banco` a compras), `subirDocumentoProveedor`; `avisoProveedor` al emitir orden o propuesta;
   `exigirDocumentosParaPagar_` + `documentosParaPagar(rfc, metodo)` (pura): solo **Transferencia** exige carátula y, si el RFC es

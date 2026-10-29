@@ -13,6 +13,8 @@
 //     el mismo dato que usa el bloqueo del servidor.
 //  6. Menores: compras no ve "Cerrar" con una devolución abierta; cerrarRequisicionCompras revisa todo antes de escribir (crédito con
 //     aprobaciones); la tabla de devoluciones de Compras se desliza en el teléfono.
+//  A. (Revisión 5b) Tarjetas escritas con puntos, dobles espacios, "/" o "_" entre grupos, y formas 4-4-4-(1…4) y Diners 4-6-4;
+//     fechas y folios siguen separados.
 // Uso: node tests/revision5.test.js .
 'use strict';
 const assert = require('assert');
@@ -331,6 +333,30 @@ aprobaciones(false);
   const html = require('fs').readFileSync(require('path').join(dir, 'web/cotizador/index.html'), 'utf8');
   assert(/'<div class="tabla-desliza"><table style="font-size:12px;margin-top:6px"><thead><tr><th>Folio<\/th><th>Material/.test(html) &&
     /'<\/tbody><\/table><\/div>' : ''\) \+\s*'<div id="rcDevResolver">/.test(html), 'tabla de devoluciones deslizable');
+}
+
+// ================= A. Separadores de tarjeta (revisión 5b) =================
+{
+  // Las sondas de la revisión 5b (probe/tarjeta.js): antes pasaban con punto, doble espacio, "/" y "_"
+  for (const [ref, metodo] of [['4111 1111 1111 1111', 'Tarjeta de crédito'], ['4111.1111.1111.1111', 'Tarjeta de crédito'],
+    ['4111  1111  1111  1111', 'Tarjeta de débito'], ['4111/1111/1111/1111', 'Tarjeta de crédito'], ['4111111111111111', 'Transferencia'],
+    ['4111.1111.1111.1111', 'Transferencia'], ['tarjeta 4111 1111 1111 1111 aut 55', 'Efectivo'], ['5555 5555 5555 4444', 'Cheque'],
+    ['5555_5555_5555_4444', 'Tarjeta de crédito'], ['4111 - 1111 - 1111 - 1111', 'Cheque'], ['4222 2222 2222 2', 'Transferencia'],
+    ['3056 930902 5904', 'Tarjeta de crédito'], ['3782.822463.10005', 'Efectivo'], ['4111 1111 1111 1111 55', 'Cheque']]) {
+    assert.equal(P.pareceNumeroTarjeta(ref, metodo), true, ref + ' (' + metodo + ') es tarjeta');
+  }
+  // Fechas y folios no se juntan con nada que no tenga forma de tarjeta
+  for (const ref of ['SPEI 29-10-2026 1234567', '30/10/2026', 'Pago 30/10/2026 folio 4111111', 'Ref 2026.10.29_000123', 'Ticket 06001234567890123456',
+    'Monto 1,624.00 · 29-10-2026']) {
+    assert.equal(P.pareceNumeroTarjeta(ref), false, ref + ' no es tarjeta');
+  }
+  // Por el servidor (probe/pago.js): con punto se rechaza y no se guarda nada
+  const s = siempre(false, { formaPago: 'Tarjeta de crédito' });
+  const antes = H('PagosProveedores').length;
+  for (const ref of ['4111 1111 1111 1111', '4111.1111.1111.1111']) {
+    falla('efrain', 'registrarPagoProveedor', [pago(s.req, { metodo: 'Tarjeta de crédito', referencia: ref })], /parece un número de tarjeta/);
+  }
+  assert.equal(H('PagosProveedores').length, antes, 'ninguna referencia con tarjeta llegó a la hoja');
 }
 
 console.log('revision5: ok');
