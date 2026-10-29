@@ -8661,7 +8661,7 @@ function aplicarRecepcionPortal_(libro, x, det, res) {
   const avance = avanceRecepcion(orden.renglones, movsOc, renglonesSinRecepcion(propuestaVigente_(req)));
   // H (incremento 5): una recepción registrada antes de que compras resolviera "Reponer" en ese renglón ya está contada (si el
   // centro de mando la vuelve a mandar, p. ej. porque se archivó su foto, no es material nuevo); tampoco su "completa"
-  const anterior = recepcionAntesDeReponer_(movsOc, x.cuando, avisoPendiente_(libro, ocFolio, 'oc.devolucion'));
+  const anterior = recepcionAntesDeReponer_(movsOc, x.cuando, avisoPendiente_(libro, ocFolio, 'oc.devolucion'), reposicionesDeOrden_(libro, ocFolio));
   const nuevos = [];
   (Array.isArray(x.renglones) ? x.renglones : []).forEach(l => {
     const linea = avance.lineas.find(a => a.renglon === Number(l && l.n));
@@ -11370,20 +11370,34 @@ function anotarFotoPortal_(libro, tarea, id, url) {
 
 /**
  * ¿La recepción del centro de mando (cuando) es de antes de que compras resolviera "Reponer" en ese renglón? Entonces su
- * cantidad ya está contada (y su "completa" es vieja). Devuelve una función renglon → bool.
+ * cantidad ya está contada (y su "completa" es vieja). Devuelve una función renglon → bool. Revisión 5b: al segundo y estrictamente
+ * antes (<): con la comparación por minuto y <=, la reposición recibida en el mismo minuto que "Reponer" nunca se contaba. La hora
+ * de "Reponer" sale de la DEV (fecha_resolucion, al segundo; resueltas = {FOLIO DEV: 'AAAA-MM-DD HH:mm:ss'}); si no se encuentra,
+ * del registro del movimiento (al minuto).
  */
-function recepcionAntesDeReponer_(movs, cuando, sinAvisar) {
+function recepcionAntesDeReponer_(movs, cuando, sinAvisar, resueltas) {
   const fecha = new Date(String(cuando || ''));
-  const recibida = isNaN(fecha.getTime()) ? '' : Utilities.formatDate(fecha, 'America/Mexico_City', 'yyyy-MM-dd HH:mm');
+  const recibida = isNaN(fecha.getTime()) ? '' : Utilities.formatDate(fecha, 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
   const reposicion = {};
   (movs || []).forEach(m => {
     if (m.tipo !== TIPO_DEVOLUCION || m.estado !== 'Vigente') return;
-    const t = marcaOrdenable(m.fechaRegistro);
+    const t = (resueltas || {})[String(m.folio).toUpperCase()] || (marcaOrdenable(m.fechaRegistro) + ':00');
     if (t > (reposicion[m.renglon] || '')) reposicion[m.renglon] = t;
   });
   // sinAvisar: el centro de mando todavía no recibe el oc.devolucion de esa orden (su "recibido" aún no baja): nada nuevo en
   // los renglones repuestos hasta que lo reciba
-  return renglon => !!reposicion[renglon] && (!!sinAvisar || !recibida || recibida <= reposicion[renglon]);
+  return renglon => !!reposicion[renglon] && (!!sinAvisar || !recibida || recibida < reposicion[renglon]);
+}
+
+/** {FOLIO DEV: 'AAAA-MM-DD HH:mm:ss'} de las devoluciones resueltas con "Reponer" de una orden (para recepcionAntesDeReponer_). */
+function reposicionesDeOrden_(libro, ocFolio) {
+  const f = String(ocFolio || '').toUpperCase(), r = {};
+  devolucionesDelLibro_(libro).forEach(d => {
+    if (d.ocFolio.toUpperCase() === f && d.estado === DEV_RESUELTA && d.resolucion === RES_REPONER && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(d.fechaResolucion)) {
+      r[d.folio.toUpperCase()] = d.fechaResolucion;
+    }
+  });
+  return r;
 }
 
 /** ¿Hay en PortalPendientes un aviso de ese tipo de la orden que todavía no llega (Pendiente)? */

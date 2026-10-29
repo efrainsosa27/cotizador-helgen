@@ -140,7 +140,9 @@ requisición en Compras (`#rcDevoluciones`) va dentro de `.tabla-desliza` (telé
 
 - `aplicarRecepcionPortal_` (dentro del candado): copia la diferencia como siempre, pero (a) el tope es lo pedido menos el
   faltante aceptado; (b) **una recepción con `cuando` anterior o igual a la última "Reponer" de ese renglón ya está contada** (el
-  centro de mando la vuelve a mandar cuando cambia su foto): no se copia ni cuenta su `completa`; (c) cada movimiento nuevo con
+  centro de mando la vuelve a mandar cuando cambia su foto): no se copia ni cuenta su `completa`. Desde la revisión 5b se compara al
+  segundo y estrictamente antes (`cuando` < `fecha_resolucion` de la DEV, `reposicionesDeOrden_`): antes, por minuto y con <=, la
+  reposición recibida en el mismo minuto que "Reponer" nunca se contaba; (c) cada movimiento nuevo con
   foto no archivada lleva `foto_id = centro:<id>`; (d) `fotosYProblemasPortal_` anota en `res.fotos` cada foto no archivada
   (renglón y problema) y crea la DEV de cada problema una sola vez (`origen_clave` = OC:renglón:f:<id de la foto> o, sin foto,
   OC:renglón:c:<hash de tipo|cantidad|comentario>), con `origen` Centro de mando y `reporto_email` = `problema.por` o, si no
