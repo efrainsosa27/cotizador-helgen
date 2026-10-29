@@ -12318,7 +12318,9 @@ function reporteFlujo() {
   exigirReporte_('flujo');
   return reporteEnCache_('flujo', () => {
     const d = datosReportes_({ cobranza: true, compras: true });
-    return flujoSemanal({ hoy: d.hoy, semanas: SEMANAS_FLUJO, cobros: etapasPorCobrar(d), pagos: porPagarProveedores(d, saldoOrdenCompra_()) });
+    // ordenesAnteriores: cuántas órdenes anteriores sin pago registrado quedaron fuera (revisión 6b; la interfaz lo dice)
+    return Object.assign(flujoSemanal({ hoy: d.hoy, semanas: SEMANAS_FLUJO, cobros: etapasPorCobrar(d), pagos: porPagarProveedores(d, saldoOrdenCompra_()) }),
+      { ordenesAnteriores: ordenesAnterioresSinPago(d).n });
   });
 }
 
@@ -12525,7 +12527,8 @@ function etapasPorCobrar(d) {
  *  2. Lo que ninguna factura cubre (más de TOLERANCIA_PAGO), completo en una fecha: la del "siguiente" de P sin facturas (el pago
  *     del plan que sigue: el anticipo vence en la fecha de la orden; o recepción/entrega + días de crédito, venceSinFactura). Es
  *     'plan' si la orden tiene plan de pagos y 'estimada' si no.
- * Las órdenes de proyectos de prueba no cuentan. Las de un proyecto Cancelado sí: se le sigue debiendo al proveedor mientras la
+ * Las órdenes de proyectos de prueba no cuentan, ni las anteriores sin pago registrado (esOrdenAnteriorSinPago: van aparte, en
+ * ordenesAnterioresSinPago). Las de un proyecto Cancelado sí: se le sigue debiendo al proveedor mientras la
  * orden no se cancele (estadoProyecto lo dice). Partida = {ocFolio, reqFolio, proyectoFolio, proyectoVisible, proyectoNombre,
  * estadoProyecto, proveedorId, proveedor, moneda, esperado, pagado, saldoOrden, monto, fecha, fuente, referencia}.
  */
@@ -12540,8 +12543,10 @@ function porPagarProveedores(d, saldoFn) {
   const partidas = [];
   (d.ordenes || []).forEach(o => {
     if (!ocVigente(o) || esFolioPrueba(o.proyectoFolio, prueba)) return;
+    const k = may(o.folio), fs = facturas[k] || [];
+    if (esOrdenAnteriorSinPago(o, pagos[k], fs)) return; // revisión 6b: aparte (ordenesAnterioresSinPago), fuera de totales y flujo
     // Con las facturas de la orden (P): con retenciones el saldo se mide contra lo facturado, igual que Cuentas por pagar
-    const k = may(o.folio), fs = facturas[k] || [], s = fn(Object.assign({}, o, { facturas: fs }), pagos[k] || [], movs[k] || []);
+    const s = fn(Object.assign({}, o, { facturas: fs }), pagos[k] || [], movs[k] || []);
     if (!s || s.completo || aCentavos(s.saldo) <= 0) return;
     // La fecha de lo que no cubre ninguna factura sale del "siguiente" de P SIN facturas (como la fila "Saldo" de Cuentas por pagar)
     const sigResto = (fs.length ? fn(Object.assign({}, o, { facturas: null }), pagos[k] || [], movs[k] || []) || {} : s).siguiente;
@@ -12553,6 +12558,43 @@ function porPagarProveedores(d, saldoFn) {
       { monto: t.cts / 100, fecha: t.fecha, fuente: t.fuente, referencia: t.referencia })));
   });
   return partidas;
+}
+
+/**
+ * (Lógica pura) ¿Orden anterior sin pago registrado? Vigente, SIN requisición (las órdenes de antes del 23/10/2026: desde entonces
+ * toda orden sale de una), sin pagos Vigentes y sin facturas Vigentes. En CAPRI no se puede pagar (el pago exige requisición) ni,
+ * si ya se recibió, cancelar: se pagó por fuera o nunca se registró. No es deuda que se pueda saldar desde CAPRI, así que los
+ * reportes la listan aparte (revisión 6b), fuera de los totales de CxP y del flujo; su costo sigue en el margen.
+ */
+function esOrdenAnteriorSinPago(o, pagos, facturas) {
+  return ocVigente(o) && !String(o.reqFolio || '').trim() && !(pagos || []).some(p => p && p.estado === 'Vigente') &&
+    !(facturas || []).some(f => f && f.estado === FPR_VIGENTE);
+}
+
+/**
+ * (Lógica pura) Órdenes anteriores sin pago registrado (esOrdenAnteriorSinPago) de proyectos que no son de prueba. d = como
+ * porPagarProveedores. Devuelve {n, totales: [{moneda, ordenes, total}] (por moneda, MXN primero; nunca se suman), ordenes:
+ * [{ocFolio, fecha, estado, fechaRecepcion, proveedorId, proveedor, proyectoFolio, proyectoVisible, proyectoNombre, estadoProyecto,
+ * moneda, total}] (por moneda y fecha)}. total = el de la orden, con IVA.
+ */
+function ordenesAnterioresSinPago(d) {
+  const may = s => String(s || '').trim().toUpperCase();
+  const prueba = d.prueba || FOLIOS_PRUEBA_REPORTES;
+  const proyectos = {}, pagos = {}, facturas = {};
+  (d.proyectos || []).forEach(p => { proyectos[may(p.folio)] = p; });
+  (d.pagosProv || []).forEach(p => { (pagos[may(p.ocFolio)] = pagos[may(p.ocFolio)] || []).push(p); });
+  (d.facturas || []).forEach(f => { (facturas[may(f.ocFolio)] = facturas[may(f.ocFolio)] || []).push(f); });
+  const ordenes = (d.ordenes || []).filter(o => !esFolioPrueba(o.proyectoFolio, prueba) &&
+    esOrdenAnteriorSinPago(o, pagos[may(o.folio)], facturas[may(o.folio)])).map(o => {
+    const p = proyectos[may(o.proyectoFolio)] || {};
+    return { ocFolio: o.folio, fecha: o.fecha || '', estado: o.estado, fechaRecepcion: o.fechaRecepcion || '', proveedorId: o.proveedorId || '',
+      proveedor: o.proveedor || '', proyectoFolio: o.proyectoFolio, proyectoVisible: p.folioVisible || o.proyectoFolio, proyectoNombre: p.nombre || '',
+      estadoProyecto: p.estado || '', moneda: o.moneda, total: redondear(o.total) };
+  }).sort((a, b) => ordenMonedas(a.moneda, b.moneda) || (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : (a.ocFolio < b.ocFolio ? -1 : 1)));
+  const tot = {};
+  ordenes.forEach(o => { const t = tot[o.moneda] || (tot[o.moneda] = { moneda: o.moneda, ordenes: 0, cts: 0 }); t.ordenes++; t.cts += aCentavos(o.total); });
+  return { n: ordenes.length, ordenes: ordenes,
+    totales: Object.keys(tot).sort(ordenMonedas).map(m => ({ moneda: m, ordenes: tot[m].ordenes, total: tot[m].cts / 100 })) };
 }
 
 /**
@@ -12667,14 +12709,17 @@ function antiguedadCxc(d) {
 
 /**
  * (Lógica pura) Antigüedad de cuentas por pagar: porPagarProveedores agrupadas por proveedor (su id o, sin él, su nombre) y orden.
- * d = {hoy, ordenes, pagosProv, movimientos, facturas, proyectos, prueba}; saldoFn = saldoOrdenCompra (P) o la provisional.
+ * d = {hoy, ordenes, pagosProv, movimientos, facturas, proyectos, prueba}; saldoFn = saldoOrdenCompra (P) o la provisional. Trae
+ * además anteriores (ordenesAnterioresSinPago): las órdenes anteriores sin pago registrado, aparte y fuera de los totales.
  */
 function antiguedadPorPagar(d, saldoFn) {
-  return antiguedadEnGrupos(porPagarProveedores(d, saldoFn), d.hoy,
+  const r = antiguedadEnGrupos(porPagarProveedores(d, saldoFn), d.hoy,
     x => ({ clave: x.proveedorId || textoNormal(x.proveedor), datos: { nombreGrupo: x.proveedor || 'Sin proveedor', proveedor: x.proveedor,
       proveedorId: x.proveedorId } }),
     x => ({ clave: x.ocFolio, datos: { ocFolio: x.ocFolio, reqFolio: x.reqFolio, proyectoFolio: x.proyectoFolio, proyectoVisible: x.proyectoVisible,
       proyectoNombre: x.proyectoNombre, estadoProyecto: x.estadoProyecto, esperado: x.esperado, pagado: x.pagado } }));
+  r.anteriores = ordenesAnterioresSinPago(d); // revisión 6b: bloque aparte, fuera de los totales
+  return r;
 }
 
 /** Lunes ("AAAA-MM-DD") de la semana de una fecha. */

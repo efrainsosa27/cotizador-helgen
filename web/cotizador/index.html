@@ -5707,7 +5707,24 @@
           'fecha esperada de cobro de la etapa (Cobranza → proyecto → Esquema de pagos); sin ella, la etapa va en "Sin fecha". Hoy no está vencido. ' +
           'Fuera: contratos por firmar, proyectos cancelados, lo anulado y los registros de prueba.' });
     }
+    /** Revisión 6b: órdenes anteriores sin pago registrado, en su propio bloque (fuera de los totales y del flujo). */
+    function htmlAnteriores(a) {
+      if (!a || !a.n) return '';
+      return '<div class="sat" style="margin-top:14px"><div class="sat-titulo">Órdenes anteriores sin pago registrado (' + a.n + ')</div>' +
+        '<div class="nota" style="margin-bottom:8px">Órdenes de antes de las requisiciones (sin requisición) que no tienen pago ni factura ' +
+        'registrados: en CAPRI no se pueden pagar ni, si ya se recibieron, cancelar. No entran a los totales de arriba ni al flujo de ' +
+        'efectivo; su costo sigue en el margen. Revisa con compras si se pagaron por fuera.</div>' +
+        '<div class="nota">' + a.totales.map(t => esc(t.moneda) + ': ' + plural(t.ordenes, 'orden', 'órdenes') + ' · ' + dinero(t.total, t.moneda)).join(' — ') + '</div>' +
+        tabla('<th>Orden</th><th>Proveedor</th><th>Proyecto</th><th>Estado</th><th>Fecha</th><th class="num">Total de la orden</th>', a.ordenes.map(o =>
+          '<tr><td style="white-space:nowrap"><b>' + esc(o.ocFolio) + '</b></td><td>' + esc(o.proveedor) + '</td><td>' + esc(o.proyectoVisible) +
+          (o.proyectoNombre ? ' <span class="nota">· ' + esc(o.proyectoNombre) + '</span>' : '') + '</td><td>' + esc(o.estado) +
+          (o.fechaRecepcion ? ' <span class="nota">(' + esc(fechaMx(o.fechaRecepcion)) + ')</span>' : '') + '</td><td style="white-space:nowrap">' +
+          esc(fechaMx(o.fecha)) + '</td><td class="num">' + dinero(o.total, o.moneda) + '</td></tr>').join('')) + '</div>';
+    }
     function htmlCxp(d) {
+      return htmlAntiguedadCxp(d) + htmlAnteriores(d.anteriores);
+    }
+    function htmlAntiguedadCxp(d) {
       return htmlAntiguedad(d, { columna: 'Proveedor / orden', quien: ['proveedor', 'proveedores'], vacio: 'No hay saldos por pagar a proveedores.',
         grupo: g => g.proveedor || 'Sin proveedor',
         detalle: x => '<b style="white-space:nowrap">' + esc(x.ocFolio) + '</b>' + (x.reqFolio ? ' <span class="nota">· ' + esc(x.reqFolio) + '</span>' : '') +
@@ -5717,8 +5734,8 @@
           dineroTexto(p.monto, p.moneda) + (p.fecha ? ' · ' + fechaMx(p.fecha) + ' (' + textoDias(p.dias) + ')' : ''),
         nota: 'Saldo de cada orden de compra vigente (lo esperado menos lo pagado, en la moneda de la orden), con las fechas de Cuentas por pagar: ' +
           'el vencimiento de sus facturas (emisión + días de crédito; lo pagado cubre primero la que vence antes); lo que no tiene factura, en la ' +
-          'fecha de su siguiente pago (el del plan de pagos o la recepción —o entrega— + días de crédito). Fuera: órdenes canceladas o anuladas y ' +
-          'registros de prueba.' });
+          'fecha de su siguiente pago (el del plan de pagos o la recepción —o entrega— + días de crédito). Fuera: órdenes canceladas o anuladas, ' +
+          'registros de prueba y las órdenes anteriores sin pago registrado (abajo, aparte).' });
     }
     function htmlFlujo(d) {
       if (!d.monedas.length) return '<p class="nota">No hay cobros ni pagos esperados.</p>';
@@ -5744,7 +5761,9 @@
             '<td class="num">' + dinero(p.monto, p.moneda) + '</td></tr>').join('')) + '</details>';
       }).join('') + '<div class="nota" style="margin-top:8px">Semana 1 = de lunes a domingo de esta semana; lo vencido cae en la semana 1 y se marca. ' +
         'Cobros: saldo de las etapas de contratos firmados en su fecha esperada. Pagos: saldo de las órdenes de compra en su vencimiento ' +
-        '(plan de pagos, factura o estimado). El acumulado empieza en cero: no incluye el saldo en bancos.</div>';
+        '(factura, plan de pagos o recepción/entrega + crédito). El acumulado empieza en cero: no incluye el saldo en bancos.' +
+        (d.ordenesAnteriores ? ' No incluye ' + plural(d.ordenesAnteriores, 'orden anterior', 'órdenes anteriores') + ' sin pago registrado ' +
+          '(ver Antigüedad de cuentas por pagar).' : '') + '</div>';
     }
     function htmlMargen(d) {
       if (!d.proyectos.length) return '<p class="nota">No hay proyectos con cotización aceptada.</p>';
@@ -5789,10 +5808,14 @@
             (p.fecha || 'sin fecha')).join(' | '))]))), []));
       }
       if (tipo === 'cxp') {
-        return armarCsv(['Proveedor', 'Orden de compra', 'Requisición', 'Proyecto', 'Moneda'].concat(rangos.map(r => r.etiqueta), ['Total', 'Vencimientos']),
+        // Las órdenes anteriores sin pago registrado van al final, sin rangos ni total (no suman), con su nota (revisión 6b)
+        const anteriores = ((d.anteriores || {}).ordenes || []).map(o => [texto(o.proveedor), texto(o.ocFolio), texto(''), texto(o.proyectoVisible),
+          texto(o.moneda)].concat(rangos.map(() => ''), ['', texto(''), texto('Orden anterior sin pago registrado (fuera de los totales) · ' +
+          o.estado + ' · total de la orden ' + num(o.total))]));
+        return armarCsv(['Proveedor', 'Orden de compra', 'Requisición', 'Proyecto', 'Moneda'].concat(rangos.map(r => r.etiqueta), ['Total', 'Vencimientos', 'Nota']),
           d.grupos.reduce((acc, g) => acc.concat(g.detalle.map(x => [texto(g.proveedor), texto(x.ocFolio), texto(x.reqFolio), texto(x.proyectoVisible),
             texto(x.moneda)].concat(rangos.map(r => num(x[r.clave])), [num(x.total), texto(x.partidas.map(p => (FUENTES[p.fuente] || p.fuente) + ' ' +
-            num(p.monto) + ' ' + (p.fecha || 'sin fecha')).join(' | '))]))), []));
+            num(p.monto) + ' ' + (p.fecha || 'sin fecha')).join(' | ')), texto('')]))), []).concat(anteriores));
       }
       if (tipo === 'flujo') {
         return armarCsv(['Moneda', 'Semana', 'Desde', 'Hasta', 'Cobros esperados', 'Pagos esperados', 'Neto', 'Acumulado', 'Cobros vencidos', 'Pagos vencidos'],
