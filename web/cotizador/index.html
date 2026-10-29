@@ -1680,8 +1680,13 @@
     $('cInfo').textContent = '';
     $('moneda').value = 'MXN'; cambiarMoneda();
     $('proyecto').value = ''; pintarProyInfo(); cerrarNuevoProyecto();
-    google.script.run.withSuccessHandler(recibirClientes).getClientes(); // incluye al cliente recién guardado
-    google.script.run.withSuccessHandler(recibirProyectos).listarProyectos('', false); // y proyectos de otros vendedores
+    // Rapidez (30/10/2026): una sola consulta trae los clientes (la cotización guardada sube su versión: incluye al cliente
+    // recién guardado) y los proyectos que cambiaron (de otros vendedores); antes eran dos llamadas. Sin carga inicial, como antes.
+    if (BOOT) sincronizarAhora();
+    else {
+      google.script.run.withSuccessHandler(recibirClientes).getClientes();
+      google.script.run.withSuccessHandler(recibirProyectos).listarProyectos('', false);
+    }
     ID_SOLICITUD = nuevoId();
     $('btnGuardar').disabled = false; $('btnGuardar').textContent = 'Guardar y generar PDF';
   }
