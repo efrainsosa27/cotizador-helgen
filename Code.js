@@ -459,6 +459,28 @@ function propiedades_(releer) {
   return MEMO_.props;
 }
 
+/**
+ * Rapidez (30/10/2026): ID guardado en Script Properties (SPREADSHEET_ID, CATALOGO_ID, COMPRAS_DB_ID, carpetas…) tomado de la
+ * lectura de esta petición (propiedades_) en lugar de una lectura por cada uso (0.05 s cada una). Si no está, se lee directo:
+ * quien lo crea (bajo candado) lo guarda y la siguiente lectura ya lo ve. Solo para IDs, que no cambian una vez creados;
+ * los contadores de folio (CONSECUTIVO_…) y las versiones se siguen leyendo frescos.
+ */
+function idGuardado_(clave) {
+  return propiedades_()[clave] || PropertiesService.getScriptProperties().getProperty(clave);
+}
+
+/** Rapidez: un libro de Sheets se abre una vez por petición (openById tarda) y se reusa lo abierto. */
+function abrirLibro_(id) {
+  const abiertos = MEMO_.libros || (MEMO_.libros = {});
+  return abiertos[id] || (abiertos[id] = SpreadsheetApp.openById(id));
+}
+
+/** Filas 2…última (n columnas) de una pestaña, con una sola llamada a getLastRow (cada llamada es un viaje a Sheets). */
+function filasDatos_(hoja, n) {
+  const ultima = hoja.getLastRow();
+  return ultima > 1 ? hoja.getRange(2, 1, ultima - 1, n).getValues() : [];
+}
+
 /** {proyectos: 12, contratos: 3, …} desde Script Properties (VER_<colección>). */
 function versiones_(releer) {
   if (!VERSIONES_ || releer) {
@@ -581,10 +603,7 @@ function fuenteConHuella_(nombre, coleccion, cadaSeg, leer, revisar) {
 /** Todos los proyectos de la pestaña Proyectos (con carpetaId: solo para uso interno). */
 function proyectosCache_(revisar) {
   return fuenteConHuella_('proyectos', 'proyectos', 300, () => {
-    const hoja = hojaProyectos_();
-    const filas = hoja.getLastRow() > 1
-      ? hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
-    return proyectosDesdeFilas(filas);
+    return proyectosDesdeFilas(filasDatos_(hojaProyectos_(), ENCABEZADOS_PROYECTOS.length));
   }, revisar);
 }
 
@@ -888,8 +907,9 @@ function setup() {
 // ====== 3. LECTURA DE DATOS ======
 
 function db_() {
-  const props = PropertiesService.getScriptProperties();
-  if (!props.getProperty('SPREADSHEET_ID') || !props.getProperty('FOLDER_ID')) {
+  // Rapidez: los IDs salen de la lectura de propiedades de la petición y el libro se abre una vez (idGuardado_, abrirLibro_)
+  if (!idGuardado_('SPREADSHEET_ID') || !idGuardado_('FOLDER_ID')) {
+    const props = PropertiesService.getScriptProperties();
     // Primera vez: se instala sola (hoja + carpeta) en lugar de exigir correr setup() a mano.
     const lock = LockService.getScriptLock();
     if (!lock.tryLock(30000)) throw new Error('Se está preparando el cotizador. Recarga la página en unos segundos.');
@@ -899,7 +919,7 @@ function db_() {
       lock.releaseLock();
     }
   }
-  return SpreadsheetApp.openById(props.getProperty('SPREADSHEET_ID'));
+  return abrirLibro_(idGuardado_('SPREADSHEET_ID'));
 }
 
 function getConfig_() {
@@ -965,7 +985,7 @@ const ENCABEZADOS_CATALOGO = ['Clave', 'Descripción', 'Unidad', 'Precio unitari
 /** Hoja del catálogo. La primera vez crea el archivo y pasa ahí los productos de la pestaña anterior. */
 function hojaCatalogo_() {
   const props = PropertiesService.getScriptProperties();
-  if (!props.getProperty('CATALOGO_ID')) {
+  if (!idGuardado_('CATALOGO_ID')) {
     const lock = LockService.getScriptLock();
     if (!lock.tryLock(30000)) throw new Error('Se está preparando el catálogo. Recarga la página en unos segundos.');
     try {
@@ -974,7 +994,7 @@ function hojaCatalogo_() {
       lock.releaseLock();
     }
   }
-  const ss = SpreadsheetApp.openById(props.getProperty('CATALOGO_ID'));
+  const ss = abrirLibro_(idGuardado_('CATALOGO_ID'));
   const hoja = ss.getSheetByName('Catalogo') || ss.getSheets()[0];
   asegurarColumnasSat_(hoja);
   // Precio en USD: dato extra; si falla, el catálogo funciona igual (en USD el precio se captura a mano)
@@ -1130,7 +1150,7 @@ const FUENTE_SAT = 'catCFDI_V_4_20261015.xls — Anexo 20 del SAT (CFDI 4.0), de
 
 function libroSat_() {
   const props = PropertiesService.getScriptProperties();
-  if (!props.getProperty('SAT_ID')) {
+  if (!idGuardado_('SAT_ID')) {
     const lock = LockService.getScriptLock();
     if (!lock.tryLock(60000)) throw new Error('Se está cargando el catálogo del SAT. Intenta en unos segundos.');
     try {
@@ -1139,7 +1159,7 @@ function libroSat_() {
       lock.releaseLock();
     }
   }
-  return SpreadsheetApp.openById(props.getProperty('SAT_ID'));
+  return abrirLibro_(idGuardado_('SAT_ID'));
 }
 
 function importarCatalogosSat_() {
@@ -1429,7 +1449,7 @@ function siguienteFolio_(prefijo, hoja, baseContador) {
   const anio = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy');
   // Cotizaciones: CONSECUTIVO_AAAA; proyectos: CONSECUTIVO_PROY_AAAA (cada tipo de folio lleva su contador)
   const clave = (baseContador || 'CONSECUTIVO_') + anio;
-  const filas = hoja.getLastRow() > 1 ? hoja.getRange(2, 1, hoja.getLastRow() - 1, 1).getValues() : [];
+  const filas = filasDatos_(hoja, 1);
   const enHoja = maxConsecutivo(filas.map(r => r[0]), prefijo, anio);
   const n = Math.max(Number(props.getProperty(clave) || 0), enHoja) + 1;
   props.setProperty(clave, String(n));
@@ -1437,7 +1457,7 @@ function siguienteFolio_(prefijo, hoja, baseContador) {
 }
 
 function carpetaDelAnio_(anio) {
-  const raiz = DriveApp.getFolderById(PropertiesService.getScriptProperties().getProperty('FOLDER_ID'));
+  const raiz = DriveApp.getFolderById(idGuardado_('FOLDER_ID'));
   const it = raiz.getFoldersByName(String(anio));
   return it.hasNext() ? it.next() : raiz.createFolder(String(anio));
 }
@@ -1523,8 +1543,9 @@ function errorProyecto_(mensaje) {
 /** Proyecto por folio (con su número de fila), o null. */
 function buscarProyecto_(hoja, folio) {
   const buscado = folioInterno(folio);
-  if (!buscado || hoja.getLastRow() < 2) return null;
-  const filas = hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues();
+  if (!buscado) return null;
+  const filas = filasDatos_(hoja, ENCABEZADOS_PROYECTOS.length);
+  if (!filas.length) return null;
   const lista = proyectosDesdeFilas(filas);
   for (let i = 0; i < lista.length; i++) {
     if (lista[i].folio.toUpperCase() === buscado) return Object.assign(lista[i], { hoja: hoja, fila: i + 2 });
@@ -1588,8 +1609,7 @@ function crearProyecto(p) {
 function asignarClavesProyectos(aplicar) {
   const cambios = conCandado_(() => {
     const hoja = hojaProyectos_();
-    const filas = hoja.getLastRow() > 1
-      ? hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
+    const filas = filasDatos_(hoja, ENCABEZADOS_PROYECTOS.length);
     const lista = [];
     filas.forEach((r, i) => {
       const folio = String(r[0] || '').trim();
@@ -1628,14 +1648,14 @@ function asignarClavesProyectosAplicar() {
 /** Carpeta "Proyectos" junto a la base de datos (en la carpeta maestra). Se crea sola y se guarda en PROYECTOS_FOLDER_ID. */
 function carpetaProyectos_() {
   const props = PropertiesService.getScriptProperties();
-  const id = props.getProperty('PROYECTOS_FOLDER_ID');
+  const id = idGuardado_('PROYECTOS_FOLDER_ID');
   if (id) {
     try {
       const f = DriveApp.getFolderById(id);
       if (!f.isTrashed()) return f;
     } catch (e) { /* se borró: se vuelve a crear abajo */ }
   }
-  const padres = DriveApp.getFileById(props.getProperty('SPREADSHEET_ID')).getParents();
+  const padres = DriveApp.getFileById(idGuardado_('SPREADSHEET_ID')).getParents();
   const maestra = padres.hasNext() ? padres.next() : DriveApp.getRootFolder();
   const carpeta = subcarpeta_(maestra, 'Proyectos');
   props.setProperty('PROYECTOS_FOLDER_ID', carpeta.getId());
@@ -1760,7 +1780,7 @@ const AREA_COBRANZA = { que: 'cobranza', propCarpeta: 'COBRANZA_FOLDER_ID', prop
 /** Carpeta del área. Se crea sola en Mi unidad (restringida). Si se borró, error. */
 function carpetaArea_(area) {
   const props = PropertiesService.getScriptProperties();
-  const id = props.getProperty(area.propCarpeta);
+  const id = idGuardado_(area.propCarpeta);
   if (!id) {
     const carpeta = privado_(DriveApp.createFolder(area.carpeta));
     props.setProperty(area.propCarpeta, carpeta.getId());
@@ -1777,7 +1797,7 @@ function carpetaArea_(area) {
 /** Libro del área; la primera vez lo crea dentro de su carpeta (bajo candado). */
 function libroArea_(area) {
   const props = PropertiesService.getScriptProperties();
-  if (!props.getProperty(area.propLibro)) {
+  if (!idGuardado_(area.propLibro)) {
     const lock = LockService.getScriptLock();
     if (!lock.tryLock(30000)) throw new Error('Se está preparando ' + area.que + '. Intenta de nuevo en unos segundos.');
     try {
@@ -1786,18 +1806,18 @@ function libroArea_(area) {
       lock.releaseLock();
     }
   }
-  return abrirLibroArea_(area, props.getProperty(area.propLibro));
+  return abrirLibroArea_(area, idGuardado_(area.propLibro));
 }
 
 /** Libro del área si ya existe; null si todavía no se crea. */
 function libroAreaSiExiste_(area) {
-  const id = PropertiesService.getScriptProperties().getProperty(area.propLibro);
+  const id = idGuardado_(area.propLibro);
   return id ? abrirLibroArea_(area, id) : null;
 }
 
 function abrirLibroArea_(area, id) {
   try {
-    return SpreadsheetApp.openById(id);
+    return abrirLibro_(id);
   } catch (e) {
     throw new Error('No se pudo abrir el libro de ' + area.que + ' (' + area.propLibro + '). Revisa que no esté en la Papelera.');
   }
@@ -1847,8 +1867,7 @@ function filasCobranza_(hoja, nombre) {
 }
 
 function filasDeArea_(hoja, hojas, nombre) {
-  const n = hojas[nombre].enc.length;
-  return hoja.getLastRow() > 1 ? hoja.getRange(2, 1, hoja.getLastRow() - 1, n).getValues() : [];
+  return filasDatos_(hoja, hojas[nombre].enc.length);
 }
 
 const marcaDeTexto_ = t => (String(t || '').trim() === MARCAS.energy || t === 'energy') ? 'energy' : 'helgen';
@@ -2041,7 +2060,7 @@ function conCandado_(f) {
 function listarProyectosCobranza(busqueda) {
   exigirCobranza_();
   // La primera vez que alguien de cobranza entra se crean la carpeta y el libro (después ya no se abre aquí)
-  if (!PropertiesService.getScriptProperties().getProperty(AREA_COBRANZA.propLibro)) libroCobranza_();
+  if (!idGuardado_(AREA_COBRANZA.propLibro)) libroCobranza_();
   const contratos = contratosCache_();
   return listarProyectos(busqueda, true).map(p => Object.assign(p, { contrato: (contratos[p.folio.toUpperCase()] || {}).estado || '' }));
 }
@@ -9401,7 +9420,7 @@ function datosAnular_() {
       vendedorEmail: String(r[16] || r[10] || '') });
   });
   const hP = hojaProyectos_();
-  const filasP = hP.getLastRow() > 1 ? hP.getRange(2, 1, hP.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
+  const filasP = filasDatos_(hP, ENCABEZADOS_PROYECTOS.length);
   filasP.forEach((r, i) => {
     const p = proyectosDesdeFilas([r])[0];
     if (p) d.pry.push(Object.assign(p, { fila: i + 2, valores: r, vendedorEmail: String(r[8] || '') }));
