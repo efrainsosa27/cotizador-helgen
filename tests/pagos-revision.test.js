@@ -9,6 +9,7 @@
 //  3. El tope de un pago es el saldo contra el total de las facturas cuando ya la cubren con retenciones (antes, el total de la orden).
 //  4. (Interfaz) Pagos en otra moneda: al precargar un monto la moneda del pago vuelve a la de la orden; "= $X aplicados" en vivo;
 //     un pago en otra moneda que no completa la orden pide confirmación.
+//  5. Cuentas por pagar mide toda orden por su saldo (con o sin pagos; sin lo devuelto): la misma cifra que Reportes → CxP.
 // Uso: node tests/pagos-revision.test.js .
 'use strict';
 const assert = require('assert');
@@ -38,9 +39,9 @@ const OCD = extra => Object.assign({ proveedor: { razonSocial: 'Ferretera del Pu
 const pago = (folio, extra) => Object.assign({ reqFolio: folio, fecha: HOY_ISO, monto: 1624, monedaPago: 'MXN', metodo: 'Transferencia',
   referencia: 'SPEI ' + id(), comprobante: { nombre: 'c.pdf', datos: A.PDF }, idSolicitud: id('pg') }, extra || {});
 const pagar = (folio, monto, extra) => ok('pedro', 'registrarPagoProveedor', pago(folio, Object.assign({ monto: monto }, extra || {})));
-/** Flujo de siempre: obrero pide, efrain autoriza. */
-function siempre(ocExtra) {
-  const folio = ok('obrero', 'guardarRequisicion', { proyectoFolio: P2, sitio: 'Querétaro', renglones: RENGLONES,
+/** Flujo de siempre: obrero pide, efrain autoriza (en P2, o en otro proyecto). */
+function siempre(ocExtra, proyecto) {
+  const folio = ok('obrero', 'guardarRequisicion', { proyectoFolio: proyecto || P2, sitio: 'Querétaro', renglones: RENGLONES,
     cotizacion: { nombre: 'cot.pdf', datos: A.PDF }, idSolicitud: id('q') }).folio;
   const oc = ok('efrain', 'autorizarRequisicion', folio, OCD(ocExtra)).ocFolio;
   return { req: folio, oc: oc };
@@ -225,6 +226,55 @@ const aMano = () => ['requisiciones', 'oc', 'pagosProveedores'].forEach(c => { p
   assert.equal(P.normalizarPagoProveedor(datos(625), base).montoAplicado, 625, 'sin facturas: 1,000 + 625 = 1,625 (±1.00)');
   assert.throws(() => P.normalizarPagoProveedor(datos(625), Object.assign({}, base, { porFacturas: 1484 })), /total de sus facturas/);
   assert.equal(P.normalizarPagoProveedor(datos(485), Object.assign({}, base, { porFacturas: 1484 })).montoAplicado, 485);
+}
+
+/** Lo que Reportes → CxP (módulo R) dice que se debe de una orden: suma de sus partidas. */
+const enReporteCxp = (rep, oc) => {
+  let t = 0;
+  (rep.grupos || []).forEach(g => (g.detalle || []).forEach(d => (d.partidas || []).forEach(p => { if (p.ocFolio === oc) t += Math.round(p.monto * 100); })));
+  return t / 100;
+};
+/** Lo que Compras → Cuentas por pagar dice que se debe de una orden: suma de lo pendiente de sus renglones. */
+const enCxp = (cxp, oc) => Math.round(cxp.abiertas.filter(a => a.ocFolio === oc).reduce((t, a) => t + a.pendiente * 100, 0)) / 100;
+/** Recibe todo con 40 m del renglón 1 dañados y los devuelve al proveedor sin reponer (menos 40 × $10 + IVA = $464). */
+const recibirYDevolver40 = req => {
+  ok('obrero', 'cerrarRequisicion', req, '', { renglones: [{ renglon: 1, foto: F, problema: { tipo: 'Dañado', cantidad: 40, comentario: 'Mojado', foto: F } }, { renglon: 2, foto: F }] });
+  ok('pedro', 'resolverDevolucion', ultimaDev(), { resolucion: 'Devolver al proveedor', nota: 'Nota de crédito' });
+};
+const CREDITO = { formaPago: 'Crédito del proveedor', diasCredito: 30, condicionesPago: 'Crédito 30' };
+
+// Otro proyecto: P2 es PRY-…-0001, que los reportes (R) tratan como registro de prueba (CLAUDE.md §5) y no muestran
+const P3 = ok('ana', 'crearProyecto', { nombre: 'Planta Norte', ubicacion: 'Querétaro', cliente: { nombre: 'Luis', empresa: 'Solar' }, idSolicitud: 'p3' }).folio;
+
+// ================= 5. Cuentas por pagar y Reportes → CxP dan lo mismo por orden (r5, r4) =================
+{
+  // a) Sin pagos, facturada completa y con 40 m devueltos sin reponer: se debe 1,160 (antes Cuentas por pagar decía 1,624)
+  const a = siempre(CREDITO, P3);
+  facturar(a.oc, 1400, 224);
+  recibirYDevolver40(a.req);
+  // b) Sin pagos, facturada a medias: la factura y lo que falta facturar (antes solo la factura)
+  const b = siempre(CREDITO, P3);
+  facturar(b.oc, 700, 112);
+  // c) Con pagos (ya se medía por saldo)
+  const c = siempre(CREDITO, P3);
+  facturar(c.oc, 1400, 224);
+  recibirYDevolver40(c.req);
+  pagar(c.req, 1);
+  const cxp = ok('pedro', 'cuentasPorPagar'), rep = ok('pedro', 'reporteCxp');
+  for (const [k, s, debe] of [['a', a, 1160], ['b', b, 1624], ['c', c, 1159]]) {
+    assert.deepEqual([k, vista(s.req).saldo.saldo, enCxp(cxp, s.oc), enReporteCxp(rep, s.oc)], [k, debe, debe, debe], 'misma cifra en los tres lados (' + k + ')');
+  }
+  const fb = cxp.abiertas.filter(x => x.ocFolio === b.oc);
+  assert.deepEqual(fb.map(x => [x.tipo, x.pendiente, x.pagoParcial]), [['Extranjera', 812, false], ['Saldo', 812, false]], 'factura + lo que falta facturar');
+  assert.deepEqual(cxp.abiertas.filter(x => x.ocFolio === a.oc).map(x => [x.tipo, x.total, x.pendiente, x.pagado]), [['Extranjera', 1624, 1160, 0]]);
+  // Pura: sin pagos también por saldo (lo devuelto sin reponer se descuenta)
+  const o = { folio: 'OC-X', fecha: HOY_ISO, proyectoFolio: 'P', proveedor: 'Prov', moneda: 'MXN', subtotal: 1400, total: 1624, estado: 'Recibida', ivaTasa: 0.16,
+    renglones: [{ renglon: 1, cantidad: 80, costo: 10, importe: 800 }, { renglon: 2, cantidad: 12, costo: 50, importe: 600 }] };
+  const f = { folio: 'FPR-X', tipo: 'Extranjera', ocFolio: 'OC-X', moneda: 'MXN', total: 1624, subtotal: 1400, fechaEmision: HOY_ISO, fechaVencimiento: HOY_ISO, estado: 'Vigente' };
+  const dev = [{ ocFolio: 'OC-X', renglon: 1, tipo: 'Devolución sin reponer', cantidad: -40, estado: 'Vigente' }];
+  const r = P.antiguedadCxp({ hoy: HOY_ISO, ordenes: [o], facturas: [f], pagos: [], movimientos: { 'OC-X': dev } });
+  assert.deepEqual(r.abiertas.map(x => x.pendiente), [1160]);
+  assert.equal(r.totales[0].total, 1160);
 }
 
 // ================= Interfaz (al final: es asíncrona; DOM simulado conectado al servidor simulado) =================

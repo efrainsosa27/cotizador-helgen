@@ -187,7 +187,9 @@ const leer=o=>ctx.leerCfdi(cfdi(o));
 {
   const fac=(folio,oc,moneda,subtotal,total,venc,o)=>Object.assign({folio,tipo:'CFDI',serieFolio:folio,ocFolio:oc,proyectoFolio:'PRY-2026-0002',
     moneda,subtotal,descuento:0,total,fechaEmision:'2026-01-01',fechaVencimiento:venc,metodoPago:'PUE',estado:'Vigente',nombreEmisor:'X'},o||{});
-  const ord=(folio,estado,moneda,subtotal,fecha)=>({folio,estado,moneda,subtotal,fecha,proyectoFolio:'PRY-2026-0002',proveedor:'Proveedor '+folio});
+  // Con su total (IVA 16 % en MXN, 0 % en USD): desde la revisión del incremento 6 toda orden se mide por su saldo (saldoOrdenCompra)
+  const ord=(folio,estado,moneda,subtotal,fecha)=>({folio,estado,moneda,subtotal,total:Math.round(subtotal*(moneda==='MXN'?116:100))/100,fecha,
+    proyectoFolio:'PRY-2026-0002',proveedor:'Proveedor '+folio});
   const r=plano(ctx.antiguedadCxp({hoy:HOY,
     facturas:[fac('F1','OC-1','MXN',1000,1160,'2026-11-10'), fac('F2','OC-2','MXN',500,580,'2026-10-17'),
       fac('F3','OC-3','USD',100,100,'2026-08-28'), fac('F4','OC-4','MXN',1000,1160,'2026-09-01',{metodoPago:'PPD'}),
@@ -196,12 +198,15 @@ const leer=o=>ctx.leerCfdi(cfdi(o));
     ordenes:[ord('OC-1','Emitida','MXN',1010,'2026-09-01'), ord('OC-2','Recibida','MXN',1000,'2026-10-01'), ord('OC-3','Emitida','USD',100,'2026-08-01'),
       ord('OC-4','Pagada','MXN',2000,'2026-10-10'), ord('OC-5','Cancelada','MXN',10,'2026-08-01'), ord('OC-6','Emitida','MXN',500,'2026-10-05')],
     pagos:[{ocFolio:'oc-4',estado:'Vigente'},{ocFolio:'OC-1',estado:'Cancelado'}]}));
-  assert.deepStrictEqual(r.abiertas.map(a=>a.folio),['F7','F3','F2','F8','F1'],'por vencimiento; sin pagadas, canceladas ni de órdenes canceladas');
-  assert.deepStrictEqual(r.abiertas.map(a=>a.rango),['d90mas','d31a60','d1a30','porVencer','porVencer']);
+  // Revisión del incremento 6: OC-2 (1,160 con IVA) solo está facturada por 812: lo que falta facturar (348) también se debe y sale
+  // como «Saldo» (vence con la fecha de la orden + sus días de crédito), igual que en Reportes → CxP
+  assert.deepStrictEqual(r.abiertas.map(a=>a.folio),['F7','F3','OC-2','F2','F8','F1'],'por vencimiento; sin pagadas, canceladas ni de órdenes canceladas');
+  assert.deepStrictEqual(r.abiertas.map(a=>a.rango),['d90mas','d31a60','d1a30','d1a30','porVencer','porVencer']);
+  assert.deepStrictEqual([r.abiertas[2].tipo,r.abiertas[2].pendiente,r.abiertas[2].fechaVencimiento],['Saldo',348,'2026-10-01']);
   assert.strictEqual(r.abiertas.find(a=>a.folio==='F8').dias,0,'vence hoy = por vencer');
   assert.strictEqual(r.abiertas[0].proveedor,'Proveedor OC-2');
   assert.deepStrictEqual(r.totales,[
-    {moneda:'MXN',facturas:4,saldos:0,porVencer:1171.6,d1a30:580,d31a60:0,d61a90:0,d90mas:232,vencido:812,total:1983.6},
+    {moneda:'MXN',facturas:4,saldos:1,porVencer:1171.6,d1a30:928,d31a60:0,d61a90:0,d90mas:232,vencido:1160,total:2331.6},
     {moneda:'USD',facturas:1,saldos:0,porVencer:0,d1a30:0,d31a60:100,d61a90:0,d90mas:0,vencido:100,total:100}],'un total por moneda; nunca MXN + USD (saldos: P, incremento 6)');
   assert.deepStrictEqual(r.faltantes.map(x=>[x.folio,x.faltante,x.pagada]),[['OC-4',1000,true],['OC-2',300,false],['OC-6',500,false]],
     'pagadas primero, luego por fecha; OC-1 y OC-3 completas, OC-5 cancelada');

@@ -6263,10 +6263,12 @@ function validarFacturaProveedor(f, orden, ctx) {
  * moneda, subtotal, descuento, total, fechaEmision, fechaVencimiento, metodoPago, estado, nombreEmisor}], ordenes = [{folio,
  * fecha, proyectoFolio, proveedor, moneda, subtotal, total, estado, …} (ordenDesdeFila_)], pagos = pagos a proveedores [{ocFolio,
  * estado, montoAplicado}], movimientos = {FOLIO DE LA ORDEN: [movimientos]} (lo devuelto sin reponer; opcional).
- * Una orden sin pagos debe sus facturas Vigentes completas (como siempre). P (incremento 6): una orden con pagos que todavía no la
- * completan sigue en cuentas por pagar por su saldo (saldoOrdenCompra): lo pagado cubre sus facturas en orden de vencimiento y
- * cada factura queda por lo que le falta (pendiente); lo que no cubre ninguna factura es una fila "Saldo" (tipo Saldo, folio = la
- * orden) que vence con lo que sigue del plan de pagos (o recepción/entrega + días de crédito). Una orden completa no debe nada.
+ * Salen las órdenes vigentes con facturas Vigentes o con pagos Vigentes (las que no tienen ninguna de las dos solo salen en Reportes →
+ * CxP). P (incremento 6) y su revisión: toda orden se mide por su saldo (saldoOrdenCompra, con o sin pagos: lo devuelto sin reponer
+ * ya no se debe), así la cifra de cada orden es la misma que en Reportes → CxP: lo pagado cubre sus facturas en orden de vencimiento
+ * y cada factura queda por lo que le falta (pendiente; nunca más que el saldo); lo que no cubre ninguna factura es una fila "Saldo"
+ * (tipo Saldo, folio = la orden) que vence con lo que sigue del plan de pagos (o recepción/entrega + días de crédito). Una orden
+ * completa no debe nada.
  * Devuelve {hoy, rangos, totales (uno por moneda, por lo pendiente; nunca suma monedas), abiertas (por vencimiento; cada una con
  * total, pendiente, pagado y pagoParcial), faltantes (órdenes vigentes con menos facturado que su subtotal; pagadas primero),
  * repPendientes (PPD en órdenes con pagos: falta su REP)}.
@@ -6308,23 +6310,24 @@ function antiguedadCxp(d) {
     const o = ordenes[k];
     if (!ocVigente(o)) return; // sin orden, cancelada o anulada: no se debe
     const fs = (facturasPorOc[k] || []).slice().sort(porVencimiento);
-    if (!pagadas[k]) { fs.forEach(f => agregar(filaFactura(f, o, aCentavos(f.total), 0, false), true)); return; }
-    const s = saldoOrdenCompra(Object.assign({}, o, { facturas: fs }), pagosPorOc[k], Array.isArray(movs) ?
-      movs.filter(m => may(m.ocFolio) === k) : movs[k] || []);
+    const ms = Array.isArray(movs) ? movs.filter(m => may(m.ocFolio) === k) : movs[k] || [];
+    // Revisión del incremento 6: toda orden se mide por su saldo (saldoOrdenCompra), con pagos o sin ellos (lo devuelto sin reponer
+    // ya no se debe), así Cuentas por pagar y Reportes → CxP dan la misma cifra por orden
+    const s = saldoOrdenCompra(Object.assign({}, o, { facturas: fs }), pagosPorOc[k] || [], ms);
     if (s.completo) { completas[k] = true; return; }
+    const parcial = aCentavos(s.pagado) > 0;
     let pagado = aCentavos(s.pagado), resto = aCentavos(s.saldo);
     fs.forEach(f => {
       const total = aCentavos(f.total), cubre = Math.min(total, pagado), pendiente = Math.min(total - cubre, resto);
       pagado -= cubre; resto -= pendiente;
-      if (pendiente > 0) agregar(filaFactura(f, o, pendiente, cubre, true), true);
+      if (pendiente > 0) agregar(filaFactura(f, o, pendiente, cubre, parcial), true);
     });
-    if (resto > tol) {
+    if (resto > 0) {
       // Lo que no cubre ninguna factura vence por el plan o la entrega (no por las facturas: esas ya tienen su fila)
-      const sig = saldoOrdenCompra(Object.assign({}, o, { facturas: null }), pagosPorOc[k], Array.isArray(movs) ?
-        movs.filter(m => may(m.ocFolio) === k) : movs[k] || []).siguiente || s.siguiente || {};
+      const sig = saldoOrdenCompra(Object.assign({}, o, { facturas: null }), pagosPorOc[k] || [], ms).siguiente || s.siguiente || {};
       agregar({ folio: o.folio, tipo: TIPO_CXP_SALDO, serieFolio: sig.concepto || 'Saldo', ocFolio: o.folio, proyectoFolio: o.proyectoFolio,
         proveedor: o.proveedor || '', fechaEmision: o.fecha || '', fechaVencimiento: sig.vence || o.fecha || hoy, moneda: o.moneda,
-        total: resto / 100, pendiente: resto / 100, pagado: s.pagado, pagoParcial: true }, false);
+        total: resto / 100, pendiente: resto / 100, pagado: s.pagado, pagoParcial: parcial }, false);
     }
   });
   const listaTotales = Object.keys(totales).sort((a, b) => (a === 'MXN' ? -1 : b === 'MXN' ? 1 : a < b ? -1 : 1)).map(m => {
