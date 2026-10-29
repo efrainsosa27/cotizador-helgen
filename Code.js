@@ -12629,7 +12629,11 @@ function ordenesAnterioresSinPago(d) {
 
 /**
  * (Lógica pura) Tramos {cts, fecha, fuente, referencia} del saldo s de una orden (reglas en porPagarProveedores). sigResto = el
- * "siguiente" de P sin facturas (fecha de lo que ninguna factura cubre); sin él (o sin fecha), venceSinFactura(o).
+ * "siguiente" de P sin facturas (fecha de lo que ninguna factura cubre en una orden sin plan); sin él (o sin fecha),
+ * venceSinFactura(o). Con plan de pagos, lo que ninguna factura cubre se parte por etapa (revisión 6b): los pagos y las facturas
+ * cubren la orden desde el principio (la etapa 1 primero, como en P), así que lo que falta es el final de la orden; cada etapa
+ * pone su parte en su fecha: la 1 (si el plan tiene más de una) en la fecha de la orden y las demás en venceSinFactura, las
+ * mismas fechas que da P en el "siguiente pago". Las etapas salen de s.etapas (P) o, con la función provisional, del plan.
  */
 function tramosPorPagar(o, s, facturas, sigResto) {
   let restante = aCentavos(s.saldo), pagado = aCentavos(s.pagado);
@@ -12644,15 +12648,44 @@ function tramosPorPagar(o, s, facturas, sigResto) {
       tramos.push({ cts: abierto, fecha: f.fechaVencimiento, fuente: 'factura', referencia: f.folio });
       restante -= abierto;
     });
-  // Lo que no cubre ninguna factura, completo en una fecha (Cuentas por pagar tampoco lista un resto dentro de la tolerancia)
-  if (restante > aCentavos(TOLERANCIA_PAGO) || (!tramos.length && restante > 0)) {
+  // Lo que no cubre ninguna factura (Cuentas por pagar tampoco lista un resto dentro de la tolerancia)
+  if (!(restante > aCentavos(TOLERANCIA_PAGO) || (!tramos.length && restante > 0))) return tramos;
+  const etapas = etapasDelPlan_(o, s);
+  if (!etapas) { // sin plan: completo en una fecha
     const sig = sigResto || s.siguiente || {};
     const fecha = fechaIsoValida(sig.vence) ? sig.vence : venceSinFactura(o);
-    const plan = Array.isArray(o.planPago) && o.planPago.length > 0;
-    tramos.push({ cts: restante, fecha: fecha, fuente: !fecha ? '' : plan ? 'plan' : 'estimada',
-      referencia: plan ? String(sig.concepto || 'Plan de pagos') : 'Sin factura' });
+    tramos.push({ cts: restante, fecha: fecha, fuente: fecha ? 'estimada' : '', referencia: 'Sin factura' });
+    return tramos;
+  }
+  // Con plan: el final de la orden (lo que ni los pagos ni las facturas cubren), partido en sus etapas
+  const totalCts = aCentavos(etapas[etapas.length - 1].acumulado), desde = totalCts - restante;
+  let puestos = 0;
+  etapas.forEach((e, k) => {
+    const fin = aCentavos(e.acumulado), ini = fin - aCentavos(e.monto);
+    const cts = Math.max(0, fin - Math.max(ini, desde));
+    if (cts <= 0) return;
+    const fecha = k === 0 && etapas.length > 1 ? (fechaIsoValida(o.fecha) ? o.fecha : '') : venceSinFactura(o);
+    tramos.push({ cts: cts, fecha: fecha, fuente: fecha ? 'plan' : '', referencia: String(e.concepto || 'Plan de pagos') });
+    puestos += cts;
+  });
+  if (restante > puestos) { // por si las etapas no suman el saldo (no debería): lo que falte, en la última
+    const ultimo = tramos[tramos.length - 1];
+    if (ultimo && ultimo.fuente !== 'factura') ultimo.cts += restante - puestos;
+    else tramos.push({ cts: restante - puestos, fecha: venceSinFactura(o), fuente: venceSinFactura(o) ? 'plan' : '', referencia: 'Plan de pagos' });
   }
   return tramos;
+}
+
+/**
+ * Etapas del plan de pagos de una orden [{concepto, monto, acumulado}] sobre lo que se debe (esperado, o el total de sus facturas
+ * con retenciones), o null sin plan. De saldoOrdenCompra (P: s.etapas); con la provisional, montosDeEsquema sobre pagado + saldo.
+ */
+function etapasDelPlan_(o, s) {
+  if (!Array.isArray(o.planPago) || !o.planPago.length) return null;
+  if (Array.isArray(s.etapas) && s.etapas.length) return s.etapas;
+  let acum = 0;
+  return montosDeEsquema(o.planPago.map(e => ({ etapa: e.concepto, porcentaje: e.porcentaje })), (aCentavos(s.pagado) + aCentavos(s.saldo)) / 100)
+    .map(e => { acum += aCentavos(e.monto); return { concepto: e.etapa, monto: e.monto, acumulado: acum / 100 }; });
 }
 
 /**

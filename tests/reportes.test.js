@@ -157,13 +157,15 @@ assert.deepEqual(cxp.totales.map(t => [t.moneda, t.total, t.vencido, t.porVencer
 assert.deepEqual(cxp.grupos.map(g => g.proveedor + ' ' + g.moneda), ['Eléctrica MXN', 'Ardusimple USD']);
 assert.deepEqual(cxp.grupos[0].detalle.map(x => x.ocFolio), ['OC-1', 'OC-2', 'OC-6', 'OC-9']);
 assert.deepEqual([cxp.grupos[0].detalle[1].d1a30, cxp.grupos[0].detalle[1].porVencer], [560, 1160], 'una orden en dos rangos');
-// Plan de pagos del módulo P (simulado con la firma del contrato): lo que no cubre ninguna factura, completo en la fecha del
-// "siguiente" de P (como Cuentas por pagar y la vista de la orden; revisión 6b)
+// Plan de pagos del módulo P (simulado con la firma del contrato, sin etapas: las arma del plan): lo que no cubre ninguna factura,
+// por etapa; la 1 en la fecha de la orden y las demás en recepción/entrega + crédito, aunque el "siguiente" diga otra fecha
+// (revisión 6b)
 const conPlan = (orden, pagos) => ({ esperado: orden.total, pagado: 0, saldo: orden.total, completo: false, vigentes: [],
   siguiente: orden.folio === 'OC-1' ? { concepto: 'Anticipo 50%', monto: 580, vence: masDias(-3) } : null });
 const ocPlan = Object.assign({}, baseCxp.ordenes[0], { planPago: [{ concepto: 'Anticipo 50%', porcentaje: 50 }, { concepto: 'Resto', porcentaje: 50 }] });
 const ppPlan = plain(P.porPagarProveedores(Object.assign({}, baseCxp, { ordenes: [ocPlan] }), conPlan));
-assert.deepEqual(ppPlan.map(x => [x.monto, x.fecha, x.fuente, x.referencia].join(' ')), ['1160 ' + masDias(-3) + ' plan Anticipo 50%']);
+assert.deepEqual(ppPlan.map(x => [x.monto, x.fecha, x.fuente, x.referencia].join(' ')),
+  ['580 ' + ocPlan.fecha + ' plan Anticipo 50%', '580 ' + P.venceSinFactura(ocPlan) + ' plan Resto']);
 // Sin plan: primero las facturas; lo que no cubren, en la fecha del "siguiente" de P sin facturas
 const sinPlan = (orden, pagos) => ({ esperado: orden.total, pagado: 600, saldo: orden.total - 600, completo: false, vigentes: [],
   siguiente: { concepto: 'Saldo', monto: orden.total - 600, vence: orden.facturas && orden.facturas.length ? masDias(-20) : masDias(-1) } });

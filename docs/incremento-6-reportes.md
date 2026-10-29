@@ -20,13 +20,14 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
    |---|---|---|---|
    | Orden de un proyecto de prueba (`FOLIOS_PRUEBA_REPORTES` + `FOLIOS_PRUEBA`, decisión 4) | fuera | cuenta | **menor** |
    | Orden **sin pagos** con lo devuelto sin reponer | su saldo: descuenta lo devuelto (`saldoOrdenCompra` con los movimientos) | sus facturas completas | **menor** |
-   | Lo **no facturado** de una orden sin pagos (sin factura, o facturas por menos que la orden) | en la antigüedad, con IVA, en la fecha de su siguiente pago (plan, o recepción/entrega + crédito) | solo en "Falta factura" (sin IVA, sin antigüedad), fuera de los totales | **mayor** |
+   | Lo **no facturado** de una orden sin pagos (sin factura, o facturas por menos que la orden) | en la antigüedad, con IVA: sin plan, en recepción/entrega + crédito; con plan, por etapa (decisión 10) | solo en "Falta factura" (sin IVA, sin antigüedad), fuera de los totales | **mayor** |
    | Orden anterior sin pago registrado (decisión 11) | bloque aparte con cuántas son, fuera de los totales y del flujo | en "Falta factura", fuera de los totales | igual (ninguno la suma) |
    | Saldo sin factura de una orden sin ninguna fecha válida (solo editando la hoja a mano) | "Sin fecha" | vence hoy ("Por vencer") | mismo monto, otro rango |
    | Factura en otra moneda que su orden (solo a mano: `validarFacturaProveedor` lo rechaza) | se ignora: el saldo va en la moneda de la orden, "Sin factura" | en la moneda de la factura | otra moneda |
+   | Orden con **plan de pagos con el anticipo pagado en parte** (transitorio: hasta integrar el cambio de P) | por etapa: lo que falta del anticipo en la fecha de la orden y las demás etapas en recepción/entrega + crédito (decisión 10) | hoy, todo el resto en una fila "Saldo" en la fecha del anticipo; P lo está cambiando para partir igual por etapa | mismo monto; R pone las etapas siguientes después |
 
    Iguales en los dos: órdenes con pagos parciales (facturas en orden de vencimiento con lo pagado + fila "Saldo" en la fecha del
-   siguiente pago de P), plan de pagos, retenciones, órdenes de proyectos Cancelados (cuentan, decisión 2), canceladas y anuladas
+   siguiente pago de P), plan de pagos con el anticipo ya pagado (el resto en recepción/entrega + crédito), retenciones, órdenes de proyectos Cancelados (cuentan, decisión 2), canceladas y anuladas
    (fuera), lo pagado dentro de la tolerancia (no se lista).
 
    **Antigüedad de CxC y flujo (R) contra el resumen de cobranza**
@@ -79,13 +80,22 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
 9. **Pestaña:** "Reportes" es un grupo propio en la barra (entre Cobranza y Administración). La interfaz decide si se ve con
    `PERMISOS` (cobranza → CxC y margen; compras → CxP; super admin → flujo y todos), con la misma regla que `permisosReportes_`;
    el servidor revisa en cada llamada.
-10. **Fechas de CxP con las reglas de Cuentas por pagar** (revisión 6b; antes: el pago del plan con su fecha y el resto aparte): primero
-    las facturas (lo pagado cubre primero la que vence antes); lo que ninguna factura cubre va **completo en una sola fecha**: la del
-    "siguiente" de P **sin facturas** (el pago del plan que sigue —el anticipo vence en la fecha de la orden— o recepción/entrega +
-    crédito), igual que la fila "Saldo" de Cuentas por pagar y el "Siguiente pago" de la orden. Así el mismo saldo cae en el mismo
-    rango y la misma semana en todas las pantallas. Con un plan cuyo anticipo no se ha pagado, todo el saldo queda en la fecha del
-    anticipo (conservador para el flujo: el dinero sale antes, no después); en cuanto se paga, el resto pasa a recepción + crédito.
-    Un resto dentro de la tolerancia (≤ 1.00) no se lista, como en Cuentas por pagar.
+10. **Fechas de CxP** (revisión 6b; el reparto por etapa del plan, decisión final del coordinador): primero las **facturas**, en su
+    vencimiento (lo pagado cubre primero la que vence antes), como Cuentas por pagar. Lo que ninguna factura cubre (más de 1.00:
+    Cuentas por pagar tampoco lista un resto dentro de la tolerancia):
+    - **Sin plan de pagos:** completo en una sola fecha, la del "siguiente" de P sin facturas = `venceSinFactura` (recepción, o
+      entrega, o la orden + días de crédito), igual que la fila "Saldo" de Cuentas por pagar y el "Siguiente pago" de la orden.
+    - **Con plan de pagos: por etapa.** Los pagos y las facturas cubren la orden desde el principio (la etapa 1 primero, como reparte
+      P), así que lo que falta es el final de la orden y cada etapa pone su parte en su fecha: el **anticipo** (la etapa 1 de un plan
+      de más de una) en la **fecha de la orden** y **las demás etapas en `venceSinFactura`** (un plan de una sola etapa no tiene
+      anticipo: va en `venceSinFactura`). Son las fechas que P da como "Siguiente pago" en cada etapa. Ejemplo: orden de 1,000 con
+      plan 30/70 y 15 días de crédito, sin pagos ni facturas → 300 en la fecha de la orden y 700 en entrega (o recepción) + 15; con el
+      anticipo pagado, solo los 700; con una factura del anticipo sin pagar, la factura en su vencimiento y los 700 en su fecha.
+      Las etapas salen de `s.etapas` (P) o, con la función provisional, de `montosDeEsquema` sobre el plan (`etapasDelPlan_`).
+    - Por qué por etapa: el flujo de efectivo tiene que ser exacto. La primera versión de esta revisión ponía todo el saldo en la
+      fecha del anticipo (una sola fecha, como la fila "Saldo"), y eso adelantaba el 70 % semanas antes de que se deba. El módulo P
+      está cambiando Cuentas por pagar para partir igual lo no facturado por etapa; mientras no se integre, una orden con plan y el
+      anticipo pagado en parte sale en Cuentas por pagar en una sola fila (§0.1, fila transitoria).
 11. **Órdenes anteriores sin pago registrado** (revisión 6b): una orden vigente **sin requisición, sin pago Vigente y sin factura
     Vigente** (las de la fase 3, de antes de las requisiciones: Recibidas, Emitidas y alguna Pagada sin renglón de pago) no es deuda
     que se pueda saldar desde CAPRI: `registrarPagoProveedor` exige requisición y una Recibida tampoco se puede cancelar (una Emitida
@@ -192,9 +202,10 @@ Esquemas: `F_esquemas_<versión de contratos>`, `H_esquemas`, `R_esquemas` (deci
   no de proyectos de prueba, **sin las órdenes anteriores sin pago registrado** (`esOrdenAnteriorSinPago`: sin `req_folio`, sin pago
   Vigente y sin factura Vigente; van en `anteriores`, decisión 11). Saldo con `saldoOrdenCompra` (P, con las facturas de la orden: retenciones); nada si `completo`.
   Fecha (decisión 10): (1) facturas Vigentes de la orden en su moneda, de la que vence antes a la última, y lo pagado cubre primero
-  las que vencen antes; (2) lo que ninguna factura cubre (más de 1.00), completo en la fecha del "siguiente" de P sin facturas o, si
-  no la da, `venceSinFactura` ('plan' si la orden tiene plan; si no, 'estimada' = "Sin factura"). Una orden puede quedar en varios
-  rangos.
+  las que vencen antes; (2) lo que ninguna factura cubre (más de 1.00): sin plan, completo en la fecha del "siguiente" de P sin
+  facturas o, si no la da, `venceSinFactura` ('estimada' = "Sin factura"); con plan, el final de la orden partido en sus etapas, el
+  anticipo en la fecha de la orden y las demás en `venceSinFactura` ('plan', con el nombre de la etapa). Una orden puede quedar en
+  varios rangos.
 - **Agrupar (`antiguedadEnGrupos`):** cliente (por `cliente_id`) → proyecto; proveedor (por id) → orden. Un grupo es de una moneda:
   un cliente con proyectos en MXN y USD sale dos veces. Grupos del más vencido al menos; totales por moneda (MXN primero).
 - **Flujo (`flujoSemanal`):** ver decisión 7 (semana 1: `etiqueta` "Semana en curso", `parcial`, `diasRestantes` con hoy). Cobros = partidas de CxC; pagos = partidas de CxP. Neto = cobros − pagos de la semana;
@@ -211,8 +222,9 @@ Esquemas: `F_esquemas_<versión de contratos>`, `H_esquemas`, `R_esquemas` (deci
    integrar **no hay que tocar nada**; después se puede borrar `saldoOrdenCompraProvisional` (y la rama del `typeof`). Las pruebas
    de R lo aceptan así (`tests/reportes.test.js`) y se comprobó que el mismo archivo pasa con una `saldoOrdenCompra` de P presente
    (sin plan, con `vence` lleno: las cifras no cambian).
-2. **Forma que R usa del resultado:** `saldo`, `completo`, `esperado`, `pagado` y `siguiente {concepto, monto, vence}` (`vigentes` no
-   se usa). Si `vence` no es `AAAA-MM-DD`, se ignora.
+2. **Forma que R usa del resultado:** `saldo`, `completo`, `esperado`, `pagado`, `siguiente {concepto, monto, vence}` (sin plan) y
+   `etapas [{concepto, monto, acumulado}]` (con plan; sin ellas, R las arma del plan) (`vigentes` no se usa). Si `vence` no es
+   `AAAA-MM-DD`, se ignora.
 3. **Pagos que R le pasa:** las filas de `PagosProveedores` de esa orden en cualquier estado (sin las anuladas), con `pagoProvDesdeFila_`;
    si P agrega `tipo`, `pagoProvDesdeFila_` debe leerlo (R no lo necesita). Movimientos: `movimientosPorOc_(libro)[OC]`.
 4. **Colecciones:** el caché de CxP y del flujo depende de `oc`, `pagosProveedores`, `facturasProveedor`, `requisiciones`, `proyectos`
@@ -243,14 +255,16 @@ Esquemas: `F_esquemas_<versión de contratos>`, `H_esquemas`, `R_esquemas` (deci
   de sincronización, bloque de fechas en Cobranza (valores, estado, solo manda lo que cambió, sin cambios no llama, sin contrato no
   se ve).
 
-`tests/revision6-reportes.test.js` (revisión 6b, 83 aserciones): cada hallazgo de la revisión con el escenario que fallaba antes del arreglo —
+`tests/revision6-reportes.test.js` (revisión 6b, 96 aserciones): cada hallazgo de la revisión con el escenario que fallaba antes del arreglo —
 fecha de lo que no tiene factura igual a Cuentas por pagar (sección 2), órdenes anteriores sin pago registrado (sección 1: pura,
 sembradas por la API como las de la fase 3, interfaz y CSV), cada diferencia de §0.1 con su dirección contra `antiguedadCxp`,
 `resumenGeneralCobranza` y el margen (sección 3; también revisa que el doc la liste), contratos desbloqueados con pagos (sección 4: pura, firmado → pago →
 desbloqueo por la API, CxC, flujo, chip y CSV; por firmar sin pagos sigue fuera), semana en curso del flujo (sección 5: domingo,
 lunes y jueves; pantalla y CSV), apóstrofo con tabulador y CR al inicio (sección 6: cliente y proyecto editados a mano en la
 hoja), fecha esperada editada a mano en Esquemas (sección 7: antes de la revisión nada; vencida la marca, sube `contratos`, manda el
-reporte abierto, CxC y flujo con la fecha nueva, una sola vez)—.
+reporte abierto, CxC y flujo con la fecha nueva, una sola vez), plan de pagos por etapa (sección 8: la orden OC-B de la revisión,
+recibida antes, anticipo pagado en parte, anticipo facturado, factura por más que el anticipo, tres etapas, plan de una etapa,
+función provisional, suma = saldo de P y flujo)—.
 
 `bash tests/todas.sh`: 25 archivos + sintaxis de la interfaz, todo en verde.
 
@@ -266,8 +280,9 @@ reporte abierto, CxC y flujo con la fecha nueva, una sola vez)—.
   app abierta por alguien de cobranza; decisión 12).
 - Después de publicar: abrir Reportes como leo@ (super admin) y revisar contra el resumen de cobranza y Cuentas por pagar (las
   diferencias esperadas están en §0.1). Capturar las fechas esperadas de los contratos firmados (sin ellas todo cae en "Sin fecha").
-- Avisar a cobranza: dónde se capturan las fechas; a compras: el reporte de CxP incluye lo que falta facturar, en la fecha de su
-  siguiente pago (recepción o entrega + días de crédito, o el plan), y que las órdenes de antes de las requisiciones que nunca se
+- Avisar a cobranza: dónde se capturan las fechas; a compras: el reporte de CxP incluye lo que falta facturar, en su fecha
+  (recepción o entrega + días de crédito; con plan de pagos, el anticipo en la fecha de la orden y cada etapa siguiente en
+  recepción o entrega + días de crédito), y que las órdenes de antes de las requisiciones que nunca se
   pagaron en CAPRI salen aparte (no se pueden pagar; si ya se pagaron fuera, basta saberlo; si no, decidir qué hacer con ellas).
 - Al integrar: pasar a `CLAUDE.md` §4.5.2 (fecha esperada), §4.6 (puras), §4.7 (pestaña Reportes), §4.8 (módulo R), §5 (columna y
   `FOLIOS_PRUEBA`), §6 (decisiones de §0), §7 (regla: reportes solo lectura, monedas aparte) y §9; y el Manual (regla 14).

@@ -13,7 +13,9 @@
 //     versión de contratos) y la antigüedad de CxC y el flujo se recalculan.
 //  2. Fecha base de lo que se debe sin factura: UNA regla para P (vista de la orden), Cuentas por pagar y R (venceSinFactura:
 //     recepción, o entrega, o la orden + días de crédito); el mismo saldo cae en el mismo rango y la misma semana que en Cuentas
-//     por pagar (facturas primero; el resto completo en la fecha del "siguiente" de P sin facturas, también con plan de pagos).
+//     por pagar (facturas primero; sin plan, el resto completo en la fecha del "siguiente" de P sin facturas; con plan, por etapa).
+//  8. Plan de pagos (decisión del coordinador después de la revisión): lo que ninguna factura cubre se parte por etapa; el anticipo
+//     en la fecha de la orden y las demás etapas en venceSinFactura (recepción, o entrega, o la orden + días de crédito).
 // Uso: node tests/revision6-reportes.test.js .
 'use strict';
 const assert = require('assert');
@@ -59,12 +61,13 @@ const filasR = d => plain(P.antiguedadPorPagar(d, P.saldoOrdenCompra)).grupos.re
   assert.deepEqual(filasR(d2), filasCxp(d2), 'mismas filas que Cuentas por pagar');
   assert.deepEqual(filasR(d2).map(x => x[0]), [560, 580, 580].sort());
 
-  // (c) Plan 30/70 sin pagar ni factura: todo el saldo en la fecha del siguiente pago (el anticipo = fecha de la orden), igual que
-  //     la vista de la orden y que la fila "Saldo" de Cuentas por pagar en cuanto haya un pago (antes: 348 + 812 en dos fechas)
+  // (c) Plan 30/70 sin pagar ni factura: por etapa (sección 8); el anticipo en la fecha de la orden (la misma del "siguiente
+  //     pago" de P) y la contra entrega en entrega + crédito (venceSinFactura, la regla de esta sección)
   const plan = [{ concepto: 'Anticipo', porcentaje: 30 }, { concepto: 'Contra entrega', porcentaje: 70 }];
   const o3 = OC('OC-P', 1160, { planPago: plan, diasCredito: 15 });
   const r3 = plain(P.porPagarProveedores(datos([o3]), P.saldoOrdenCompra));
-  assert.deepEqual(r3.map(x => [x.monto, x.fecha, x.fuente, x.referencia]), [[1160, o3.fecha, 'plan', 'Anticipo']]);
+  assert.deepEqual(r3.map(x => [x.monto, x.fecha, x.fuente, x.referencia]),
+    [[348, o3.fecha, 'plan', 'Anticipo'], [812, P.venceSinFactura(o3), 'plan', 'Contra entrega']], 'plan sin pagar: por etapa');
   assert.equal(P.saldoOrdenCompra(o3, [], []).siguiente.vence, o3.fecha);
   // Con el anticipo pagado: el resto en recepción/entrega + crédito, como Cuentas por pagar
   const d3 = datos([o3], [PGP('OC-P', 348)]);
@@ -75,6 +78,46 @@ const filasR = d => plain(P.antiguedadPorPagar(d, P.saldoOrdenCompra)).grupos.re
   const copias = SRC.match(/fechaRecepcion\s*\|\|\s*\w+\.fechaEntrega\s*\|\|\s*\w+\.fecha\b/g) || [];
   assert.equal(copias.length, 1, 'la regla vive en venceSinFactura: ' + copias.length + ' copias');
   assert(!/function fechaEstimadaOrden/.test(SRC), 'sin la copia de R');
+}
+
+// ================= 8. Plan de pagos: lo que ninguna factura cubre, por etapa =================
+{
+  const pp = (ordenes, pagos, facturas) => plain(P.porPagarProveedores(datos(ordenes, pagos, facturas), P.saldoOrdenCompra))
+    .map(x => [x.monto, x.fecha, x.fuente, x.referencia]);
+  const p3070 = [{ concepto: 'Anticipo', porcentaje: 30 }, { concepto: 'Contra entrega', porcentaje: 70 }];
+  // Orden de la revisión (a-puras OC-B): 1000 con plan 30/70 y 15 días de crédito, sin pagos → 300 en la fecha de la orden y 700 en
+  // entrega + 15; recibida antes, la contra entrega en recepción + 15
+  const oB = OC('OC-B', 1000, { planPago: p3070, diasCredito: 15, fecha: '2026-10-01', fechaEntrega: '2026-10-10' });
+  assert.deepEqual(pp([oB]), [[300, '2026-10-01', 'plan', 'Anticipo'], [700, '2026-10-25', 'plan', 'Contra entrega']], 'OC-B de la revisión');
+  const oBr = Object.assign({}, oB, { fechaRecepcion: '2026-10-07' });
+  assert.deepEqual(pp([oBr]).map(x => x[1]), ['2026-10-01', '2026-10-22'], 'recibida: recepción + crédito');
+  // Anticipo pagado en parte: lo que falta del anticipo en la fecha de la orden; la contra entrega completa en su fecha
+  const o1 = OC('OC-1', 1160, { planPago: p3070, diasCredito: 15 });
+  assert.deepEqual(pp([o1], [PGP('OC-1', 100)]), [[248, o1.fecha, 'plan', 'Anticipo'], [812, P.venceSinFactura(o1), 'plan', 'Contra entrega']]);
+  // Anticipo facturado y sin pagar: la factura en su vencimiento; lo que no está facturado (la contra entrega) en su fecha
+  assert.deepEqual(pp([o1], [], [FPR('FPR-A', 'OC-1', 348, masDias(2))]),
+    [[348, masDias(2), 'factura', 'FPR-A'], [812, P.venceSinFactura(o1), 'plan', 'Contra entrega']]);
+  // Factura por más que el anticipo: lo no facturado es el final de la orden (solo contra entrega)
+  assert.deepEqual(pp([o1], [], [FPR('FPR-B', 'OC-1', 580, masDias(2))]),
+    [[580, masDias(2), 'factura', 'FPR-B'], [580, P.venceSinFactura(o1), 'plan', 'Contra entrega']]);
+  // Tres etapas y un pago que pasa del anticipo a la segunda: cada etapa con lo suyo
+  const o3e = OC('OC-3', 1160, { planPago: [{ concepto: 'Anticipo', porcentaje: 30 }, { concepto: 'Avance', porcentaje: 40 },
+    { concepto: 'Finiquito', porcentaje: 30 }], diasCredito: 0 });
+  assert.deepEqual(pp([o3e], [PGP('OC-3', 500)]), [[312, P.venceSinFactura(o3e), 'plan', 'Avance'], [348, P.venceSinFactura(o3e), 'plan', 'Finiquito']]);
+  // Plan de una sola etapa: no hay anticipo (como P: recepción/entrega + crédito)
+  const o100 = OC('OC-U', 1160, { planPago: [{ concepto: 'Contra entrega', porcentaje: 100 }], diasCredito: 10 });
+  assert.deepEqual(pp([o100]), [[1160, P.venceSinFactura(o100), 'plan', 'Contra entrega']]);
+  assert.equal(P.saldoOrdenCompra(o100, [], []).siguiente.vence, P.venceSinFactura(o100), 'la misma fecha que P');
+  // Con la función provisional (sin s.etapas) el reparto sale del plan: igual
+  assert.deepEqual(plain(P.porPagarProveedores(datos([oB]), P.saldoOrdenCompraProvisional)).map(x => [x.monto, x.fecha]),
+    [[300, '2026-10-01'], [700, '2026-10-25']], 'provisional');
+  // La suma de las etapas es el saldo de P
+  assert.equal(pp([o3e], [PGP('OC-3', 500)]).reduce((a, x) => a + x[0], 0), P.saldoOrdenCompra(o3e, [PGP('OC-3', 500)], []).saldo);
+  // En el flujo: el anticipo (vencido) en la semana en curso y la contra entrega en la semana de su fecha
+  const oF = OC('OC-W', 1160, { planPago: p3070, diasCredito: 20, fecha: masDias(-3), fechaEntrega: masDias(1) });
+  const fl = plain(P.flujoSemanal({ hoy: HOY_ISO, cobros: [], pagos: P.porPagarProveedores(datos([oF]), P.saldoOrdenCompra) }));
+  const sem = f => P.diasEntre(P.lunesDe(HOY_ISO), f) < 0 ? 1 : Math.floor(P.diasEntre(P.lunesDe(HOY_ISO), f) / 7) + 1;
+  assert.deepEqual(fl.partidas.map(p => [p.monto, p.semana, p.vencido]), [[348, 1, true], [812, sem(masDias(21)), false]], 'flujo por etapa');
 }
 
 // ================= 3. Diferencias documentadas en §0.1 (cada una contra las funciones de verdad) =================
@@ -106,6 +149,14 @@ const filasR = d => plain(P.antiguedadPorPagar(d, P.saldoOrdenCompra)).grupos.re
   const dRt = datos([OC('OC-R', 1160), OC('OC-Q', 2320)], [PGP('OC-Q', 500)],
     [FPR('FPR-R', 'OC-R', 1120, masDias(5), { subtotal: 1000 }), FPR('FPR-Q1', 'OC-Q', 1160, masDias(-3)), FPR('FPR-Q2', 'OC-Q', 1160, masDias(9))]);
   assert.deepEqual(filasR(dRt), filasCxp(dRt), 'retenciones y pagos parciales: lo mismo');
+  // CxP · plan con el anticipo pagado en parte: R por etapa (348 − 100 en la fecha de la orden, 812 en entrega + crédito). Cuentas por
+  // pagar de esta rama pone todo el resto en la fecha del siguiente pago; P lo está cambiando para partir igual (al integrar, igual)
+  const oPl = OC('OC-PL', 1160, { planPago: [{ concepto: 'Anticipo', porcentaje: 30 }, { concepto: 'Contra entrega', porcentaje: 70 }], diasCredito: 15 });
+  const dPl = datos([oPl], [PGP('OC-PL', 100)]);
+  assert.deepEqual(filasR(dPl), [[248, oPl.fecha, 'd1a30'], [812, P.venceSinFactura(oPl), 'd1a30']].sort(), 'R por etapa (entrega −25 + 15: vencido 10 días)');
+  const cPl = filasCxp(dPl);
+  assert(cPl.length === 2 ? JSON.stringify(cPl) === JSON.stringify(filasR(dPl)) : JSON.stringify(cPl) === JSON.stringify([[1060, oPl.fecha, 'd1a30']]),
+    'Cuentas por pagar: todo en la fecha del anticipo (hoy) o por etapa como R (con el cambio de P): ' + JSON.stringify(cPl));
 
   // CxC · contra el resumen de cobranza (resumenGeneralCobranza)
   const PRY = folio => ({ folio, folioVisible: folio, nombre: 'Proyecto ' + folio, cliente: 'Cliente', clienteId: 'C1', estado: 'Activo' });
@@ -134,7 +185,7 @@ const filasR = d => plain(P.antiguedadPorPagar(d, P.saldoOrdenCompra)).grupos.re
   const s01 = doc.slice(doc.indexOf('## 0.'), doc.indexOf('2. **Las órdenes de un proyecto Cancelado')).toLowerCase();
   ['de un proyecto de prueba', 'con lo devuelto sin reponer', 'lo **no facturado**', 'orden anterior sin pago registrado', 'sin ninguna fecha válida',
     'factura en otra moneda que su orden', 'contrato desbloqueado con pagos', 'pago de más dentro de la tolerancia', 'etapa sin fecha esperada',
-    'proyecto o cotización aceptada de prueba', 'no cambia lo que hacen', 'tarjeta de margen']
+    'proyecto o cotización aceptada de prueba', 'no cambia lo que hacen', 'tarjeta de margen', 'plan de pagos con el anticipo pagado en parte']
     .forEach(k => assert(s01.includes(k.toLowerCase()), 'el §0.1 del doc no menciona: ' + k));
 }
 

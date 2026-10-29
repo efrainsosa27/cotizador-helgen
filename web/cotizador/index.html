@@ -5738,7 +5738,8 @@
           dineroTexto(p.monto, p.moneda) + (p.fecha ? ' · ' + fechaMx(p.fecha) + ' (' + textoDias(p.dias) + ')' : ''),
         nota: 'Saldo de cada orden de compra vigente (lo esperado menos lo pagado, en la moneda de la orden), con las fechas de Cuentas por pagar: ' +
           'el vencimiento de sus facturas (emisión + días de crédito; lo pagado cubre primero la que vence antes); lo que no tiene factura, en la ' +
-          'fecha de su siguiente pago (el del plan de pagos o la recepción —o entrega— + días de crédito). Fuera: órdenes canceladas o anuladas, ' +
+          'recepción —o entrega— + días de crédito; con plan de pagos, por etapa: el anticipo en la fecha de la orden y las demás etapas en la ' +
+          'recepción —o entrega— + días de crédito. Fuera: órdenes canceladas o anuladas, ' +
           'registros de prueba y las órdenes anteriores sin pago registrado (abajo, aparte).' });
     }
     /** Revisión 6b: la semana 1 es la semana en curso; si hoy no es lunes, parcial (un domingo solo queda hoy). */
