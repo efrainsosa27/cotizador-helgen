@@ -39,7 +39,7 @@ recepciones cada 15 min para cerrar la requisición. Detalle en §4.8, §5 (Admi
 |---|---|
 | **Cotizador (lo usa el equipo)** | `https://cotizador-helgen.cotizador-helgen.workers.dev/cotizador/` (portada en `/`) |
 | Proyecto Apps Script de la API (`scriptId` en `.clasp.json`) | `1GsH8DjaFEZ9dltqBUTUEFE_frblSYimRRCvPkqKdRB5UhmBwwYHLSwyS` (nombre anterior "Cotizador Helgen — PRUEBAS interfaz web"; ver §9) |
-| Deployment de la API (siempre actualizar este; `API_URL` en `web/cotizador/index.html`) | `AKfycbwBjF7ra_4O8INsxBq0eh-4r-BlSsJ4LLxcJgVCPRpx1U1a-Pz1CUSdYtvj_Mh0S6y2` (@12 al 28/10/2026 = facturas de proveedor y cuentas por pagar + requisiciones con operaciones (PR 2 y 3; el flujo con operaciones se activa al poner correos en `ROL_OPERACIONES`); @11 al 23/10/2026 = carga rápida, sincronización sin recargar, requisiciones en cualquier proyecto y clave de proyecto; @10 = requisiciones de materiales y pago a proveedores; @9 = resumen de cobranza; @8 = Compras: órdenes de compra, proveedores y margen; @7 = ocultar aceptar/firmar en proyectos cancelados; @6 = Cobranza y USD; @5 = nombre del vendedor en Historial; @4 = Proyectos; @3 = 19/10/2026; `access: ANYONE_ANONYMOUS` + token) |
+| Deployment de la API (siempre actualizar este; `API_URL` en `web/cotizador/index.html`) | `AKfycbwBjF7ra_4O8INsxBq0eh-4r-BlSsJ4LLxcJgVCPRpx1U1a-Pz1CUSdYtvj_Mh0S6y2` (**@13 al 29/10/2026 = CAPRI incremento 4, publicado por facilities@**; @12 al 28/10/2026 = facturas de proveedor y cuentas por pagar + requisiciones con operaciones (PR 2 y 3; el flujo con operaciones se activa al poner correos en `ROL_OPERACIONES`); @11 al 23/10/2026 = carga rápida, sincronización sin recargar, requisiciones en cualquier proyecto y clave de proyecto; @10 = requisiciones de materiales y pago a proveedores; @9 = resumen de cobranza; @8 = Compras: órdenes de compra, proveedores y margen; @7 = ocultar aceptar/firmar en proyectos cancelados; @6 = Cobranza y USD; @5 = nombre del vendedor en Historial; @4 = Proyectos; @3 = 19/10/2026; `access: ANYONE_ANONYMOUS` + token) |
 | Client ID de OAuth (`CLIENT_ID_GOOGLE` en `web/cotizador/index.html` y `Code.js`) | `884526916417-cn5fh45io0nnpvlad2439thkpius4063.apps.googleusercontent.com` (no es secreto) |
 | Carpeta maestra en Drive "Cotizador Helgen" | `1lf3Z4d3e_oqFbYJse4QbyYkWowYT9HCo` |
 | Base de datos "Cotizador Helgen — Base de datos" (`SPREADSHEET_ID`) | `1ozFsyt1OjSnSv-PVpRWZjgqeWt6voQREbjvOJAXPEaI` |
@@ -918,7 +918,15 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
   rechaza el cambio, decirlo y anotarlo en §9 como pendiente.
 
 ## 9. Pendientes e ideas
-- **CAPRI — incremento 4: construido e integrado el 28/10/2026, SIN PUBLICAR** (rama `incremento-4`; 5 módulos A–E + integración;
+- **CAPRI — incremento 4: PUBLICADO el 29/10/2026 ~11:55** (API **@13** publicada por `facilities@helgen.tech` sobre el mismo
+  deployment `AKfycbwBjF7…`, "Ejecutar como: facilities@"; interfaz con `CLOUDFLARE_ACCOUNT_ID=badd8bca… npx wrangler@4 deploy`,
+  versión `5f66244c`). Hechos: Leo compartió el proyecto con facilities@ (Editor); facilities@ corrió `prepararCapri()` (libro de
+  Administración `1bI6gx3xRAl6qe9Zg4Cn_yR8vyynm7PPMDLBHhRQ_PU0` en su Drive, 12 usuarios migrados, `SESION_SECRETO`, SITIOS con
+  código, activador `cadaQuinceMinutos`, correo de prueba recibido). Revisado en el real como leo@ (Claude in Chrome): entrada
+  CAPRI, Pendientes (REQ-2026-0003 por cotizar), Permisos (12), Compras (REQ-0001..0004) y Cobranza cargan, sin errores de
+  consola. Sin respaldo previo de los libros (los cambios de `prepararCapri` solo agregan; historial de versiones de Sheets).
+  Ojo: `wrangler` con la sesión de leo@ elige su cuenta propia; siempre con `CLOUDFLARE_ACCOUNT_ID` de la cuenta de efrain@.
+  Antes: construido e integrado el 28/10/2026 (rama `incremento-4`; 5 módulos A–E + integración;
   `bash tests/todas.sh` en verde: 17 revisiones). **Revisión independiente** (dos agentes: seguridad y flujos/centro de mando)
   hecha el 28/10/2026; sus hallazgos se arreglaron con prueba (commit "Revisión independiente…", `tests/revision.test.js` y
   casos nuevos en identidad, correos, pantallas y centro). No se probó en PRUEBAS ni en el navegador real. **Pasos para publicar (Efrain, con Leo):**
