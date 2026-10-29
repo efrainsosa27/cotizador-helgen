@@ -6829,7 +6829,7 @@ function anular(folio, motivo, idSolicitud) {
   return conCandado_(() => {
     if (claveCache) {
       const previo = cache.get(claveCache);
-      if (previo) return JSON.parse(previo);
+      if (previo) return Object.assign(JSON.parse(previo), { anulados: listarAnuladosDeHoja_('') });
     }
     const d = datosAnular_();
     const plan = planAnulacion_(d, objetivo);
@@ -6842,9 +6842,10 @@ function anular(folio, motivo, idSolicitud) {
     notificar_('anulado', { folio: plan.raiz.folio, tipo: plan.raiz.tipo, motivo: m,
       cascada: plan.registros.map(r => ({ tipo: r.tipo, folio: r.folio })), para: plan.para.slice() });
     plan.ocsPortal.forEach(oc => { try { avisarPortal_('oc.cancelada', oc); } catch (e) { fallas.push('Centro de mando (' + oc + '): ' + e.message); } });
-    const resultado = Object.assign(resumenPlan_(plan), { fallas: fallas, anulados: listarAnuladosDeHoja_('') });
+    // En el caché de idempotencia va sin la lista de anulados (puede ser grande): al repetir se vuelve a leer
+    const resultado = Object.assign(resumenPlan_(plan), { fallas: fallas });
     guardarIdempotencia_(cache, claveCache, resultado);
-    return resultado;
+    return Object.assign({}, resultado, { anulados: listarAnuladosDeHoja_('') });
   });
 }
 
