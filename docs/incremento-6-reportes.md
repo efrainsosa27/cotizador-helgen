@@ -27,7 +27,13 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
    `PRY-2026-0001`) más la Script Property opcional **`FOLIOS_PRUEBA`** (folios separados por coma; se aplica sin publicar). Fuera:
    el proyecto con ese folio (también con su clave), un contrato cuya cotización aceptada es de prueba y las órdenes de ese proyecto.
 5. **Contratos "Por firmar"** (aceptada sin firmar): no van en CxC ni en el flujo (todavía no se cobran: los pagos exigen contrato
-   firmado); en el margen se muestran y **no suman**, como en el resumen de cobranza.
+   firmado); en el margen se muestran y **no suman**, como en el resumen de cobranza. **Desbloqueados** (revisión 6b): un contrato
+   que se firmó, se desbloqueó (`desbloquearContrato` lo regresa a Aceptada y conserva los pagos) y tiene algún pago Vigente **sigue
+   en CxC y en el flujo**, marcado **"Desbloqueado"** (chip en pantalla, columna "Contrato" en el CSV de CxC): se le sigue cobrando
+   y antes desaparecía de los dos reportes. Se reconoce sin leer la Bitácora (`contratoDesbloqueado`: Aceptada + pago Vigente, que
+   solo puede existir tras un desbloqueo porque `registrarPago` exige contrato firmado). Uno aceptado sin pagos sigue fuera aunque
+   se haya desbloqueado (no hay nada cobrado; vuelve en cuanto se firme). **En el margen no cambia:** se muestra "Por firmar" y no
+   suma, como en el resumen de cobranza (la revisión no lo pidió y el contrato de verdad no está firmado).
 6. **Margen con un costo en otra moneda** (orden de compra en una moneda que no es la del contrato): el renglón dice "Revisar" y no
    suma; los totales de su línea suman solo los demás y dicen cuántos quedaron fuera. (El resumen de cobranza, en cambio, deja el
    margen total de esa moneda en blanco.)
@@ -65,7 +71,8 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
 2. **Pestaña Reportes** con cuatro reportes, cada uno con "Actualizar" y "Descargar CSV" (UTF-8 con BOM; texto que empieza con
    `= + - @` con apóstrofo; números con 2 decimales), MXN y USD siempre aparte:
    - **Antigüedad de cuentas por cobrar** (cobranza, super admin): por cliente y proyecto, en No vencido · 1–30 · 31–60 · 61–90 ·
-     Más de 90 días · Sin fecha, con el total vencido. Cada proyecto lista sus etapas por cobrar con su fecha.
+     Más de 90 días · Sin fecha, con el total vencido. Cada proyecto lista sus etapas por cobrar con su fecha; un contrato
+     desbloqueado con pagos va marcado "Desbloqueado" (decisión 5).
    - **Antigüedad de cuentas por pagar** (compras, super admin): por proveedor y orden, mismos rangos; cada orden dice de dónde sale
      la fecha (factura, plan de pagos o sin factura). Abajo, aparte y fuera de los totales, las **órdenes anteriores sin pago
      registrado** (decisión 11) con cuántas son. Sin datos de contrato ni margen. En el CSV van al final con la columna "Nota".
@@ -105,7 +112,7 @@ Nada en la Base de datos ni en el libro de compras. Caché (CacheService): `K_RE
 | `foliosPrueba_()` | `FOLIOS_PRUEBA_REPORTES` + Script Property `FOLIOS_PRUEBA` |
 | `datosReportes_(que)` | Lee contratos, esquemas (con fecha), pagos de clientes; órdenes, pagos a proveedores, movimientos y facturas; proyectos visibles. Sin lo anulado (estado `Anulada` o `esAnulado_`). No crea nada |
 | `guardarFechasEsperadas(proyecto, fechas)` *(API)* | Ver §1.1. `fechas = [{orden, etapa, fecha}]`; si la etapa en ese número ya no se llama igual (el esquema cambió), error y no escribe nada. Con candado; escribe solo la celda de cada etapa que cambió; devuelve `vistaCobranza_` |
-| Puras | `fechaIsoValida`, `esFolioPrueba`, `normalizarFechasEsperadas`, `rangoAntiguedad`, `ordenMonedas`, `etapasPorCobrar`, `porPagarProveedores`, `tramosPorPagar`, `esOrdenAnteriorSinPago`, `ordenesAnterioresSinPago`, `saldoOrdenCompraProvisional`, `antiguedadEnGrupos`, `antiguedadCxc`, `antiguedadPorPagar`, `lunesDe`, `flujoSemanal`, `margenPorProyecto`; constantes `FOLIOS_PRUEBA_REPORTES`, `SEMANAS_FLUJO`, `RANGOS_REPORTE`, `RANGO_SIN_FECHA`, `FUENTES_VENCE` |
+| Puras | `fechaIsoValida`, `esFolioPrueba`, `normalizarFechasEsperadas`, `rangoAntiguedad`, `ordenMonedas`, `contratoDesbloqueado`, `etapasPorCobrar`, `porPagarProveedores`, `tramosPorPagar`, `esOrdenAnteriorSinPago`, `ordenesAnterioresSinPago`, `saldoOrdenCompraProvisional`, `antiguedadEnGrupos`, `antiguedadCxc`, `antiguedadPorPagar`, `lunesDe`, `flujoSemanal`, `margenPorProyecto`; constantes `FOLIOS_PRUEBA_REPORTES`, `SEMANAS_FLUJO`, `RANGOS_REPORTE`, `RANGO_SIN_FECHA`, `FUENTES_VENCE` |
 
 ### Cambios fuera de §6.R (marcados "R (incremento 6)")
 - `MODULOS_` (+ `modReportes_()`).
@@ -126,7 +133,7 @@ Nada en la Base de datos ni en el libro de compras. Caché (CacheService): `K_RE
 
 ## 4. Reglas de cálculo
 
-- **CxC (`etapasPorCobrar`):** solo contratos **Firmados** de proyectos que existen, no Cancelados ni de prueba. Saldo de cada etapa
+- **CxC (`etapasPorCobrar`):** solo contratos **Firmados** (y los desbloqueados con algún pago Vigente, `desbloqueado: true`, decisión 5) de proyectos que existen, no Cancelados ni de prueba. Saldo de cada etapa
   = `resumenCobranza(contrato, etapas, pagos)` (el mismo reparto que la vista del proyecto: pagos Vigentes en orden de registro; el
   excedente pasa a la siguiente etapa; un pago en otra moneda cuenta por su `monto_aplicado` en la moneda del contrato; un pago
   cancelado o anulado no cuenta). Sin esquema guardado: una etapa "Total". Solo etapas con saldo > 0. Fecha = `fecha_esperada`
@@ -190,7 +197,8 @@ Nada en la Base de datos ni en el libro de compras. Caché (CacheService): `K_RE
 
 `tests/revision6-reportes.test.js` (revisión 6b): cada hallazgo de la revisión con el escenario que fallaba antes del arreglo —
 fecha de lo que no tiene factura igual a Cuentas por pagar (sección 2), órdenes anteriores sin pago registrado (sección 1: pura,
-sembradas por la API como las de la fase 3, interfaz y CSV)—.
+sembradas por la API como las de la fase 3, interfaz y CSV), contratos desbloqueados con pagos (sección 4: pura, firmado → pago →
+desbloqueo por la API, CxC, flujo, chip y CSV; por firmar sin pagos sigue fuera)—.
 
 `bash tests/todas.sh`: 25 archivos + sintaxis de la interfaz, todo en verde.
 

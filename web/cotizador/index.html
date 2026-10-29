@@ -5697,15 +5697,19 @@
         return '<div class="sat-titulo" style="margin-top:14px">' + esc(t.moneda) + '</div>' + tabla(enc, filas + total);
       }).join('') + '<div class="nota" style="margin-top:8px">' + cfg.nota + '</div>';
     }
+    /** Revisión 6b: contrato que se firmó, se desbloqueó y ya tiene pagos (se sigue cobrando). */
+    const chipDesbloqueado = si => si ? ' <span class="chip aceptada" style="white-space:nowrap" title="Se firmó, se desbloqueó y ya tiene pagos: ' +
+      'se sigue cobrando">Desbloqueado</span>' : '';
     function htmlCxc(d) {
       return htmlAntiguedad(d, { columna: 'Cliente / proyecto', quien: ['cliente', 'clientes'], vacio: 'No hay saldos por cobrar en contratos firmados.',
         grupo: g => g.cliente || 'Sin cliente',
         detalle: x => '<b style="white-space:nowrap">' + esc(x.folioVisible) + '</b> · ' + esc(x.nombre) + ' <span class="nota">· ' + esc(MARCA_TXT[x.marca] || '') +
-          (x.estadoProyecto && x.estadoProyecto !== 'Activo' ? ' · ' + esc(x.estadoProyecto) : '') + '</span>',
+          (x.estadoProyecto && x.estadoProyecto !== 'Activo' ? ' · ' + esc(x.estadoProyecto) : '') + '</span>' + chipDesbloqueado(x.desbloqueado),
         partida: p => p.etapa + ': ' + dineroTexto(p.monto, p.moneda) + ' · ' + (p.fecha ? fechaMx(p.fecha) + ' (' + textoDias(p.dias) + ')' : 'sin fecha esperada'),
         nota: 'Saldo de cada etapa de los contratos firmados (con IVA), con el mismo reparto de pagos que la vista del proyecto. La fecha es la ' +
           'fecha esperada de cobro de la etapa (Cobranza → proyecto → Esquema de pagos); sin ella, la etapa va en "Sin fecha". Hoy no está vencido. ' +
-          'Fuera: contratos por firmar, proyectos cancelados, lo anulado y los registros de prueba.' });
+          'Un contrato que se firmó, se desbloqueó y ya tiene pagos sigue aquí, marcado "Desbloqueado". ' +
+          'Fuera: contratos por firmar (sin pagos), proyectos cancelados, lo anulado y los registros de prueba.' });
     }
     /** Revisión 6b: órdenes anteriores sin pago registrado, en su propio bloque (fuera de los totales y del flujo). */
     function htmlAnteriores(a) {
@@ -5756,11 +5760,11 @@
           '<details style="margin-top:8px"><summary class="nota">Partidas (' + partidas.length + ')</summary>' +
           tabla('<th>Tipo</th><th>Folio</th><th>Detalle</th><th>Fecha</th><th>Semana</th><th class="num">Monto</th>', partidas.map(p =>
             '<tr><td>' + (p.tipo === 'cobro' ? 'Cobro' : 'Pago') + '</td><td style="white-space:nowrap">' + esc(p.folio) + '</td><td>' + esc(p.detalle) +
-            (p.fuente === 'estimada' ? ' <span class="nota">(sin factura)</span>' : '') + '</td><td style="white-space:nowrap">' + (p.fecha ? esc(fechaMx(p.fecha)) : 'Sin fecha') +
+            (p.fuente === 'estimada' ? ' <span class="nota">(sin factura)</span>' : '') + chipDesbloqueado(p.desbloqueado) + '</td><td style="white-space:nowrap">' + (p.fecha ? esc(fechaMx(p.fecha)) : 'Sin fecha') +
             (p.vencido ? ' <span class="chip cancelado">Vencido</span>' : '') + '</td><td>' + (p.semana || (p.donde === 'despues' ? 'Después' : '—')) + '</td>' +
             '<td class="num">' + dinero(p.monto, p.moneda) + '</td></tr>').join('')) + '</details>';
       }).join('') + '<div class="nota" style="margin-top:8px">Semana 1 = de lunes a domingo de esta semana; lo vencido cae en la semana 1 y se marca. ' +
-        'Cobros: saldo de las etapas de contratos firmados en su fecha esperada. Pagos: saldo de las órdenes de compra en su vencimiento ' +
+        'Cobros: saldo de las etapas de contratos firmados (y de los desbloqueados que ya tienen pagos, marcados) en su fecha esperada. Pagos: saldo de las órdenes de compra en su vencimiento ' +
         '(factura, plan de pagos o recepción/entrega + crédito). El acumulado empieza en cero: no incluye el saldo en bancos.' +
         (d.ordenesAnteriores ? ' No incluye ' + plural(d.ordenesAnteriores, 'orden anterior', 'órdenes anteriores') + ' sin pago registrado ' +
           '(ver Antigüedad de cuentas por pagar).' : '') + '</div>';
@@ -5802,10 +5806,10 @@
       if (!d) return '';
       const rangos = d.rangos || [];
       if (tipo === 'cxc') {
-        return armarCsv(['Cliente', 'Folio', 'Proyecto', 'Línea de negocio', 'Moneda'].concat(rangos.map(r => r.etiqueta), ['Total', 'Etapas por cobrar']),
+        return armarCsv(['Cliente', 'Folio', 'Proyecto', 'Línea de negocio', 'Moneda'].concat(rangos.map(r => r.etiqueta), ['Total', 'Etapas por cobrar', 'Contrato']),
           d.grupos.reduce((acc, g) => acc.concat(g.detalle.map(x => [texto(g.cliente), texto(x.folioVisible), texto(x.nombre), texto(MARCA_TXT[x.marca] || ''),
             texto(x.moneda)].concat(rangos.map(r => num(x[r.clave])), [num(x.total), texto(x.partidas.map(p => p.etapa + ' ' + num(p.monto) + ' ' +
-            (p.fecha || 'sin fecha')).join(' | '))]))), []));
+            (p.fecha || 'sin fecha')).join(' | ')), texto(x.desbloqueado ? 'Desbloqueado' : 'Firmado')]))), []));
       }
       if (tipo === 'cxp') {
         // Las órdenes anteriores sin pago registrado van al final, sin rangos ni total (no suman), con su nota (revisión 6b)

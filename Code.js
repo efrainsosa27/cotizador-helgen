@@ -12483,14 +12483,27 @@ function ordenMonedas(a, b) {
 }
 
 /**
+ * (Lógica pura, revisión 6b) ¿Contrato desbloqueado que ya se cobra? Aceptada con algún pago Vigente: registrarPago exige
+ * contrato firmado, así que una aceptada con pagos solo existe si se firmó y luego se desbloqueó (desbloquearContrato la regresa
+ * a Aceptada y conserva los pagos). c = contratoDesdeFila_; pagos = los del proyecto (cualquier estado, sin los anulados).
+ */
+function contratoDesbloqueado(c, pagos) {
+  return !!c && c.estado === ESTADO_ACEPTADA && (pagos || []).some(p => p && p.estado === 'Vigente');
+}
+
+/**
  * Lo que falta cobrar de cada etapa de los contratos firmados, como partidas con fecha. d = {contratos (contratoDesdeFila_),
  * esquemas [{proyectoFolio, orden, etapa, porcentaje, fechaEsperada}], pagos (cobranza; cualquier estado), proyectos
  * [{folio, folioVisible, nombre, cliente, clienteId, estado}], prueba}. El saldo de cada etapa sale de resumenCobranza (mismo
  * reparto que la vista del proyecto: pagos Vigentes en orden de registro, el excedente pasa a la siguiente etapa; todo en la
- * moneda del contrato, aunque el pago haya sido en otra). Solo contratos Firmados (uno por firmar todavía no se cobra), de
- * proyectos que existen, no Cancelados ni de prueba; solo etapas con saldo. Partida = {proyectoFolio, folioVisible, nombre,
- * cliente, clienteId, estadoProyecto, marca, moneda, orden, etapa, montoEtapa, pagadoEtapa, monto (saldo), fecha (esperada o '')}.
+ * moneda del contrato, aunque el pago haya sido en otra). Solo contratos Firmados (uno por firmar todavía no se cobra) y los
+ * desbloqueados (revisión 6b: Aceptada con algún pago Vigente; los pagos exigen contrato firmado, así que solo existe si se
+ * firmó y luego se desbloqueó: se le sigue cobrando y va marcado desbloqueado), de proyectos que existen, no Cancelados ni de
+ * prueba; solo etapas con saldo. Una aceptada sin pagos sigue fuera. Partida = {proyectoFolio, folioVisible, nombre, cliente,
+ * clienteId, estadoProyecto, marca, moneda, desbloqueado, orden, etapa, montoEtapa, pagadoEtapa, monto (saldo), fecha (esperada
+ * o '')}.
  */
+
 function etapasPorCobrar(d) {
   const may = s => String(s || '').trim().toUpperCase();
   const prueba = d.prueba || FOLIOS_PRUEBA_REPORTES;
@@ -12501,7 +12514,9 @@ function etapasPorCobrar(d) {
   const partidas = [];
   (d.contratos || []).forEach(c => {
     const folio = may(c.proyectoFolio), p = proyectos[folio];
-    if (c.estado !== ESTADO_FIRMADO || !p || p.estado === 'Cancelado' || esFolioPrueba(folio, prueba) || esFolioPrueba(c.cotizacion, prueba)) return;
+    const desbloqueado = contratoDesbloqueado(c, pagos[folio]);
+    if ((c.estado !== ESTADO_FIRMADO && !desbloqueado) || !p || p.estado === 'Cancelado' || esFolioPrueba(folio, prueba) ||
+      esFolioPrueba(c.cotizacion, prueba)) return;
     const filas = (esquemas[folio] || []).slice().sort((a, b) => a.orden - b.orden);
     const etapas = filas.length ? filas.map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje })) : [{ etapa: 'Total', porcentaje: 100 }];
     resumenCobranza(c, etapas, pagos[folio] || []).etapas.forEach((e, i) => {
@@ -12509,7 +12524,7 @@ function etapasPorCobrar(d) {
       if (cts <= 0) return;
       const fecha = filas[i] && fechaIsoValida(filas[i].fechaEsperada) ? filas[i].fechaEsperada : '';
       partidas.push({ proyectoFolio: p.folio, folioVisible: p.folioVisible || p.folio, nombre: p.nombre || '', cliente: p.cliente || '',
-        clienteId: p.clienteId || '', estadoProyecto: p.estado, marca: c.marca, moneda: c.moneda, orden: i + 1, etapa: e.etapa,
+        clienteId: p.clienteId || '', estadoProyecto: p.estado, marca: c.marca, moneda: c.moneda, desbloqueado: desbloqueado, orden: i + 1, etapa: e.etapa,
         montoEtapa: e.monto, pagadoEtapa: e.pagado, monto: cts / 100, fecha: fecha });
     });
   });
@@ -12704,7 +12719,7 @@ function antiguedadCxc(d) {
   return antiguedadEnGrupos(etapasPorCobrar(d), d.hoy,
     x => ({ clave: x.clienteId || textoNormal(x.cliente), datos: { nombreGrupo: x.cliente || 'Sin cliente', cliente: x.cliente, clienteId: x.clienteId } }),
     x => ({ clave: x.proyectoFolio, datos: { folio: x.proyectoFolio, folioVisible: x.folioVisible, nombre: x.nombre, marca: x.marca,
-      estadoProyecto: x.estadoProyecto } }));
+      estadoProyecto: x.estadoProyecto, desbloqueado: !!x.desbloqueado } }));
 }
 
 /**
@@ -12757,7 +12772,7 @@ function flujoSemanal(d) {
     else { semana = Math.floor(diasEntre(inicio, x.fecha) / 7) + 1; M.s[semana - 1][campo] += cts; }
     partidas.push({ tipo: tipo, moneda: x.moneda, monto: cts / 100, fecha: fechaIsoValida(x.fecha) ? x.fecha : '', semana: semana,
       vencido: vencido, donde: donde, folio: folio, detalle: detalle, proyectoVisible: x.folioVisible || x.proyectoVisible || '',
-      fuente: x.fuente || '' });
+      fuente: x.fuente || '', desbloqueado: !!x.desbloqueado });
   };
   (d.cobros || []).forEach(x => meter(x, 'cobro', x.folioVisible || x.proyectoFolio, (x.cliente ? x.cliente + ' · ' : '') + x.etapa));
   (d.pagos || []).forEach(x => meter(x, 'pago', x.ocFolio, (x.proveedor || '') + (x.referencia ? ' · ' + x.referencia : '')));

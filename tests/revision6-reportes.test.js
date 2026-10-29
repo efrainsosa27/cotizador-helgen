@@ -3,6 +3,8 @@
 //  1. Órdenes anteriores sin pago registrado (sin requisición, sin pago Vigente y sin factura; Recibidas o Emitidas de antes de las
 //     requisiciones): no se pueden pagar ni cancelar, así que van en su propio bloque de la antigüedad de CxP (con cuántas son),
 //     fuera de los totales y del flujo; su costo sigue en el margen.
+//  4. Contratos desbloqueados (se firmaron, se desbloquearon y tienen pagos Vigentes): siguen en la antigüedad de CxC y en el flujo,
+//     marcados "Desbloqueado"; uno aceptado sin firmar y sin pagos sigue fuera.
 //  2. Fecha base de lo que se debe sin factura: UNA regla para P (vista de la orden), Cuentas por pagar y R (venceSinFactura:
 //     recepción, o entrega, o la orden + días de crédito); el mismo saldo cae en el mismo rango y la misma semana que en Cuentas
 //     por pagar (facturas primero; el resto completo en la fecha del "siguiente" de P sin facturas, también con plan de pagos).
@@ -71,7 +73,7 @@ const filasR = d => plain(P.antiguedadPorPagar(d, P.saldoOrdenCompra)).grupos.re
 
 // ================= Servidor e interfaz: datos sembrados por la API (doPost) =================
 const B = require('./arnes')(dir, { props: {
-  ROL_COBRANZA: 'tania@helgen.tech', ADMIN_DESBLOQUEO: 'efrain@helgen.tech', ROL_COMPRAS: 'pedro@helgen.tech',
+  ROL_COBRANZA: 'tania@helgen.tech, efrain@helgen.tech', ADMIN_DESBLOQUEO: 'efrain@helgen.tech', ROL_COMPRAS: 'pedro@helgen.tech',
   ROL_REQUISICION: 'obrero@helgen.tech', ROL_OPERACIONES: '' } });
 B.P.exigirDocumentosParaPagar_ = function () {};
 B.correr(`enviarCorreosPendientes_ = function () { MEMO_.correos = []; }; avisarPortal_ = function () { return ''; };`);
@@ -145,6 +147,43 @@ const L1 = 'OC-' + B.ANIO + '-0900', L2 = 'OC-' + B.ANIO + '-0901'; // órdenes 
   assert.equal(rm.totalCostos, ok('tania', 'getCobranzaProyecto', p1).margen.totalCostos, 'igual que la tarjeta de margen');
 }
 
+// ================= 4. Contratos desbloqueados con pagos =================
+{
+  // Lógica pura: Aceptada con un pago Vigente = desbloqueado (cuenta y va marcado); sin pagos o solo con pagos cancelados, fuera
+  const PRY = folio => ({ folio, folioVisible: folio, nombre: 'Proyecto ' + folio, cliente: 'Cliente', clienteId: 'C1', estado: 'Activo' });
+  const CON = (folio, estado) => ({ proyectoFolio: folio, cotizacion: 'HLG-' + folio, marca: 'helgen', moneda: 'MXN', subtotal: 1000, total: 1160, estado });
+  const PAG = (folio, montoAplicado, estado) => ({ proyectoFolio: folio, montoAplicado, etapaOrden: 1, estado: estado || 'Vigente', fecha: HOY_ISO });
+  const dc = { hoy: HOY_ISO, prueba: [], esquemas: [],
+    proyectos: ['PRY-9-0011', 'PRY-9-0012', 'PRY-9-0013', 'PRY-9-0014'].map(PRY),
+    contratos: [CON('PRY-9-0011', 'Firmado'), CON('PRY-9-0012', 'Aceptada'), CON('PRY-9-0013', 'Aceptada'), CON('PRY-9-0014', 'Aceptada')],
+    pagos: [PAG('PRY-9-0011', 100), PAG('PRY-9-0012', 500), PAG('PRY-9-0014', 500, 'Cancelado')] };
+  assert.deepEqual(plain(P.etapasPorCobrar(dc)).map(x => [x.proyectoFolio, x.monto, x.desbloqueado]),
+    [['PRY-9-0011', 1060, false], ['PRY-9-0012', 660, true]], 'el desbloqueado con pagos se sigue cobrando; por firmar sin pagos, fuera');
+  assert.deepEqual(plain(P.antiguedadCxc(dc)).grupos[0].detalle.map(x => x.folio + ' ' + x.desbloqueado), ['PRY-9-0011 false', 'PRY-9-0012 true']);
+  assert.deepEqual(plain(P.flujoSemanal({ hoy: HOY_ISO, cobros: P.etapasPorCobrar(dc), pagos: [] })).partidas.map(p => p.folio + ' ' + p.desbloqueado).sort(),
+    ['PRY-9-0011 false', 'PRY-9-0012 true']);
+
+  // Por la API: firmado, con un pago, desbloqueado
+  const p2 = pry('Terminal Sur', UNO);
+  firmar(p2, cot(p2, UNO, 1000));
+  const etapa1 = ok('tania', 'getCobranzaProyecto', p2).esquema[0].etapa;
+  ok('tania', 'guardarFechasEsperadas', p2, [{ orden: 1, etapa: etapa1, fecha: masDias(3) }]);
+  ok('tania', 'registrarPago', { proyectoFolio: p2, fecha: HOY_ISO, monto: 500, metodo: 'Transferencia', referencia: 'SPEI 500', etapaOrden: 1,
+    comprobante: { datos: B.PDF }, idSolicitud: id('g') });
+  const enCxc = () => detalleDe(ok('tania', 'reporteCxc')).filter(x => x.folio === p2).map(x => x.total + ' ' + x.desbloqueado);
+  assert.deepEqual(enCxc(), ['660 false']);
+  ok('efrain', 'desbloquearContrato', p2, 'Se firmó con la cotización equivocada');
+  assert.equal(ok('tania', 'getCobranzaProyecto', p2).contrato.estado, 'Aceptada');
+  assert.deepEqual(enCxc(), ['660 true'], 'desbloqueado con pagos: sigue en CxC, marcado (antes desaparecía)');
+  const cobroP2 = ok('leo', 'reporteFlujo').partidas.filter(p => p.tipo === 'cobro' && p.folio === ok('tania', 'getCobranzaProyecto', p2).proyecto.folioVisible);
+  assert.deepEqual(cobroP2.map(p => p.monto + ' ' + p.fecha + ' ' + p.desbloqueado), ['196 ' + masDias(3) + ' true', '348  true', '116  true'],
+    'y en el flujo (esquema 60/30/10: 696 − 500, 348 y 116 sin fecha)');
+  // Una aceptada sin firmar y sin pagos sigue fuera
+  const p4 = pry('Por firmar', UNO);
+  ok('tania', 'marcarAceptada', p4, cot(p4, UNO, 2000), true);
+  assert(!detalleDe(ok('tania', 'reporteCxc')).some(x => x.folio === p4), 'por firmar sin pagos: fuera');
+}
+
 // ================= Interfaz (mod-reportes sobre la app, conectada al servidor simulado) =================
 const vm = require('vm');
 const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
@@ -193,6 +232,16 @@ const esperar = async (k = 30) => { for (let i = 0; i < k; i++) await new Promis
   L.run("verTab('rep')"); await esperar();
   L.run("REPORTES.ver('flujo')"); await esperar();
   assert(/No incluye 2 órdenes anteriores sin pago registrado/.test(L.$('vistaRep').innerHTML), 'el flujo lo dice');
+  // 4. El chip "Desbloqueado" en CxC y en las partidas del flujo; columna "Contrato" en el CSV de CxC
+  assert(/Desbloqueado<\/span>/.test(L.$('vistaRep').innerHTML), 'partida del flujo marcada');
+  const T = montar('tania'); await esperar();
+  T.run("verTab('rep')"); await esperar();
+  T.run("REPORTES.ver('cxc')"); await esperar();
+  assert(/title="Se firmó, se desbloqueó y ya tiene pagos: se sigue cobrando">Desbloqueado/.test(T.$('vistaRep').innerHTML), 'proyecto marcado en CxC');
+  const csvC = T.run("REPORTES.csv('cxc')").split('\r\n');
+  assert(/"Etapas por cobrar","Contrato"$/.test(csvC[0]), csvC[0]);
+  assert.deepEqual(csvC.slice(1).map(l => (/Terminal Sur/.test(l) ? 'p2 ' : 'otro ') + l.match(/"(\w+)"$/)[1]).sort(), ['otro Firmado', 'p2 Desbloqueado'],
+    'Firmado o Desbloqueado por renglón');
   // La Emitida anterior sí se puede cancelar (sale del bloque); la Recibida no (se queda, aparte)
   ok('pedro', 'cancelarOrdenCompra', L2, 'Orden anterior que nunca se surtió', true);
   assert.deepEqual(ok('pedro', 'reporteCxp').anteriores.ordenes.map(o => o.ocFolio), [L1]);
