@@ -443,6 +443,22 @@ assert.equal(ok('leo', 'bootstrap').permisos.superadmin, true);
 const vAnt = Number(props.VER_anulaciones);
 assert(vAnt >= 10, 'anular sube la versión de anulaciones');
 
+// ===== Ayudantes para los demás módulos: esAnulado_ y foliosAnulados_ (una sola definición) =====
+correr('MEMO_ = {};');
+for (const f of [p1, p1o.folioVisible.toLowerCase(), ' ' + c1.toLowerCase() + ' ', r3, oc2, pgp1, fpr1, rec2, pag1b]) assert.equal(P.esAnulado_(f), true, f);
+for (const f of [c2, p2, r5, oc5, 'CONTRATO ' + p2, '', null, 'XYZ']) assert.equal(P.esAnulado_(f), false, String(f));
+const fa2 = plain(P.foliosAnulados_());
+assert(fa2[oc4] && fa2[r3] && !fa2['CONTRATO ' + p2], 'todos los folios anulados; los contratos no');
+// El registro manda: aunque alguien regrese a mano el estado de una requisición anulada, sigue sin contar como pendiente
+const filaR3 = fila(LO, 'Requisiciones', r3);
+filaR3[5] = 'Solicitada';
+P.subirVersiones_(['requisiciones']);
+assert(!ok('pedro', 'listarRequisiciones', '', '').some(x => x.folio === r3), 'compras');
+assert(!ok('adri', 'listarOperaciones').some(x => x.folio === r3), 'operaciones (pendiente de aprobar)');
+assert(!ok('obrero', 'misRequisiciones').some(x => x.folio === r3), 'quien pidió');
+filaR3[5] = 'Anulada';
+P.subirVersiones_(['requisiciones']);
+
 // ===== 10. Cotización sin proyecto y proyecto con aceptada sin firmar =====
 const cs = cot(undefined, 'Cliente Seis', 100);
 const pdfCs = P.idDeUrlDrive(H(libros.DB, 'Cotizaciones').find(r => r[0] === cs)[11]);

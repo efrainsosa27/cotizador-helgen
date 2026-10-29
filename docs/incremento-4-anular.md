@@ -28,7 +28,10 @@ navegadores vuelven a pedir sus listas). `sincronizar`: si el contexto trae `anu
 `PREFIJO_FOLIO`; `PRY-AAAA-NNNN-XXX` se guarda con la llave corta; `CONTRATO PRY-…` para contratos), `idDeUrlDrive(url)`,
 `jsonCelda(valor)` (JSON que cabe en una celda: recorta textos largos), `ocVigente(orden)` (ni Cancelada ni Anulada).
 
-**Internas:** `anulados_()` (conjunto `{FOLIO: true}`, ver §4), `estaAnulado_(folio)`, `proyectosVisibles_()`,
+**Para todos los módulos** (una sola definición, en §6.E; ver §4): `esAnulado_(folio)` → booleano (mayúsculas o minúsculas;
+un proyecto también con su clave) y `foliosAnulados_()` → `{FOLIO: true}`.
+
+**Internas:** `proyectosVisibles_()`,
 `anuladosDeHoja_()`, `datosAnular_()` (lee todo lo que una anulación puede tocar, también lo ya anulado o cancelado; no crea
 pestañas: `filasSiHay_`), `planAnulacion_(datos, objetivo)` (la cascada; no cambia nada), `resumenPlan_`, `nombreCarpetaPlan_`,
 `motivoAnular_`, `libroAnulaciones_()` (exige el libro de Administración), `aplicarAnulacion_` (hojas, efectos, Bitacoras de
@@ -90,14 +93,17 @@ reporta en `fallas`.
 ## 4. Cómo se esconde (y qué funciones se tocaron)
 
 - **Por estado** (`Anulada`) lo que tiene columna de estado; **por el registro de Anulaciones** cotizaciones y proyectos.
-- `anulados_()` = `{FOLIO: true}` de la pestaña Anulaciones (sin contratos: esos los esconde su estado), en caché por la
-  versión de `anulaciones` (`claveCache_`), también durante una escritura (solo `anular` cambia esa hoja y `anular` lee la hoja
-  directo). Sin libro de Administración: vacío.
+- **`foliosAnulados_()`** = `{FOLIO: true}` de la pestaña Anulaciones (todos los tipos con folio; sin contratos: esos los
+  esconde su estado), en caché por la versión de `anulaciones` (`claveCache_`) y una vez por petición; sirve también durante
+  una escritura (solo `anular` cambia esa hoja y `anular` lee la hoja directo). Sin libro de Administración: vacío.
+  **`esAnulado_(folio)`** la consulta (barato). Es lo que deben usar los demás módulos para saltar lo anulado: **lo anulado no
+  cuenta como pendiente para nadie**. El registro manda: una requisición u orden anulada sigue escondida aunque alguien regrese
+  su estado a mano en la hoja (las listas de requisiciones y los lectores de órdenes revisan el estado y `esAnulado_`).
 - Lectores que ahora quitan lo anulado (la idea: filtrar en el lector, no en cada pantalla):
   - Cotizaciones: `getClientes` (clientes sugeridos), `listarCotizaciones` (historial), `cotizacionesDeProyecto_` (vista de
     cobranza y `marcarAceptada`: una anulada no se puede aceptar).
   - Proyectos: `proyectosVisibles_()` en `listarProyectos` (cotizar y cobranza), `listarProyectosCompras`,
-    `listarProyectosRequisicion` y el resumen de cobranza; `proyectoParaCobranza_` y `proyectoParaCompras_` dan error "está
+    `listarProyectosRequisicion` y el resumen de cobranza (por `esAnulado_`); `proyectoParaCobranza_` y `proyectoParaCompras_` dan error "está
     anulado" (vista de cobranza, órdenes por proyecto, pedir, autorizar…). `mapaProyectos_` (folio visible) no se filtra.
   - Cobranza: `datosCobranza_` (contrato y pagos), `contratosDelLibro_` (y con él `contratosCache_`, `contratosFirmados_`,
     moneda de compras), `resumenCobranzaDeHojas_` (contratos, pagos, órdenes y proyectos); `cancelarPago` dice "está anulado".
@@ -168,7 +174,7 @@ los libros).
 ## 9. Para los otros módulos y lo que no alcanzó
 
 - **D (Pantallas / Pendientes)**: los conteos deben salir de las funciones de lista (ya sin lo anulado) o, si leen hojas,
-  saltar `estado === 'Anulada'` y los folios de `anulados_()` (cotizaciones y proyectos).
+  saltar los folios con `esAnulado_(folio)` (o `foliosAnulados_()` para una lista); lo anulado no es pendiente de nadie.
 - **B (Correos)**: el evento `anulado` trae `cascada` con folios de orden; a quien pidió o recibe no se le deben poner folios de
   orden ni montos (regla del spec).
 - **C (Centro de mando)**: recibe `oc.cancelada` también por anulación; el material ya recibido se queda.

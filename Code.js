@@ -1273,9 +1273,9 @@ function guardarProducto(p) {
  * Si se borran sus filas de la base de datos, dejan de sugerirse.
  */
 function getClientes() {
-  const anuladas = anulados_(); // una cotización anulada no sugiere a su cliente (§6.E)
+  // Una cotización anulada no sugiere a su cliente (§6.E)
   const filas = db_().getSheetByName('Cotizaciones').getDataRange().getValues().slice(1)
-    .filter(r => !anuladas[String(r[0] || '').trim().toUpperCase()])
+    .filter(r => !esAnulado_(r[0]))
     .map(r => {
       const f = r.slice();
       f[1] = f[1] instanceof Date ? Utilities.formatDate(f[1], 'America/Mexico_City', 'dd/MM/yyyy') : String(f[1] || '');
@@ -1290,8 +1290,7 @@ function listarCotizaciones(busqueda) {
   const filas = hoja.getDataRange().getDisplayValues().slice(1);
   // Correo → "Nombre Apellido" con todas las filas (antes de filtrar), para ponerle nombre a las filas viejas
   const nombres = nombresDeVendedores(filas);
-  const anuladas = anulados_(); // las anuladas no salen en el historial (§6.E)
-  const datos = filas.filter(r => !anuladas[String(r[0] || '').trim().toUpperCase()]).reverse();
+  const datos = filas.filter(r => !esAnulado_(r[0])).reverse(); // las anuladas no salen en el historial (§6.E)
   const q = String(busqueda || '').toLowerCase().trim();
   // Folio del proyecto con su clave (PRY-AAAA-NNNN-XXX); si no se puede leer Proyectos, el de la hoja
   let proyectos = {};
@@ -1923,9 +1922,9 @@ function foliosConContratoFirmado_() {
 function cotizacionesDeProyecto_(folio) {
   const f = String(folio).toUpperCase();
   const hoja = db_().getSheetByName('Cotizaciones');
-  const anuladas = anulados_(); // una anulada ni se muestra ni se puede aceptar (§6.E)
+  // Una anulada ni se muestra ni se puede aceptar (§6.E)
   return hoja.getDataRange().getValues().slice(1)
-    .filter(r => String(r[19] || '').toUpperCase() === f && String(r[0] || '').trim() && !anuladas[String(r[0]).trim().toUpperCase()])
+    .filter(r => String(r[19] || '').toUpperCase() === f && String(r[0] || '').trim() && !esAnulado_(r[0]))
     .map(r => ({
       folio: String(r[0]), fecha: r[1] instanceof Date ? Utilities.formatDate(r[1], 'America/Mexico_City', 'dd/MM/yyyy') : String(r[1] || ''),
       cliente: String(r[2] || ''), subtotal: Number(r[7]) || 0, iva: Number(r[8]) || 0, total: Number(r[9]) || 0,
@@ -1938,7 +1937,7 @@ function cotizacionesDeProyecto_(folio) {
 function proyectoParaCobranza_(folio) {
   const proyecto = buscarProyecto_(hojaProyectos_(), folio);
   if (!proyecto) throw new Error('No existe el proyecto ' + String(folio || '').toUpperCase() + '.');
-  if (estaAnulado_(proyecto.folio)) throw new Error('El proyecto ' + proyecto.folioVisible + ' está anulado.');
+  if (esAnulado_(proyecto.folio)) throw new Error('El proyecto ' + proyecto.folioVisible + ' está anulado.');
   return proyecto;
 }
 
@@ -2418,7 +2417,7 @@ function ordenesDeProyecto_(libro, folio) {
   const f = String(folio || '').toUpperCase();
   const lista = [];
   filasDeArea_(hojaCompras_(libro, 'OrdenesCompra'), HOJAS_COMPRAS, 'OrdenesCompra').forEach((r, i) => {
-    if (String(r[2]).toUpperCase() === f && String(r[0] || '').trim() && String(r[28] || '') !== ESTADO_ANULADA) {
+    if (String(r[2]).toUpperCase() === f && String(r[0] || '').trim() && String(r[28] || '') !== ESTADO_ANULADA && !esAnulado_(r[0])) {
       lista.push(ordenDesdeFila_(r, i + 2));
     }
   });
@@ -2454,7 +2453,7 @@ function guardarProveedor_(libro, prov) {
 function proyectoParaCompras_(folio) {
   const proyecto = buscarProyecto_(hojaProyectos_(), folio);
   if (!proyecto) throw new Error('No existe el proyecto ' + String(folio || '').toUpperCase() + '.');
-  if (estaAnulado_(proyecto.folio)) throw new Error('El proyecto ' + proyecto.folioVisible + ' está anulado.');
+  if (esAnulado_(proyecto.folio)) throw new Error('El proyecto ' + proyecto.folioVisible + ' está anulado.');
   return proyecto;
 }
 
@@ -2884,7 +2883,7 @@ function ordenesPorFolio_(libro) {
   const mapa = {};
   if (!libro) return mapa;
   filasDeArea_(hojaCompras_(libro, 'OrdenesCompra'), HOJAS_COMPRAS, 'OrdenesCompra').forEach((r, i) => {
-    if (String(r[0] || '').trim() && String(r[28] || '') !== ESTADO_ANULADA) mapa[String(r[0]).toUpperCase()] = ordenDesdeFila_(r, i + 2);
+    if (String(r[0] || '').trim() && String(r[28] || '') !== ESTADO_ANULADA && !esAnulado_(r[0])) mapa[String(r[0]).toUpperCase()] = ordenDesdeFila_(r, i + 2);
   });
   return mapa;
 }
@@ -2969,7 +2968,7 @@ function misRequisicionesDeHojas_(yo, flujo) {
   filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
     const req = reqDesdeFila_(r, i + 2);
     // Quien recibe la ve desde que hay orden de compra; las anuladas no se ven
-    if (!req.folio || req.estado === ESTADO_ANULADA || (req.solicitanteEmail !== yo && !(req.recibeEmail === yo && req.ocFolio))) return;
+    if (!req.folio || req.estado === ESTADO_ANULADA || esAnulado_(req.folio) || (req.solicitanteEmail !== yo && !(req.recibeEmail === yo && req.ocFolio))) return;
     const f = req.folio.toUpperCase();
     let orden = null, m = [];
     if (req.ocFolio) {
@@ -3130,7 +3129,7 @@ function listarRequisicionesDeHojas_(busqueda, estado) {
   const lista = [];
   filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
     const req = reqDesdeFila_(r, i + 2);
-    if (!req.folio || req.estado === ESTADO_ANULADA) return;
+    if (!req.folio || req.estado === ESTADO_ANULADA || esAnulado_(req.folio)) return;
     const p = proyectos[req.proyectoFolio.toUpperCase()];
     const x = { folio: req.folio, fecha: req.fecha, proyectoFolio: req.proyectoFolio, proyectoNombre: p ? p.nombre : '',
       proyectoVisible: p ? p.folioVisible : req.proyectoFolio,
@@ -3426,7 +3425,7 @@ function listarOperacionesDeHojas_() {
   const lista = [];
   filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
     const req = reqDesdeFila_(r, i + 2);
-    if (!req.folio || req.estado === ESTADO_ANULADA) return;
+    if (!req.folio || req.estado === ESTADO_ANULADA || esAnulado_(req.folio)) return;
     const p = proyectos[req.proyectoFolio.toUpperCase()];
     const prop = req.estado === REQ_COTIZADA ? propuestaVigente_(req) : null;
     lista.push({ folio: req.folio, fecha: req.fecha, proyectoFolio: req.proyectoFolio, proyectoNombre: p ? p.nombre : '',
@@ -6468,10 +6467,12 @@ function anuladosDeHoja_() {
 }
 
 /**
- * {FOLIO: true} de todo lo anulado: en caché por la versión de 'anulaciones' (solo anular la cambia, y anular lee la hoja
- * directo), así que también se usa durante una escritura. Lo usan todas las listas que esconden cotizaciones y proyectos.
+ * PARA TODOS LOS MÓDULOS: {FOLIO: true} de todo lo anulado (cotizaciones, proyectos, pagos, requisiciones, órdenes, pagos a
+ * proveedor, facturas y recepciones; los contratos no: los esconde su estado). En caché por la versión de 'anulaciones' (solo
+ * anular la cambia, y anular lee la hoja directo), así que también sirve durante una escritura; una vez por petición. Sin
+ * libro de Administración: {}. Para una lista: const a = foliosAnulados_(); filas.filter(r => !a[folio.toUpperCase()]).
  */
-function anulados_() {
+function foliosAnulados_() {
   if (MEMO_.anulados) return MEMO_.anulados;
   if (!propiedades_()[AREA_ADMIN.propLibro]) return (MEMO_.anulados = {});
   const clave = claveCache_('anulados', ['anulaciones']);
@@ -6483,12 +6484,21 @@ function anulados_() {
   return (MEMO_.anulados = v);
 }
 
-const estaAnulado_ = folio => !!anulados_()[String(folio || '').trim().toUpperCase()];
+/**
+ * PARA TODOS LOS MÓDULOS: ¿está anulado este folio? (mayúsculas o minúsculas; un proyecto también con su clave,
+ * PRY-AAAA-NNNN-XXX). Barato: usa foliosAnulados_(). Lo anulado no cuenta como pendiente para nadie. Las filas con columna de
+ * estado además quedan en 'Anulada' (ESTADO_ANULADA): una lectura de hoja puede saltarlas por cualquiera de los dos.
+ */
+function esAnulado_(folio) {
+  const f = String(folio == null ? '' : folio).trim().toUpperCase();
+  if (!f) return false;
+  const a = foliosAnulados_();
+  return !!(a[f] || (/^PRY-\d{4}-\d{4,}-[A-Z]{3}$/.test(f) && a[folioInterno(f)]));
+}
 
 /** Proyectos que no están anulados (las listas de todas las pestañas parten de aquí; el mapa de folios visibles no). */
 function proyectosVisibles_() {
-  const a = anulados_();
-  return proyectosCache_().filter(p => !a[p.folio.toUpperCase()]);
+  return proyectosCache_().filter(p => !esAnulado_(p.folio));
 }
 
 /** Filas de una pestaña si existe (anular solo lee: no crea pestañas). */
