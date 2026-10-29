@@ -11880,7 +11880,8 @@ function etapasPorCobrar(d) {
  * (ordenDesdeFila_), pagosProv (PagosProveedores, cualquier estado), movimientos ({OC: [MovimientosInventario]}), facturas
  * (FacturasProveedor), proyectos, prueba}; saldoFn = saldoOrdenCompra (módulo P) o saldoOrdenCompraProvisional. Cuánto: el saldo
  * de saldoFn (en la moneda de la orden; nada si está completo). Cuándo (fuente):
- *  1. 'plan': el "siguiente" de P si trae fecha (vence); el resto del saldo, en la fecha estimada pero nunca antes que ese.
+ *  1. 'plan': el "siguiente" de P cuando es un pago del plan (trae fecha en vence y es MENOR que el saldo; el contrato dice que
+ *     sin plan "siguiente" es el saldo completo); el resto del saldo, en la fecha estimada pero nunca antes que ese pago.
  *  2. 'factura': si no, las facturas Vigentes de la orden en su moneda (vencimiento = emisión + días de crédito), de la que vence
  *     primero a la última; lo ya pagado cubre primero las que vencen antes.
  *  3. 'estimada': lo que ninguna factura cubre, en la fecha de entrega (o de la orden) + días de crédito de la orden.
@@ -11922,7 +11923,9 @@ function tramosPorPagar(o, s, facturas) {
   let restante = aCentavos(s.saldo);
   const tramos = [], estimada = fechaEstimadaOrden(o);
   const sig = s.siguiente;
-  if (sig && fechaIsoValida(sig.vence) && aCentavos(sig.monto) > 0) {
+  // Un pago del plan (P): menor que el saldo y con fecha. Sin plan, "siguiente" es el saldo completo y mandan las facturas, aunque
+  // P le ponga fecha (así lo que se factura sale con la fecha de su factura)
+  if (sig && fechaIsoValida(sig.vence) && aCentavos(sig.monto) > 0 && aCentavos(sig.monto) < restante) {
     const c = Math.min(aCentavos(sig.monto), restante);
     tramos.push({ cts: c, fecha: sig.vence, fuente: 'plan', referencia: String(sig.concepto || 'Siguiente pago') });
     restante -= c;

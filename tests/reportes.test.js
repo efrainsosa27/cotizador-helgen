@@ -163,6 +163,11 @@ const conPlan = (orden, pagos) => ({ esperado: orden.total, pagado: 0, saldo: or
 const ppPlan = plain(P.porPagarProveedores(Object.assign({}, baseCxp, { ordenes: [baseCxp.ordenes[0]] }), conPlan));
 assert.deepEqual(ppPlan.map(x => [x.monto, x.fecha, x.fuente, x.referencia].join(' ')),
   ['580 ' + masDias(-3) + ' plan Anticipo 50%', '580 ' + masDias(-3) + ' plan Resto del plan de pagos']);
+// Sin plan, "siguiente" es el saldo completo: aunque P le ponga fecha, mandan las facturas y lo estimado
+const sinPlan = (orden, pagos) => ({ esperado: orden.total, pagado: 600, saldo: orden.total - 600, completo: false, vigentes: [],
+  siguiente: { concepto: 'Saldo', monto: orden.total - 600, vence: masDias(-1) } });
+assert.deepEqual(plain(P.porPagarProveedores(Object.assign({}, baseCxp, { ordenes: [baseCxp.ordenes[1]] }), sinPlan)).map(x => x.fuente + ' ' + x.monto),
+  ['factura 560', 'factura 580', 'estimada 580']);
 // Pagos parciales del módulo P (simulado): saldoFn manda; completo = fuera
 const parcial = () => ({ esperado: 1160, pagado: 400, saldo: 760, completo: false, vigentes: [{ folio: 'PGP-1', fecha: HOY_ISO, montoAplicado: 400, tipo: 'Anticipo' }], siguiente: null });
 assert.deepEqual(plain(P.porPagarProveedores(Object.assign({}, baseCxp, { ordenes: [baseCxp.ordenes[0]] }), parcial)).map(x => x.monto), [760]);
@@ -177,7 +182,8 @@ const ocDev = OC('OC-D', 1624, { renglones: [{ cantidad: 80, costo: 10 }, { cant
 const dev = P.saldoOrdenCompraProvisional(ocDev, [], [{ estado: 'Vigente', tipo: correr('TIPO_DEVOLUCION_CIERRA'), renglon: 2, cantidad: -2 }]);
 assert.deepEqual([dev.esperado, dev.saldo], [1508, 1508], '1624 − 2 × 50 × 1.16');
 // El módulo P se usa en cuanto exista (punto de integración)
-assert.equal(P.saldoOrdenCompra_(), P.saldoOrdenCompraProvisional, 'sin P: la provisional');
+assert.equal(P.saldoOrdenCompra_(), typeof P.saldoOrdenCompra === 'function' ? P.saldoOrdenCompra : P.saldoOrdenCompraProvisional,
+  'la de P en cuanto exista; mientras tanto, la provisional');
 
 // ---- Flujo semanal ----
 const fl = plain(P.flujoSemanal({ hoy: HOY_ISO, semanas: 13, cobros: partidasCxc, pagos: pp }));
