@@ -115,6 +115,9 @@ const REQ=f=>'REQ-'+ANIO+'-'+f, OC=f=>'OC-'+ANIO+'-'+f, PGP=f=>'PGP-'+ANIO+'-'+f
 
 // ================= Lógica pura =================
 const P=ctx;
+// F (incremento 5): sin CSF y carátula del proveedor no se registra un pago; estas pruebas no son de documentos (eso va en
+// tests/proveedores.test.js), así que aquí se salta ese bloqueo
+P.exigirDocumentosParaPagar_=function(){};
 const rl=P.normalizarRequisicion({renglones:[{descripcion:'  Cable  THW 10 ',cantidad:'25.5',unidad:'m',notas:' rojo '},{descripcion:'',cantidad:3}]});
 assert.deepEqual(rl.map(r=>({...r})),[{descripcion:'Cable THW 10',cantidad:25.5,unidad:'M',notas:'rojo'}],'limpia y quita renglones vacíos');
 assert.equal(P.normalizarRequisicion({renglones:[{descripcion:'Tornillo',cantidad:1}]})[0].unidad,'PZA','unidad por omisión');
@@ -287,7 +290,7 @@ falla('pedro','devolverRequisicion',[rLuis,'Revisa cantidades'],/está cancelada
 assert.equal(H('Requisiciones').length,4,'nada se borra');
 
 // --- Autorizar: genera la OC con los datos de compras ---
-const oc=(extra)=>({proveedor:{razonSocial:'Eléctrica del Centro',rfc:'EDC200101AB1'},fechaEntrega:MANANA,condicionesPago:'Contado',diasCredito:0,
+const oc=(extra)=>({proveedor:{razonSocial:'Eléctrica del Centro',rfc:'EDC200101AB1'},fechaEntrega:MANANA,formaPago: 'Transferencia', condicionesPago:'Contado',diasCredito:0,
   ivaTasa:0.16,renglones:[{descripcion:'Tubo conduit 3/4 cédula 40',unidad:'PZA',cantidad:12,costo:100}],idSolicitud:'o'+(++nId),...extra});
 r=ok('pedro','autorizarRequisicion',REQ('0001'),oc({idSolicitud:'au1'}));
 assert.deepEqual([r.folio,r.ocFolio,r.total,r.moneda,r.vista.requisicion.estado,r.vista.orden.folio,r.vista.orden.reqFolio,r.vista.puedePagar],

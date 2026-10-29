@@ -70,6 +70,9 @@ const A = require('./arnes')(dir, { rutas, props: {
   PORTAL_URL: 'https://drogheda.test/', PORTAL_PROYECTOS: JSON.stringify({ [P1 + '-DRO']: 'drogheda' }) } });
 const { P, ok, falla, plain, props, HOY_ISO, masDias, correr, como, PDF } = A;
 const MANANA = masDias(1), AYER = masDias(-1);
+// F (incremento 5): sin CSF y carátula del proveedor no se registra un pago; estas pruebas no son de documentos (eso va en
+// tests/proveedores.test.js), así que aquí se salta ese bloqueo
+P.exigirDocumentosParaPagar_ = function () {};
 correr('var AVISOS = []; enviarCorreosPendientes_ = function () { AVISOS.push.apply(AVISOS, MEMO_.correos || []); MEMO_.correos = []; };');
 const avisos = tipo => plain(correr('AVISOS')).filter(a => a.tipo === tipo);
 const MONTOS = /costo|importe|subtotal|iva|total|cambio|moneda|margen|monto|precio/i;
@@ -158,7 +161,7 @@ let nId = 0;
 const id = p => p + (++nId);
 const nuevaReq = (proyecto, extra) => Object.assign({ proyectoFolio: proyecto, sitio: 'manzanillo (timsa)', idSolicitud: id('q'),
   renglones: [{ descripcion: 'Cable THW 10', cantidad: 80, unidad: 'm', item: 'CAB-THW-10' }, { descripcion: 'Tubo conduit 3/4', cantidad: 12, unidad: 'pza' }] }, extra || {});
-const PROP = extra => Object.assign({ proveedor: { razonSocial: 'Ferretera del Puerto', rfc: '' }, fechaEntrega: MANANA, condicionesPago: 'Contado',
+const PROP = extra => Object.assign({ proveedor: { razonSocial: 'Ferretera del Puerto', rfc: '' }, fechaEntrega: MANANA, formaPago: 'Transferencia', condicionesPago: 'Contado',
   diasCredito: 0, recibe: 'rosa@helgen.tech', idSolicitud: id('p'), renglones: [{ renglon: 1, disponibilidad: 'Exacto', costo: 10 },
     { renglon: 2, disponibilidad: 'Sustituto', descripcion: 'Tubo conduit 1"', costo: 50, item: 'TUB-1' },
     { renglon: 0, disponibilidad: 'Adicional', descripcion: 'Flete', unidad: 'SERV', cantidad: 1, costo: 200, recibir: false }] }, extra || {});
@@ -197,7 +200,8 @@ assert.equal(H('RequisicionesRenglones')[0].slice(-1)[0], 'inventario_item');
 assert.deepEqual(H('RequisicionesRenglones')[1], ['REQ-2025-0099', 1, 1, 'Guantes de carnaza', 5, 'PAR', ''], 'la fila vieja no cambia');
 assert.deepEqual(H('RequisicionesRenglones').filter(r => r[0] === r0.req).map(r => r.slice(3).join('|')),
   ['Cable THW 10|80|M||CAB-THW-10', 'Tubo conduit 3/4|12|PZA|'], 'ítem por renglón (solo si tiene)');
-assert.deepEqual(H('OrdenesCompra')[0].slice(-5), ['paqueteria', 'guia', 'fecha_estimada', 'en_camino_en', 'en_camino_por']);
+assert.deepEqual(H('OrdenesCompra')[0].slice(-6), ['paqueteria', 'guia', 'fecha_estimada', 'en_camino_en', 'en_camino_por', 'forma_pago'],
+  'centro de mando y, al final, forma_pago (F, incremento 5)');
 let filaOc = H('OrdenesCompra').find(r => r[0] === r0.oc);
 assert.deepEqual(JSON.parse(filaOc[21]).map(r => r.descripcion + ':' + (r.item || '')), ['Cable THW 10:CAB-THW-10', 'Tubo conduit 1":TUB-1', 'Flete:'],
   'la orden conserva el ítem (exacto: el de quien pidió; sustituto: el que eligió compras)');
@@ -470,7 +474,7 @@ falla('obrero', 'guardarRequisicion', [conCot({ proyectoFolio: P1, sitio: '' })]
 falla('obrero', 'guardarRequisicion', [conCot({ proyectoFolio: P1, sitio: 'Monterrey' })], /no es un sitio del centro de mando/);
 const r7 = ok('obrero', 'guardarRequisicion', conCot({ proyectoFolio: P1 + '-DRO', sitio: 'Querétaro' })).folio;
 const oc7 = ok('efrain', 'autorizarRequisicion', r7, { proveedor: { razonSocial: 'Eléctrica del Bajío' }, fechaEntrega: MANANA, lugarEntrega: 'Querétaro',
-  condicionesPago: 'Contado', diasCredito: 0, idSolicitud: id('oc'),
+  formaPago: 'Transferencia', condicionesPago: 'Contado', diasCredito: 0, idSolicitud: id('oc'),
   renglones: [{ descripcion: 'Cable THW 10', unidad: 'M', cantidad: 80, costo: 10, item: 'CAB-THW-10' }, { descripcion: 'Tubo', unidad: 'PZA', cantidad: 12, costo: 50 }] }).ocFolio;
 const ev7 = CM.eventos[oc7 + ':oc.autorizada:1'];
 assert.deepEqual([ev7.oc.autorizo, ev7.oc.proveedor, ev7.oc.sitio, ev7.oc.renglones.map(r => r.item)],
@@ -734,7 +738,7 @@ CM.recepciones = [];
   C.run("verTab('com')"); await esperar(20);
   assert(!C.$('comCentro').classList.contains('oculto') && /2 aviso\(s\) pendiente\(s\)/.test(C.$('comCentro').innerHTML) && /centroConsultar\(\)/.test(C.$('comCentro').innerHTML));
   const OC = { folio: 'OC-' + ANIO + '-0009', fecha: HOY_ISO, estado: 'Pagada', proveedor: 'Ferretera', total: 1856, moneda: 'MXN', fechaEntrega: MANANA, lugarEntrega: 'Puerto',
-    condicionesPago: 'Contado', diasCredito: 0, renglones: [], paqueteria: 'DHL', guia: '123', fechaEstimada: MANANA, enCaminoEn: '28/10/2026 11:00', enCaminoPor: 'obrero@helgen.tech' };
+    formaPago: 'Transferencia', condicionesPago: 'Contado', diasCredito: 0, renglones: [], paqueteria: 'DHL', guia: '123', fechaEstimada: MANANA, enCaminoEn: '28/10/2026 11:00', enCaminoPor: 'obrero@helgen.tech' };
   const V = { requisicion: { folio: RQ.folio, fecha: HOY_ISO, proyectoFolio: P1, solicitante: 'Juan', solicitanteEmail: 'obrero@helgen.tech', estado: 'En camino', motivo: '',
       cotizacionId: '', cotizacionUrl: '', ocFolio: OC.folio, sitio: 'Manzanillo (TIMSA)', recibeEmail: 'rosa@helgen.tech' },
     renglones: [], eventos: [], proyecto: { folio: P1, folioVisible: P1 + '-DRO', nombre: 'DROGHEDA', cliente: 'ICAVE', estado: 'Activo', ubicacion: 'Puerto' }, moneda: 'MXN',

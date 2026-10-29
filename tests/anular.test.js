@@ -15,6 +15,9 @@ const A = require('./arnes')(dir, { props: {
   SOLO_REQUISICION: 'adri@helgen.tech', ROL_OPERACIONES: '' } });
 const { P, ok, falla, plain, props, libros, archivos, carpetas, HOY_ISO, masDias, correr, ANIO, PDF } = A;
 const MANANA = masDias(1);
+// F (incremento 5): sin CSF y carátula del proveedor no se registra un pago; estas pruebas no son de documentos (eso va en
+// tests/proveedores.test.js), así que aquí se salta ese bloqueo
+P.exigirDocumentosParaPagar_ = function () {};
 const JPG = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3]).toString('base64');
 let nId = 0;
 const id = p => (p || 'x') + (++nId);
@@ -81,7 +84,7 @@ const pag1 = pagar(p1, 1000), pag1b = pagar(p1, 600), pag2 = pagar(p2, 116);
 const req = (proyectoFolio, descripcion) => ok('obrero', 'guardarRequisicion', { proyectoFolio, renglones: [{ descripcion, cantidad: 1, unidad: 'pza' }],
   cotizacion: { nombre: 'c.pdf', datos: PDF }, idSolicitud: id('r') }).folio;
 const autorizar = (folio, costo) => ok('pedro', 'autorizarRequisicion', folio, { proveedor: { razonSocial: 'Eléctrica del Centro' },
-  fechaEntrega: MANANA, condicionesPago: 'Contado', diasCredito: 0, ivaTasa: 0.16,
+  fechaEntrega: MANANA, formaPago: 'Transferencia', condicionesPago: 'Contado', diasCredito: 0, ivaTasa: 0.16,
   renglones: [{ descripcion: 'Material', unidad: 'PZA', cantidad: 1, costo }], idSolicitud: id('o') }).ocFolio;
 const pagarProv = (reqFolio, monto) => ok('pedro', 'registrarPagoProveedor', { reqFolio, fecha: HOY_ISO, monto, monedaPago: '', metodo: 'Transferencia',
   referencia: 'SPEI', comprobante: { nombre: 'p.pdf', datos: PDF }, idSolicitud: id('pg') }).folio;
@@ -291,7 +294,7 @@ assert.equal(ok('adri', 'bootstrap').permisos.flujoOperaciones, true);
 const r4 = ok('obrero', 'guardarRequisicion', { proyectoFolio: p1, sitio: 'Querétaro', renglones: [{ descripcion: 'Tubo conduit', cantidad: 10, unidad: 'pza' }],
   idSolicitud: id('r') }).folio;
 ok('adri', 'aprobarRequisicion', r4, { version: 1, renglones: [{ renglon: 1, aprobado: true }] });
-const propuesta = costo => ({ proveedor: { razonSocial: 'Tubos SA' }, fechaEntrega: MANANA, condicionesPago: 'Contado', diasCredito: 0,
+const propuesta = costo => ({ proveedor: { razonSocial: 'Tubos SA' }, fechaEntrega: MANANA, formaPago: 'Transferencia', condicionesPago: 'Contado', diasCredito: 0,
   renglones: [{ renglon: 1, disponibilidad: 'Exacto', costo }], idSolicitud: id('pr') });
 assert.equal(ok('pedro', 'cotizarRequisicion', r4, propuesta(10)).version, 1);
 const vbo = ok('adri', 'getRequisicionOperaciones', r4).propuesta.huella;

@@ -13,6 +13,9 @@ const A = require('./arnes')(dir, { props: {
   SOLO_REQUISICION: 'rosa@helgen.tech, adri@helgen.tech', ROL_OPERACIONES: 'adri@helgen.tech, tania@helgen.tech', SUPER_ADMIN: 'leo@helgen.tech' } });
 const { P, ok, falla, plain, props, HOY_ISO, masDias, correr } = A;
 const PDF = A.PDF;
+// F (incremento 5): sin CSF y carátula del proveedor no se registra un pago; estas pruebas no son de documentos (eso va en
+// tests/proveedores.test.js), así que aquí se salta ese bloqueo
+P.exigirDocumentosParaPagar_ = function () {};
 
 // ---- Lógica pura ----
 assert.equal(P.marcaOrdenable('2026-10-28 14:05:09'), '2026-10-28 14:05');
@@ -97,7 +100,7 @@ assert(!tipos('adri').includes('aprobar:' + rL), 'la rechazada ya no espera nada
 ok('adri', 'aprobarRequisicion', r1, { version: 1, prioridad: 'Urgente', renglones: [{ renglon: 1, aprobado: true }] });
 assert.deepEqual(tipos('pedro'), ['cotizar:' + r1]);
 assert.deepEqual(tipos('adri'), [], 'ya la aprobó');
-const PROP = id => ({ proveedor: { razonSocial: 'Ferretera del Puerto' }, fechaEntrega: masDias(2), condicionesPago: 'Contado', diasCredito: 0,
+const PROP = id => ({ proveedor: { razonSocial: 'Ferretera del Puerto' }, fechaEntrega: masDias(2), formaPago: 'Transferencia', condicionesPago: 'Contado', diasCredito: 0,
   recibe: 'rosa@helgen.tech', renglones: [{ renglon: 1, disponibilidad: 'Exacto', costo: 10 }], idSolicitud: id });
 ok('pedro', 'cotizarRequisicion', r1, PROP('pp1'));
 assert.deepEqual(tipos('pedro'), [], 'espera el visto bueno');
@@ -174,7 +177,7 @@ assert.deepEqual(tipos('pedro'), ['autorizar:' + r5]);
 assert.deepEqual(tipos('tania'), [], 'sin el flujo con aprobaciones no hay nada que aprobar');
 assert.deepEqual(pend('obrero').items.map(i => i.tipo + ':' + i.folio + ':' + i.accion), ['recibir:' + r1 + ':Confirmar que llegó']);
 // Revisión 28/10/2026: en el flujo de siempre, En camino sin pagar no se ofrece para confirmar (el servidor pide la orden pagada)
-ok('pedro', 'autorizarRequisicion', r5, { proveedor: { razonSocial: 'Eléctrica del Centro' }, fechaEntrega: masDias(2), condicionesPago: 'Contado',
+ok('pedro', 'autorizarRequisicion', r5, { proveedor: { razonSocial: 'Eléctrica del Centro' }, fechaEntrega: masDias(2), formaPago: 'Transferencia', condicionesPago: 'Contado',
   diasCredito: 0, ivaTasa: 0.16, renglones: [{ descripcion: 'Brida', unidad: 'PZA', cantidad: 1, costo: 100 }], idSolicitud: 'oc-r5' });
 ok('pedro', 'marcarEnCamino', r5, { paqueteria: 'DHL', guia: '123', fechaEstimada: masDias(1), idSolicitud: 'enc-r5' });
 assert(!pend('obrero').items.some(i => i.folio === r5), 'en camino sin pagar: todavía no es de quien recibe');
