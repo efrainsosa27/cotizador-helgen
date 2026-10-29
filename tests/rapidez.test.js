@@ -4,6 +4,10 @@
 //     (no se crea otro) y un ID que falta se vuelve a leer.
 //  2. Encabezados revisados: la fila 1 de una pestaña se lee una vez por petición y no se vuelve a leer en 6 h; se revisa otra
 //     vez si el código espera otros encabezados, si la pestaña es nueva (creada por el código o a mano) o si pasaron 6 h.
+//  3. Filas leídas en la petición (MEMO_.filas): toda escritura de Code.js pasa por escribe_ y todo candado por candado_ (revisión
+//     del código); una lectura después de escribir ve lo escrito; al tomar el candado se relee lo que otro cambió; al leer las
+//     versiones se olvida lo leído antes; quien recibe filas puede cambiarlas sin tocar las de los demás. (Además, el arnés
+//     falla cualquier prueba que escriba en una pestaña con sus filas guardadas.)
 // Uso: node tests/rapidez.test.js .
 'use strict';
 const assert = require('assert');
@@ -97,6 +101,65 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   assert.equal(LC().pest.Bitacora.m[0][0], 'fecha', 'vencida: se revisa y se repara');
   // Una anotación vencida no se queda en el caché al guardar otras
   assert(Object.values(JSON.parse(cache.ENCABEZADOS_OK)).every(t => Date.now() - t < 6 * 3600 * 1000));
+}
+
+// ================= 3. Filas leídas en la petición =================
+{
+  const fs = require('fs'), path = require('path');
+  const { escrituras } = require('./escrituras');
+  const src = fs.readFileSync(path.join(dir, 'Code.js'), 'utf8');
+  const sin = escrituras(src).filter(e => !/^escribe_\(/.test(e.cadena));
+  assert.deepEqual(sin.map(e => 'línea ' + e.linea + ': ' + e.cadena.slice(0, 60) + '.' + e.metodo), [],
+    'toda escritura a una hoja pasa por escribe_(…) (si no, una lectura posterior en la misma petición vería filas viejas)');
+  assert(escrituras(src).length > 100, 'el revisor encuentra las escrituras');
+  const candados = src.split('\n').map((l, i) => [i + 1, l]).filter(([, l]) => /LockService\.getScriptLock\(\)/.test(l) && !/^\s*\*|^\s*\/\//.test(l));
+  assert.equal(candados.length, 1, 'solo candado_ toma LockService.getScriptLock(): ' + candados.map(x => x[0]).join(', '));
+
+  const A = crear({ perfil: true });
+  const { ok, props, perfil, correr, como, P } = A;
+  P.exigirDocumentosParaPagar_ = function () {};
+  const P1 = ok('ana', 'crearProyecto', { nombre: 'Uno', cliente: { nombre: 'Luis' }, idSolicitud: 'p1' }).folio;
+  const folio = ok('obrero', 'guardarRequisicion', { proyectoFolio: P1, sitio: 'Querétaro', renglones: [{ descripcion: 'Cable', cantidad: 1 }],
+    cotizacion: { nombre: 'c.pdf', datos: A.PDF }, idSolicitud: 'q1' }).folio;
+  const H = () => A.libros[props.COMPRAS_DB_ID].pest.Requisiciones;
+  const estado = () => correr(`buscarReq_(libroCompras_(), ${JSON.stringify(folio)}).req.estado`);
+  const lecturasReq = () => perfil.ops.filter(o => o.tipo === 'lee' && /\/Requisiciones$/.test(o.hoja)).length;
+  // Dentro de una petición: la segunda lectura sale de lo guardado; después de escribir, se relee y se ve lo escrito
+  como('pedro@helgen.tech');
+  perfil.ops = [];
+  assert.equal(estado(), 'Solicitada');
+  assert.equal(estado(), 'Solicitada');
+  assert.equal(lecturasReq(), 1, 'una sola lectura de Requisiciones para dos búsquedas');
+  correr(`(() => { const b = buscarReq_(libroCompras_(), ${JSON.stringify(folio)}); cambiarReq_(b.hoja, b.req, 'Rechazada', { motivo: 'prueba de memoria' }); })()`);
+  assert.equal(estado(), 'Rechazada', 'después de escribir se ve lo escrito');
+  // Otra ejecución cambia la hoja mientras esta espera el candado: adentro del candado se relee
+  const fila = H().m.findIndex(r => r[0] === folio);
+  assert.equal(estado(), 'Rechazada');
+  H().m[fila][5] = 'Solicitada'; // "otra persona" (otra ejecución) la regresó
+  assert.equal(estado(), 'Rechazada', 'fuera del candado, la misma petición sigue con lo que leyó');
+  assert.equal(correr(`conCandado_(() => buscarReq_(libroCompras_(), ${JSON.stringify(folio)}).req.estado)`), 'Solicitada',
+    'al tomar el candado se olvida lo leído antes');
+  // Leer las versiones también lo olvida (una lista guardada con una versión se arma con filas leídas después de ella)
+  assert.equal(estado(), 'Solicitada');
+  H().m[fila][5] = 'Devuelta';
+  correr('versiones_(true)');
+  assert.equal(estado(), 'Devuelta');
+  // Copias: quien recibe las filas puede cambiarlas
+  correr(`filasDeArea_(hojaReq_(libroCompras_()), HOJAS_COMPRAS, 'Requisiciones').forEach(r => { r[5] = 'Cambiada en memoria'; })`);
+  assert.equal(estado(), 'Devuelta', 'las filas guardadas no cambian');
+  H().m[fila][5] = 'Solicitada';
+  correr('MEMO_ = {}');
+  // De punta a punta: pagar una autorizada y la vista que regresa (y la siguiente sincronización) ya dicen Pagada
+  const oc = ok('pedro', 'autorizarRequisicion', folio, { proveedor: { razonSocial: 'Ferretera' }, fechaEntrega: A.masDias(1), lugarEntrega: 'Querétaro', formaPago: 'Transferencia',
+    condicionesPago: 'Contado', diasCredito: 0, renglones: [{ descripcion: 'Cable', unidad: 'PZA', cantidad: 1, costo: 100 }], idSolicitud: 'oc1' }).ocFolio;
+  const vers = ok('pedro', 'bootstrap').versiones;
+  const v = ok('pedro', 'registrarPagoProveedor', { reqFolio: folio, fecha: A.HOY_ISO, monto: 116, monedaPago: 'MXN', metodo: 'Transferencia',
+    referencia: 'SPEI 1', comprobante: { nombre: 'c.pdf', datos: A.PDF }, idSolicitud: 'pg1' });
+  assert.deepEqual([v.vista.requisicion.estado, v.vista.orden.estado, v.vista.pagos.length], ['Pagada', 'Pagada', 1]);
+  const sy = ok('pedro', 'sincronizar', vers, { req: folio, rcBuscar: '', rcEstado: '' });
+  assert.equal(sy.requisicion.requisicion.estado, 'Pagada');
+  assert.equal(sy.comRequisiciones.find(r => r.folio === folio).estado, 'Pagada');
+  assert.equal(oc, sy.requisicion.orden.folio);
 }
 
 console.log('rapidez: todo bien');

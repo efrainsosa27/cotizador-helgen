@@ -40,6 +40,17 @@ module.exports = function crearArnes(dir, opciones) {
   // Nombre "libro/pestaña" de una hoja (solo para el perfil)
   const quien = m => { for (const id in libros) for (const n in libros[id].pest) if (libros[id].pest[n].m === m) return (libros[id].nombre || id) + '/' + n; return '?'; };
   const an = (tipo, m, celdas) => perfil.activo && anota(tipo, { hoja: quien(m), celdas: celdas || 0 });
+  // Rapidez (filas leídas en la petición, MEMO_.filas): en cada escritura, el código no puede tener guardadas filas de esa misma
+  // pestaña (toda escritura pasa por escribe_, que las olvida). Si las tiene, la siguiente lectura devolvería algo viejo: falla.
+  let leerMemo = null;
+  const revisarMemo = (m, idHoja) => {
+    if (!leerMemo) return;
+    const claves = leerMemo.runInContext(ctx);
+    if (!claves.length) return;
+    const nombre = quien(m).split('/').slice(-1)[0];
+    const mala = claves.find(k => k.endsWith('/' + nombre + '/' + idHoja) || (nombre === 'Proyectos' && k === 'base/Proyectos'));
+    if (mala) throw new Error('Rapidez: escritura en ' + quien(m) + ' con sus filas guardadas en MEMO_.filas (' + mala + '): falta escribe_');
+  };
   let nHoja = 0; // getSheetId: cada pestaña tiene su id (una pestaña borrada y vuelta a crear tiene otro)
   function hoja(m) {
     const fmt = function () { an('formato', m); return this; };
@@ -49,13 +60,13 @@ module.exports = function crearArnes(dir, opciones) {
       getDataRange: () => { an('dataRange', m); return {
         getValues: () => { an('lee', m, m.reduce((s, r) => s + r.length, 0)); return m.map(r => r.slice()); },
         getDisplayValues: () => { an('lee', m, m.reduce((s, r) => s + r.length, 0)); return m.map(r => r.map(x => String(x ?? ''))); } }; },
-      appendRow: a => { an('escribe', m, a.length); return m.push(a.map(comoSheets)); },
-      deleteRow: n => { an('escribe', m, 1); return m.splice(n - 1, 1); },
+      appendRow: a => { revisarMemo(m, idHoja); an('escribe', m, a.length); return m.push(a.map(comoSheets)); },
+      deleteRow: n => { revisarMemo(m, idHoja); an('escribe', m, 1); return m.splice(n - 1, 1); },
       getRange: (r, c = 1, nr = 1, nc = 1) => typeof r === 'string' ? { setNumberFormat: fmt, setDataValidation: fmt } : ({
         getValues: () => { an('lee', m, nr * nc); return Array.from({ length: nr }, (_, i) => { const f = (m[r - 1 + i] || []).slice(c - 1, c - 1 + nc); while (f.length < nc) f.push(''); return f; }); },
         getValue: () => { an('lee', m, 1); return ((m[r - 1] || [])[c - 1] ?? ''); },
-        setValue(v) { an('escribe', m, 1); m[r - 1] = m[r - 1] || []; m[r - 1][c - 1] = comoSheets(v); return this; },
-        setValues(vs) { an('escribe', m, vs.length * ((vs[0] || []).length)); vs.forEach((x, i) => { m[r - 1 + i] = m[r - 1 + i] || []; x.forEach((y, j) => m[r - 1 + i][c - 1 + j] = comoSheets(y)); }); return this; },
+        setValue(v) { revisarMemo(m, idHoja); an('escribe', m, 1); m[r - 1] = m[r - 1] || []; m[r - 1][c - 1] = comoSheets(v); return this; },
+        setValues(vs) { revisarMemo(m, idHoja); an('escribe', m, vs.length * ((vs[0] || []).length)); vs.forEach((x, i) => { m[r - 1 + i] = m[r - 1 + i] || []; x.forEach((y, j) => m[r - 1 + i][c - 1 + j] = comoSheets(y)); }); return this; },
         setNumberFormat: fmt, setFontWeight: fmt, setBackground: fmt, setFontColor: fmt, setDataValidation: fmt }) };
   }
   const libros = {};
@@ -200,6 +211,7 @@ module.exports = function crearArnes(dir, opciones) {
   if (op.ctxExtra) Object.assign(ctx, op.ctxExtra);
   vm.createContext(ctx);
   vm.runInContext(src, ctx, perfil.activo ? { filename: 'capri.js' } : undefined);
+  leerMemo = new vm.Script("typeof MEMO_ === 'object' && MEMO_ && MEMO_.filas ? Object.keys(MEMO_.filas) : []");
 
   // ultimaRespuesta = bytes (UTF-8) del JSON que devolvió doPost en la última llamada (perfil)
   const post = (quien, funcion, ...args) => {
