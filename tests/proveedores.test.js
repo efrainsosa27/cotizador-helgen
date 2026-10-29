@@ -120,7 +120,7 @@ assert.deepEqual(plain(av.faltan), []); assert.deepEqual(plain(av.faltanPago), [
 assert(/comprobante de domicilio tiene más de 3 meses/.test(av.avisos.join(' ')) && /constancia de situación fiscal tiene más de 12 meses/.test(av.avisos.join(' ')));
 av = P.avisosProveedor({ csfId: 'a', csfFecha: meses(-11), caratulaId: 'b', domicilioId: 'c', domicilioFecha: masDias(-60) }, HOY_ISO);
 assert.deepEqual(plain(av.avisos), [], 'documentos al día');
-assert(/Sin constancia de situación fiscal y carátula bancaria no se le podrá registrar el pago/.test(P.textoAvisoProveedor({ razonSocial: 'X' }, P.avisosProveedor({}, HOY_ISO))));
+assert(/Sin constancia de situación fiscal y carátula bancaria no se le podrá registrar un pago por transferencia/.test(P.textoAvisoProveedor({ razonSocial: 'X' }, P.avisosProveedor({}, HOY_ISO))));
 assert.equal(P.textoAvisoProveedor({ razonSocial: 'X' }, P.avisosProveedor({ csfId: 1, caratulaId: 2, domicilioId: 3 }, HOY_ISO)), '');
 assert.equal(P.nombreCarpetaProveedor('', 'Tubos: "SA"'), 'SIN-RFC — Tubos SA');
 assert.equal(P.nombreDocProveedor('EDC200101AB1', 'caratula', 'pdf', 2), 'EDC200101AB1 — Carátula bancaria (2).pdf');
@@ -182,7 +182,7 @@ falla('pedro', 'autorizarRequisicion', [r1, OC({ formaPago: 'Crédito del provee
 const a1 = ok('pedro', 'autorizarRequisicion', r1, OC());
 assert(/Proveedor Eléctrica del Centro: Falta la constancia de situación fiscal, la carátula bancaria y el comprobante de domicilio\./.test(a1.avisoProveedor),
   'la respuesta avisa lo que falta: ' + a1.avisoProveedor);
-assert(/no se le podrá registrar el pago/.test(a1.avisoProveedor));
+assert(/no se le podrá registrar un pago por transferencia/.test(a1.avisoProveedor));
 assert.equal(LC().OrdenesCompra.m[0][LC().OrdenesCompra.m[0].length - 1], 'forma_pago', 'columna al final');
 assert.equal(filaOc(a1.ocFolio)[colOc('forma_pago')], 'Transferencia');
 const pdf1 = Object.values(A.archivos).find(x => x.nombre && x.nombre.indexOf(a1.ocFolio) === 0);
@@ -222,11 +222,16 @@ assert(!/super admin/.test(e.error), 'a quien no es super admin no se le ofrece 
 falla('pedro', 'registrarPagoProveedor', [PAGO(r1, { metodo: 'Tarjeta de crédito', referencia: '4111 1111 1111 1111' })], /parece un número de tarjeta/);
 e = falla('leo', 'registrarPagoProveedor', [PAGO(r1)], /Como super admin puedes hacerlo/, 'PERMISO');
 falla('leo', 'registrarPagoProveedor', [PAGO(r1), 'corto'], /Falta la constancia/, 'PERMISO');
-const pgLeo = ok('leo', 'registrarPagoProveedor', PAGO(r1, { metodo: 'Tarjeta de crédito', referencia: 'AUT 778899' }), 'Pago urgente: el proveedor manda la CSF mañana');
+// Integración: el bloqueo es para transferencias (tarjeta, efectivo y cheque solo avisan); extranjero: solo la carátula
+assert.deepEqual(plain(P.documentosParaPagar('EDC200101AB1', 'Transferencia')), ['csf', 'caratula']);
+assert.deepEqual(plain(P.documentosParaPagar('XEXX010101000', 'Transferencia')), ['caratula'], 'RFC genérico de extranjero');
+assert.deepEqual(plain(P.documentosParaPagar('', 'Transferencia')), ['caratula'], 'sin RFC');
+for (const m of ['Tarjeta de crédito', 'Tarjeta de débito', 'Efectivo', 'Cheque']) assert.deepEqual(plain(P.documentosParaPagar('EDC200101AB1', m)), [], m);
+const pgLeo = ok('leo', 'registrarPagoProveedor', PAGO(r1, { metodo: 'Transferencia', referencia: 'SPEI 778899' }), 'Pago urgente: el proveedor manda la CSF mañana');
 assert(/^PGP-/.test(pgLeo.folio));
 assert.deepEqual(bitAdmin()[bitAdmin().length - 1].slice(2, 6), ['Excepción de super admin: pagar a un proveedor sin documentos (falta la constancia ' +
   'de situación fiscal y la carátula bancaria)', a1.ocFolio, '', 'Pago urgente: el proveedor manda la CSF mañana']);
-assert.equal(LC().PagosProveedores.m.find(r => r[0] === pgLeo.folio)[11], 'Tarjeta de crédito');
+assert.equal(LC().PagosProveedores.m.find(r => r[0] === pgLeo.folio)[11], 'Transferencia');
 
 // ---- Ficha: banco, CLABE y documentos ----
 const SIN = Object.assign({}, PROV, { id: 'EDC200101AB1', contacto: 'Luis Pérez', telefono: '+52 442 111 2233', direccion: 'Av. 5 de Febrero 100, Qro.' });

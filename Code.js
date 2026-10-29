@@ -3453,7 +3453,7 @@ function registrarPagoProveedor(p, motivoExcepcion) {
     const pago = normalizarPagoProveedor(d0, { moneda: orden.moneda, total: orden.total, fechaOrden: orden.fecha, hoy: hoyIso_(),
       totalFacturado: fac.completa ? fac.total : 0, facturadoParcial: fac.completa ? 0 : fac.total });
     // F (incremento 5): documentos del proveedor (CSF y carátula) o excepción de super admin con motivo (antes de escribir)
-    exigirDocumentosParaPagar_(libro, orden, motivoExcepcion);
+    exigirDocumentosParaPagar_(libro, orden, motivoExcepcion, pago.metodo);
 
     const hP = hojaCompras_(libro, 'PagosProveedores');
     const folio = siguienteFolio_(PREFIJO_PGP, hP, 'CONSECUTIVO_PGP_');
@@ -9722,6 +9722,17 @@ const DOCS_PROVEEDOR = {
   domicilio: { nombre: 'el comprobante de domicilio', corto: 'Domicilio', archivo: 'Comprobante de domicilio' },
 };
 const DOCS_PARA_PAGAR = ['csf', 'caratula'];
+
+/**
+ * Documentos que exige registrar un pago (pura): solo con Transferencia (se le paga a la CLABE de la carátula): la carátula y,
+ * si el proveedor es nacional (RFC propio, no genérico), la CSF. Otros métodos: ninguno (queda el aviso).
+ */
+function documentosParaPagar(rfc, metodo) {
+  if (textoNormal(metodo) !== textoNormal('Transferencia')) return [];
+  const r = String(rfc || '').trim().toUpperCase();
+  const nacional = /^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/.test(r) && RFC_GENERICOS.indexOf(r) === -1;
+  return nacional ? ['csf', 'caratula'] : ['caratula'];
+}
 const MESES_AVISO_DOMICILIO = 3, MESES_AVISO_CSF = 12;
 const SUBCARPETA_PROVEEDORES = 'Proveedores';
 /** Columna (desde 1) donde empieza la ficha en Proveedores (I: direccion … Z: actualizo). */
@@ -9829,10 +9840,14 @@ function avisoDeProveedor_(libro, id, razonSocial) {
  * Bloqueo del pago (registrarPagoProveedor, dentro del candado y antes de escribir): sin CSF y carátula, error PERMISO con lo que
  * falta + textoExcepcion_(); un super admin con motivo ≥ 10 pasa y queda en la Bitacora de Administración.
  */
-function exigirDocumentosParaPagar_(libro, orden, motivoExcepcion) {
+function exigirDocumentosParaPagar_(libro, orden, motivoExcepcion, metodo) {
   const p = proveedorDePago_(libro, orden);
-  if (!p.faltanPago.length) return;
-  const falta = listaConY(p.faltanPago.map(k => DOCS_PROVEEDOR[k].nombre));
+  // Integración (29/10/2026): el bloqueo es para lo que se transfiere a una CLABE; con tarjeta (compra en tienda), efectivo o
+  // cheque solo queda el aviso. Proveedor extranjero (sin RFC o RFC genérico): sin CSF, pero la transferencia sí pide carátula.
+  const exigidos = documentosParaPagar(p.rfc || orden.rfc || '', metodo);
+  const faltan = exigidos.filter(k => p.faltanPago.indexOf(k) !== -1 || !p.registrado);
+  if (!faltan.length) return;
+  const falta = listaConY(faltan.map(k => DOCS_PROVEEDOR[k].nombre));
   if (!excepcionPosible_(motivoExcepcion)) {
     throw errorPermiso_('Falta ' + falta + ' de ' + (orden.proveedor || 'el proveedor') + ': no se registra el pago hasta subirlas en ' +
       'Compras → Proveedores (se le paga a la CLABE de la carátula).' + textoExcepcion_());
@@ -10247,7 +10262,7 @@ function avisosProveedor(p, hoy) {
 function textoAvisoProveedor(p, a) {
   if (!a || !a.avisos.length) return '';
   return 'Proveedor ' + p.razonSocial + ': ' + a.avisos.join(' ') + (a.faltanPago.length ? ' Sin ' +
-    listaConY(a.faltanPago.map(k => DOCS_PROVEEDOR[k].nombre.replace(/^(la|el) /, ''))) + ' no se le podrá registrar el pago: ' +
+    listaConY(a.faltanPago.map(k => DOCS_PROVEEDOR[k].nombre.replace(/^(la|el) /, ''))) + ' no se le podrá registrar un pago por transferencia: ' +
     'súbelas en Compras → Proveedores.' : '');
 }
 
