@@ -184,7 +184,7 @@ Manual (Compras, Tareas frecuentes, Reglas de oro, Historial, Pendientes).
 
 ## 6. Publicar
 
-- Sin servicios de Google nuevos (Drive, Sheets, UrlFetch y MailApp ya están autorizados): `clasp push` + `clasp deploy` + `wrangler deploy`.
+- Sin servicios de Google nuevos (Drive, Sheets, UrlFetch y MailApp ya están autorizados): `clasp push`, versión nueva publicada por **facilities@** desde el editor y `wrangler deploy` con la cuenta de Helgen (ver `CLAUDE.md` §9).
 - Respaldar antes el libro de compras (las pestañas `OrdenesCompra` y `Proveedores` ganan columnas al primer uso; nada se mueve).
 - Opcional: correr `prepararCompras()` desde el editor para escribir los encabezados nuevos de una vez.
 - **Avisar a compras el día que se publique**: desde ese momento **ningún pago por transferencia se registra sin la carátula y,

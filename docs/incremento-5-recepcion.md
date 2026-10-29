@@ -271,9 +271,11 @@ Devoluciones existe; centro: los movimientos de "Lo recogí"). `bash tests/todas
 
 1. Merge (con F). `bash tests/todas.sh`.
 2. Respaldo del libro de compras. `npx clasp push --force`.
-3. **Efrain corre `prepararCapri()`** (crea `Devoluciones` y las columnas `foto_id`/`foto_url`; también se crean solas al
+3. **facilities@ corre `prepararCapri()`** desde el editor (crea `Devoluciones` y las columnas `foto_id`/`foto_url`; también se crean solas al
    primer uso). No hay permisos nuevos de Google (Drive, UrlFetch y MailApp ya estaban).
-4. `npx clasp deploy --deploymentId AKfycbwBjF7…` y `npx --yes wrangler@4 deploy` (cambió la interfaz).
+4. **facilities@** publica la versión nueva desde el editor (Implementar → Administrar implementaciones → editar → Versión nueva):
+   la API corre como quien la publica, así que un `clasp deploy` con otra cuenta la cambiaría de dueño. Luego
+   `CLOUDFLARE_ACCOUNT_ID=badd8bca60b008822a73ca24e983ff43 npx --yes wrangler@4 deploy` (cambió la interfaz).
 5. Centro de mando: publicar el módulo I (rutas `foto`, `foto-archivada`, recepciones con `foto`/`problema`, `oc.devolucion`)
    **antes o junto** con CAPRI. Si el centro de mando todavía no manda `foto`/`problema`, CAPRI sigue igual que hoy.
 6. Prueba en el navegador (regla 13, entorno de PRUEBAS): recibir con fotos desde el teléfono (Safari y Chrome), reportar un
