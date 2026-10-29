@@ -250,6 +250,19 @@ const sinMontos = (texto, que) => assert(!/\$|\d,\d{3}\.\d{2}|\b\d+\.\d{2}\b|PGP
   falla('obrero', 'cancelarPagoProveedor', [PGP('0001'), 'No me late'], /No tienes permiso de compras/, 'PERMISO');
   falla('obrero', 'getRequisicion', [s1.req], /No tienes permiso de compras/, 'PERMISO');
   falla('rosa', 'registrarPagoProveedor', [pago(s1.req, { monto: 100 })], /solo tiene acceso a Requisiciones/, 'PERMISO');
+  falla('obrero', 'listarRequisiciones', ['', 'Pagada parcial'], /No tienes permiso de compras/, 'PERMISO');
+  falla('obrero', 'cuentasPorPagar', [], /No tienes permiso de compras/, 'PERMISO');
+  falla('obrero', 'getComprasProyecto', [P2], /No tienes permiso de compras/, 'PERMISO');
+  falla('obrero', 'autorizarRequisicion', [s1.req, OCD({ planPago: PLAN })], /No tienes permiso de compras/, 'PERMISO');
+  // Sincronizar: el pago sube la versión de pagos, órdenes y requisiciones (cambios declarados) y quien pide recibe su lista sin montos
+  const sy = siempre();
+  const vAntes = ok('obrero', 'sincronizar', {}, {}).versiones;
+  pagar(sy.req, 100);
+  const sx = ok('obrero', 'sincronizar', vAntes, {});
+  assert.deepEqual(['pagosProveedores', 'requisiciones', 'oc'].filter(c => sx.cambios.includes(c)), ['pagosProveedores', 'requisiciones', 'oc']);
+  assert(sx.misReq && sx.misReq.find(x => x.folio === sy.req).pagadaParcial && !('comRequisiciones' in sx), 'quien pide: su lista, no la de compras');
+  sinMontos(JSON.stringify(sx.misReq), 'sincronizar de quien pide');
+  correosNuevos();
 
   // Segundo pago (todavía sin recibir): otro anticipo; no repite oc.pagada ni el correo
   const a2 = pagar(s1.req, 500);
