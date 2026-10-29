@@ -15,6 +15,7 @@
 //  7. Cuentas por pagar: lo que no tiene factura, una fila por etapa del plan con su vencimiento (antes todo con la que sigue).
 //  8. Al cancelar o anular un pago, un pago que decía "Liquidación" y ya no liquida pasa a Anticipo o Parcial (según si ya se había
 //     recibido algo cuando se registró).
+//  9. El porcentaje de una etapa del plan es un número o un texto con un número (true, [50], "50%"… se rechazan).
 // Uso: node tests/pagos-revision.test.js .
 'use strict';
 const assert = require('assert');
@@ -379,6 +380,22 @@ const guardado = {}; // lo que usa la sección de interfaz
   assert.deepEqual(plain(P.retiparPagosProv(pg, false, {}, mov)), [{ folio: 'A', fila: 3, de: 'Liquidación', a: 'Anticipo' }, { folio: 'C', fila: 5, de: '', a: 'Parcial' }]);
   assert.deepEqual(plain(P.retiparPagosProv(pg, true, {}, mov)), []);
   assert.deepEqual(plain(P.retiparPagosProv(pg, false, { fechaRecepcion: '2026-10-01' }, [])).map(x => x.a), ['Parcial', 'Parcial']);
+}
+
+// ================= 9. El porcentaje del plan es un número (o un texto con un número) =================
+{
+  const con = (a, b) => [{ concepto: 'A', porcentaje: a }, { concepto: 'B', porcentaje: b }];
+  // Antes true valía 1 % y [50] valía 50 %
+  for (const [mal, otro] of [[true, 99], [[50], 50], [{ v: 50 }, 50], ['50%', 50], ['5O', 50], ['0x32', 50], ['5e1', 50], ['-50', 150]]) {
+    assert.throws(() => P.normalizarPlanPago(con(mal, otro)), /El porcentaje de "A" debe ser un número mayor a 0/, JSON.stringify(mal));
+  }
+  assert.deepEqual(plain(P.normalizarPlanPago(con(' 30.5 ', '69.5'))), [{ concepto: 'A', porcentaje: 30.5 }, { concepto: 'B', porcentaje: 69.5 }]);
+  assert.deepEqual(plain(P.normalizarPlanPago(con(50, 50))).map(e => e.porcentaje), [50, 50]);
+  // Por la API también (sin gastar folio)
+  const folio = ok('obrero', 'guardarRequisicion', { proyectoFolio: P2, sitio: 'Querétaro', renglones: RENGLONES,
+    cotizacion: { nombre: 'cot.pdf', datos: A.PDF }, idSolicitud: id('q') }).folio;
+  falla('efrain', 'autorizarRequisicion', [folio, OCD({ planPago: con(true, 99) })], /debe ser un número mayor a 0/);
+  assert.equal(vista(folio).requisicion.estado, 'Solicitada');
 }
 
 // ================= Interfaz (al final: es asíncrona; DOM simulado conectado al servidor simulado) =================

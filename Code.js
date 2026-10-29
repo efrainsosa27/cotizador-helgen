@@ -12143,7 +12143,10 @@ function normalizarPlanPago(plan) {
   const vistos = {};
   const limpio = etapas.map((e, i) => {
     const concepto = String(e.concepto == null ? '' : e.concepto).trim().replace(/\s+/g, ' ');
-    const txt = e.porcentaje, porcentaje = Number(txt);
+    // Revisión del incremento 6: un número o un texto con un número (antes true valía 1 % y [50], 50 %)
+    const txt = e.porcentaje;
+    const numerico = (typeof txt === 'number' && isFinite(txt)) || (typeof txt === 'string' && /^\s*(\d+(\.\d*)?|\.\d+)\s*$/.test(txt));
+    const porcentaje = numerico ? Number(txt) : NaN;
     if (!concepto) throw new Error('La etapa ' + (i + 1) + ' del plan de pagos no tiene concepto (p. ej. Anticipo).');
     if (concepto.length > MAX_CONCEPTO_PLAN) {
       throw new Error('El concepto "' + concepto.slice(0, 20) + '…" del plan de pagos debe tener máximo ' + MAX_CONCEPTO_PLAN + ' caracteres.');
@@ -12151,6 +12154,7 @@ function normalizarPlanPago(plan) {
     const k = textoNormal(concepto);
     if (vistos[k]) throw new Error('El concepto "' + concepto + '" está repetido en el plan de pagos.');
     vistos[k] = true;
+    if (!vacio(txt) && !numerico) throw new Error('El porcentaje de "' + concepto + '" debe ser un número mayor a 0.');
     if (vacio(txt) || !isFinite(porcentaje) || porcentaje <= 0) throw new Error('El porcentaje de "' + concepto + '" debe ser mayor a 0.');
     if (Math.abs(redondear(porcentaje) - porcentaje) > 1e-9) throw new Error('El porcentaje de "' + concepto + '" admite máximo 2 decimales.');
     return { concepto: concepto, porcentaje: redondear(porcentaje) };
