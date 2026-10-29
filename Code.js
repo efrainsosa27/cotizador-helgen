@@ -2321,7 +2321,9 @@ const HOJAS_COMPRAS = {
       'fecha_entrega', 'lugar_entrega', 'condiciones_pago', 'moneda', 'iva_tasa', 'subtotal', 'iva', 'total', 'moneda_proyecto',
       'tipo_cambio', 'subtotal_proyecto', 'renglones (JSON)', 'notas', 'pdf_id', 'pdf_url', 'elaboro_email', 'elaboro_nombre',
       'fecha_registro', 'estado', 'fecha_recepcion', 'recibio', 'cancelado_por', 'fecha_cancelacion', 'motivo_cancelacion',
-      'req_folio', 'dias_credito'],
+      'req_folio', 'dias_credito',
+      // Incremento 4 (centro de mando): En camino (paquetería, guía, fecha estimada, cuándo y quién lo marcó)
+      'paqueteria', 'guia', 'fecha_estimada', 'en_camino_en', 'en_camino_por'],
     numeros: [15, 16, 17, 18, 20, 21],
   },
   // dias_credito (H): crédito habitual del proveedor; precarga las órdenes nuevas (la orden guarda el suyo en AJ)
@@ -2353,7 +2355,9 @@ const HOJAS_COMPRAS = {
       'cancelado_por', 'fecha_cancelacion', 'motivo_cancelacion'],
     numeros: [9, 13],
   },
-  RequisicionesRenglones: { enc: ['req_folio', 'version', 'renglon', 'descripcion', 'cantidad', 'unidad', 'notas'], numeros: [2, 3, 5] },
+  // inventario_item (incremento 4): código del ítem en el centro de mando (opcional; sin ítem = "por ligar" allá)
+  RequisicionesRenglones: { enc: ['req_folio', 'version', 'renglon', 'descripcion', 'cantidad', 'unidad', 'notas', 'inventario_item'],
+    numeros: [2, 3, 5] },
   // Historial que ve el solicitante (estado, quién y cuándo); sin montos
   RequisicionesEventos: { enc: ['req_folio', 'fecha', 'estado', 'correo', 'nombre', 'nota'], numeros: [] },
   PagosProveedores: {
@@ -2363,8 +2367,13 @@ const HOJAS_COMPRAS = {
     numeros: [7, 9, 10],
   },
   Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
+  // Avisos al centro de mando (incremento 4, 6.C): cada aviso se escribe aquí antes de mandarse (Pendiente) y queda Enviado
+  // cuando el centro de mando lo acepta; el activador de 15 minutos reintenta los pendientes. Nunca se borran filas.
+  PortalPendientes: { enc: ['evento_id', 'cuerpo', 'intentos', 'ultimo_error', 'creado', 'estado', 'enviado'], numeros: [] },
 };
 const COL_ESTADO_OC = 29; // AC: estado, recepción (AD:AE) y cancelación (AF:AH)
+/** Columna (desde 1) de un encabezado de OrdenesCompra (las del centro de mando se buscan por nombre). */
+const colOc_ = nombre => HOJAS_COMPRAS.OrdenesCompra.enc.indexOf(nombre) + 1;
 
 const AREA_COMPRAS = { que: 'compras', propCarpeta: 'COMPRAS_FOLDER_ID', propLibro: 'COMPRAS_DB_ID',
   carpeta: NOMBRE_CARPETA_COMPRAS, libro: NOMBRE_LIBRO_COMPRAS, hojas: HOJAS_COMPRAS };
@@ -2400,6 +2409,10 @@ function ordenDesdeFila_(r, fila) {
     canceladoPor: String(r[31] || ''), motivoCancelacion: String(r[33] || ''), reqFolio: String(r[34] || ''),
     // Orden anterior a los días de crédito (AJ vacía): los de sus condiciones de pago ("Crédito 30 días"); si no dicen, contado
     diasCredito: r[35] === '' || r[35] == null ? diasCreditoDeCondiciones(r[12]) : diasCreditoGuardados(r[35]), fila: fila,
+    // En camino (centro de mando): paquetería, guía, fecha estimada, cuándo y quién
+    paqueteria: String(r[colOc_('paqueteria') - 1] || ''), guia: String(r[colOc_('guia') - 1] || ''),
+    fechaEstimada: fechaIso_(r[colOc_('fecha_estimada') - 1]), enCaminoEn: fechaTexto_(r[colOc_('en_camino_en') - 1]),
+    enCaminoPor: String(r[colOc_('en_camino_por') - 1] || ''),
   };
 }
 
@@ -2567,16 +2580,28 @@ function buscarOrden_(libro, folioOc) {
 /**
  * Cancela una orden Emitida (no se borra), con motivo; queda en la Bitacora y deja de contar en el margen. Una pagada o
  * recibida ya no se cancela. Su requisición regresa a Solicitada (sin orden) para autorizarla de nuevo.
+ * Incremento 4: si su requisición va En camino, el motivo debe explicarlo (≥ 10 caracteres) y hay que confirmarlo
+ * (confirmado = true; sin él devuelve {confirmar, mensaje} sin cambiar nada). Avisa oc.cancelada al centro de mando.
  */
-function cancelarOrdenCompra(folioOc, motivo) {
+function cancelarOrdenCompra(folioOc, motivo, confirmado) {
   exigirCompras_();
   const m = motivoObligatorio_(motivo, 'Escribe el motivo de la cancelación.');
   const libro = libroCompras_();
-  return conCandado_(() => {
+  return conAvisoPortal_(conCandado_(() => {
     const { hoja, orden } = buscarOrden_(libro, folioOc);
     if (orden.estado === OC_CANCELADA) throw new Error('La orden ' + orden.folio + ' ya está cancelada.');
     if (orden.estado === OC_PAGADA) throw new Error('La orden ' + orden.folio + ' ya está pagada: no se puede cancelar.');
     if (orden.estado !== OC_EMITIDA) throw new Error('La orden ' + orden.folio + ' ya se recibió: no se puede cancelar.');
+    const reqDeOrden = orden.reqFolio ? buscarReq_(libro, orden.reqFolio).req : null;
+    if (reqDeOrden && reqDeOrden.estado === REQ_EN_CAMINO && reqDeOrden.ocFolio.toUpperCase() === orden.folio.toUpperCase()) {
+      if (m.length < 10) {
+        throw new Error('El material de la orden ' + orden.folio + ' ya va en camino: escribe un motivo que explique la cancelación (mínimo 10 caracteres).');
+      }
+      if (confirmado !== true) {
+        return { confirmar: true, mensaje: 'El material de la orden ' + orden.folio + ' ya va en camino (' + textoEnCamino(orden) +
+          '). Si la cancelas, el centro de mando quita lo que está en tránsito. ¿Cancelar la orden?' };
+      }
+    }
     const conFactura = facturasDelLibro_(libro).filter(f => f.estado === FPR_VIGENTE &&
       f.ocFolio.toUpperCase() === orden.folio.toUpperCase()).map(f => f.folio);
     if (conFactura.length) {
@@ -2594,7 +2619,7 @@ function cancelarOrdenCompra(folioOc, motivo) {
       formatoMoneda(orden.total) + ' ' + orden.moneda, m, HOJAS_COMPRAS);
     if (orden.reqFolio) {
       const { hoja: hR, req } = buscarReq_(libro, orden.reqFolio);
-      if (req.estado === REQ_AUTORIZADA && req.ocFolio.toUpperCase() === orden.folio.toUpperCase()) {
+      if ((req.estado === REQ_AUTORIZADA || req.estado === REQ_EN_CAMINO) && req.ocFolio.toUpperCase() === orden.folio.toUpperCase()) {
         // Con aprobación de operaciones vuelve a Aprobada (compras propone otra vez); si no, a Solicitada (flujo de siempre)
         const conAprobacion = !!req.aprobacion;
         const nuevo = transicionReq(req.estado, conAprobacion ? 'cancelarOcAprobada' : 'cancelarOc');
@@ -2605,9 +2630,10 @@ function cancelarOrdenCompra(folioOc, motivo) {
         bitacora_(libro, 'Requisición a ' + nuevo, req.proyectoFolio, req.folio + ' · se canceló ' + orden.folio, m, HOJAS_COMPRAS);
       }
     }
+    avisarPortal_('oc.cancelada', orden.folio);
     SpreadsheetApp.flush();
     return vistaCompras_(libro, proyectoParaCompras_(orden.proyectoFolio));
-  });
+  }));
 }
 
 /** Motivo obligatorio (5 a 500 caracteres). */
@@ -2778,8 +2804,10 @@ function renglonesDeReqs_(libro) {
     const x = mapa[f] || (mapa[f] = { version: 0, renglones: [] });
     if (v > x.version) { x.version = v; x.renglones = []; }
     if (v === x.version) {
-      x.renglones.push({ renglon: Number(r[2]) || x.renglones.length + 1, descripcion: String(r[3] || ''), cantidad: Number(r[4]) || 0,
-        unidad: String(r[5] || ''), notas: String(r[6] || '') });
+      const ren = { renglon: Number(r[2]) || x.renglones.length + 1, descripcion: String(r[3] || ''), cantidad: Number(r[4]) || 0,
+        unidad: String(r[5] || ''), notas: String(r[6] || '') };
+      if (String(r[7] || '').trim()) ren.item = String(r[7]).trim(); // ítem del centro de mando (solo si tiene)
+      x.renglones.push(ren);
     }
   });
   Object.keys(mapa).forEach(f => mapa[f].renglones.sort((a, b) => a.renglon - b.renglon));
@@ -2802,7 +2830,9 @@ function eventosDeReqs_(libro) {
 function escribirRenglonesReq_(libro, folio, version, renglones) {
   const hoja = hojaCompras_(libro, 'RequisicionesRenglones');
   const t = textoCelda;
-  renglones.forEach((r, i) => hoja.appendRow([folio, version, i + 1, t(r.descripcion), r.cantidad, t(r.unidad), t(r.notas)]));
+  // inventario_item (H) solo si el renglón tiene ítem del centro de mando
+  renglones.forEach((r, i) => hoja.appendRow([folio, version, i + 1, t(r.descripcion), r.cantidad, t(r.unidad), t(r.notas)]
+    .concat(r.item ? [t(r.item)] : [])));
 }
 
 /** {folio: proyecto} (para mostrar el nombre sin el cliente y el folio con clave). */
@@ -2893,15 +2923,19 @@ const compraSinCostos_ = prop => prop ? (prop.renglones || []).map(r => ({ rengl
 /**
  * Lo que ve el solicitante (o quien recibe) de una requisición: estado, renglones con la decisión de operaciones, lo que se
  * compra (después del visto bueno), avance de la recepción e historial. Sin montos, proveedor, cliente, folio de la orden ni
- * pagos. x = {flujo, yo, orden, movimientos}.
+ * pagos. x = {flujo, yo, orden, movimientos, centro (centroDeReq_: proyecto ligado al centro de mando, o null)}.
+ * Proyecto ligado: el material se recibe en el centro de mando (aquí no hay "Registrar lo que llegó" ni "Recibí el material");
+ * quien pidió puede registrar el envío (En camino) y quien recibe o quien pidió, "Lo recogí".
  */
 function reqParaSolicitante_(req, ren, eventos, proyectos, x) {
   const p = proyectos[req.proyectoFolio.toUpperCase()];
-  const o = x || {}, flujo = !!o.flujo, yo = o.yo || '';
+  const o = x || {}, flujo = !!o.flujo, yo = o.yo || '', centro = o.centro || null;
   const orden = o.orden && o.orden.estado !== OC_CANCELADA &&
-    [REQ_AUTORIZADA, REQ_PAGADA, REQ_RECIBIDA, REQ_CERRADA].indexOf(req.estado) !== -1 ? o.orden : null;
+    [REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO, REQ_RECIBIDA, REQ_CERRADA].indexOf(req.estado) !== -1 ? o.orden : null;
   const avance = orden ? avanceRecepcion(orden.renglones, o.movimientos, renglonesSinRecepcion(propuestaVigente_(req))) : null;
   const recibe = req.recibeEmail || req.solicitanteEmail;
+  const ocPagada = !!orden && orden.estado === OC_PAGADA;
+  const porEnviar = !!orden && [REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO].indexOf(req.estado) !== -1;
   return {
     folio: req.folio, fecha: req.fecha, proyectoFolio: req.proyectoFolio, proyectoNombre: p ? p.nombre : '',
     proyectoVisible: p ? p.folioVisible : req.proyectoFolio, estado: req.estado, notasRecepcion: req.notasRecepcion,
@@ -2914,10 +2948,18 @@ function reqParaSolicitante_(req, ren, eventos, proyectos, x) {
     recibe: recibe, esReceptor: !!orden && yo !== req.solicitanteEmail && yo === recibe,
     puedeEditar: req.estado === REQ_DEVUELTA && yo === req.solicitanteEmail,
     puedeCancelar: (req.estado === REQ_SOLICITADA || req.estado === REQ_DEVUELTA) && yo === req.solicitanteEmail,
-    puedeCerrar: !flujo && req.estado === REQ_PAGADA && yo === req.solicitanteEmail,
+    // En camino y ya pagada también se cierra; un proyecto ligado se recibe en el centro de mando
+    puedeCerrar: !flujo && !centro && (req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && ocPagada)) &&
+      yo === req.solicitanteEmail,
     // Con operaciones se recibe renglón por renglón (también las requisiciones de antes que ya tenían orden)
-    puedeRecibir: flujo && !!avance && !avance.completo && (req.estado === REQ_AUTORIZADA || req.estado === REQ_PAGADA) &&
-      (yo === req.solicitanteEmail || yo === recibe),
+    puedeRecibir: flujo && !centro && !!avance && !avance.completo &&
+      [REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO].indexOf(req.estado) !== -1 && (yo === req.solicitanteEmail || yo === recibe),
+    // Centro de mando (incremento 4): dónde se recibe y el envío (sin montos ni proveedor)
+    centroMando: centro ? { sitio: centro.sitio, sitioCodigo: centro.sitioCodigo } : null,
+    enCamino: orden && orden.enCaminoEn ? { paqueteria: orden.paqueteria, guia: orden.guia, fechaEstimada: orden.fechaEstimada,
+      en: orden.enCaminoEn, recogido: esRecogido(orden.paqueteria) } : null,
+    puedeEnCamino: porEnviar && yo === req.solicitanteEmail,
+    puedeRecoger: porEnviar && (yo === recibe || yo === req.solicitanteEmail),
   };
 }
 
@@ -2942,14 +2984,16 @@ function listarProyectosRequisicion(busqueda) {
 function misRequisiciones(soloSiHay) {
   exigirRequisicion_();
   const yo = yo_(), flujo = flujoOperaciones_();
-  return enCache_('misReq_' + (flujo ? 'op_' : '') + yo, ['requisiciones', 'oc', 'pagosProveedores', 'proyectos'], TTL_CACHE,
-    soloSiHay ? null : () => misRequisicionesDeHojas_(yo, flujo)) || null;
+  // La clave lleva los proyectos ligados al centro de mando (cambian lo que se puede hacer en cada requisición)
+  return enCache_('misReq_' + (flujo ? 'op_' : '') + firmaCentro_() + yo, ['requisiciones', 'oc', 'pagosProveedores', 'proyectos'],
+    TTL_CACHE, soloSiHay ? null : () => misRequisicionesDeHojas_(yo, flujo)) || null;
 }
 
 function misRequisicionesDeHojas_(yo, flujo) {
   const libro = libroComprasSiExiste_(); // solo lee: el libro lo crea la primera requisición
   if (!libro) return [];
   const ren = renglonesDeReqs_(libro), ev = eventosDeReqs_(libro), proyectos = nombresDeProyectos_();
+  const cfg = configPortal_(), det = cfg.activo ? sitiosDetalle_() : [];
   const lista = [];
   let ordenes = null, movs = null;
   filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
@@ -2963,7 +3007,8 @@ function misRequisicionesDeHojas_(yo, flujo) {
       orden = ordenes[req.ocFolio.toUpperCase()] || null;
       m = movs[req.ocFolio.toUpperCase()] || [];
     }
-    lista.push(reqParaSolicitante_(req, ren[f], ev[f], proyectos, { flujo: flujo, yo: yo, orden: orden, movimientos: m }));
+    lista.push(reqParaSolicitante_(req, ren[f], ev[f], proyectos, { flujo: flujo, yo: yo, orden: orden, movimientos: m,
+      centro: centroDeReq_(req, cfg, det) }));
   });
   return lista.reverse();
 }
@@ -2984,7 +3029,10 @@ function guardarRequisicion(p) {
   const flujo = flujoOperaciones_();
   if (!reenvio && !bytes && !flujo) throw new Error('Adjunta la cotización del proveedor (PDF o imagen).');
   const tipo = bytes ? validarArchivo(bytes, 'la cotización del proveedor', 'La cotización') : null;
+  // Proyecto ligado al centro de mando: el sitio es obligatorio y con código (VER, ZLO…), porque allá se recibe el material
+  const ligadoNuevo = !reenvio && proyectoLigado_(d0.proyectoFolio);
   const sitio = sitioDeLista(d0.sitio, sitios_(), flujo && !reenvio);
+  if (ligadoNuevo) sitioConCodigo_(sitio);
   const fechaRequerida = fechaRequeridaValida(d0.fechaRequerida, hoyIso_());
   const libro = libroCompras_();
 
@@ -3004,6 +3052,7 @@ function guardarRequisicion(p) {
       const { hoja, req } = buscarReq_(libro, d0.folio);
       if (req.solicitanteEmail !== yo) throw errorPermiso_('Solo quien hizo la requisición ' + req.folio + ' puede corregirla.');
       const nuevo = transicionReq(req.estado, 'reenviar');
+      if (proyectoLigado_(req.proyectoFolio)) sitioConCodigo_(sitio || req.sitio);
       folio = req.folio;
       version = ((renglonesDeReqs_(libro)[folio.toUpperCase()] || {}).version || 1) + 1;
       if (bytes) {
@@ -3065,7 +3114,7 @@ function cancelarRequisicion(folioReq, motivo) {
 
 /** Cierre: la requisición pasa a Cerrada y su orden a Recibida (hoy, con el correo de quien cierra). */
 function cerrarReq_(libro, hoja, req, nota, motivo) {
-  const nuevo = transicionReq(req.estado, 'cerrar');
+  const nuevo = transicionReq(req.estado, req.estado === REQ_EN_CAMINO ? 'cerrarEnCamino' : 'cerrar');
   const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
   if (orden.estado !== OC_PAGADA) throw new Error('La orden ' + orden.folio + ' no está pagada.');
   cambiarReq_(hoja, req, nuevo, { notasRecepcion: nota, motivo: motivo || req.motivo });
@@ -3086,6 +3135,7 @@ function cerrarRequisicion(folioReq, notas) {
     if (req.solicitanteEmail !== String(VENDEDOR_.email).toLowerCase()) {
       throw errorPermiso_('Solo quien hizo la requisición ' + req.folio + ' puede confirmar que recibió el material.');
     }
+    exigirNoLigado_(req);
     cerrarReq_(libro, hoja, req, nota, '');
     SpreadsheetApp.flush();
     return misRequisiciones();
@@ -3174,6 +3224,8 @@ function vistaRequisicion_(libro, folioReq) {
   const avance = orden && orden.estado !== OC_CANCELADA ? avanceRecepcion(orden.renglones, movs, renglonesSinRecepcion(propuestaVigente_(req))) : null;
   const aprobados = renglonesAprobados(renglones, req.aprobacion);
   const porCotizar = req.estado === REQ_APROBADA || req.estado === REQ_COTIZADA;
+  const ocPagada = !!orden && orden.estado === OC_PAGADA;
+  const conOrden = [REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO].indexOf(req.estado) !== -1;
   return {
     requisicion: r,
     flujoOperaciones: flujo,
@@ -3202,11 +3254,15 @@ function vistaRequisicion_(libro, folioReq) {
     puedeCotizar: flujo && porCotizar && proyectoVigente,
     puedeDevolver: flujo && req.estado === REQ_APROBADA,
     puedeSeparar: flujo && porCotizar && aprobados.length > 1,
-    puedePagar: (req.estado === REQ_AUTORIZADA || req.estado === REQ_RECIBIDA) && !!orden && orden.estado === OC_EMITIDA,
-    puedeCancelarPago: req.estado === REQ_PAGADA,
-    puedeCerrar: req.estado === REQ_PAGADA,
-    puedeRecibir: flujo && !!avance && !avance.completo && (req.estado === REQ_AUTORIZADA || req.estado === REQ_PAGADA),
+    puedePagar: (req.estado === REQ_AUTORIZADA || req.estado === REQ_RECIBIDA || req.estado === REQ_EN_CAMINO) && !!orden &&
+      orden.estado === OC_EMITIDA,
+    puedeCancelarPago: req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && ocPagada),
+    puedeCerrar: req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && ocPagada),
+    puedeRecibir: flujo && !!avance && !avance.completo && conOrden,
     puedeCancelarRecepcion: req.estado !== REQ_CERRADA && !!orden && orden.estado !== OC_CANCELADA,
+    // Centro de mando (incremento 4): proyecto ligado (recibir o cerrar aquí es el respaldo de compras) y registrar el envío
+    centroMando: centroDeReq_(req),
+    puedeEnCamino: conOrden && !!orden && orden.estado !== OC_CANCELADA,
   };
 }
 
@@ -3230,24 +3286,26 @@ function autorizarRequisicion(folioReq, oc) {
   const cache = CacheService.getScriptCache();
   const claveCache = idSolicitud ? 'OC_' + idSolicitud : '';
 
-  return conCandado_(() => {
+  return conAvisoPortal_(conCandado_(() => {
     if (claveCache) {
       const previo = cache.get(claveCache);
       if (previo) return JSON.parse(previo);
     }
     const { hoja, req } = buscarReq_(libro, folioReq);
     const nuevo = transicionReq(req.estado, 'autorizar');
+    if (proyectoLigado_(req.proyectoFolio)) sitioConCodigo_(req.sitio, req.folio);
     const proyecto = proyectoParaCompras_(req.proyectoFolio);
     const r = emitirOrdenCompra_(libro, d0, proyecto, req.folio);
     cambiarReq_(hoja, req, nuevo, { motivo: '', ocFolio: r.folio, revisar: true });
     eventoReq_(libro, req.folio, nuevo, '');
     bitacora_(libro, 'Autorizar requisición', proyecto.folio, req.folio + ' · ' + r.folio, '', HOJAS_COMPRAS);
+    avisarPortal_('oc.autorizada', r.folio);
     SpreadsheetApp.flush();
     const resultado = { folio: req.folio, ocFolio: r.folio, url: r.url, total: r.total, moneda: r.moneda,
       vista: vistaRequisicion_(libro, req.folio) };
     if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
     return resultado;
-  });
+  }));
 }
 
 /**
@@ -3294,7 +3352,7 @@ function registrarPagoProveedor(p) {
   const cache = CacheService.getScriptCache();
   const claveCache = idSolicitud ? 'PGP_' + idSolicitud : '';
 
-  return conCandado_(() => {
+  return conAvisoPortal_(conCandado_(() => {
     if (claveCache) {
       const previo = cache.get(claveCache);
       if (previo) return JSON.parse(previo);
@@ -3303,9 +3361,9 @@ function registrarPagoProveedor(p) {
     if (!reqFolio && d0.ocFolio) reqFolio = buscarOrden_(libro, d0.ocFolio).orden.reqFolio;
     if (!reqFolio) throw new Error('Esta orden no tiene requisición: no se puede registrar el pago.');
     const { hoja, req } = buscarReq_(libro, reqFolio);
-    // Con todo ya recibido (Recibida), el pago la cierra y la orden queda Recibida
-    const yaRecibida = req.estado === REQ_RECIBIDA;
-    const nuevo = transicionReq(req.estado, yaRecibida ? 'pagarRecibida' : 'pagar');
+    // Con todo ya recibido (Recibida), el pago la cierra y la orden queda Recibida; En camino sigue En camino (pagada)
+    const yaRecibida = req.estado === REQ_RECIBIDA, enCamino = req.estado === REQ_EN_CAMINO;
+    const nuevo = transicionReq(req.estado, yaRecibida ? 'pagarRecibida' : enCamino ? 'pagarEnCamino' : 'pagar');
     const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
     if (d0.ocFolio && String(d0.ocFolio).trim().toUpperCase() !== orden.folio.toUpperCase()) {
       throw new Error('La orden ' + String(d0.ocFolio).toUpperCase() + ' no es la de la requisición ' + req.folio + '.');
@@ -3328,15 +3386,16 @@ function registrarPagoProveedor(p) {
       t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '']);
     hO.getRange(orden.fila, COL_ESTADO_OC).setValue(yaRecibida ? OC_RECIBIDA : OC_PAGADA);
     cambiarReq_(hoja, req, nuevo, {});
-    eventoReq_(libro, req.folio, nuevo, yaRecibida ? 'Pagada; el material ya estaba recibido.' : '');
+    eventoReq_(libro, req.folio, nuevo, yaRecibida ? 'Pagada; el material ya estaba recibido.' : enCamino ? 'Pagada; el material va en camino.' : '');
     bitacora_(libro, 'Registrar pago a proveedor', req.proyectoFolio, folio + ' · ' + orden.folio + ' · ' + req.folio + ' · ' +
       formatoMoneda(pago.monto) + ' ' + pago.monedaPago + (pago.tipoCambio ? ' · TC ' + pago.tipoCambio + ' = ' +
       formatoMoneda(pago.montoAplicado) + ' ' + orden.moneda : '') + ' · ' + pago.metodo, '', HOJAS_COMPRAS);
+    avisarPortal_('oc.pagada', orden.folio);
     SpreadsheetApp.flush();
     const resultado = { folio: folio, url: archivo.getUrl(), vista: vistaRequisicion_(libro, req.folio) };
     if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
     return resultado;
-  });
+  }));
 }
 
 /** Cancela un pago a proveedor (no se borra), con motivo: la orden vuelve a Emitida y la requisición a Autorizada. */
@@ -3355,7 +3414,7 @@ function cancelarPagoProveedor(folioPago, motivo) {
     if (pago.estado !== 'Vigente') throw new Error('El pago ' + pago.folio + ' ya está cancelado.');
     const { hoja, req } = buscarReq_(libro, pago.reqFolio);
     if (req.estado === REQ_CERRADA) throw new Error('La requisición ' + req.folio + ' ya está cerrada (material recibido): el pago no se puede cancelar.');
-    const nuevo = transicionReq(req.estado, 'cancelarPago');
+    const nuevo = transicionReq(req.estado, req.estado === REQ_EN_CAMINO ? 'cancelarPagoEnCamino' : 'cancelarPago');
     const { hoja: hO, orden } = buscarOrden_(libro, pago.ocFolio);
     hP.getRange(pago.fila, 18, 1, 4).setValues([['Cancelado', textoCelda(VENDEDOR_.email),
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
@@ -3369,18 +3428,24 @@ function cancelarPagoProveedor(folioPago, motivo) {
   });
 }
 
-/** Compras cierra una requisición Pagada en lugar del solicitante (p. ej. ya no está en la obra), con motivo obligatorio. */
+/**
+ * Compras cierra una requisición Pagada (o En camino y pagada) en lugar del solicitante (p. ej. ya no está en la obra), con
+ * motivo obligatorio. En un proyecto ligado es el respaldo cuando el centro de mando no funciona (no llega al inventario del
+ * sitio) y avisa req.cerrada al centro de mando.
+ */
 function cerrarRequisicionCompras(folioReq, motivo, notas) {
   exigirCompras_();
   const m = motivoObligatorio_(motivo, 'Escribe por qué cierras la requisición en lugar de quien la pidió.');
   const nota = notaOpcional_(notas);
   const libro = libroCompras_();
-  return conCandado_(() => {
+  return conAvisoPortal_(conCandado_(() => {
     const { hoja, req } = buscarReq_(libro, folioReq);
-    cerrarReq_(libro, hoja, req, nota, m);
+    const ligado = proyectoLigado_(req.proyectoFolio);
+    cerrarReq_(libro, hoja, req, nota, m + (ligado ? ' (respaldo: no llega al inventario del sitio)' : ''));
+    if (ligado) avisarPortal_('req.cerrada', req.ocFolio);
     SpreadsheetApp.flush();
     return vistaRequisicion_(libro, req.folio);
-  });
+  }));
 }
 
 // ---- Requisiciones con operaciones (incremento 3) ----
@@ -3439,7 +3504,8 @@ function vistaOperaciones_(libro, folioReq) {
   if (req.ocFolio) {
     const o = buscarOrden_(libro, req.ocFolio).orden;
     orden = { folio: o.folio, fecha: o.fecha, estado: o.estado, proveedor: o.proveedor, total: o.total, moneda: o.moneda,
-      fechaEntrega: o.fechaEntrega, lugarEntrega: o.lugarEntrega };
+      fechaEntrega: o.fechaEntrega, lugarEntrega: o.lugarEntrega, paqueteria: o.paqueteria, guia: o.guia,
+      fechaEstimada: o.fechaEstimada, enCaminoEn: o.enCaminoEn };
     movs = movimientosPorOc_(libro)[o.folio.toUpperCase()] || [];
     if (o.estado !== OC_CANCELADA) avance = avanceRecepcion(o.renglones, movs, renglonesSinRecepcion(actual));
   }
@@ -3536,6 +3602,7 @@ function cotizarRequisicion(folioReq, p) {
     }
     const { hoja, req } = buscarReq_(libro, folioReq);
     const nuevo = transicionReq(req.estado, 'cotizar');
+    if (proyectoLigado_(req.proyectoFolio)) sitioConCodigo_(req.sitio, req.folio);
     const proyecto = proyectoParaCompras_(req.proyectoFolio);
     if (proyecto.estado === 'Cancelado') throw new Error('El proyecto ' + proyecto.folio + ' está cancelado: no admite órdenes de compra.');
     const c = monedaDeProyecto_(contratosDelLibro_()[proyecto.folio.toUpperCase()] || null);
@@ -3588,13 +3655,14 @@ function autorizarPropuesta(folioReq, version, idSolicitud, huella) {
   const id = String(idSolicitud || '').slice(0, 64);
   const cache = CacheService.getScriptCache();
   const claveCache = id ? 'VOBO_' + id : '';
-  return conCandado_(() => {
+  return conAvisoPortal_(conCandado_(() => {
     if (claveCache) {
       const previo = cache.get(claveCache);
       if (previo) return JSON.parse(previo);
     }
     const { hoja, req } = buscarReq_(libro, folioReq);
     const nuevo = transicionReq(req.estado, 'visto');
+    if (proyectoLigado_(req.proyectoFolio)) sitioConCodigo_(req.sitio, req.folio);
     const prop = propuestaVigente_(req);
     if (!prop) throw new Error('La requisición ' + req.folio + ' no tiene propuesta de compra.');
     const yo = yo_();
@@ -3615,11 +3683,12 @@ function autorizarPropuesta(folioReq, version, idSolicitud, huella) {
     camposReq_(hoja, req, { voboEmail: yo, fechaVobo: ahoraTexto_() });
     eventoReq_(libro, req.folio, nuevo, 'Visto bueno de operaciones: se emitió la orden de compra.');
     bitacora_(libro, 'Visto bueno de operaciones', req.proyectoFolio, req.folio + ' · propuesta v' + prop.version + ' · ' + r.folio, '', HOJAS_COMPRAS);
+    avisarPortal_('oc.autorizada', r.folio);
     SpreadsheetApp.flush();
     const resultado = { folio: req.folio, ocFolio: r.folio, vista: vistaOperaciones_(libro, req.folio) };
     guardarIdempotencia_(cache, claveCache, resultado);
     return resultado;
-  });
+  }));
 }
 
 /** Operaciones regresa la propuesta a compras (Cotizada → Aprobada) con el motivo, que ven compras y operaciones. */
@@ -3720,7 +3789,7 @@ function registrarRecepcion(p) {
   const cache = CacheService.getScriptCache();
   const claveCache = idSolicitud ? 'REC_' + idSolicitud : '';
 
-  return conCandado_(() => {
+  return conAvisoPortal_(conCandado_(() => {
     if (claveCache) {
       const previo = cache.get(claveCache);
       if (previo) return JSON.parse(previo);
@@ -3728,11 +3797,16 @@ function registrarRecepcion(p) {
     const yo = yo_();
     const { hoja, req } = buscarReq_(libro, d0.reqFolio);
     const recibe = req.recibeEmail || req.solicitanteEmail;
-    const propio = yo === req.solicitanteEmail || yo === recibe;
+    // Proyecto ligado al centro de mando: se recibe allá; aquí solo compras, como respaldo y con motivo
+    const centro = centroDeReq_(req);
+    if (centro && !compras) {
+      throw new Error('El material de ' + req.folio + ' se recibe en el centro de mando (' + centro.sitio + '), no en CAPRI.');
+    }
+    const propio = !centro && (yo === req.solicitanteEmail || yo === recibe);
     if (!propio && !compras) {
       throw errorPermiso_('Solo quien pidió la requisición ' + req.folio + ' o quien la recibe puede registrar la recepción.');
     }
-    if (req.estado !== REQ_AUTORIZADA && req.estado !== REQ_PAGADA) {
+    if ([REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO].indexOf(req.estado) === -1) {
       throw new Error('La requisición ' + req.folio + ' está ' + req.estado.toLowerCase() + ': no tiene material por recibir.');
     }
     const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
@@ -3741,6 +3815,9 @@ function registrarRecepcion(p) {
       renglonesSinRecepcion(propuestaVigente_(req)));
     if (avance.completo) throw new Error('Todo lo de la orden ya se recibió.');
     const rec = normalizarRecepcion(d0, avance.lineas, sitios);
+    if (centro && rec.notas.length < 5) {
+      throw new Error('Recepción de respaldo (el proyecto se recibe en el centro de mando): escribe en las notas por qué la registras aquí.');
+    }
     if (!propio && rec.notas.length < 5) throw new Error('Registras la recepción en lugar de quien la recibe: escribe en las notas por qué.');
     const hM = hojaCompras_(libro, 'MovimientosInventario');
     const folio = siguienteFolio_(PREFIJO_REC, hM, 'CONSECUTIVO_REC_');
@@ -3752,7 +3829,7 @@ function registrarRecepcion(p) {
       archivo ? archivo.getId() : '', archivo ? archivo.getUrl() : '', 'Vigente', '', '', '']));
     let nuevo = req.estado;
     if (rec.completo) {
-      if (req.estado === REQ_PAGADA) {
+      if (req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && orden.estado === OC_PAGADA)) {
         nuevo = transicionReq(req.estado, 'recibirPagada');
         hO.getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(hoyIso_()), t(yo)]]);
       } else {
@@ -3769,16 +3846,20 @@ function registrarRecepcion(p) {
     });
     const lista = rec.renglones.map(x => x.cantidad + ' ' + x.unidad + ' ' + String(x.descripcion).slice(0, 40)).join('; ');
     eventoReq_(libro, req.folio, nuevo, 'Recepción ' + folio + ' en ' + rec.sitio + ' (' +
-      (rec.completo ? (faltante ? 'última, con faltante' : 'completa') : 'parcial') + '): ' + lista + (propio ? '' : ' · registrada por compras') +
+      (rec.completo ? (faltante ? 'última, con faltante' : 'completa') : 'parcial') + '): ' + lista +
+      (centro ? ' · respaldo de compras (no llega al inventario del sitio en el centro de mando)' : propio ? '' : ' · registrada por compras') +
       (rec.notas ? ' · ' + rec.notas : ''));
-    bitacora_(libro, 'Registrar recepción', req.proyectoFolio, folio + ' · ' + req.folio + ' · ' + orden.folio + ' · ' + rec.sitio + ' · ' +
-      lista + (rec.completo ? ' · ' + nuevo : ' · parcial'), propio ? '' : rec.notas, HOJAS_COMPRAS);
+    bitacora_(libro, centro ? 'Registrar recepción (respaldo del centro de mando)' : 'Registrar recepción', req.proyectoFolio,
+      folio + ' · ' + req.folio + ' · ' + orden.folio + ' · ' + rec.sitio + ' · ' + lista + (rec.completo ? ' · ' + nuevo : ' · parcial'),
+      propio ? '' : rec.notas, HOJAS_COMPRAS);
+    // Respaldo completo: el centro de mando deja de esperar el material (allá se registra a mano)
+    if (centro && rec.completo) avisarPortal_('req.cerrada', orden.folio);
     SpreadsheetApp.flush();
     const resultado = { folio: folio, completo: rec.completo, estado: nuevo,
       requisiciones: requisicion ? misRequisiciones() : null, vista: compras ? vistaRequisicion_(libro, req.folio) : null };
     guardarIdempotencia_(cache, claveCache, resultado);
     return resultado;
-  });
+  }));
 }
 
 /**
@@ -3808,7 +3889,8 @@ function cancelarRecepcion(folioRec, motivo) {
     filas.forEach(x => hM.getRange(x.fila, 19, 1, 4).setValues([['Cancelado', t(yo_()), ahora, t(m)]]));
     let nuevo = req.estado;
     if (req.estado === REQ_RECIBIDA) {
-      nuevo = transicionReq(req.estado, 'cancelarRecepcion');
+      // Si ya iba en camino (centro de mando), vuelve a En camino; si no, a Autorizada
+      nuevo = transicionReq(req.estado, orden.enCaminoEn ? 'cancelarRecepcionEnCamino' : 'cancelarRecepcion');
       cambiarReq_(hoja, req, nuevo, { notasRecepcion: '' });
       hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([['', '']]);
     } else {
@@ -4655,8 +4737,11 @@ function normalizarOrdenCompra(p, proyecto) {
       if (costoTxt === '' || costoTxt == null || !isFinite(costo)) throw new Error('Captura el costo unitario de "' + descripcion.slice(0, 40) + '".');
       if (costo < 0) throw new Error('El costo de "' + descripcion.slice(0, 40) + '" no puede ser negativo.');
       const c = redondear(costo);
-      return { clave: limpio(r.clave).toUpperCase().slice(0, 30), descripcion: descripcion,
+      const x = { clave: limpio(r.clave).toUpperCase().slice(0, 30), descripcion: descripcion,
         unidad: limpio(r.unidad).toUpperCase().slice(0, 20) || 'PZA', cantidad: cantidad, costo: c, importe: redondear(cantidad * c) };
+      const item = itemInventario(r.item, descripcion); // ítem del centro de mando (incremento 4; solo si tiene)
+      if (item) x.item = item;
+      return x;
     });
   if (!renglones.length) throw new Error('Agrega al menos un renglón con descripción, cantidad y costo.');
   if (renglones.length > MAX_RENGLONES_OC) throw new Error('Una orden admite máximo ' + MAX_RENGLONES_OC + ' renglones.');
@@ -4831,6 +4916,10 @@ const MAX_RENGLONES_REQ = 100;
  * compras), Autorizada → Aprobada (se canceló la orden), Recibida → Autorizada (se canceló una recepción). Operaciones puede
  * rechazar hasta antes del visto bueno.
  */
+// Incremento 4 (centro de mando): En camino entre la orden (Autorizada) o el pago (Pagada) y la recepción. Pagar en camino la
+// deja En camino (la orden queda Pagada); recibir todo la cierra (Cerrada si la orden está pagada; si no, Recibida). Cancelar la
+// orden (sin pagar) la regresa como desde Autorizada; cancelar el pago la deja En camino; cancelar la recepción de una que iba en
+// camino la regresa a En camino. Quien llama elige la acción según el estado de la orden (pagada o no).
 const TRANSICIONES_REQ = {
   autorizar: { de: [REQ_SOLICITADA], a: REQ_AUTORIZADA },
   rechazar: { de: [REQ_SOLICITADA, REQ_APROBADA, REQ_COTIZADA], a: REQ_RECHAZADA },
@@ -4840,23 +4929,30 @@ const TRANSICIONES_REQ = {
   pagar: { de: [REQ_AUTORIZADA], a: REQ_PAGADA },
   cancelarPago: { de: [REQ_PAGADA], a: REQ_AUTORIZADA },
   cerrar: { de: [REQ_PAGADA], a: REQ_CERRADA },
-  cancelarOc: { de: [REQ_AUTORIZADA], a: REQ_SOLICITADA },
+  cancelarOc: { de: [REQ_AUTORIZADA, REQ_EN_CAMINO], a: REQ_SOLICITADA },
   // Con operaciones
   aprobar: { de: [REQ_SOLICITADA], a: REQ_APROBADA },
   cotizar: { de: [REQ_APROBADA, REQ_COTIZADA], a: REQ_COTIZADA },
   regresarACompras: { de: [REQ_COTIZADA], a: REQ_APROBADA },
   visto: { de: [REQ_COTIZADA], a: REQ_AUTORIZADA },
-  recibir: { de: [REQ_AUTORIZADA], a: REQ_RECIBIDA },
-  recibirPagada: { de: [REQ_PAGADA], a: REQ_CERRADA },
+  recibir: { de: [REQ_AUTORIZADA, REQ_EN_CAMINO], a: REQ_RECIBIDA }, // En camino sin pagar
+  recibirPagada: { de: [REQ_PAGADA, REQ_EN_CAMINO], a: REQ_CERRADA }, // En camino ya pagada
   pagarRecibida: { de: [REQ_RECIBIDA], a: REQ_CERRADA },
-  cancelarOcAprobada: { de: [REQ_AUTORIZADA], a: REQ_APROBADA },
+  cancelarOcAprobada: { de: [REQ_AUTORIZADA, REQ_EN_CAMINO], a: REQ_APROBADA },
   cancelarRecepcion: { de: [REQ_RECIBIDA], a: REQ_AUTORIZADA },
+  // Centro de mando (incremento 4)
+  enCamino: { de: [REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO], a: REQ_EN_CAMINO }, // otra vez en camino = corregir el envío
+  cerrarEnCamino: { de: [REQ_EN_CAMINO], a: REQ_CERRADA }, // solo con la orden pagada (cerrarReq_)
+  pagarEnCamino: { de: [REQ_EN_CAMINO], a: REQ_EN_CAMINO },
+  cancelarPagoEnCamino: { de: [REQ_EN_CAMINO], a: REQ_EN_CAMINO },
+  cancelarRecepcionEnCamino: { de: [REQ_RECIBIDA], a: REQ_EN_CAMINO },
 };
 const VERBOS_REQ = { autorizar: 'autorizar', rechazar: 'rechazar', devolver: 'devolver', reenviar: 'reenviar', cancelar: 'cancelar',
   pagar: 'pagar', cancelarPago: 'cancelar el pago de', cerrar: 'cerrar', cancelarOc: 'regresar a Solicitada', aprobar: 'aprobar',
   cotizar: 'mandar la propuesta de', regresarACompras: 'regresar a compras', visto: 'dar el visto bueno a', recibir: 'recibir',
   recibirPagada: 'recibir', pagarRecibida: 'pagar', cancelarOcAprobada: 'regresar a Aprobada',
-  cancelarRecepcion: 'cancelar la recepción de' };
+  cancelarRecepcion: 'cancelar la recepción de', enCamino: 'marcar en camino', pagarEnCamino: 'pagar',
+  cancelarPagoEnCamino: 'cancelar el pago de', cancelarRecepcionEnCamino: 'cancelar la recepción de', cerrarEnCamino: 'cerrar' };
 
 /** Estado nuevo de una requisición tras la acción; error si no se puede desde su estado actual. */
 function transicionReq(estado, accion) {
@@ -4887,8 +4983,11 @@ function normalizarRequisicion(p) {
       if (cantidad > 1e7) throw new Error('La cantidad de "' + descripcion.slice(0, 40) + '" no es válida.');
       const notas = limpio(r.notas);
       if (notas.length > 300) throw new Error('Las notas de "' + descripcion.slice(0, 30) + '…" deben tener máximo 300 caracteres.');
-      return { descripcion: descripcion, cantidad: Math.round(cantidad * 10000) / 10000,
+      const x = { descripcion: descripcion, cantidad: Math.round(cantidad * 10000) / 10000,
         unidad: limpio(r.unidad).toUpperCase().slice(0, 20) || 'PZA', notas: notas };
+      const item = itemInventario(r.item, descripcion); // ítem del centro de mando (opcional; incremento 4)
+      if (item) x.item = item;
+      return x;
     });
   if (!renglones.length) throw new Error('Agrega al menos un renglón con descripción y cantidad.');
   if (renglones.length > MAX_RENGLONES_REQ) throw new Error('Una requisición admite máximo ' + MAX_RENGLONES_REQ + ' renglones.');
@@ -5009,9 +5108,12 @@ function normalizarAprobacion(d, renglones) {
 function renglonesAprobados(renglones, aprobacion) {
   const dec = {};
   ((aprobacion && aprobacion.renglones) || []).forEach(a => { dec[a.renglon] = a; });
-  return (renglones || []).filter(r => dec[r.renglon] && dec[r.renglon].aprobado).map(r => ({
-    renglon: r.renglon, descripcion: r.descripcion, unidad: r.unidad, notas: r.notas, cantidad: dec[r.renglon].cantidad,
-    pedida: r.cantidad }));
+  return (renglones || []).filter(r => dec[r.renglon] && dec[r.renglon].aprobado).map(r => {
+    const x = { renglon: r.renglon, descripcion: r.descripcion, unidad: r.unidad, notas: r.notas, cantidad: dec[r.renglon].cantidad,
+      pedida: r.cantidad };
+    if (r.item) x.item = r.item; // ítem del centro de mando que eligió quien pidió
+    return x;
+  });
 }
 
 /**
@@ -5059,11 +5161,14 @@ function normalizarPropuesta(p, ctx) {
     const base = { renglon: a.renglon, disponibilidad: x, nota: nota(r, a.renglon), recibir: true };
     if (x === DISP_NO) return Object.assign(base, { clave: '', descripcion: a.descripcion, unidad: a.unidad, cantidad: 0, costo: 0, importe: 0 });
     if (x === DISP_SUSTITUTO && !limpio(r.descripcion)) throw new Error('Escribe qué se comprará en lugar del renglón ' + a.renglon + '.');
+    // Ítem del centro de mando: el que mande compras; si no manda nada, el exacto conserva el de quien pidió
+    const item = r.item != null ? r.item : x === DISP_EXACTO ? a.item : '';
     return Object.assign(base, { comprar: true, clave: r.clave, descripcion: limpio(r.descripcion) || a.descripcion,
-      unidad: limpio(r.unidad) || a.unidad, cantidad: r.cantidad === '' || r.cantidad == null ? a.cantidad : r.cantidad, costo: r.costo });
+      unidad: limpio(r.unidad) || a.unidad, cantidad: r.cantidad === '' || r.cantidad == null ? a.cantidad : r.cantidad, costo: r.costo,
+      item: item });
   }).concat(adicionales.map((r, i) => ({ renglon: 0, disponibilidad: DISP_ADICIONAL, nota: nota(r, 'adicional ' + (i + 1)),
     recibir: r.recibir !== false, comprar: true, clave: r.clave, descripcion: r.descripcion, unidad: r.unidad, cantidad: r.cantidad,
-    costo: r.costo })));
+    costo: r.costo, item: r.item })));
   const comprar = todos.filter(r => r.comprar);
   if (!comprar.length) throw new Error('Ningún renglón se puede comprar: devuélvela a quien la pidió o pide a operaciones que la rechace.');
   if (!comprar.some(r => r.recibir)) throw new Error('Al menos un renglón debe recibirse en sitio (los demás son servicios o fletes).');
@@ -5087,8 +5192,11 @@ function ordenDePropuesta(prop) {
     proveedor: prop.proveedor, fechaEntrega: prop.fechaEntrega, lugarEntrega: prop.lugarEntrega,
     condicionesPago: prop.condicionesPago, diasCredito: prop.diasCredito, moneda: prop.moneda, tipoCambio: prop.tipoCambio,
     ivaTasa: prop.ivaTasa, notas: prop.notas,
-    renglones: (prop.renglones || []).filter(r => r.disponibilidad !== DISP_NO)
-      .map(r => ({ clave: r.clave, descripcion: r.descripcion, unidad: r.unidad, cantidad: r.cantidad, costo: r.costo })),
+    renglones: (prop.renglones || []).filter(r => r.disponibilidad !== DISP_NO).map(r => {
+      const x = { clave: r.clave, descripcion: r.descripcion, unidad: r.unidad, cantidad: r.cantidad, costo: r.costo };
+      if (r.item) x.item = r.item; // la orden conserva el ítem del centro de mando
+      return x;
+    }),
   };
 }
 
@@ -6339,17 +6447,795 @@ function enviarCorreosPendientes_() {
 }
 
 // ---- 6.C Centro de mando (drogheda.helgen.online): sitios con código, ítems, En camino, avisos firmados, recepciones ----
+// El centro de mando es el inventario (ítems, existencias por sitio, material en tránsito, kits, salidas y conteos). CAPRI
+// conserva el dinero, las aprobaciones y qué, cuánto y a qué sitio; el centro de mando nunca recibe montos. Solo los proyectos
+// ligados (Script Property PORTAL_PROYECTOS) hablan con él. Sin PORTAL_URL y PORTAL_SECRETO todo esto está apagado y CAPRI
+// funciona como antes. Detalle en docs/incremento-4-centro.md.
+//   Avisos: cada cambio guardado (orden autorizada, pagada, en camino, cancelada; requisición cerrada) se escribe en la pestaña
+//   PortalPendientes (dentro del candado) y, ya fuera del candado, se manda firmado (conAvisoPortal_). Si no contesta, queda
+//   Pendiente y el activador de 15 minutos lo reintenta; la acción de la persona nunca falla por eso.
+//   Recepciones: el activador lee lo que se recibió en los sitios (traerRecepcionesPortal) y cierra solo las requisiciones.
 
 function modCentroMando_() {
-  return { nombre: 'Centro de mando', api: {}, cambios: {}, solo: [], publicas: [] };
+  return {
+    nombre: 'Centro de mando',
+    api: { marcarEnCamino: marcarEnCamino, misArticulos: misArticulos, itemsInventario: itemsInventario,
+      estadoCentroMando: estadoCentroMando, consultarCentroMando: consultarCentroMando },
+    cambios: { marcarEnCamino: ['requisiciones', 'oc'], consultarCentroMando: ['requisiciones', 'oc'] },
+    // Quien pide y quien recibe suelen ser cuentas de solo requisiciones
+    solo: ['marcarEnCamino', 'misArticulos', 'itemsInventario'],
+    publicas: [],
+    bootstrap(permisos) {
+      if (!(permisos.requisicion || permisos.compras || permisos.operaciones)) return {};
+      const cfg = configPortal_();
+      const c = { activo: cfg.activo, ligados: cfg.activo ? Object.keys(cfg.proyectos) : [], items: null, misArticulos: null };
+      if (cfg.activo) { const it = itemsInventario_(true); c.items = it ? it.items : null; } // solo si ya está en caché
+      if (permisos.requisicion) c.misArticulos = misArticulos(true); // ídem (si no, la interfaz los pide)
+      return { centro: c };
+    },
+    sincronizar(permisos, ctx, algo, r) {
+      if (!(permisos.requisicion || permisos.compras || permisos.operaciones)) return;
+      const cfg = configPortal_();
+      r.centro = { activo: cfg.activo, ligados: cfg.activo ? Object.keys(cfg.proyectos) : [] };
+    },
+    preparar() {
+      migrarSitiosConCodigo_();
+      const libro = libroComprasSiExiste_();
+      if (libro) hojaCompras_(libro, 'PortalPendientes');
+      instalarActivadorPortal();
+      const cfg = configPortal_();
+      console.log('Centro de mando: ' + (cfg.activo ? 'activo (' + cfg.url + ')' + (cfg.prueba ? ' · avisos de PRUEBA' : '')
+        : 'apagado (faltan PORTAL_URL con https:// y PORTAL_SECRETO)') + ' · proyectos ligados: ' + JSON.stringify(cfg.proyectos) +
+        ' · activador cadaQuinceMinutos instalado.');
+    },
+  };
+}
+
+const TIPOS_EVENTO_PORTAL = ['oc.autorizada', 'oc.pagada', 'oc.en_camino', 'oc.cancelada', 'req.cerrada'];
+const MENSAJE_PORTAL_PENDIENTE = 'Guardado. El centro de mando se actualizará en unos minutos.';
+/** Quién aparece en el historial y la Bitacora cuando el cambio lo trae el centro de mando. */
+const CORREO_CENTRO_MANDO = 'centro de mando';
+const RUTA_PORTAL_EVENTO = '/api/integracion/cotizador/evento';
+const RUTA_PORTAL_RECEPCIONES = '/api/integracion/cotizador/recepciones';
+const RUTA_PORTAL_ITEMS = '/api/integracion/inventario/items';
+const PAQ_PROVEEDOR = 'Lo trae el proveedor';
+const MAX_ENVIOS_PORTAL = 60; // por corrida (el activador sigue en la siguiente)
+
+/**
+ * Configuración del centro de mando (Script Properties; nunca sale a la interfaz ni al registro): PORTAL_URL (https://…),
+ * PORTAL_SECRETO (secreto compartido), PORTAL_PROYECTOS (JSON {"PRY-2026-0002": "drogheda"}: llave interna → proyecto del
+ * centro de mando) y PORTAL_PRUEBA ('1' = los avisos van con "prueba": true). activo = hay URL https y secreto.
+ */
+function configPortal_() {
+  if (MEMO_.cfgPortal) return MEMO_.cfgPortal;
+  const p = propiedades_();
+  const url = String(p.PORTAL_URL || '').trim().replace(/\/+$/, '');
+  const secreto = String(p.PORTAL_SECRETO || '').trim();
+  const proyectos = {};
+  try {
+    const j = JSON.parse(String(p.PORTAL_PROYECTOS || '').trim() || '{}');
+    Object.keys(j || {}).forEach(k => {
+      const f = folioInterno(k), v = String(j[k] == null ? '' : j[k]).trim();
+      if (/^PRY-\d{4}-\d{4}$/.test(f) && v) proyectos[f] = v;
+    });
+  } catch (e) {
+    console.warn('PORTAL_PROYECTOS no es un JSON válido: ningún proyecto queda ligado.');
+  }
+  MEMO_.cfgPortal = { activo: /^https:\/\/[^\s/]+/i.test(url) && !!secreto, url: url, secreto: secreto, proyectos: proyectos,
+    prueba: String(p.PORTAL_PRUEBA || '').trim() === '1' };
+  return MEMO_.cfgPortal;
+}
+
+/** Parte de las claves de caché que depende de los proyectos ligados (si cambian, las listas se arman de nuevo). */
+function firmaCentro_() {
+  const cfg = configPortal_();
+  return cfg.activo ? 'cm' + Object.keys(cfg.proyectos).sort().join('.') + '_' : '';
 }
 
 /**
- * Avisa al centro de mando un cambio de una orden de compra (tipo del contrato: oc.autorizada, oc.pagada, oc.en_camino,
- * oc.cancelada, req.cerrada). Solo si el proyecto está ligado; sin montos; si no contesta, queda en PortalPendientes y se
- * reintenta. Nunca lanza error. La implementa el módulo del centro de mando; aquí no hace nada.
+ * ¿El proyecto habla con el centro de mando? Su llave interna (PRY-AAAA-NNNN; acepta también el folio con clave) está en
+ * PORTAL_PROYECTOS y la función está encendida (PORTAL_URL y PORTAL_SECRETO). Única definición: la usan este módulo y
+ * Pendientes (módulo D).
  */
-function avisarPortal_(tipo, folioOc) {}
+function proyectoLigado_(proyectoFolio) {
+  const cfg = configPortal_();
+  return cfg.activo && !!cfg.proyectos[folioInterno(proyectoFolio)];
+}
+
+/** Centro de mando de una requisición: null si su proyecto no está ligado; si no, {proyecto, sitioCodigo, sitio (etiqueta)}. */
+function centroDeReq_(req, cfg, det) {
+  const c = cfg || configPortal_();
+  if (!proyectoLigado_(req.proyectoFolio)) return null;
+  const clave = c.proyectos[folioInterno(req.proyectoFolio)];
+  const d = det || sitiosDetalle_();
+  const codigo = codigoDeSitio(req.sitio, d);
+  const s = d.find(x => x.codigo === codigo);
+  return { proyecto: clave, sitioCodigo: codigo, sitio: codigo ? codigo + ' · ' + (s ? s.nombre : req.sitio) : (req.sitio || 'sin sitio') };
+}
+
+/** Sitio obligatorio y con código del centro de mando (proyecto ligado); devuelve el código o lanza el error para la persona. */
+function sitioConCodigo_(sitio, folioReq) {
+  const s = String(sitio == null ? '' : sitio).trim();
+  const de = folioReq ? 'La requisición ' + folioReq + ' es de un proyecto ligado al centro de mando: '
+    : 'El proyecto está ligado al centro de mando: ';
+  if (!s) throw new Error(de + 'elige el sitio donde se recibe el material' + (folioReq ? ' (devuélvela para que lo elijan).' : '.'));
+  const codigo = codigoDeSitio(s, sitiosDetalle_());
+  if (!codigo) {
+    throw new Error(de + 'el sitio "' + s.slice(0, 60) + '" no tiene código del centro de mando (VER, ZLO, ESE, LZC, QRO). ' +
+      'Corrige Config → SITIOS.');
+  }
+  return codigo;
+}
+
+/** Quien pidió no cierra aquí una requisición de un proyecto ligado: se recibe en el centro de mando. */
+function exigirNoLigado_(req) {
+  const c = centroDeReq_(req);
+  if (c) throw new Error('El material de ' + req.folio + ' se recibe en el centro de mando (' + c.sitio + '): allá lo registra quien recibe en el sitio.');
+}
+
+/** Lo que un aviso por correo puede llevar de una requisición (sin propuesta, montos ni proveedor). */
+function reqParaAviso_(req) {
+  return { folio: req.folio, proyectoFolio: req.proyectoFolio, solicitanteEmail: req.solicitanteEmail, solicitante: req.solicitante,
+    recibeEmail: req.recibeEmail || req.solicitanteEmail, sitio: req.sitio, estado: req.estado };
+}
+
+/** Fecha y hora con zona ("2026-10-28T10:15:00-06:00"), como la pide el centro de mando para firmar. */
+function isoConZona_(d) {
+  const f = Utilities.formatDate(d, 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
+  const m = f.match(/^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)$/);
+  const off = Math.round((Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) - Math.floor(d.getTime() / 1000) * 1000) / 60000);
+  const a = Math.abs(off), p = n => String(n).padStart(2, '0');
+  return f.replace(' ', 'T') + (off < 0 ? '-' : '+') + p(Math.floor(a / 60)) + ':' + p(a % 60);
+}
+
+/** Firma del contrato: hex de HMAC-SHA256(secreto, tiempo + "\n" + cuerpo) (Apps Script da bytes con signo). */
+function firmaPortal_(secreto, tiempo, cuerpo) {
+  return hexDeBytes(Utilities.computeHmacSha256Signature(tiempo + '\n' + cuerpo, secreto, Utilities.Charset.UTF_8));
+}
+
+/**
+ * Llamada firmada al centro de mando (cabeceras X-Hbox-Tiempo y X-Hbox-Firma). Nunca lanza error ni pone el secreto en el
+ * mensaje: {ok, codigo, datos, error}. ok = respondió 200 con {ok: true}.
+ */
+function llamarPortal_(cfg, metodo, url, cuerpo) {
+  const tiempo = isoConZona_(new Date());
+  const op = { method: metodo, muteHttpExceptions: true, followRedirects: false,
+    headers: { 'X-Hbox-Tiempo': tiempo, 'X-Hbox-Firma': 'sha256=' + firmaPortal_(cfg.secreto, tiempo, cuerpo || '') } };
+  if (metodo === 'post') { op.contentType = 'application/json; charset=utf-8'; op.payload = cuerpo; }
+  let r;
+  try {
+    r = UrlFetchApp.fetch(url, op);
+  } catch (e) {
+    return { ok: false, codigo: 0, error: 'Sin respuesta del centro de mando: ' + String(e && e.message || e).slice(0, 200) };
+  }
+  const codigo = r.getResponseCode();
+  let datos = null;
+  try { datos = JSON.parse(r.getContentText()); } catch (e) { datos = null; }
+  if (codigo === 200 && datos && datos.ok === true) return { ok: true, codigo: codigo, datos: datos };
+  return { ok: false, codigo: codigo, datos: datos,
+    error: 'El centro de mando respondió ' + codigo + (datos && datos.error ? ': ' + String(datos.error).slice(0, 200) : '') };
+}
+
+/** Manda un aviso ya formado (texto JSON). {ok, repetido, datos, error}. */
+function enviarEventoPortal_(cfg, texto) {
+  const r = llamarPortal_(cfg, 'post', cfg.url + RUTA_PORTAL_EVENTO, texto);
+  return r.ok ? { ok: true, repetido: !!r.datos.repetido, datos: r.datos } : r;
+}
+
+/**
+ * Avisa al centro de mando un cambio de una orden de compra (tipo: oc.autorizada, oc.pagada, oc.en_camino, oc.cancelada,
+ * req.cerrada). Se llama dentro del candado, después de guardar el cambio: forma el aviso con lo que hay en la hoja (sin
+ * montos), lo escribe en PortalPendientes (Pendiente) y lo deja en la cola de la petición; conAvisoPortal_ lo manda al salir
+ * del candado y, si nadie lo manda (p. ej. el módulo de anular), lo manda el activador de 15 minutos. evento_id =
+ * "<folio OC>:<tipo>:<n>" (n = cuántas veces se ha formado ese tipo para esa orden): un reintento nunca duplica.
+ * Solo proyectos ligados y con la función encendida. Nunca lanza error. Devuelve el evento_id ('' si no aplica).
+ */
+function avisarPortal_(tipo, folioOc) {
+  try {
+    const cfg = configPortal_();
+    if (!cfg.activo || TIPOS_EVENTO_PORTAL.indexOf(tipo) === -1) return '';
+    const libro = libroComprasSiExiste_();
+    if (!libro) return '';
+    const orden = buscarOrden_(libro, folioOc).orden;
+    const clave = cfg.proyectos[folioInterno(orden.proyectoFolio)];
+    if (!clave) return '';
+    const req = orden.reqFolio ? buscarReq_(libro, orden.reqFolio).req : null;
+    const hoja = hojaCompras_(libro, 'PortalPendientes');
+    const prefijo = (orden.folio + ':' + tipo + ':').toUpperCase();
+    const previos = filasDeArea_(hoja, HOJAS_COMPRAS, 'PortalPendientes')
+      .filter(r => String(r[0] || '').toUpperCase().indexOf(prefijo) === 0).length;
+    const datos = { cuando: isoConZona_(new Date()), quien: VENDEDOR_ ? VENDEDOR_.email : '', prueba: cfg.prueba, orden: orden, req: req,
+      proyectoFolio: folioInterno(orden.proyectoFolio), proyectoClave: clave,
+      sitioCodigo: req ? codigoDeSitio(req.sitio, sitiosDetalle_()) : '',
+      sinRecibir: renglonesSinRecepcion(req ? propuestaVigente_(req) : null) };
+    let cuerpo = cuerpoEventoPortal(tipo, previos + 1, datos);
+    let texto = jsonAscii(cuerpo);
+    if (texto.length > 45000) { cuerpo = cuerpoEventoPortal(tipo, previos + 1, datos, 40); texto = jsonAscii(cuerpo); } // cabe en una celda
+    const montos = buscarMontos(cuerpo);
+    if (montos.length) throw new Error('el aviso llevaba montos (' + montos.join(', ') + ')'); // nunca debe pasar
+    hoja.appendRow([cuerpo.evento_id, texto, 0, '', ahoraTexto_(), 'Pendiente', '']);
+    (MEMO_.portal = MEMO_.portal || []).push({ eventoId: cuerpo.evento_id, oc: orden.folio });
+    return cuerpo.evento_id;
+  } catch (e) {
+    console.warn('Aviso al centro de mando no formado (' + tipo + ' ' + folioOc + '): ' + e.message);
+    return '';
+  }
+}
+
+/**
+ * Manda (fuera del candado) los avisos que formó esta petición. Si alguno no llegó, quedan Pendientes para el activador y el
+ * resultado lleva avisoPortal (también su vista) para que la interfaz diga "Guardado. El centro de mando se actualizará en unos
+ * minutos". Nunca lanza error: la acción de la persona ya quedó guardada.
+ */
+function conAvisoPortal_(resultado) {
+  const cola = MEMO_.portal || [];
+  if (!cola.length) return resultado;
+  MEMO_.portal = [];
+  let falto = true;
+  try {
+    const r = enviarPendientesPortal_(cola.map(x => x.oc));
+    falto = cola.some(x => !r.enviados[x.eventoId]);
+  } catch (e) {
+    console.warn('Avisos al centro de mando sin mandar: ' + e.message);
+  }
+  if (falto && resultado && typeof resultado === 'object' && !Array.isArray(resultado)) {
+    resultado.avisoPortal = MENSAJE_PORTAL_PENDIENTE;
+    if (resultado.vista && typeof resultado.vista === 'object') resultado.vista.avisoPortal = MENSAJE_PORTAL_PENDIENTE;
+  }
+  return resultado;
+}
+
+/**
+ * Manda los avisos Pendientes de PortalPendientes, en el orden en que se formaron (soloOcs = solo los de esas órdenes; null =
+ * todos). Por orden se detiene en el primero que falle, para que el centro de mando nunca reciba un pago antes que su
+ * autorización. Sin candado: solo cambia celdas de filas que ya existen. {enviados: {evento_id: true}, intentados, fallidos}.
+ */
+function enviarPendientesPortal_(soloOcs) {
+  const res = { enviados: {}, intentados: 0, fallidos: 0 };
+  const cfg = configPortal_();
+  if (!cfg.activo) return res;
+  const libro = libroComprasSiExiste_();
+  if (!libro || !libro.getSheetByName('PortalPendientes')) return res;
+  const hoja = hojaCompras_(libro, 'PortalPendientes');
+  const filtro = soloOcs ? soloOcs.map(f => String(f).toUpperCase()) : null;
+  const detenidas = {};
+  filasDeArea_(hoja, HOJAS_COMPRAS, 'PortalPendientes').forEach((r, i) => {
+    const id = String(r[0] || '').trim();
+    if (!id || String(r[5] || '') !== 'Pendiente' || res.intentados >= MAX_ENVIOS_PORTAL) return;
+    const oc = id.split(':')[0].toUpperCase();
+    if ((filtro && filtro.indexOf(oc) === -1) || detenidas[oc]) return;
+    res.intentados++;
+    const envio = enviarEventoPortal_(cfg, String(r[1] || ''));
+    const fila = i + 2, intentos = (Number(r[2]) || 0) + 1;
+    if (envio.ok) {
+      hoja.getRange(fila, 3, 1, 2).setValues([[intentos, envio.repetido ? 'ya lo tenía (repetido)' : '']]);
+      hoja.getRange(fila, 6, 1, 2).setValues([['Enviado', ahoraTexto_()]]);
+      res.enviados[id] = true;
+    } else {
+      hoja.getRange(fila, 3, 1, 2).setValues([[intentos, textoCelda(String(envio.error).slice(0, 300))]]);
+      detenidas[oc] = true;
+      res.fallidos++;
+    }
+  });
+  return res;
+}
+
+/**
+ * En camino (solicitante, compras o quien recibe; idempotente). d = {paqueteria, guia, fechaEstimada, traeProveedor, recogido,
+ * idSolicitud}. Envío (compras o quien pidió): paquetería, guía (salvo "lo trae el proveedor") y fecha estimada no anterior a
+ * hoy. "Lo recogí" (recogido: true; quien recibe o quien pidió): paquetería "Recogido por <nombre>", sin guía. Desde Autorizada,
+ * Pagada o En camino (otra vez = corregir el envío). Guarda paquetería, guía, fecha estimada, cuándo y quién en la orden, avisa
+ * oc.en_camino al centro de mando y forma el aviso req.encamino (quien pidió y quien recibe).
+ */
+function marcarEnCamino(folioReq, d) {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + '.');
+  const compras = esCompras_(), requisicion = esRequisicion_();
+  if (!compras && !requisicion) throw errorPermiso_('No tienes permiso para registrar envíos.');
+  const d0 = d || {};
+  const libro = libroCompras_();
+  const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
+  const cache = CacheService.getScriptCache();
+  const claveCache = idSolicitud ? 'ENC_' + idSolicitud : '';
+  return conAvisoPortal_(conCandado_(() => {
+    if (claveCache) {
+      const previo = cache.get(claveCache);
+      if (previo) return JSON.parse(previo);
+    }
+    const yo = yo_();
+    const { hoja, req } = buscarReq_(libro, folioReq);
+    const recibe = req.recibeEmail || req.solicitanteEmail;
+    const recogido = d0.recogido === true;
+    if (recogido) {
+      if (yo !== recibe && yo !== req.solicitanteEmail) {
+        throw errorPermiso_('Solo quien recibe la requisición ' + req.folio + ' (o quien la pidió) puede marcar "Lo recogí".');
+      }
+    } else if (yo !== req.solicitanteEmail && !compras) {
+      throw errorPermiso_('Solo compras o quien pidió la requisición ' + req.folio + ' puede registrar el envío.');
+    }
+    const nuevo = transicionReq(req.estado, 'enCamino');
+    const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
+    if (orden.estado === OC_CANCELADA) throw new Error('La orden ' + orden.folio + ' está cancelada.');
+    const e = normalizarEnCamino(d0, { hoy: hoyIso_(), nombre: nombreYo_() });
+    const t = textoCelda;
+    hO.getRange(orden.fila, colOc_('paqueteria'), 1, 5).setValues([[t(e.paqueteria), t(e.guia), textoFecha_(e.fechaEstimada),
+      ahoraTexto_(), t(yo)]]);
+    const nota = (req.estado === REQ_EN_CAMINO ? 'Envío corregido: ' : '') + textoEnCamino(e);
+    cambiarReq_(hoja, req, nuevo, {});
+    eventoReq_(libro, req.folio, nuevo, nota);
+    bitacora_(libro, recogido ? 'Lo recogí' : 'Marcar en camino', req.proyectoFolio, req.folio + ' · ' + orden.folio + ' · ' + nota, '',
+      HOJAS_COMPRAS);
+    avisarPortal_('oc.en_camino', orden.folio);
+    notificar_('req.encamino', { folio: req.folio, req: reqParaAviso_(req), nota: nota, sitio: req.sitio, paqueteria: e.paqueteria,
+      guia: e.guia, fechaEstimada: e.fechaEstimada, recogido: recogido,
+      para: [req.solicitanteEmail, recibe].filter((c, i, a) => c && a.indexOf(c) === i) });
+    SpreadsheetApp.flush();
+    const resultado = { folio: req.folio, estado: nuevo, requisiciones: requisicion ? misRequisiciones() : null,
+      vista: compras ? vistaRequisicion_(libro, req.folio) : null };
+    guardarIdempotencia_(cache, claveCache, resultado);
+    return resultado;
+  }));
+}
+
+/**
+ * "Mis artículos" (decisión de Leo: sugerencias de lo que la persona ya pidió): descripciones de sus requisiciones, las más
+ * pedidas primero, con la unidad y el último ítem del centro de mando que usó. En caché por usuario y versión.
+ */
+function misArticulos(soloSiHay) {
+  exigirRequisicion_();
+  const yo = yo_();
+  const v = enCache_('misArt_' + yo, ['requisiciones'], TTL_CACHE, soloSiHay ? null : () => misArticulosDeHojas_(yo));
+  return v === undefined ? null : v;
+}
+
+function misArticulosDeHojas_(yo) {
+  const libro = libroComprasSiExiste_();
+  if (!libro) return [];
+  const mias = {};
+  filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach(r => {
+    if (String(r[0] || '').trim() && String(r[3] || '').toLowerCase() === yo) mias[String(r[0]).toUpperCase()] = true;
+  });
+  const filas = filasDeArea_(hojaCompras_(libro, 'RequisicionesRenglones'), HOJAS_COMPRAS, 'RequisicionesRenglones');
+  const version = {};
+  filas.forEach(r => { const f = String(r[0]).toUpperCase(); if (mias[f]) version[f] = Math.max(version[f] || 0, Number(r[1]) || 1); });
+  const lista = [];
+  filas.forEach((r, i) => {
+    const f = String(r[0]).toUpperCase();
+    if (mias[f] && (Number(r[1]) || 1) === version[f]) {
+      lista.push({ descripcion: String(r[3] || ''), unidad: String(r[5] || ''), item: String(r[7] || '').trim(), orden: i });
+    }
+  });
+  return articulosFrecuentes(lista, 100);
+}
+
+/** Ítems del inventario del centro de mando para elegir por renglón (requisiciones, compras o aprobaciones). */
+function itemsInventario() {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + '.');
+  if (!esRequisicion_() && !esCompras_() && !esOperaciones_()) throw errorPermiso_('No tienes acceso a los ítems del inventario.');
+  return itemsInventario_(false);
+}
+
+/**
+ * {activo, items: [{codigo, descripcion, unidad, categoria}], actualizado} del centro de mando, en caché 6 h (CacheService).
+ * soloCache = no consultar (carga inicial): null si no está. refrescarSiViejo (activador): vuelve a pedirla si tiene más de
+ * 1 h. Si el centro de mando no contesta, la lista anterior (o vacía, con error).
+ */
+function itemsInventario_(soloCache, refrescarSiViejo) {
+  const cfg = configPortal_();
+  if (!cfg.activo) return { activo: false, items: [] };
+  const previo = leerCache_('PORTAL_ITEMS');
+  const viejo = !!previo && !!refrescarSiViejo && Date.now() - (Number(previo.ts) || 0) > 3600000;
+  if (previo && !viejo) return previo;
+  if (soloCache) return previo || null;
+  const r = llamarPortal_(cfg, 'get', cfg.url + RUTA_PORTAL_ITEMS, '');
+  if (!r.ok) return previo || { activo: true, items: [], error: 'No se pudo leer la lista de ítems del centro de mando (' + r.error + ').' };
+  const valor = { activo: true, items: normalizarItemsPortal(r.datos.items), actualizado: ahoraTexto_(), ts: Date.now() };
+  guardarCache_('PORTAL_ITEMS', valor, TTL_CACHE);
+  return valor;
+}
+
+/** Corre fn como el centro de mando (historial y Bitacora dicen "centro de mando"). */
+function comoCentroMando_(fn) {
+  const antes = VENDEDOR_;
+  VENDEDOR_ = { email: CORREO_CENTRO_MANDO, nombre: 'Centro de mando', apellido: '' };
+  try {
+    return fn();
+  } finally {
+    VENDEDOR_ = antes;
+  }
+}
+
+/**
+ * Recepciones del centro de mando desde PORTAL_ULTIMA_CONSULTA (la primera vez, 30 días): completa → cierra la requisición
+ * (Cerrada si la orden está pagada; si no, Recibida y espera el pago) con "Recibido en ZLO por jesush en el centro de mando,
+ * 30-oct-2026"; parcial → nota en el historial y sigue igual (p. ej. En camino); ya cerrada → nada. Lo recibido se copia a
+ * MovimientosInventario (bitácora de recepciones de CAPRI; CAPRI no lleva existencias) solo por la diferencia con lo ya
+ * registrado, así una recepción repetida no duplica nada. PORTAL_ULTIMA_CONSULTA solo avanza si todo salió bien.
+ */
+function traerRecepcionesPortal() {
+  const cfg = configPortal_();
+  if (!cfg.activo) return { activo: false };
+  const props = PropertiesService.getScriptProperties();
+  const desde = props.getProperty('PORTAL_ULTIMA_CONSULTA') || isoConZona_(new Date(Date.now() - 30 * 86400000));
+  const inicio = isoConZona_(new Date());
+  const r = llamarPortal_(cfg, 'get', cfg.url + RUTA_PORTAL_RECEPCIONES + '?desde=' + encodeURIComponent(desde), '');
+  const res = { activo: true, ok: r.ok, desde: desde, recepciones: 0, cerradas: [], parciales: [], ignoradas: [], errores: [] };
+  if (!r.ok) {
+    props.setProperty('PORTAL_ERROR_CONSULTA', ahoraTexto_() + ' · ' + r.error);
+    MEMO_.props = null;
+    res.errores.push(r.error);
+    return res;
+  }
+  const lista = Array.isArray(r.datos.recepciones) ? r.datos.recepciones : [];
+  res.recepciones = lista.length;
+  const libro = lista.length ? libroComprasSiExiste_() : null;
+  if (libro) {
+    const det = sitiosDetalle_();
+    comoCentroMando_(() => conCandado_(() => {
+      lista.forEach(x => {
+        try {
+          aplicarRecepcionPortal_(libro, x || {}, det, res);
+        } catch (e) {
+          res.errores.push(String((x && x.oc_folio) || '?') + ': ' + e.message);
+        }
+      });
+      SpreadsheetApp.flush();
+    }));
+  }
+  if (res.cerradas.length || res.parciales.length) subirVersiones_(['requisiciones', 'oc']);
+  if (!res.errores.length) {
+    props.setProperty('PORTAL_ULTIMA_CONSULTA', String(r.datos.hasta || inicio));
+    props.setProperty('PORTAL_ULTIMO_OK', ahoraTexto_());
+    props.deleteProperty('PORTAL_ERROR_CONSULTA');
+  } else {
+    props.setProperty('PORTAL_ERROR_CONSULTA', ahoraTexto_() + ' · ' + res.errores.join(' · ').slice(0, 400));
+  }
+  MEMO_.props = null; MEMO_.cfgPortal = null;
+  return res;
+}
+
+/** Aplica una recepción del centro de mando (dentro del candado, como el centro de mando). */
+function aplicarRecepcionPortal_(libro, x, det, res) {
+  const ocFolio = String(x.oc_folio || '').trim().toUpperCase();
+  let encontrada;
+  try {
+    encontrada = buscarOrden_(libro, ocFolio);
+  } catch (e) {
+    res.ignoradas.push(ocFolio + ' (no existe)');
+    return;
+  }
+  const { hoja: hO, orden } = encontrada;
+  if (orden.estado === OC_CANCELADA || !orden.reqFolio) { res.ignoradas.push(ocFolio + ' (cancelada o sin requisición)'); return; }
+  const { hoja, req } = buscarReq_(libro, orden.reqFolio);
+  if ([REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO, REQ_RECIBIDA].indexOf(req.estado) === -1 ||
+      req.ocFolio.toUpperCase() !== orden.folio.toUpperCase()) {
+    res.ignoradas.push(ocFolio + ' (' + req.folio + ' ' + req.estado.toLowerCase() + ')');
+    return;
+  }
+  const codigo = String(x.sitio || '').trim().toUpperCase();
+  const s = det.find(y => y.codigo === codigo);
+  const sitio = s ? s.nombre : (req.sitio || codigo);
+  const recibio = String(x.recibio == null ? '' : x.recibio).trim().replace(/\s+/g, ' ').slice(0, 60) || 'centro de mando';
+  const cuando = new Date(String(x.cuando || ''));
+  const fecha = isNaN(cuando.getTime()) ? hoyIso_() : Utilities.formatDate(cuando, 'America/Mexico_City', 'yyyy-MM-dd');
+  const lugar = (codigo || sitio) + ' por ' + recibio + ' en el centro de mando, ' + fechaCortaEs(fecha);
+
+  // Lo recibido (acumulado por renglón de la orden) contra lo ya registrado en CAPRI: solo se copia la diferencia
+  const avance = avanceRecepcion(orden.renglones, movimientosPorOc_(libro)[ocFolio] || [], renglonesSinRecepcion(propuestaVigente_(req)));
+  const nuevos = [];
+  (Array.isArray(x.renglones) ? x.renglones : []).forEach(l => {
+    const linea = avance.lineas.find(a => a.renglon === Number(l && l.n));
+    if (!linea) return;
+    const total = Math.min(Math.max(0, Number(l.recibido) || 0), linea.pedido);
+    const dif = Math.round((total - linea.recibido) * 10000) / 10000;
+    if (dif > 1e-9) nuevos.push({ renglon: linea.renglon, clave: linea.clave, descripcion: linea.descripcion, unidad: linea.unidad, cantidad: dif });
+  });
+  const t = textoCelda;
+  if (nuevos.length) {
+    const hM = hojaCompras_(libro, 'MovimientosInventario');
+    const folio = siguienteFolio_(PREFIJO_REC, hM, 'CONSECUTIVO_REC_');
+    const ahora = ahoraTexto_();
+    nuevos.forEach(n => hM.appendRow([folio, textoFecha_(fecha), ahora, TIPO_ENTRADA_COMPRA, t(sitio), req.proyectoFolio, req.folio,
+      orden.folio, n.renglon, t(n.clave), t(n.descripcion), t(n.unidad), n.cantidad, t(CORREO_CENTRO_MANDO),
+      t(recibio + ' (centro de mando)'), t('Recibido en ' + lugar), '', '', 'Vigente', '', '', '']));
+  }
+  const lista = nuevos.map(n => n.cantidad + ' ' + n.unidad + ' ' + String(n.descripcion).slice(0, 40)).join('; ');
+  if (x.completa === true && req.estado !== REQ_RECIBIDA) {
+    const pagada = orden.estado === OC_PAGADA;
+    const nuevo = transicionReq(req.estado, pagada ? 'recibirPagada' : 'recibir');
+    const nota = 'Recibido en ' + lugar;
+    if (pagada) hO.getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(fecha), t(recibio + ' (centro de mando)')]]);
+    else hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(fecha), t(recibio + ' (centro de mando)')]]);
+    cambiarReq_(hoja, req, nuevo, { notasRecepcion: nota });
+    eventoReq_(libro, req.folio, nuevo, nota + (pagada ? '' : ' · falta el pago al proveedor'));
+    bitacora_(libro, 'Recepción del centro de mando', req.proyectoFolio, req.folio + ' · ' + orden.folio + ' · ' + nota +
+      (lista ? ' · ' + lista : '') + ' · ' + nuevo, '', HOJAS_COMPRAS);
+    notificar_('req.recibida', { folio: req.folio, req: reqParaAviso_(req), nota: nota, sitio: req.sitio, centroMando: true });
+    res.cerradas.push(req.folio);
+  } else if (nuevos.length) {
+    const nota = 'Recepción parcial en ' + lugar + ': ' + lista;
+    cambiarReq_(hoja, req, req.estado, {});
+    eventoReq_(libro, req.folio, req.estado, nota);
+    bitacora_(libro, 'Recepción parcial del centro de mando', req.proyectoFolio, req.folio + ' · ' + orden.folio + ' · ' + nota, '', HOJAS_COMPRAS);
+    res.parciales.push(req.folio);
+  } else {
+    res.ignoradas.push(ocFolio + ' (sin cambios)');
+  }
+}
+
+/**
+ * Activador de cada 15 minutos (instalarActivadorPortal): reintenta los avisos pendientes, trae las recepciones del centro de
+ * mando y deja en caché las listas pesadas que la carga inicial solo manda si ya están (así la primera carga de la mañana es
+ * rápida). Corre sin sesión; nunca lanza error. Lo puede correr Efrain desde el editor para probar.
+ */
+function cadaQuinceMinutos() {
+  VENDEDOR_ = null; VERSIONES_ = null; SIN_CACHE_ = false; MEMO_ = {};
+  const r = {};
+  try { r.avisos = enviarPendientesPortal_(null); } catch (e) { r.avisos = { error: e.message }; }
+  try { r.recepciones = traerRecepcionesPortal(); } catch (e) { r.recepciones = { error: e.message }; }
+  try { r.cache = calentarCache_(); } catch (e) { r.cache = { error: e.message }; }
+  try { if (MEMO_.correos && MEMO_.correos.length) enviarCorreosPendientes_(); } catch (e) { console.warn('Correos sin mandar: ' + e.message); }
+  VENDEDOR_ = null; MEMO_ = {};
+  console.log('cadaQuinceMinutos: ' + JSON.stringify(r).slice(0, 2000));
+  return r;
+}
+
+/**
+ * Llena el caché de lo que la carga inicial solo manda si ya está: listas de compras, operaciones y cobranza (como la primera
+ * persona con ese rol) y, por persona con requisiciones, "mis requisiciones" y "mis artículos". Solo lee. Lo que ya está en
+ * caché no se vuelve a armar; se detiene a los 2 minutos.
+ */
+function calentarCache_() {
+  const inicio = Date.now(), hechos = [];
+  const como = (correo, que, fn) => {
+    if (!correo || Date.now() - inicio > 120000) return;
+    const antes = VENDEDOR_;
+    VENDEDOR_ = { email: correo, nombre: '', apellido: '' };
+    try { fn(); hechos.push(que); } catch (e) { console.warn('Caché de ' + que + ': ' + e.message); } finally { VENDEDOR_ = antes; }
+  };
+  try { configLigera_(); proyectosCache_(); catalogoCache_(); clientesCache_(); contratosCache_(); hechos.push('fuentes'); }
+  catch (e) { console.warn('Caché de fuentes: ' + e.message); }
+  try { if (configPortal_().activo) { itemsInventario_(false, true); hechos.push('ítems'); } } catch (e) { console.warn('Ítems: ' + e.message); }
+  const primero = rol => correosConRol_(rol)[0] || '';
+  como(primero('ventas'), 'proyectos', () => listarProyectos('', false));
+  como(primero('compras'), 'compras', () => { listarRequisiciones('', ''); cuentasPorPagar(); });
+  como(primero('aprobaciones'), 'aprobaciones', () => listarOperaciones());
+  como(primero('cobranza'), 'cobranza', () => resumenCobranzaGeneral());
+  correosConRol_('requisicion').forEach(c => como(c, 'requisiciones de ' + c, () => { misRequisiciones(); misArticulos(); }));
+  return { hechos: hechos.length, segundos: Math.round((Date.now() - inicio) / 1000) };
+}
+
+/** Instala (una sola vez) el activador de 15 minutos; si hay repetidos, deja uno. Lo corre preparar() desde prepararCapri. */
+function instalarActivadorPortal() {
+  const propios = ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'cadaQuinceMinutos');
+  propios.slice(1).forEach(t => ScriptApp.deleteTrigger(t));
+  if (!propios.length) ScriptApp.newTrigger('cadaQuinceMinutos').timeBased().everyMinutes(15).create();
+  return { instalado: !propios.length, quitados: Math.max(0, propios.length - 1) };
+}
+
+/** Estado del enlace (compras o super admin): avisos pendientes y última consulta de recepciones. Solo lee. */
+function estadoCentroMando() {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + '.');
+  if (!esCompras_() && !esSuperAdmin_()) throw errorPermiso_('No tienes permiso de compras.');
+  return estadoCentroMando_();
+}
+
+function estadoCentroMando_() {
+  const cfg = configPortal_(), p = propiedades_();
+  const r = { activo: cfg.activo, servidor: cfg.url.replace(/^https?:\/\//i, ''), prueba: cfg.prueba,
+    ligados: Object.keys(cfg.proyectos).map(f => ({ folio: f, proyecto: cfg.proyectos[f] })),
+    pendientes: 0, masAntiguo: '', ultimoError: '', enviados: 0,
+    ultimaConsulta: String(p.PORTAL_ULTIMA_CONSULTA || ''), ultimoOk: String(p.PORTAL_ULTIMO_OK || ''),
+    errorConsulta: String(p.PORTAL_ERROR_CONSULTA || '') };
+  const libro = libroComprasSiExiste_();
+  if (libro && libro.getSheetByName('PortalPendientes')) {
+    filasDeArea_(hojaCompras_(libro, 'PortalPendientes'), HOJAS_COMPRAS, 'PortalPendientes').forEach(x => {
+      if (String(x[5]) === 'Pendiente') {
+        r.pendientes++;
+        if (!r.masAntiguo) r.masAntiguo = fechaTexto_(x[4]);
+        if (x[3]) r.ultimoError = String(x[3]);
+      } else if (String(x[5]) === 'Enviado') {
+        r.enviados++;
+      }
+    });
+  }
+  try { r.activador = ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'cadaQuinceMinutos'); } catch (e) { r.activador = null; }
+  return r;
+}
+
+/** "Consultar ahora" (compras o super admin): reintenta los avisos y trae las recepciones sin esperar al activador. */
+function consultarCentroMando() {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + '.');
+  if (!esCompras_() && !esSuperAdmin_()) throw errorPermiso_('No tienes permiso de compras.');
+  const r = { avisos: null, recepciones: null };
+  if (configPortal_().activo) {
+    const a = enviarPendientesPortal_(null);
+    r.avisos = { intentados: a.intentados, fallidos: a.fallidos };
+    r.recepciones = traerRecepcionesPortal();
+  }
+  MEMO_.props = null; MEMO_.cfgPortal = null;
+  r.estado = estadoCentroMando_();
+  return r;
+}
+
+/**
+ * Config → SITIOS con el formato de solo nombres ("Veracruz (ICAVE)") pasa a "VER | Veracruz (ICAVE)" si todos los nombres
+ * tienen código conocido (las requisiciones siguen guardando el nombre). Lo corre preparar(); si no se puede, no toca nada.
+ */
+function migrarSitiosConCodigo_() {
+  const hoja = db_().getSheetByName('Config');
+  if (!hoja) return false;
+  const v = hoja.getDataRange().getValues();
+  const i = v.findIndex(r => String(r[0]).trim() === 'SITIOS');
+  if (i < 1) return false;
+  const nuevo = sitiosConCodigoTexto(v[i][1]);
+  if (!nuevo) {
+    if (String(v[i][1] || '').indexOf('|') === -1) console.log('Config → SITIOS: hay sitios sin código conocido; escríbelos como "VER | Veracruz (ICAVE)".');
+    return false;
+  }
+  hoja.getRange(i + 1, 2).setValue(nuevo);
+  console.log('Config → SITIOS con código: ' + nuevo.replace(/\n/g, ' · '));
+  return true;
+}
+
+/**
+ * Prueba del enlace desde el editor (no cambia nada en CAPRI): lee los ítems, las recepciones de las últimas 24 h y manda un
+ * aviso con "prueba": true de una orden inventada. Muestra en el registro lo que contestó (nunca el secreto).
+ */
+function probarCentroMando() {
+  MEMO_ = {};
+  const cfg = configPortal_();
+  if (!cfg.activo) { console.log('Centro de mando apagado: faltan PORTAL_URL (https://…) y PORTAL_SECRETO en Script Properties.'); return; }
+  const it = llamarPortal_(cfg, 'get', cfg.url + RUTA_PORTAL_ITEMS, '');
+  console.log('Ítems: ' + (it.ok ? (it.datos.items || []).length + ' en la lista' : it.error));
+  const rc = llamarPortal_(cfg, 'get', cfg.url + RUTA_PORTAL_RECEPCIONES + '?desde=' +
+    encodeURIComponent(isoConZona_(new Date(Date.now() - 86400000))), '');
+  console.log('Recepciones (últimas 24 h): ' + (rc.ok ? (rc.datos.recepciones || []).length : rc.error));
+  const folio = Object.keys(cfg.proyectos)[0] || 'PRY-0000-0000';
+  const cuerpo = cuerpoEventoPortal('oc.autorizada', 1, { cuando: isoConZona_(new Date()), quien: Session.getActiveUser().getEmail() || 'editor',
+    prueba: true, proyectoFolio: folio, proyectoClave: cfg.proyectos[folio] || 'prueba', sitioCodigo: 'QRO', req: { folio: 'REQ-PRUEBA' },
+    orden: { folio: 'OC-PRUEBA-' + Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyyMMddHHmmss'), proveedor: 'Proveedor de prueba',
+      fechaEntrega: hoyIso_(), renglones: [{ descripcion: 'Renglón de prueba', unidad: 'PZA', cantidad: 1 }] } });
+  const ev = enviarEventoPortal_(cfg, jsonAscii(cuerpo));
+  console.log('Aviso de prueba ' + cuerpo.evento_id + ': ' + (ev.ok ? 'aceptado ' + JSON.stringify(ev.datos) : ev.error));
+}
+
+// -- Lógica pura del centro de mando (sin servicios de Google; se prueba en Node) --
+
+/** Hex de bytes (Apps Script da enteros con signo, -128…127). */
+function hexDeBytes(bytes) {
+  return Array.prototype.map.call(bytes || [], b => ((Number(b) + 256) % 256).toString(16).padStart(2, '0')).join('');
+}
+
+/** JSON con todo lo que no es ASCII escapado (á): la firma y el envío no dependen de la codificación. */
+function jsonAscii(obj) {
+  return JSON.stringify(obj).replace(/[\u007f-￿]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+}
+
+/**
+ * Cuerpo de un aviso al centro de mando (contrato del 28/10/2026). d = {cuando, quien, prueba, orden (ordenDesdeFila_), req
+ * (reqDesdeFila_), proyectoFolio, proyectoClave, sitioCodigo, sinRecibir (renglones de la orden que no se reciben en sitio)}.
+ * Renglones con n = número de renglón de la orden (así regresan las recepciones) e item (o null). Nunca montos: ni costo,
+ * importe, subtotal, IVA, total, tipo de cambio, moneda ni margen. maxDesc acorta descripciones (200 por omisión).
+ */
+function cuerpoEventoPortal(tipo, n, d, maxDesc) {
+  if (TIPOS_EVENTO_PORTAL.indexOf(tipo) === -1) throw new Error('Tipo de aviso no válido: ' + tipo);
+  const o = d.orden || {}, q = d.req || {}, sin = d.sinRecibir || [], corta = maxDesc || 200;
+  return {
+    evento_id: o.folio + ':' + tipo + ':' + n, tipo: tipo, cuando: d.cuando, quien: d.quien || '', prueba: !!d.prueba,
+    oc: {
+      folio: o.folio, req_folio: q.folio || o.reqFolio || '', proyecto_folio: d.proyectoFolio || o.proyectoFolio || '',
+      proyecto_clave: d.proyectoClave || '', sitio: d.sitioCodigo || '', proveedor: o.proveedor || '',
+      fecha_entrega: o.fechaEstimada || o.fechaEntrega || '', paqueteria: o.paqueteria || '', guia: o.guia || '',
+      solicitante: q.solicitanteEmail || '', autorizo: q.voboEmail || q.reviso || '',
+      renglones: (o.renglones || []).map((r, i) => ({ n: i + 1, descripcion: String(r.descripcion || '').slice(0, corta),
+        unidad: r.unidad || 'PZA', cantidad: Number(r.cantidad) || 0, item: r.item ? String(r.item) : null }))
+        .filter(r => sin.indexOf(r.n) === -1),
+    },
+  };
+}
+
+/** Rutas de las llaves con montos en un objeto (un aviso al centro de mando nunca debe tener ninguna). */
+function buscarMontos(obj, ruta) {
+  const malas = /costo|importe|subtotal|^iva|_iva|total|cambio|moneda|margen|monto|precio/i;
+  let lista = [];
+  if (obj && typeof obj === 'object') {
+    Object.keys(obj).forEach(k => {
+      const r = (ruta ? ruta + '.' : '') + k;
+      if (!Array.isArray(obj) && malas.test(k)) lista.push(r);
+      lista = lista.concat(buscarMontos(obj[k], r));
+    });
+  }
+  return lista;
+}
+
+/**
+ * En camino. d = {paqueteria, guia, fechaEstimada, traeProveedor, recogido}; ctx = {hoy, nombre (de quien lo marca)}. Recogido:
+ * "Recogido por <nombre>", sin guía, fecha hoy. Envío: paquetería (o "Lo trae el proveedor"), guía obligatoria salvo que lo
+ * traiga el proveedor, fecha estimada obligatoria y no anterior a hoy.
+ */
+function normalizarEnCamino(d, ctx) {
+  const x = d || {}, limpio = s => String(s == null ? '' : s).trim().replace(/\s+/g, ' ');
+  if (x.recogido === true) {
+    return { recogido: true, traeProveedor: false, paqueteria: 'Recogido por ' + (limpio(ctx.nombre).slice(0, 80) || 'quien recibe'),
+      guia: '', fechaEstimada: ctx.hoy };
+  }
+  const trae = x.traeProveedor === true;
+  const paqueteria = trae ? PAQ_PROVEEDOR : limpio(x.paqueteria);
+  if (!paqueteria) throw new Error('Escribe la paquetería (o marca "Lo trae el proveedor").');
+  if (paqueteria.length > 60) throw new Error('La paquetería debe tener máximo 60 caracteres.');
+  const guia = limpio(x.guia);
+  if (!trae && !guia) throw new Error('Escribe el número de guía (si lo trae el proveedor, márcalo).');
+  if (guia.length > 60) throw new Error('El número de guía debe tener máximo 60 caracteres.');
+  const fechaEstimada = validarFechaIso(x.fechaEstimada, null, 'La fecha estimada de llegada');
+  if (ctx.hoy && fechaEstimada < ctx.hoy) throw new Error('La fecha estimada de llegada no puede ser anterior a hoy.');
+  return { recogido: false, traeProveedor: trae, paqueteria: paqueteria, guia: guia, fechaEstimada: fechaEstimada };
+}
+
+const esRecogido = paqueteria => /^Recogido por /i.test(String(paqueteria || ''));
+
+/** Texto del envío para el historial ("Enviado por DHL · guía 123 · llega aprox. el 02/11/2026"). */
+function textoEnCamino(o) {
+  const x = o || {};
+  const dmy = iso => { const m = String(iso || '').match(/^(\d{4})-(\d\d)-(\d\d)$/); return m ? m[3] + '/' + m[2] + '/' + m[1] : String(iso || ''); };
+  if (esRecogido(x.paqueteria)) return x.paqueteria + (x.fechaEstimada ? ' el ' + dmy(x.fechaEstimada) : '') + '; va al sitio';
+  return (x.paqueteria === PAQ_PROVEEDOR ? PAQ_PROVEEDOR : 'Enviado por ' + x.paqueteria) + (x.guia ? ' · guía ' + x.guia : '') +
+    (x.fechaEstimada ? ' · llega aprox. el ' + dmy(x.fechaEstimada) : '');
+}
+
+/** Código de ítem del centro de mando (opcional): sin espacios ni comillas, máximo 40. '' si viene vacío. */
+function itemInventario(v, descripcion) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  if (!/^[^\s"'<>]{1,40}$/.test(s)) {
+    throw new Error('El ítem "' + s.slice(0, 40) + '"' + (descripcion ? ' de "' + String(descripcion).slice(0, 40) + '"' : '') +
+      ' no es un código del inventario (sin espacios, máximo 40).');
+  }
+  return s;
+}
+
+/** Ítems del centro de mando, limpios y sin repetir: [{codigo, descripcion, unidad, categoria}] (máximo 5000). */
+function normalizarItemsPortal(lista) {
+  const vistos = {};
+  return (Array.isArray(lista) ? lista : []).filter(x => x && typeof x === 'object').map(x => ({
+    codigo: String(x.codigo == null ? '' : x.codigo).trim(), descripcion: String(x.descripcion || '').trim().slice(0, 200),
+    unidad: String(x.unidad || '').trim().toUpperCase().slice(0, 20), categoria: String(x.categoria || '').trim().slice(0, 60),
+  })).filter(x => /^[^\s"'<>]{1,40}$/.test(x.codigo) && !vistos[x.codigo] && (vistos[x.codigo] = true)).slice(0, 5000);
+}
+
+/**
+ * Artículos que más pide una persona: renglones [{descripcion, unidad, item, orden (más grande = más reciente)}] agrupados por
+ * descripción (sin acentos ni mayúsculas); los más pedidos primero (empates: el más reciente). La descripción y la unidad son
+ * las de la vez más reciente; item, el último que tuvo ítem.
+ */
+function articulosFrecuentes(renglones, max) {
+  const grupos = {};
+  (renglones || []).forEach(r => {
+    const k = textoNormal(r.descripcion);
+    if (!k) return;
+    const g = grupos[k] || (grupos[k] = { descripcion: r.descripcion, unidad: r.unidad || '', item: '', veces: 0, ultimo: -1, conItem: -1 });
+    g.veces++;
+    if (r.orden >= g.ultimo) { g.ultimo = r.orden; g.descripcion = String(r.descripcion).trim(); g.unidad = r.unidad || g.unidad; }
+    if (r.item && r.orden >= g.conItem) { g.conItem = r.orden; g.item = r.item; }
+  });
+  return Object.keys(grupos).map(k => grupos[k]).sort((a, b) => b.veces - a.veces || b.ultimo - a.ultimo).slice(0, max || 100)
+    .map(g => ({ descripcion: g.descripcion, unidad: g.unidad, item: g.item, veces: g.veces }));
+}
+
+/** SITIOS de solo nombres → "VER | Veracruz (ICAVE)" por renglón; '' si ya tiene códigos o si algún nombre no tiene código. */
+function sitiosConCodigoTexto(texto) {
+  const t = String(texto == null ? '' : texto);
+  if (!t.trim() || t.indexOf('|') !== -1) return '';
+  const det = sitiosDetalleDeTexto(t);
+  if (!det.length || det.some(s => !s.codigo)) return '';
+  return det.map(s => s.codigo + ' | ' + s.nombre).join('\n');
+}
+
+/** "2026-10-30" → "30-oct-2026". */
+function fechaCortaEs(iso) {
+  const m = String(iso || '').match(/^(\d{4})-(\d\d)-(\d\d)/);
+  if (!m) return String(iso || '');
+  return m[3] + '-' + ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'][Number(m[2]) - 1] + '-' + m[1];
+}
 
 // ---- 6.D Pantallas: Pendientes (inicio), conteos y navegación por grupos ----
 
