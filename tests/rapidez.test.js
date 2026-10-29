@@ -3,7 +3,8 @@
 //  1. IDs de Script Properties y libros abiertos una vez por petición: un libro que se crea en la misma petición se encuentra
 //     (no se crea otro) y un ID que falta se vuelve a leer.
 //  2. Encabezados revisados: la fila 1 de una pestaña se lee una vez por petición y no se vuelve a leer en 6 h; se revisa otra
-//     vez si el código espera otros encabezados, si la pestaña es nueva (creada por el código o a mano) o si pasaron 6 h.
+//     vez si el código espera otros encabezados, si la pestaña es nueva (creada por el código o a mano) o si pasaron 6 h; y si
+//     alguien la vació a mano, se reponen antes de la primera escritura (ningún renglón cae en la fila 1).
 //  3. Filas leídas en la petición (MEMO_.filas): toda escritura de Code.js pasa por escribe_ y todo candado por candado_ (revisión
 //     del código); una lectura después de escribir ve lo escrito; al tomar el candado se relee lo que otro cambió; al leer las
 //     versiones se olvida lo leído antes; quien recibe filas puede cambiarlas sin tocar las de los demás. (Además, el arnés
@@ -115,6 +116,24 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   assert.equal(LC().pest.Bitacora.m[0][0], 'fecha', 'vencida: se revisa y se repara');
   // Una anotación vencida no se queda en el caché al guardar otras
   assert(Object.values(JSON.parse(cache.ENCABEZADOS_OK)).every(t => Date.now() - t < 6 * 3600 * 1000));
+  // Alguien vacía a mano la pestaña (con todo y encabezados) sin borrarla: la anotación sigue vigente, pero antes de la primera
+  // escritura se ve que está vacía y se reponen los encabezados; el renglón nuevo queda en la fila 2 (como antes)
+  for (const n of ['Bitacora', 'RequisicionesEventos', 'Requisiciones']) LC().pest[n].m.length = 0;
+  perfil.ops = [];
+  const r3 = pedir();
+  for (const n of ['Bitacora', 'RequisicionesEventos', 'Requisiciones']) {
+    const m = LC().pest[n].m;
+    assert.equal(m[0][0], n === 'Bitacora' ? 'fecha' : n === 'Requisiciones' ? 'folio' : 'req_folio', n + ': encabezados en la fila 1');
+    assert(m.length >= 2 && String(m[1][0]).length > 0, n + ': el renglón nuevo en la fila 2');
+  }
+  assert.equal(LC().pest.Requisiciones.m[1][0], r3);
+  // Sin vaciar: cada pestaña escrita se revisa con una sola llamada barata por petición (getLastRow), sin leer la fila 1
+  perfil.ops = [];
+  pedir();
+  const fila1 = perfil.ops.filter(o => o.tipo === 'lee' && (o.pila || [])[0] === 'revisar' && /\/(Bitacora|RequisicionesEventos)$/.test(o.hoja));
+  assert.equal(fila1.length, 0, JSON.stringify(fila1));
+  assert.equal(perfil.ops.filter(o => o.tipo === 'ultimaFila' && /\/Bitacora$/.test(o.hoja) && (o.pila || [])[0] === 'escribe_').length, 1,
+    'una revisión barata de la Bitacora en la petición');
 }
 
 // ================= 3. Filas leídas en la petición =================
@@ -282,8 +301,8 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   perfil.pila = true;
   const guardar = n => ok('ana', 'guardarCotizacion', { cliente: { nombre: 'Luis' }, items: [{ descripcion: 'Servicio', cantidad: 1, precio: 100 }],
     idSolicitud: 'c' + n }).folio;
-  const filas1 = () => perfil.ops.filter(o => o.tipo === 'lee' && ((/\/Cotizaciones$/.test(o.hoja) && (o.pila || [])[0] === 'guardarCotizacion') ||
-    (/\/Catalogo$/.test(o.hoja) && (o.pila || [])[0] === 'asegurarColumnasSat_'))).length;
+  const filas1 = () => perfil.ops.filter(o => o.tipo === 'lee' && ((/\/Cotizaciones$/.test(o.hoja) && (o.pila || [])[0] === 'revisarEnc') ||
+    (/\/Catalogo$/.test(o.hoja) && (o.pila || []).indexOf('asegurarColumnasSat_') !== -1 && o.celdas === 2))).length;
   perfil.ops = [];
   guardar(1);
   assert.equal(filas1(), 2, 'la primera vez se revisan los dos encabezados');

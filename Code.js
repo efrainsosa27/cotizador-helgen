@@ -516,6 +516,13 @@ function sufijoFilas_(hoja) {
 function escribe_(hoja) {
   const sufijo = sufijoFilas_(hoja);
   if (!sufijo) { olvidarFilas_(); return hoja; }
+  // Encabezados confiados sin leer (confiarEncabezados_): antes de la primera escritura, si la pestaña está vacía, se reponen
+  const confiados = MEMO_.encConfiado && MEMO_.encConfiado[sufijo];
+  if (confiados) {
+    delete MEMO_.encConfiado[sufijo];
+    (MEMO_.encVacia = MEMO_.encVacia || {})[sufijo] = true;
+    if (hoja.getLastRow() === 0) Object.keys(confiados).forEach(k => confiados[k]());
+  }
   const memo = MEMO_.filas || {};
   Object.keys(memo).forEach(k => { if (k.slice(-sufijo.length) === sufijo) delete memo[k]; });
   if (/^\/Config\//.test(sufijo)) MEMO_.cfgLigera = null;
@@ -1112,7 +1119,7 @@ function asegurarPrecioUsd_(hoja) {
   }
   // Rapidez: el encabezado de la columna I se lee solo si no se revisó hace poco (encabezadosRevisados_)
   const claveUsd = claveEncabezados_(ss, hoja, 'Catalogo/USD', [ENC_PRECIO_USD]);
-  if (!encabezadosRevisados_(claveUsd)) {
+  const revisarUsd = () => {
     if (hoja.getRange(1, COL_PRECIO_USD).getValue() !== ENC_PRECIO_USD) {
       escribe_(hoja).getRange(1, COL_PRECIO_USD).setValue(ENC_PRECIO_USD)
         .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
@@ -1122,7 +1129,9 @@ function asegurarPrecioUsd_(hoja) {
         'o el tipo de cambio)').setWarningOnly(true);
     }
     anotarEncabezados_(claveUsd);
-  }
+  };
+  if (!encabezadosRevisados_(claveUsd)) revisarUsd();
+  else confiarEncabezados_(hoja, claveUsd, revisarUsd);
   // Renglones con producto y sin fórmula en I: se les pone (incluye los dados de alta a mano en Sheets)
   const n = hoja.getLastRow() - 1;
   if (n < 1) return;
@@ -1151,15 +1160,18 @@ function asegurarColumnasSat_(hoja, ss) {
   const n = ENCABEZADOS_CATALOGO.length;
   // Rapidez: G1:H1 se leen solo si no se revisaron hace poco (encabezadosRevisados_; ss = el libro del catálogo)
   const clave = ss ? claveEncabezados_(ss, hoja, 'Catalogo/SAT', ENCABEZADOS_CATALOGO.slice(6, n)) : '';
-  if (clave && encabezadosRevisados_(clave)) return;
-  const enc = hoja.getRange(1, 7, 1, 2).getValues()[0];
-  if (!(enc[0] === ENCABEZADOS_CATALOGO[6] && enc[1] === ENCABEZADOS_CATALOGO[7])) {
-    hoja.getRange('G:H').setNumberFormat('@'); // "01010101" no pierde el cero inicial
-    escribe_(hoja).getRange(1, 7, 1, 2).setValues([ENCABEZADOS_CATALOGO.slice(6, n)])
-      .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
-    hoja.setColumnWidth(7, 110); hoja.setColumnWidth(8, 100);
-  }
-  if (clave) anotarEncabezados_(clave);
+  const revisar = () => {
+    const enc = hoja.getRange(1, 7, 1, 2).getValues()[0];
+    if (!(enc[0] === ENCABEZADOS_CATALOGO[6] && enc[1] === ENCABEZADOS_CATALOGO[7])) {
+      hoja.getRange('G:H').setNumberFormat('@'); // "01010101" no pierde el cero inicial
+      escribe_(hoja).getRange(1, 7, 1, 2).setValues([ENCABEZADOS_CATALOGO.slice(6, n)])
+        .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+      hoja.setColumnWidth(7, 110); hoja.setColumnWidth(8, 100);
+    }
+    if (clave) anotarEncabezados_(clave);
+  };
+  if (clave && encabezadosRevisados_(clave)) confiarEncabezados_(hoja, clave, revisar);
+  else revisar();
 }
 
 function crearCatalogo_() {
@@ -1500,14 +1512,16 @@ function guardarCotizacion(payload) {
     const nCols = ENCABEZADOS_COTIZACIONES.length;
     // Rapidez: la fila 1 se lee solo si no se revisó hace poco (encabezadosRevisados_)
     const claveEnc = claveEncabezados_(db_(), hojaCot, 'Cotizaciones', ENCABEZADOS_COTIZACIONES);
-    if (!encabezadosRevisados_(claveEnc)) {
+    const revisarEnc = () => {
       const actuales = hojaCot.getRange(1, 1, 1, nCols).getValues()[0];
       if (ENCABEZADOS_COTIZACIONES.some((h, i) => actuales[i] !== h)) {
         escribe_(hojaCot).getRange(1, 1, 1, nCols).setValues([ENCABEZADOS_COTIZACIONES])
           .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
       }
       anotarEncabezados_(claveEnc);
-    }
+    };
+    if (!encabezadosRevisados_(claveEnc)) revisarEnc();
+    else confiarEncabezados_(hojaCot, claveEnc, revisarEnc);
     const t = textoCelda;
     escribe_(hojaCot).appendRow([
       folio, ahora, t(datos.cliente.nombre), t(datos.cliente.empresa), t(datos.cliente.rfc),
@@ -1605,7 +1619,7 @@ function hojaProyectos_() {
   const n = ENCABEZADOS_PROYECTOS.length;
   // Rapidez: la fila 1 se lee solo si no se revisó hace poco (encabezadosRevisados_, como en hojaDeArea_)
   const clave = claveEncabezados_(ss, hoja, 'Proyectos', ENCABEZADOS_PROYECTOS);
-  if (creada || !encabezadosRevisados_(clave)) {
+  const revisar = () => {
     const actuales = hoja.getRange(1, 1, 1, n).getValues()[0];
     if (ENCABEZADOS_PROYECTOS.some((h, i) => actuales[i] !== h)) {
       escribe_(hoja).getRange(1, 1, 1, n).setValues([ENCABEZADOS_PROYECTOS])
@@ -1613,7 +1627,9 @@ function hojaProyectos_() {
       hoja.getRange(1, COL_CLAVE_PROYECTO, hoja.getMaxRows(), 1).setNumberFormat('@'); // la clave es texto (columna L, al final)
     }
     anotarEncabezados_(clave);
-  }
+  };
+  if (creada || !encabezadosRevisados_(clave)) revisar();
+  else confiarEncabezados_(hoja, clave, revisar);
   return hoja;
 }
 
@@ -1962,14 +1978,16 @@ function hojaDeArea_(libro, hojas, nombre) {
   }
   // Rapidez: la fila 1 se lee solo si esta pestaña no se revisó hace poco (encabezadosRevisados_)
   const clave = claveEncabezados_(libro, hoja, nombre, def.enc);
-  if (creada || !encabezadosRevisados_(clave)) {
+  const revisar = () => {
     const actuales = hoja.getRange(1, 1, 1, def.enc.length).getValues()[0];
     if (def.enc.some((h, i) => actuales[i] !== h)) {
       escribe_(hoja).getRange(1, 1, 1, def.enc.length).setValues([def.enc])
         .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
     }
     anotarEncabezados_(clave);
-  }
+  };
+  if (creada || !encabezadosRevisados_(clave)) revisar();
+  else confiarEncabezados_(hoja, clave, revisar);
   return hoja;
 }
 
@@ -2017,6 +2035,20 @@ function anotarEncabezados_(clave) {
   // Solo las revisiones vigentes (cada una vence 6 h después de hecha, aunque el mapa se vuelva a guardar)
   Object.keys(ok).forEach(k => { if (!(ahora - Number(ok[k]) < TTL_CACHE * 1000)) delete ok[k]; });
   try { CacheService.getScriptCache().put(CACHE_ENCABEZADOS, JSON.stringify(ok), TTL_CACHE); } catch (e) { /* solo se pierde el ahorro */ }
+}
+
+/**
+ * La fila 1 se dio por buena sin leerla (anotada en las últimas 6 h). La primera escritura de la petición en esa pestaña
+ * (escribe_) revisa con getLastRow que no esté vacía: si alguien la vació a mano, corre `revisar` (repone los encabezados)
+ * antes de escribir, como antes; así un renglón nuevo nunca cae en la fila 1. Sin forma de reconocer la pestaña después
+ * (simulacros sin getSheetId/getName), se revisa ya.
+ */
+function confiarEncabezados_(hoja, clave, revisar) {
+  const sufijo = sufijoFilas_(hoja);
+  if (!sufijo) { revisar(); return; }
+  if ((MEMO_.encVacia || {})[sufijo]) return; // ya se vio en esta petición que no está vacía
+  const m = MEMO_.encConfiado || (MEMO_.encConfiado = {});
+  (m[sufijo] = m[sufijo] || {})[clave] = revisar;
 }
 
 /** Filas de datos (sin encabezado) de una pestaña, con el ancho de sus encabezados. */
