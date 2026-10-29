@@ -33,7 +33,7 @@ const ctx={console,Date,JSON,
  UrlFetchApp:{fetch:url=>{fetches++;const t=decodeURIComponent(url.split('id_token=')[1]);const c=tokens[t];
   return{getResponseCode:()=>c?200:400,getContentText:()=>JSON.stringify(c||{error:'invalid_token'})}}},
  ContentService:{MimeType:{JSON:'json'},createTextOutput:t=>({t,setMimeType(){return this}})},
- SpreadsheetApp:{flush(){},openById:id=>id==='c'?{getSheetByName:()=>hoja([['Clave','Descripción','Unidad','Precio unitario (sin IVA)','Actualizado','Actualizó','Clave SAT','Unidad SAT']]),getUrl:()=>'cat'}:{getSheetByName:n=>n==='Config'?cfg:n==='Proyectos'?pry:cot,
+ SpreadsheetApp:{flush(){},openById:id=>id==='c'?{getSheetByName:()=>hoja([['Clave','Descripción','Unidad','Precio unitario (sin IVA)','Actualizado','Actualizó','Clave SAT','Unidad SAT']]),getUrl:()=>'cat'}:{getId:()=>id,getSheetByName:n=>n==='Config'?cfg:n==='Proyectos'?pry:cot,
    insertSheet:n=>pry=Object.assign(hoja([]),{setFrozenRows(){},getMaxRows:()=>1000,setColumnWidth(){}})},
   newDataValidation:()=>{const b={requireValueInList:()=>b,setAllowInvalid:()=>b,setHelpText:()=>b,build:()=>({})};return b}},
  DriveApp:{getFolderById:()=>({getFoldersByName:()=>({hasNext:()=>true,next:()=>({createFile:()=>({getUrl:()=>'u'})})})})},

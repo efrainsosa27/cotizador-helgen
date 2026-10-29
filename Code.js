@@ -1496,8 +1496,9 @@ const PREFIJO_PROYECTO = 'PRY';
  */
 function hojaProyectos_() {
   const ss = db_();
-  let hoja = ss.getSheetByName('Proyectos');
+  let hoja = ss.getSheetByName('Proyectos'), creada = false;
   if (!hoja) {
+    creada = true;
     try {
       hoja = ss.insertSheet('Proyectos');
     } catch (e) {
@@ -1514,11 +1515,16 @@ function hojaProyectos_() {
     hoja.setColumnWidth(3, 260); hoja.setColumnWidth(4, 260); hoja.setColumnWidth(6, 220);
   }
   const n = ENCABEZADOS_PROYECTOS.length;
-  const actuales = hoja.getRange(1, 1, 1, n).getValues()[0];
-  if (ENCABEZADOS_PROYECTOS.some((h, i) => actuales[i] !== h)) {
-    hoja.getRange(1, 1, 1, n).setValues([ENCABEZADOS_PROYECTOS])
-      .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
-    hoja.getRange(1, COL_CLAVE_PROYECTO, hoja.getMaxRows(), 1).setNumberFormat('@'); // la clave es texto (columna L, al final)
+  // Rapidez: la fila 1 se lee solo si no se revisó hace poco (encabezadosRevisados_, como en hojaDeArea_)
+  const clave = claveEncabezados_(ss, hoja, 'Proyectos', ENCABEZADOS_PROYECTOS);
+  if (creada || !encabezadosRevisados_(clave)) {
+    const actuales = hoja.getRange(1, 1, 1, n).getValues()[0];
+    if (ENCABEZADOS_PROYECTOS.some((h, i) => actuales[i] !== h)) {
+      hoja.getRange(1, 1, 1, n).setValues([ENCABEZADOS_PROYECTOS])
+        .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+      hoja.getRange(1, COL_CLAVE_PROYECTO, hoja.getMaxRows(), 1).setNumberFormat('@'); // la clave es texto (columna L, al final)
+    }
+    anotarEncabezados_(clave);
   }
   return hoja;
 }
@@ -1846,19 +1852,71 @@ function hojaCobranza_(libro, nombre) {
 /** Pestaña de un libro de área (estructura en `hojas`); la crea o le repone los encabezados. */
 function hojaDeArea_(libro, hojas, nombre) {
   const def = hojas[nombre];
-  let hoja = libro.getSheetByName(nombre);
+  let hoja = libro.getSheetByName(nombre), creada = false;
   if (!hoja) {
     hoja = libro.insertSheet(nombre);
+    creada = true;
     hoja.setFrozenRows(1);
     hoja.getRange(1, 1, hoja.getMaxRows(), def.enc.length).setNumberFormat('@'); // texto: nada se lee como fórmula
     def.numeros.forEach(c => hoja.getRange(2, c, hoja.getMaxRows() - 1, 1).setNumberFormat('#,##0.00##'));
   }
-  const actuales = hoja.getRange(1, 1, 1, def.enc.length).getValues()[0];
-  if (def.enc.some((h, i) => actuales[i] !== h)) {
-    hoja.getRange(1, 1, 1, def.enc.length).setValues([def.enc])
-      .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+  // Rapidez: la fila 1 se lee solo si esta pestaña no se revisó hace poco (encabezadosRevisados_)
+  const clave = claveEncabezados_(libro, hoja, nombre, def.enc);
+  if (creada || !encabezadosRevisados_(clave)) {
+    const actuales = hoja.getRange(1, 1, 1, def.enc.length).getValues()[0];
+    if (def.enc.some((h, i) => actuales[i] !== h)) {
+      hoja.getRange(1, 1, 1, def.enc.length).setValues([def.enc])
+        .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+    }
+    anotarEncabezados_(clave);
   }
   return hoja;
+}
+
+// ---- Rapidez (30/10/2026): encabezados ya revisados ----
+// Revisar los encabezados de una pestaña cuesta leer su fila 1 (un viaje a Sheets) y se hacía en cada uso de la pestaña, varias
+// veces por llamada. Una pestaña revisada (o reparada) queda anotada en la petición (MEMO_.enc) y en CacheService
+// (ENCABEZADOS_OK) por máximo 6 h, con la firma de los encabezados que espera el código y el id de la pestaña: si una versión
+// nueva agrega columnas, o alguien borra la pestaña y la vuelve a crear, se revisa otra vez; una pestaña recién creada por el
+// código siempre se revisa. Solo se deja de leer la fila 1: los datos se siguen leyendo de la hoja. Lo único distinto: si
+// alguien cambia o borra a mano la fila de encabezados de una pestaña que ya existe, se repara a más tardar 6 h después (antes,
+// en la siguiente llamada que la usara). Las filas se leen por posición, así que eso no cambia lo que se lee.
+const CACHE_ENCABEZADOS = 'ENCABEZADOS_OK';
+
+/** Firma corta de un texto (djb2): cambia si cambia un encabezado esperado. */
+function firmaTexto_(t) {
+  let h = 5381;
+  for (let i = 0; i < t.length; i++) h = ((h * 33) ^ t.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+/** Libro, pestaña (nombre e id) y encabezados esperados. */
+function claveEncabezados_(libro, hoja, nombre, enc) {
+  const idHoja = typeof hoja.getSheetId === 'function' ? hoja.getSheetId() : '';
+  return libro.getId() + '/' + nombre + '/' + idHoja + '/' + enc.length + '.' + firmaTexto_(enc.join('\u0001'));
+}
+
+/** {clave: momento en que se revisó (ms)} de esta petición; se lee de CacheService una vez. */
+function encabezadosOk_() {
+  if (!MEMO_.enc) {
+    let previo = {};
+    try { previo = JSON.parse(CacheService.getScriptCache().get(CACHE_ENCABEZADOS) || '{}') || {}; } catch (e) { previo = {}; }
+    MEMO_.enc = previo;
+  }
+  return MEMO_.enc;
+}
+
+function encabezadosRevisados_(clave) {
+  const t = Number(encabezadosOk_()[clave]) || 0;
+  return t > 0 && Date.now() - t < TTL_CACHE * 1000;
+}
+
+function anotarEncabezados_(clave) {
+  const ok = encabezadosOk_(), ahora = Date.now();
+  ok[clave] = ahora;
+  // Solo las revisiones vigentes (cada una vence 6 h después de hecha, aunque el mapa se vuelva a guardar)
+  Object.keys(ok).forEach(k => { if (!(ahora - Number(ok[k]) < TTL_CACHE * 1000)) delete ok[k]; });
+  try { CacheService.getScriptCache().put(CACHE_ENCABEZADOS, JSON.stringify(ok), TTL_CACHE); } catch (e) { /* solo se pierde el ahorro */ }
 }
 
 /** Filas de datos (sin encabezado) de una pestaña, con el ancho de sus encabezados. */

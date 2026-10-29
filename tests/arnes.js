@@ -40,9 +40,11 @@ module.exports = function crearArnes(dir, opciones) {
   // Nombre "libro/pestaña" de una hoja (solo para el perfil)
   const quien = m => { for (const id in libros) for (const n in libros[id].pest) if (libros[id].pest[n].m === m) return (libros[id].nombre || id) + '/' + n; return '?'; };
   const an = (tipo, m, celdas) => perfil.activo && anota(tipo, { hoja: quien(m), celdas: celdas || 0 });
+  let nHoja = 0; // getSheetId: cada pestaña tiene su id (una pestaña borrada y vuelta a crear tiene otro)
   function hoja(m) {
     const fmt = function () { an('formato', m); return this; };
-    return { m, getLastRow: () => { an('ultimaFila', m); return m.length; }, getMaxRows: () => { an('ultimaFila', m); return 1000; },
+    const idHoja = ++nHoja;
+    return { m, getSheetId: () => idHoja, getLastRow: () => { an('ultimaFila', m); return m.length; }, getMaxRows: () => { an('ultimaFila', m); return 1000; },
       setFrozenRows() { an('formato', m); }, setColumnWidth() { an('formato', m); },
       getDataRange: () => { an('dataRange', m); return {
         getValues: () => { an('lee', m, m.reduce((s, r) => s + r.length, 0)); return m.map(r => r.slice()); },
