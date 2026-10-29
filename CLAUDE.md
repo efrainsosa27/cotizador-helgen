@@ -965,7 +965,10 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
   rechaza el cambio, decirlo y anotarlo en §9 como pendiente.
 
 ## 9. Pendientes e ideas
-- **CAPRI — incremento 5: construido e integrado el 29/10/2026 (rama `incremento-5`), SIN PUBLICAR.** Módulos F (proveedores y
+- **CAPRI — incremento 5: construido, integrado y revisado el 29/10/2026 (rama `incremento-5`), SIN PUBLICAR.** Dos revisiones
+  independientes (flujos y dinero; seguridad + prueba en vivo del `Code.js` real contra el Flask real) → 14 arreglos con su prueba
+  (`tests/revision5*.test.js`) en CAPRI y 5 en el centro de mando; prueba en vivo final 44 + 7 bien. El Manual del Cotizador
+  queda por actualizar (no está compartido con la cuenta de Leo: lo hace Efrain). Módulos F (proveedores y
   forma de pago) y H (fotos y devoluciones) + centro de mando (repo `hbox-docs`, rama `fotos-devoluciones`). Publicar: respaldo del
   libro de compras; `clasp push`; como facilities@: `prepararCapri()` y nueva versión del deployment; `CLOUDFLARE_ACCOUNT_ID=… wrangler
   deploy`; centro de mando: parches + `./scripts/deploy.sh` + `sudo systemctl restart actas-hbox` (antes o junto con CAPRI); nginx
