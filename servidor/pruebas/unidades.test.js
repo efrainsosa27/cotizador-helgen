@@ -143,6 +143,46 @@ caso('candado: uno a la vez en orden de llegada, tryLock(0) no espera, tiempo ag
   assert.deepEqual(revisados, ['a', 'b']);
 });
 
+caso('PDF con Chromium (puppeteer-core, navegador falso): sin JavaScript, sin red, sin fondos, máx. 2 a la vez, renace si se cae', async () => {
+  const { MotorPdf } = require('../src/nucleo/servicios');
+  const registro = { paginas: 0, abiertas: 0, max: 0, lanzamientos: 0, opciones: null, peticiones: [] };
+  let alCaer = null;
+  const navegadorFalso = () => ({
+    on: (ev, f) => { if (ev === 'disconnected') alCaer = f; },
+    close: async () => {},
+    newPage: async () => {
+      registro.paginas++; registro.abiertas++; registro.max = Math.max(registro.max, registro.abiertas);
+      const oyentes = {};
+      return {
+        setJavaScriptEnabled: async b => { assert.equal(b, false); },
+        setRequestInterception: async b => { assert.equal(b, true); },
+        on: (ev, f) => { oyentes[ev] = f; },
+        setContent: async html => {
+          // la página pide una imagen data: (se permite) y una externa (se bloquea)
+          for (const url of ['data:image/png;base64,AAAA', 'https://evil.example.com/x.png']) {
+            oyentes.request({ url: () => url, continue: () => registro.peticiones.push('sí ' + url.slice(0, 5)), abort: () => registro.peticiones.push('no ' + url.slice(0, 5)) });
+          }
+          await new Promise(r => setTimeout(r, 30));
+          void html;
+        },
+        pdf: async o => { registro.opciones = o; return new Uint8Array([37, 80, 68, 70]); },
+        close: async () => { registro.abiertas--; },
+      };
+    },
+  });
+  const motor = new MotorPdf({ lanzar: async () => { registro.lanzamientos++; return navegadorFalso(); } });
+  const pdfs = await Promise.all([1, 2, 3, 4, 5].map(i => motor.html('<p>' + i + '</p>')));
+  assert(pdfs.every(b => b.toString() === '%PDF'));
+  assert.equal(registro.max, 2, 'nunca más de 2 páginas a la vez');
+  assert.equal(registro.abiertas, 0, 'cada página se cierra');
+  assert.equal(registro.lanzamientos, 1, 'un solo navegador para todos');
+  assert.deepEqual([registro.opciones.format, registro.opciones.printBackground], ['Letter', false]);
+  assert(registro.peticiones.includes('sí data:') && registro.peticiones.includes('no https'));
+  alCaer();
+  await motor.html('<p>otra vez</p>');
+  assert.equal(registro.lanzamientos, 2, 'si Chromium se cae, se vuelve a abrir');
+});
+
 (async () => {
   let fallas = 0;
   for (const [n, f] of casos) {

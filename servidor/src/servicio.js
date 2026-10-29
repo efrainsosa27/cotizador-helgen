@@ -131,7 +131,7 @@ function crearServicio(conf, piezas) {
     confTrabajador: { archivos: archivosCodigo, plantillas: conductor.plantillas, zona: conf.zonaHoraria, cuentaServicio: conf.cuentaServicio,
       marcaToken: MARCA_TOKEN, silencioso: !!conf.silencioso, memoriaMb: conf.memoriaTrabajadorMb, idScript: conf.idScript,
       relojFijo: conf.relojFijo || null, escrituraInmediata: !!conf.escrituraInmediata },
-    alMorir: async (t, dueno) => { candado.soltar(dueno); } });
+    alMorir: async (t, dueno) => { candado.cancelar(dueno); } });
 
   const timers = [];
   return {

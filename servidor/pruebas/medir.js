@@ -74,6 +74,9 @@ async function lecturasBajoCarga() {
     lecturas.push(Date.now() - t);
   }
   const fins = await Promise.all(escrituras);
+  const salud = B.servicio.salud();
+  console.log('\n  trabajadores (montón de V8 con Code.js cargado + espejo de prueba): ' + salud.trabajadores.trabajadores.map(t => (t.heapMb == null ? '?' : t.heapMb) + ' MB').join(', ') +
+    ' · carga de Code.js: ' + salud.trabajadores.trabajadores.map(t => t.msCarga + ' ms').join(', '));
   await B.cerrar();
   lecturas.sort((x, y) => x - y);
   const p = q => lecturas[Math.min(lecturas.length - 1, Math.floor(q * lecturas.length))];
@@ -117,10 +120,18 @@ function presupuestoMemoria() {
   t = Date.now();
   structuredClone(com);
   const msCompras = Date.now() - t;
+  // Lo que viaja de verdad después de autorizar una requisición: un parche con las hojas tocadas
+  com.rev = 1;
+  const tocadas = new Set([0, 1, 3]); // OrdenesCompra, Requisiciones, RequisicionesEventos
+  t = Date.now();
+  const parche = structuredClone(M.parcheDe(com, 0, tocadas, []));
+  const msParche = Date.now() - t;
+  void parche;
   console.log('\nC · Presupuesto de memoria (espejo de ' + celdas.toLocaleString('es-MX') + ' celdas, un año de CAPRI con holgura):');
   console.log('  una copia del espejo en el montón: ~' + Math.round(mb) + ' MB' + (global.gc ? '' : ' (aprox.; con --expose-gc es exacto)') +
     ' · al cable entre hilos: ' + Math.round(ser.length / 1048576) + ' MB (' + msSerializar + ' ms + ' + msDeserializar + ' ms)');
-  console.log('  copiar el libro de compras entero a un trabajador (lo que pasa después de cada guardado): ' + msCompras + ' ms · huella: ' + msHuella + ' ms');
+  console.log('  copiar el libro de compras entero: ' + msCompras + ' ms · lo que viaja tras autorizar (parche de 3 hojas): ' + msParche +
+    ' ms por trabajador · huella del libro (solo al releer de Google, fuera de las peticiones): ' + msHuella + ' ms');
   void copia;
 }
 

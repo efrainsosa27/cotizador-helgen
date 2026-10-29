@@ -142,6 +142,15 @@ caso('tiempo agotado: se corta, el candado se suelta, el trabajador renace; lo q
     assert.equal(B.servicio.pool.metricas.cortados, 1);
     assert.equal(B.servicio.candado.dueno, null, 'candado libre');
     assert(B.servicio.pool.trabajadores.every(t => t.listo), 'el trabajador cortado ya renació');
+    // Cortado MIENTRAS ESPERABA el candado: su petición sale de la cola (si no, el candado se entregaría a un muerto)
+    await B.servicio.candado.tomar('prueba', null);
+    const esperando = await B.post('ana', 'crearProyecto', { nombre: 'Planta Sur', ubicacion: 'Q', cliente: { nombre: 'L' }, idSolicitud: 'p-espera' });
+    assert.equal(esperando.codigo, 'TIEMPO');
+    await new Promise(x => setTimeout(x, 100));
+    B.servicio.candado.soltar('prueba');
+    await new Promise(x => setTimeout(x, 50));
+    assert.equal(B.servicio.candado.dueno, null, 'nadie quedó con el candado');
+    assert((await B.post('ana', 'crearProyecto', { nombre: 'Planta Sur', ubicacion: 'Q', cliente: { nombre: 'L' }, idSolicitud: 'p-espera-2' })).ok);
   } finally { await B.cerrar(); }
 });
 
@@ -177,6 +186,7 @@ caso('HTTP: CORS solo para la interfaz, 404, 413 y /salud', async () => {
     assert.equal((await pedir('GET', '/otra')).estado, 404);
     const salud = JSON.parse((await pedir('GET', '/salud')).texto);
     assert(salud.ok && salud.trabajadores.trabajadores.length === 3 && salud.backend === 'memoria');
+    assert.deepEqual(JSON.parse((await pedir('GET', '/salud', null, { 'X-Forwarded-For': '201.141.1.1' })).texto), { ok: true }, 'por nginx: sin detalle');
     const grande = await pedir('POST', '/api', Buffer.alloc(51 * 1024 * 1024, 'a'));
     assert.equal(grande.estado, 413);
     assert(/pesan demasiado/.test(JSON.parse(grande.texto).error));

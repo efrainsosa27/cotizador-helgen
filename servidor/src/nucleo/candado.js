@@ -58,6 +58,18 @@ class Candado {
     return true;
   }
 
+  /**
+   * Un trabajador murió (corte por tiempo o error): se quitan de la cola sus peticiones pendientes y, si tenía el
+   * candado, se suelta. Sin esto, una petición encolada se entregaría después a un dueño muerto y nadie lo soltaría.
+   */
+  cancelar(dueno) {
+    this.cola.forEach(p => {
+      if (p.dueno === dueno && !p.cancelada) { p.cancelada = true; if (p.timer) clearTimeout(p.timer); p.resolve(false); }
+    });
+    this.cola = this.cola.filter(p => !p.cancelada);
+    return this.soltar(dueno);
+  }
+
   /** Corre f() con el candado (para el principal). */
   async con(dueno, f) {
     await this.tomar(dueno, null);

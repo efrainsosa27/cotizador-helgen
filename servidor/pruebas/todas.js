@@ -3,7 +3,7 @@
 const { spawnSync } = require('child_process');
 const path = require('path');
 
-const pruebas = ['unidades', 'google', 'identidad', 'paridad', 'servidor'];
+const pruebas = ['unidades', 'google', 'identidad', 'paridad', 'servidor', 'sombra'];
 let fallas = 0;
 for (const n of pruebas) {
   const r = spawnSync(process.execPath, [path.join(__dirname, n + '.test.js')], { encoding: 'utf8', env: Object.assign({}, process.env, { TZ: 'America/Mexico_City' }), timeout: 300000 });

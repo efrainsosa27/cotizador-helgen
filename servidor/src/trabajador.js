@@ -148,6 +148,7 @@ function ejecutar(msg) {
 }
 
 parentPort.on('message', msg => {
+  if (msg && msg.tipo === 'memoria') { parentPort.postMessage({ tipo: 'memoria', memoria: process.memoryUsage(), libros: amb.espejo.size }); return; }
   if (!msg || msg.tipo !== 'trabajo') return;
   let r;
   try {

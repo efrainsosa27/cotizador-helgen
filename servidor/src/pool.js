@@ -51,12 +51,16 @@ class Pool {
         if (m.tipo === 'listo') {
           t.listo = true;
           t.msCarga = m.msCarga;
+          t.memoria = m.memoria;
           (m.cambiosApi || []).forEach(f => this.cambiosApi.add(f));
           (m.publicas || []).forEach(f => this.publicas.add(f));
           resolve(t);
           this.despachar();
         } else if (m.tipo === 'hecho') {
           this.terminar(t, m);
+          if (Math.random() < 0.05) t.worker.postMessage({ tipo: 'memoria' });
+        } else if (m.tipo === 'memoria') {
+          t.memoria = m.memoria;
         }
       });
       worker.on('error', e => { this.registro('error', 'trabajador ' + numero + ': ' + e.message); if (!t.listo) reject(e); });
@@ -159,7 +163,8 @@ class Pool {
 
   estado() {
     return { trabajadores: this.trabajadores.map(t => ({ numero: t.numero, listo: t.listo, ocupado: t.trabajo ? t.trabajo.funcion || 'doPost' : null,
-      msOcupado: t.trabajo ? Date.now() - t.trabajo.inicio : 0, msCarga: t.msCarga })), cola: this.cola.length, metricas: this.metricas };
+      msOcupado: t.trabajo ? Date.now() - t.trabajo.inicio : 0, msCarga: t.msCarga,
+      heapMb: t.memoria ? Math.round(t.memoria.heapUsed / 1048576) : null })), cola: this.cola.length, metricas: this.metricas };
   }
 
   async cerrar(msEspera) {

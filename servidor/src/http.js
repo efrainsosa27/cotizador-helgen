@@ -1,6 +1,6 @@
 // HTTP: el mismo contrato que el doPost de Apps Script. La interfaz solo cambia API_URL.
 //   POST /api (o /)  cuerpo text/plain {"funcion", "args", "token"} → 200 {"ok", "datos" | "error", "codigo"?}
-//   GET  /salud      estado del servicio (solo desde 127.0.0.1 o con la cabecera de nginx; sin datos de CAPRI)
+//   GET  /salud      estado del servicio (el detalle solo desde el mismo servidor, sin pasar por nginx; sin datos de CAPRI)
 // CORS: solo los orígenes de la interfaz (Cloudflare y la copia local de pruebas). nginx pone TLS y el límite por IP.
 'use strict';
 const http = require('http');
@@ -39,9 +39,9 @@ function crearServidorHttp(servicio, o) {
       return;
     }
     if (req.method === 'GET' && ruta === '/salud') {
-      const local = req.socket.remoteAddress === '127.0.0.1' || req.socket.remoteAddress === '::1' || req.socket.remoteAddress === '::ffff:127.0.0.1';
-      if (!local && !req.headers['x-capri-salud']) { responder(res, 200, { ok: true }); return; }
-      responder(res, 200, servicio.salud());
+      // El detalle solo desde el mismo servidor (curl 127.0.0.1:8090/salud); por nginx (trae X-Forwarded-For) solo {ok}
+      const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress) && !req.headers['x-forwarded-for'];
+      responder(res, 200, local ? servicio.salud() : { ok: true });
       return;
     }
     if (req.method !== 'POST' || (ruta !== '/api' && ruta !== '/' && ruta !== '/exec')) {
