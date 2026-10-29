@@ -642,6 +642,24 @@
         <div class="nota" style="margin-top:8px">Toda orden de compra sale de una requisición: ábrela para autorizarla, pagarla o cerrarla.</div>
         <div id="comCentro" class="sat oculto" style="margin-top:10px"></div>
       </div>
+      <!-- recepción (mod-recepcion): devoluciones DEV-… (material equivocado o dañado) por resolver -->
+      <div class="modulo oculto" id="comModDevoluciones">
+        <h2>Devoluciones (material equivocado o dañado)</h2>
+        <div class="proy-fila">
+          <div style="max-width:240px;min-width:180px"><label>Estado</label>
+            <select id="devEstado" onchange="RECEPCION.cargarDevoluciones()">
+              <option value="Abierta">Abiertas (por resolver)</option><option value="Resuelta">Resueltas</option><option value="">Todas</option>
+            </select></div>
+          <button type="button" class="btn btn-sec" onclick="RECEPCION.cargarDevoluciones()">Actualizar</button>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="margin-top:14px;font-size:12px">
+            <thead><tr><th>Folio</th><th>Fecha</th><th>Requisición</th><th>Material</th><th>Problema</th><th>Reportó</th><th>Estado</th><th></th></tr></thead>
+            <tbody id="devLista"><tr><td colspan="8" class="nota">Cargando…</td></tr></tbody>
+          </table>
+        </div>
+        <div id="devResolver"></div>
+      </div>
       <div class="modulo" id="comModOrdenes">
         <h2>2 · Órdenes por proyecto</h2>
         <div class="proy-fila">
@@ -846,6 +864,8 @@
           <div id="rcAvance"></div>
           <div id="rcRecibirForm"></div>
         </div>
+        <!-- recepción (mod-recepcion): fotos de lo que llegó, devoluciones de esta requisición, reportar y resolver -->
+        <div id="rcDevoluciones" class="sat oculto"></div>
         <div id="rcFacturasCaja" class="sat">
           <div class="sat-titulo">Facturas del proveedor</div>
           <div id="rcFacturasResumen" class="nota" style="margin-bottom:8px"></div>
@@ -2409,7 +2429,8 @@
       (r.puedeCerrar ? botonChico('Recibí el material', "recibiMaterial('" + esc(r.folio) + "')", false) : '') +
       (r.puedeEditar ? botonChico('Corregir y reenviar', "editarReq('" + esc(r.folio) + "')") : '') +
       (r.puedeCancelar ? botonChico('Cancelar requisición', "cancelarReq('" + esc(r.folio) + "')") : '') +
-      '</div><div id="cmCaja-' + esc(r.folio) + '"></div><div id="rcpCaja-' + esc(r.folio) + '"></div></div>').join('');
+      '</div><div id="devCaja-' + esc(r.folio) + '"></div>' + // recepción (mod-recepcion): devoluciones, fotos y "Reportar problema"
+      '<div id="cmCaja-' + esc(r.folio) + '"></div><div id="rcpCaja-' + esc(r.folio) + '"></div></div>').join('');
     pintarConteos();
     avisarModulos('alMisReq', MIS_REQ); // centro de mando: dónde se recibe, En camino y "Lo recogí"
   }
@@ -4967,6 +4988,412 @@
       // La sincronización manda la lista otra vez cuando alguien guarda un proveedor u orden (con el filtro de esta página)
       contexto() { return visible() ? { comProveedores: true, provFiltro: filtro() } : {}; },
       alSincronizar(r) { if (r && r.comProveedores && visible()) pintarLista(r.comProveedores); },
+    });
+  })();
+</script>
+<script id="mod-recepcion">
+  // Recepción con fotos y devoluciones (incremento 5, módulo H): una foto por renglón que llega, comprimida aquí (lado mayor
+  // 1600 px, JPEG 0.72) en "Registrar lo que llegó", "Recibí el material", "Lo recogí" y el respaldo de compras; "Reportar
+  // problema" sobre lo recibido (al recibir o después, hasta 30 días); devoluciones DEV-… en Compras (lista y resolución) y "Ver
+  // foto". No edita el código de Requisiciones ni de Compras: reemplaza el formulario de recepción (htmlFormRecepcion,
+  // enviarRecepcion), "Recibí el material" (recibiMaterial) y "Lo recogí" (centroRecogi), y pinta sus cajas con los eventos
+  // alMisReq / alVistaReqCom. El servidor revisa todo otra vez (fotos, cantidades, permisos y estados).
+  (function () {
+    const LADO_MAX = 1600, CALIDAD = 0.72, MAX_BYTES = 10 * 1024 * 1024;
+    const TIPOS = ['Dañado', 'Incorrecto', 'Faltante', 'Sobrante', 'Otro'];
+    const RESOLUCIONES = ['Reponer', 'Devolver al proveedor', 'Cancelar renglón', 'Conservar'];
+    const AYUDA_RES = { 'Reponer': 'el proveedor lo manda otra vez: se descuenta lo recibido y el renglón vuelve a "por recibir"',
+      'Devolver al proveedor': 'se descuenta y ya no se espera (escribe la nota de crédito o el reembolso; guía opcional)',
+      'Cancelar renglón': 'se descuenta y ya no se espera, sin trámite con el proveedor', 'Conservar': 'se acepta como llegó; nada cambia' };
+    const RD = { lista: null, cargando: false, reporte: null, resolver: null, listaPendiente: null };
+    const nombreJpg = n => String(n || 'foto').replace(/\.[^.]+$/, '').slice(0, 80) + '.jpg';
+    const leerInput = id => { const el = $(id); return el && el.files && el.files[0] ? el.files[0] : null; };
+    const inputFoto = (id, extra) => '<input id="' + id + '" type="file" accept="image/*" capture="environment"' + (extra || '') + '>';
+    const ligaFoto = (url, texto) => url ? '<a href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(texto || 'Ver foto') + '</a>' : '';
+    const textoMaterial = d => esc(d.cantidad) + (d.unidad ? ' ' + esc(d.unidad) : '') + ' de ' + esc(String(d.descripcion || '').slice(0, 80));
+
+    /**
+     * Foto del teléfono o la computadora → {nombre, datos (base64 sin prefijo), mime: 'image/jpeg'}: lado mayor 1600 px, JPEG con
+     * calidad 0.72 (canvas). Si el navegador no puede dibujarla (p. ej. HEIC fuera de Safari), se manda como está (el servidor
+     * acepta JPG, PNG o HEIC de hasta 10 MB).
+     */
+    function comprimirFoto(file) {
+      return new Promise((ok, mal) => {
+        if (!file) { mal(new Error('Toma la foto del material.')); return; }
+        if (file.type && !/^image\//i.test(file.type)) { mal(new Error('La foto debe ser una imagen (JPG, PNG o HEIC).')); return; }
+        const crudo = () => {
+          if (file.size > MAX_BYTES) { mal(new Error('La foto pesa más de 10 MB y este navegador no la pudo reducir: tómala otra vez.')); return; }
+          const r = new FileReader();
+          r.onload = () => ok({ nombre: String(file.name || 'foto'), datos: String(r.result).split(',')[1] || '', mime: file.type || 'image/jpeg' });
+          r.onerror = () => mal(new Error('No se pudo leer la foto.'));
+          r.readAsDataURL(file);
+        };
+        if (typeof Image === 'undefined' || typeof URL === 'undefined' || !URL.createObjectURL) { crudo(); return; }
+        const url = URL.createObjectURL(file), img = new Image();
+        img.onload = () => {
+          try {
+            const w0 = img.naturalWidth || img.width, h0 = img.naturalHeight || img.height;
+            const k = Math.min(1, LADO_MAX / Math.max(w0, h0, 1));
+            const c = document.createElement('canvas');
+            c.width = Math.max(1, Math.round(w0 * k)); c.height = Math.max(1, Math.round(h0 * k));
+            const g = c.getContext('2d');
+            g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); // PNG con transparencia: fondo blanco en el JPEG
+            g.drawImage(img, 0, 0, c.width, c.height);
+            const datos = String(c.toDataURL('image/jpeg', CALIDAD)).split(',')[1] || '';
+            URL.revokeObjectURL(url);
+            if (!datos) { crudo(); return; }
+            ok({ nombre: nombreJpg(file.name), datos: datos, mime: 'image/jpeg' });
+          } catch (e) { URL.revokeObjectURL(url); crudo(); }
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); crudo(); };
+        img.src = url;
+      });
+    }
+    window.comprimirFoto = comprimirFoto;
+
+    // ---- Formulario de recepción con foto por renglón (registrar · cerrar = "Recibí el material" · recoger = "Lo recogí") ----
+    const TITULO = { registrar: 'Registrar lo que llegó', cerrar: 'Recibí el material', recoger: 'Lo recogí' };
+    const BOTON = { registrar: 'Registrar recepción', cerrar: 'Confirmar que llegó', recoger: 'Lo recogí: va en camino' };
+    function htmlProblema(p, l, modo) {
+      const n = l.renglon;
+      return '<tr id="' + p + 'PR' + n + '" class="oculto"><td colspan="4" style="background:#FFF7E6">' +
+        '<div class="grid"><div><label>¿Qué pasó? *</label><select id="' + p + 'PT' + n + '">' +
+          // donde se escribe cuánto llegó, lo que faltó simplemente no se registra (queda por recibir)
+          TIPOS.filter(t => modo !== 'registrar' || t !== 'Faltante').map(t => '<option>' + t + '</option>').join('') + '</select></div>' +
+        '<div><label>¿Cuántos ' + esc(l.unidad) + '? *</label><input id="' + p + 'PK' + n + '" type="number" min="0" step="any"></div>' +
+        '<div><label>Foto del problema (salvo faltante)</label>' + inputFoto(p + 'PF' + n) + '</div>' +
+        '<div style="grid-column:1/-1"><label>Describe el problema *</label><input id="' + p + 'PC' + n + '" maxlength="500" placeholder="Ej. Rollo aplastado, calibre equivocado"></div></div>' +
+        '<div class="nota">Compras lo revisa y decide: reponer, devolver al proveedor, cancelar el renglón o conservar. Mientras tanto la requisición no se cierra.</div></td></tr>';
+    }
+    window.htmlFormRecepcion = function (p, lineas, sitio, enSuLugar) {
+      const f = FORMS_REC[p] || {}, modo = f.modo || 'registrar';
+      const conProblema = modo !== 'recoger';
+      const intro = modo === 'cerrar' ? 'Toma una foto de cada renglón que llegó. Si algo vino mal, márcalo en "Problema".'
+        : modo === 'recoger' ? 'Toma una foto de cada renglón que recogiste' + (f.sitio ? '; queda en camino a ' + esc(f.sitio) + ' y allá se recibe.' : '; queda en camino al sitio.')
+        : 'Una foto por renglón que llegó (obligatoria). Si algo vino mal, márcalo en "Problema".';
+      return '<div class="sat" style="margin-top:8px;background:#fff"><div class="sat-titulo">' + TITULO[modo] + '</div>' +
+        '<div class="nota" style="margin-bottom:6px">' + intro + '</div>' +
+        (enSuLugar ? '<div class="nota aviso-moneda" style="margin-bottom:6px">La registras en lugar de quien la recibe: escribe en las notas por qué.</div>' : '') +
+        '<div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Material</th><th class="num">' + (modo === 'registrar' ? 'Falta' : 'Cantidad') +
+        '</th>' + (modo === 'registrar' ? '<th class="num" style="width:100px">Llegó</th>' : '<th></th>') + '<th>Foto *</th></tr></thead><tbody>' +
+        lineas.map(l => '<tr><td>' + esc(l.descripcion) + (conProblema ? '<div><button type="button" class="btn btn-sec" style="padding:2px 8px;font-size:11px;margin-top:4px" ' +
+          'onclick="RECEPCION.problema(\'' + p + '\',' + Number(l.renglon) + ')">Problema</button></div>' : '') + '</td><td class="num">' + esc(l.pendiente) + ' ' + esc(l.unidad) +
+          '</td><td>' + (modo === 'registrar' ? '<input id="' + p + 'C' + l.renglon + '" type="number" min="0" step="any" value="' + esc(l.pendiente) +
+          '" style="text-align:right">' : '') + '</td><td>' + inputFoto(p + 'F' + l.renglon) + '</td></tr>' + (conProblema ? htmlProblema(p, l, modo) : '')).join('') +
+        '</tbody></table></div><div class="grid" style="margin-top:8px">' +
+        (modo === 'registrar' ? '<div><label>Sitio donde se recibió *</label><select id="' + p + 'Sitio">' + SITIOS.map(x => '<option value="' + esc(x) + '"' +
+          (x === sitio ? ' selected' : '') + '>' + esc(etiquetaSitio(x)) + '</option>').join('') + '</select></div>' +
+          '<div><label>Foto de la remisión (opcional)</label><input id="' + p + 'Foto" type="file" accept="image/*,application/pdf" capture="environment"></div>' : '') +
+        (modo !== 'recoger' ? '<div style="grid-column:1/-1"><label>Notas' + (enSuLugar ? ' *' : ' (opcional)') + '</label><input id="' + p + 'Notas" maxlength="500" placeholder="Ej. Llegó una caja golpeada"></div>' : '') +
+        '</div>' +
+        (modo === 'registrar' ? '<label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input id="' + p + 'Final" type="checkbox" style="width:auto"> ' +
+          'Ya no llegará lo que falta (cierra la recepción; explica en las notas qué faltó)</label>' : '') +
+        '<div class="acciones"><button type="button" id="' + p + 'Btn" class="btn" onclick="enviarRecepcion(\'' + p + '\')">' + BOTON[modo] + '</button>' +
+        '<button type="button" class="btn btn-sec" onclick="cerrarFormRecepcion(\'' + p + '\')">Cancelar</button></div></div>';
+    };
+
+    /** Lee el formulario: [{renglon, cantidad, archivo, problema: {tipo, cantidad, comentario, archivo}}]; error si falta algo. */
+    function leerForm(p, f, modo) {
+      return f.lineas.map(l => {
+        const n = l.renglon, cant = modo === 'registrar' ? $(p + 'C' + n).value : l.pendiente;
+        const x = { renglon: n, cantidad: cant, archivo: leerInput(p + 'F' + n), problema: null };
+        if (Number(cant) > 0 && !x.archivo) throw new Error('Falta la foto de "' + l.descripcion + '" (una por renglón ' + (modo === 'recoger' ? 'que recogiste' : 'que llegó') + ').');
+        if ((f.problemas || {})[n]) { // fila "Problema" abierta
+          const pr = { tipo: $(p + 'PT' + n).value, cantidad: $(p + 'PK' + n).value, comentario: $(p + 'PC' + n).value, archivo: leerInput(p + 'PF' + n) };
+          if (!(Number(cant) > 0)) throw new Error('El problema de "' + l.descripcion + '" va con lo que llegó: escribe cuánto llegó.');
+          if (!(Number(pr.cantidad) > 0)) throw new Error('Escribe cuántos de "' + l.descripcion + '" tienen el problema.');
+          if (String(pr.comentario || '').trim().length < 5) throw new Error('Describe el problema de "' + l.descripcion + '".');
+          if (!pr.archivo && pr.tipo !== 'Faltante') throw new Error('Toma una foto del problema de "' + l.descripcion + '" (solo un faltante va sin foto).');
+          x.problema = pr;
+        }
+        return x;
+      });
+    }
+    window.enviarRecepcion = function (p) {
+      const f = FORMS_REC[p], b = $(p + 'Btn');
+      if (!f || !b || b.disabled) return;
+      const modo = f.modo || 'registrar';
+      let renglones;
+      try { renglones = leerForm(p, f, modo); } catch (e) { mostrarError(e); return; }
+      const remision = modo === 'registrar' ? leerInput(p + 'Foto') : null;
+      if (remision && remision.size > MAX_BYTES) { mostrarError('La foto de la remisión pesa más de 10 MB. Reduce la imagen.'); return; }
+      b.disabled = true; b.textContent = 'Preparando fotos…';
+      const listo = () => { b.disabled = false; b.textContent = BOTON[modo]; };
+      const quitar = () => {
+        delete FORMS_REC[p];
+        if ($(f.caja)) $(f.caja).innerHTML = '';
+        if (p.indexOf('rcp-') === 0) REC_ABIERTA = null;
+      };
+      Promise.all([Promise.all(renglones.map(x => x.archivo ? comprimirFoto(x.archivo) : null)),
+        Promise.all(renglones.map(x => x.problema && x.problema.archivo ? comprimirFoto(x.problema.archivo) : null)),
+        remision ? leerArchivo(remision) : null]).then(([fotos, fotosProb, rem]) => {
+        const lista = renglones.map((x, i) => Object.assign({ renglon: x.renglon }, modo === 'registrar' ? { cantidad: x.cantidad } : {},
+          fotos[i] ? { foto: fotos[i] } : {}, x.problema ? { problema: { tipo: x.problema.tipo, cantidad: x.problema.cantidad,
+            comentario: x.problema.comentario, foto: fotosProb[i] } } : {}));
+        b.textContent = 'Guardando…';
+        const run = google.script.run.withFailureHandler(err => { listo(); mostrarError(err); });
+        if (modo === 'registrar') {
+          run.withSuccessHandler(r => {
+            quitar();
+            f.alExito(r);
+            aviso('ok', 'Recepción <b>' + esc(r.folio) + '</b> registrada' + (!r.completo ? ' (parcial: falta material).' : r.estado === 'Cerrada' ?
+              ': requisición cerrada.' : r.estado === 'Recibida' && renglones.some(x => x.problema) ? ': quedó Recibida hasta que compras resuelva el problema.' :
+              ': todo recibido; falta el pago al proveedor.') + extraPortal(r));
+          }).registrarRecepcion({ reqFolio: f.folio, sitio: $(p + 'Sitio').value, notas: $(p + 'Notas').value, final: !!$(p + 'Final').checked,
+            renglones: lista, evidencia: rem ? { nombre: remision.name, datos: rem } : null, idSolicitud: f.id });
+        } else if (modo === 'cerrar') {
+          run.withSuccessHandler(l => {
+            quitar();
+            if (f.alExito) f.alExito(l);
+            const r = (l || []).find(x => x.folio === f.folio);
+            aviso('ok', 'Requisición <b>' + esc(f.folio) + '</b>' + (r && r.estado === 'Cerrada' ? ' cerrada: material recibido.'
+              : ': material recibido; queda <b>Recibida</b> hasta que compras resuelva el problema que reportaste.'));
+          }).cerrarRequisicion(f.folio, $(p + 'Notas').value, { renglones: lista, idSolicitud: f.id });
+        } else {
+          run.withSuccessHandler(r => {
+            quitar();
+            if (r.requisiciones) pintarMisReq(r.requisiciones);
+            aviso('ok', 'Requisición <b>' + esc(r.folio) + '</b>: la recogiste; va en camino al sitio.' + extraPortal(r));
+          }).marcarEnCamino(f.folio, { recogido: true, renglones: lista, idSolicitud: f.id });
+        }
+      }, err => { listo(); mostrarError(err); });
+    };
+
+    /** Abre el formulario de fotos bajo la requisición (Mis requisiciones) en modo cerrar o recoger. */
+    function abrirFormFotos(folio, modo) {
+      const r = MIS_REQ.find(x => x.folio === folio);
+      if (!r) return;
+      const lineas = (r.avance || []).filter(l => l.pendiente > 0);
+      if (!lineas.length) return false;
+      Object.keys(FORMS_REC).filter(k => k.indexOf('rcp-') === 0).forEach(cerrarFormRecepcion);
+      const p = 'rcp-' + folio.replace(/[^A-Za-z0-9]/g, '');
+      REC_ABIERTA = folio;
+      FORMS_REC[p] = { folio: folio, lineas: lineas, id: nuevoId(), caja: 'rcpCaja-' + folio, modo: modo,
+        sitio: r.centroMando ? r.centroMando.sitio : etiquetaSitio(r.sitio || ''),
+        alExito: l => { MISREQ_PENDIENTE = null; pintarMisReq(l || MIS_REQ); } };
+      $('rcpCaja-' + folio).innerHTML = htmlFormRecepcion(p, lineas, r.sitio, false);
+      return true;
+    }
+    // "Recibí el material" (flujo de siempre): una foto por renglón de la orden
+    const recibiBase = window.recibiMaterial;
+    window.recibiMaterial = function (folio) {
+      const r = MIS_REQ.find(x => x.folio === folio);
+      if (!r || !r.puedeCerrar) return;
+      if (abrirFormFotos(folio, 'cerrar') === false && recibiBase) recibiBase(folio); // sin renglones por recibir: como antes
+    };
+    // "Lo recogí": una foto por renglón (el módulo del centro de mando ponía solo un confirm)
+    const recogiBase = window.centroRecogi;
+    window.centroRecogi = function (folio) {
+      if (abrirFormFotos(folio, 'recoger') === false && recogiBase) recogiBase(folio);
+    };
+    // Una fila de problema se abre o se cierra (al abrirla, la cantidad propuesta es la que llegó)
+    function problema(p, n) {
+      const f = FORMS_REC[p], fila = $(p + 'PR' + n);
+      if (!f || !fila) return;
+      f.problemas = f.problemas || {};
+      const abrir = !f.problemas[n];
+      f.problemas[n] = abrir;
+      fila.classList.toggle('oculto', !abrir);
+      if (abrir && $(p + 'PK' + n) && !$(p + 'PK' + n).value) $(p + 'PK' + n).value = $(p + 'C' + n) ? $(p + 'C' + n).value : '';
+    }
+
+    // ---- Reportar un problema después de recibir (quien pidió, quien recibe o compras) ----
+    function htmlReporte(clave, folio, reportables) {
+      return '<div class="sat" style="margin-top:8px;background:#fff"><div class="sat-titulo">Reportar problema · ' + esc(folio) + '</div><div class="grid">' +
+        '<div style="grid-column:1/-1"><label>Material *</label><select id="' + clave + 'R">' + reportables.map(l => '<option value="' + Number(l.renglon) + '">' +
+          esc(l.descripcion) + ' (recibido sin reportar: ' + esc(l.disponible) + ' ' + esc(l.unidad) + ')</option>').join('') + '</select></div>' +
+        '<div><label>¿Qué pasó? *</label><select id="' + clave + 'T">' + TIPOS.map(t => '<option>' + t + '</option>').join('') + '</select></div>' +
+        '<div><label>¿Cuántos? *</label><input id="' + clave + 'K" type="number" min="0" step="any"></div>' +
+        '<div><label>Foto (salvo faltante)</label>' + inputFoto(clave + 'F') + '</div>' +
+        '<div style="grid-column:1/-1"><label>Describe el problema *</label><input id="' + clave + 'C" maxlength="500" placeholder="Ej. Llegó calibre 12 en vez de 10"></div></div>' +
+        '<div class="nota">Hasta 30 días después de recibirla. Compras decide: reponer, devolver al proveedor, cancelar el renglón o conservar.</div>' +
+        '<div class="acciones"><button type="button" id="' + clave + 'Btn" class="btn" onclick="RECEPCION.enviarReporte()">Reportar</button>' +
+        '<button type="button" class="btn btn-sec" onclick="RECEPCION.cerrarReporte()">Cancelar</button></div></div>';
+    }
+    function abrirReporte(folio, desde) {
+      const x = desde === 'com' ? REQC : MIS_REQ.find(y => y.folio === folio);
+      const reportables = x ? (x.reportables || []) : [];
+      if (!reportables.length) return;
+      cerrarReporte(true);
+      if (desde === 'req') Object.keys(FORMS_REC).filter(k => k.indexOf('rcp-') === 0).forEach(cerrarFormRecepcion); // uno a la vez
+      const clave = 'dvr' + desde + folio.replace(/[^A-Za-z0-9]/g, '');
+      RD.reporte = { folio: folio, desde: desde, clave: clave, id: nuevoId() };
+      if (desde === 'req') REC_ABIERTA = folio; // la sincronización no borra lo capturado
+      const caja = $(desde === 'com' ? 'rcDevForm' : 'devForm-' + folio);
+      if (caja) caja.innerHTML = htmlReporte(clave, folio, reportables);
+    }
+    function cerrarReporte(sinRepintar) {
+      const r = RD.reporte;
+      if (!r) return;
+      RD.reporte = null;
+      const caja = $(r.desde === 'com' ? 'rcDevForm' : 'devForm-' + r.folio);
+      if (caja) caja.innerHTML = '';
+      if (r.desde === 'req' && REC_ABIERTA === r.folio) {
+        REC_ABIERTA = null;
+        if (!sinRepintar && MISREQ_PENDIENTE) pintarMisReq(MISREQ_PENDIENTE);
+      }
+    }
+    function enviarReporte() {
+      const r = RD.reporte, k = r && r.clave, b = k && $(k + 'Btn');
+      if (!r || !b || b.disabled) return;
+      const d = { renglon: Number($(k + 'R').value), tipo: $(k + 'T').value, cantidad: $(k + 'K').value, comentario: $(k + 'C').value, idSolicitud: r.id };
+      const archivo = leerInput(k + 'F');
+      if (!(Number(d.cantidad) > 0)) { mostrarError('Escribe cuántos tienen el problema.'); return; }
+      if (String(d.comentario || '').trim().length < 5) { mostrarError('Describe el problema (mínimo 5 caracteres).'); return; }
+      if (!archivo && d.tipo !== 'Faltante') { mostrarError('Toma una foto del problema (solo un faltante va sin foto).'); return; }
+      b.disabled = true; b.textContent = 'Enviando…';
+      (archivo ? comprimirFoto(archivo) : Promise.resolve(null)).then(foto => {
+        if (foto) d.foto = foto;
+        google.script.run.withSuccessHandler(x => {
+          const desde = r.desde;
+          RD.reporte = null;
+          if (desde === 'req') { REC_ABIERTA = null; MISREQ_PENDIENTE = null; if (x.requisiciones) pintarMisReq(x.requisiciones); }
+          else if (x.vista) pintarReqCom(x.vista);
+          aviso('ok', 'Problema reportado: devolución <b>' + esc(x.folio) + '</b>. Compras lo va a resolver.');
+          if (RD.lista) cargarDevoluciones();
+        }).withFailureHandler(err => { b.disabled = false; b.textContent = 'Reportar'; mostrarError(err); }).reportarProblema(r.folio, d);
+      }, err => { b.disabled = false; b.textContent = 'Reportar'; mostrarError(err); });
+    }
+
+    // ---- Mis requisiciones: devoluciones, fotos (si tienes acceso a la carpeta) y "Reportar problema" ----
+    function htmlDevSolicitante(r) {
+      const partes = [];
+      if ((r.devoluciones || []).length) {
+        partes.push('<div class="nota" style="margin-top:6px"><b>Problemas reportados:</b><br>' + r.devoluciones.map(d => '<b>' + esc(d.folio) + '</b> · ' +
+          esc(d.tipo) + ' · ' + textoMaterial(Object.assign({ unidad: '' }, d)) + ' · ' + (d.estado === 'Abierta' ? '<span class="aviso-moneda">por resolver</span>'
+          : 'resuelta: ' + esc(d.resolucion) + (d.guia ? ' (guía ' + esc(d.guia) + ')' : ''))).join('<br>') + '</div>');
+      }
+      if ((r.fotos || []).length) {
+        partes.push('<div class="nota" style="margin-top:4px"><b>Fotos:</b> ' + r.fotos.map(x => esc(x.folio) + ' r' + esc(x.renglon) + ' ' + ligaFoto(x.url)).join(' · ') + '</div>');
+      }
+      if ((r.reportables || []).length && !(RD.reporte && RD.reporte.folio === r.folio && RD.reporte.desde === 'req')) {
+        partes.push('<div class="acciones" style="margin-top:6px">' + botonChico('Reportar problema', "RECEPCION.abrirReporte('" + esc(r.folio) + "','req')") + '</div>');
+      }
+      partes.push('<div id="devForm-' + esc(r.folio) + '"></div>');
+      return partes.join('');
+    }
+    function pintarMisReqDev(lista) {
+      if (RD.reporte && RD.reporte.desde === 'req') RD.reporte = null; // la lista se volvió a pintar: el formulario ya no está
+      (lista || []).forEach(r => { const caja = $('devCaja-' + r.folio); if (caja) caja.innerHTML = htmlDevSolicitante(r); });
+    }
+
+    // ---- Compras: la requisición (fotos, devoluciones, reportar y resolver) ----
+    function htmlResolver(clave, dv) {
+      return '<div class="sat" style="margin-top:8px;background:#fff"><div class="sat-titulo">Resolver ' + esc(dv.folio) + '</div>' +
+        '<div class="nota">' + esc(dv.tipo) + ' · ' + textoMaterial(dv) + ' · reportó ' + esc(dv.reporto) + (dv.origen === 'Centro de mando' ? ' (centro de mando)' : '') +
+        (dv.comentario ? '<br><b>Comentario:</b> ' + esc(dv.comentario) : '') + (dv.fotoUrl ? '<br>' + ligaFoto(dv.fotoUrl) : dv.fotoPendiente ? '<br>La foto llega del centro de mando en unos minutos.' : '') + '</div>' +
+        '<div class="grid" style="margin-top:6px"><div><label>Resolución *</label><select id="' + clave + 'Res" onchange="RECEPCION.ayudaRes(\'' + clave + '\')">' +
+        RESOLUCIONES.map(x => '<option>' + x + '</option>').join('') + '</select></div>' +
+        '<div><label>Guía de la devolución (opcional)</label><input id="' + clave + 'Guia" maxlength="60"></div>' +
+        '<div style="grid-column:1/-1"><label>Nota (obligatoria al devolver o cancelar)</label><input id="' + clave + 'Nota" maxlength="500" placeholder="Ej. Nota de crédito NC-123"></div></div>' +
+        '<div id="' + clave + 'Ayuda" class="nota">' + esc(AYUDA_RES.Reponer) + '</div>' +
+        '<div class="acciones"><button type="button" id="' + clave + 'Btn" class="btn" onclick="RECEPCION.resolver()">Resolver</button>' +
+        '<button type="button" class="btn btn-sec" onclick="RECEPCION.cerrarResolver()">Cancelar</button></div></div>';
+    }
+    function pintarCompras(v) {
+      const caja = $('rcDevoluciones');
+      if (!caja) return;
+      const fotos = [];
+      (v.recepciones || []).forEach(x => (x.renglones || []).forEach(y => { if (y.fotoUrl) fotos.push(esc(x.folio) + ' r' + esc(y.renglon) + ' ' + ligaFoto(y.fotoUrl)); }));
+      (v.fotosRecogido || []).forEach(x => fotos.push('Lo recogí r' + esc(x.renglon) + ' ' + ligaFoto(x.url)));
+      const devs = v.devoluciones || [];
+      const hay = fotos.length || devs.length || (v.reportables || []).length;
+      caja.classList.toggle('oculto', !hay);
+      if (!hay) { caja.innerHTML = ''; return; }
+      const abiertoRes = RD.resolver && RD.resolver.desde === 'com' && devs.some(d => d.folio === RD.resolver.folio && d.puedeResolver) ? RD.resolver : null;
+      if (RD.resolver && RD.resolver.desde === 'com' && !abiertoRes) RD.resolver = null;
+      caja.innerHTML = '<div class="sat-titulo">Fotos y devoluciones</div>' +
+        (fotos.length ? '<div class="nota"><b>Fotos de lo que llegó:</b> ' + fotos.join(' · ') + '</div>' : '') +
+        (devs.length ? '<table style="font-size:12px;margin-top:6px"><thead><tr><th>Folio</th><th>Material</th><th>Problema</th><th>Reportó</th><th>Estado</th><th></th></tr></thead><tbody>' +
+          devs.map(d => '<tr><td><b>' + esc(d.folio) + '</b><div class="nota">' + esc(fechaMx(d.fecha)) + '</div></td><td>' + textoMaterial(d) + '</td><td>' + esc(d.tipo) +
+            (d.comentario ? '<div class="nota">' + esc(d.comentario) + '</div>' : '') + (d.fotoUrl ? '<div>' + ligaFoto(d.fotoUrl) + '</div>' : '') + '</td><td>' + esc(d.reporto) +
+            (d.origen === 'Centro de mando' ? '<div class="nota">centro de mando</div>' : '') + '</td><td>' + (d.estado === 'Abierta' ? '<span class="chip aceptada">Abierta</span>'
+            : '<span class="chip firmado">' + esc(d.resolucion) + '</span>' + (d.notaResolucion ? '<div class="nota">' + esc(d.notaResolucion) + '</div>' : '') +
+              (d.guia ? '<div class="nota">Guía ' + esc(d.guia) + '</div>' : '')) + '</td><td>' +
+            (d.puedeResolver ? botonChico('Resolver', "RECEPCION.abrirResolver('" + esc(d.folio) + "','com')", false) : '') + '</td></tr>').join('') + '</tbody></table>' : '') +
+        '<div id="rcDevResolver"></div>' +
+        ((v.reportables || []).length && !(RD.reporte && RD.reporte.desde === 'com') ? '<div class="acciones" style="margin-top:6px">' +
+          botonChico('Reportar problema', "RECEPCION.abrirReporte('" + esc(v.requisicion.folio) + "','com')") + '</div>' : '') +
+        '<div id="rcDevForm"></div>';
+      if (abiertoRes) { const dv = devs.find(d => d.folio === abiertoRes.folio); $('rcDevResolver').innerHTML = htmlResolver(abiertoRes.clave, dv); }
+      if (RD.reporte && RD.reporte.desde === 'com') {
+        if (RD.reporte.folio === v.requisicion.folio && (v.reportables || []).length) $('rcDevForm').innerHTML = htmlReporte(RD.reporte.clave, RD.reporte.folio, v.reportables);
+        else RD.reporte = null;
+      }
+    }
+
+    // ---- Compras: lista de devoluciones y resolución ----
+    function cargarDevoluciones() {
+      if (!PERMISOS.compras && !PERMISOS.superadmin) return;
+      RD.cargando = true;
+      google.script.run.withSuccessHandler(l => { RD.cargando = false; pintarLista(l); })
+        .withFailureHandler(err => { RD.cargando = false; mostrarError(err); }).listarDevoluciones({ estado: $('devEstado').value });
+    }
+    function pintarLista(l) {
+      if (RD.resolver && RD.resolver.desde === 'lista') { RD.listaPendiente = l; return; } // no se borra lo capturado
+      RD.lista = l || [];
+      $('devLista').innerHTML = RD.lista.length ? RD.lista.map(d => '<tr><td><b>' + esc(d.folio) + '</b>' + (d.origen === 'Centro de mando' ? '<div class="nota">centro de mando</div>' : '') +
+        '</td><td>' + esc(fechaMx(d.fecha)) + '</td><td><a href="#" onclick="RECEPCION.abrirReq(\'' + esc(d.reqFolio) + '\');return false">' + esc(d.reqFolio) + '</a><div class="nota">' +
+        esc(d.proyectoVisible) + ' · ' + esc(d.proyectoNombre) + '</div></td><td>' + textoMaterial(d) + '</td><td>' + esc(d.tipo) +
+        (d.comentario ? '<div class="nota">' + esc(d.comentario) + '</div>' : '') + (d.fotoUrl ? '<div>' + ligaFoto(d.fotoUrl) + '</div>' : '') + '</td><td>' + esc(d.reporto) +
+        '</td><td>' + (d.estado === 'Abierta' ? '<span class="chip aceptada">Abierta</span>' : '<span class="chip firmado">' + esc(d.resolucion) + '</span>') + '</td><td>' +
+        (d.puedeResolver ? botonChico('Resolver', "RECEPCION.abrirResolver('" + esc(d.folio) + "','lista')", false) : '') + '</td></tr>').join('')
+        : '<tr><td colspan="8" class="nota">No hay devoluciones' + ($('devEstado').value === 'Abierta' ? ' por resolver' : '') + '.</td></tr>';
+    }
+    function abrirResolver(folio, desde) {
+      const dv = desde === 'com' ? ((REQC && REQC.devoluciones) || []).find(d => d.folio === folio) : (RD.lista || []).find(d => d.folio === folio);
+      if (!dv || !dv.puedeResolver) return;
+      cerrarResolver();
+      const clave = 'dvs' + desde + folio.replace(/[^A-Za-z0-9]/g, '');
+      RD.resolver = { folio: folio, desde: desde, clave: clave, id: nuevoId() };
+      $(desde === 'com' ? 'rcDevResolver' : 'devResolver').innerHTML = htmlResolver(clave, dv);
+    }
+    function cerrarResolver() {
+      const r = RD.resolver;
+      if (!r) return;
+      RD.resolver = null;
+      const caja = $(r.desde === 'com' ? 'rcDevResolver' : 'devResolver');
+      if (caja) caja.innerHTML = '';
+      if (r.desde === 'lista' && RD.listaPendiente) { const l = RD.listaPendiente; RD.listaPendiente = null; pintarLista(l); }
+    }
+    function ayudaRes(clave) { const a = $(clave + 'Ayuda'); if (a) a.textContent = AYUDA_RES[$(clave + 'Res').value] || ''; }
+    function resolver() {
+      const r = RD.resolver, k = r && r.clave, b = k && $(k + 'Btn');
+      if (!r || !b || b.disabled) return;
+      const d = { resolucion: $(k + 'Res').value, nota: $(k + 'Nota').value, guia: $(k + 'Guia').value, idSolicitud: r.id };
+      if ((d.resolucion === 'Devolver al proveedor' || d.resolucion === 'Cancelar renglón') && String(d.nota || '').trim().length < 5) {
+        mostrarError(d.resolucion === 'Devolver al proveedor' ? 'Escribe la nota de la devolución (nota de crédito o reembolso).' : 'Escribe por qué se cancela el renglón.');
+        return;
+      }
+      if (!window.confirm('¿Resolver ' + r.folio + ' como "' + d.resolucion + '"? ' + (AYUDA_RES[d.resolucion] || '') + '.')) return;
+      b.disabled = true; b.textContent = 'Resolviendo…';
+      google.script.run.withSuccessHandler(x => {
+        RD.resolver = null; RD.listaPendiente = null;
+        if (x.vista && REQC && REQC.requisicion.folio === x.vista.requisicion.folio) pintarReqCom(x.vista);
+        if ($('devEstado').value === 'Abierta' && x.devoluciones) pintarLista(x.devoluciones); else if (RD.lista) cargarDevoluciones();
+        if (r.desde === 'lista') $('devResolver').innerHTML = '';
+        aviso('ok', 'Devolución <b>' + esc(x.folio) + '</b> resuelta: ' + esc(d.resolucion) + '. La requisición quedó <b>' + esc(x.estado) + '</b>.' + extraPortal(x));
+      }).withFailureHandler(err => { b.disabled = false; b.textContent = 'Resolver'; mostrarError(err); }).resolverDevolucion(r.folio, d);
+    }
+    function abrirReq(folio) { if (typeof abrirReqCom === 'function') abrirReqCom(folio); }
+
+    window.RECEPCION = { problema: problema, abrirReporte: abrirReporte, cerrarReporte: cerrarReporte, enviarReporte: enviarReporte,
+      cargarDevoluciones: cargarDevoluciones, abrirResolver: abrirResolver, cerrarResolver: cerrarResolver, resolver: resolver, ayudaRes: ayudaRes,
+      abrirReq: abrirReq, comprimirFoto: comprimirFoto };
+
+    registrarModulo({
+      nombre: 'Recepción',
+      alPermisos(permisos, solo) {
+        const com = !!permisos && !solo && (permisos.compras || permisos.superadmin);
+        $('comModDevoluciones').classList.toggle('oculto', !com);
+        if (!com) { RD.lista = null; $('devLista').innerHTML = ''; }
+      },
+      alVerTab(t) { if (t === 'com' && BOOT && !RD.lista && !RD.cargando) cargarDevoluciones(); },
+      // La sincronización manda la lista otra vez cuando cambia algo (con el estado elegido)
+      contexto() { return RD.lista && TAB === 'com' ? { devoluciones: { estado: $('devEstado').value } } : {}; },
+      alSincronizar(r) { if (r && r.devoluciones && RD.lista) pintarLista(r.devoluciones); },
+      alMisReq(lista) { pintarMisReqDev(lista); },
+      alVistaReqCom(v) { pintarCompras(v); },
     });
   })();
 </script>

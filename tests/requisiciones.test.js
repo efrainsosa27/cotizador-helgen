@@ -110,6 +110,8 @@ function vivos(f){return f.hijos.filter(h=>!h.trashed)}
 
 
 const PDF=Buffer.from('%PDF-1.4 cotizacion del proveedor').toString('base64');
+// Incremento 5: "Recibí el material" lleva una foto por renglón de la orden
+const FOTOS={renglones:Array.from({length:20},(_,i)=>({renglon:i+1,foto:{nombre:'f.jpg',datos:Buffer.from([0xFF,0xD8,0xFF,0xE0,0,16]).toString('base64')}}))};
 const JPG=Buffer.from([0xFF,0xD8,0xFF,0xE0,1,2,3]).toString('base64');
 const REQ=f=>'REQ-'+ANIO+'-'+f, OC=f=>'OC-'+ANIO+'-'+f, PGP=f=>'PGP-'+ANIO+'-'+f;
 
@@ -355,7 +357,7 @@ falla('pedro','cerrarRequisicion',[REQ('0001'),''],/Solo quien hizo la requisici
 falla('obrero','cerrarRequisicionCompras',[REQ('0001'),'Lo cierro yo'],/No tienes permiso de compras/,'PERMISO');
 falla('pedro','cerrarRequisicionCompras',[REQ('0001'),''],/Escribe por qué cierras/);
 falla('obrero','cerrarRequisicion',[REQ('0001'),'n'.repeat(501)],/500 caracteres/);
-mias=ok('obrero','cerrarRequisicion',REQ('0001'),'Faltó 1 pieza');
+mias=ok('obrero','cerrarRequisicion',REQ('0001'),'Faltó 1 pieza',FOTOS);
 assert.deepEqual([mias[0].estado,mias[0].notasRecepcion,mias[0].puedeCerrar,mias[0].eventos[mias[0].eventos.length-1].nota],['Cerrada','Faltó 1 pieza',false,'Material recibido · Faltó 1 pieza']);
 let fo=H('OrdenesCompra')[1];
 assert.deepEqual([fo[28],fo[29],fo[30]],['Recibida',HOY_ISO,'obrero@helgen.tech']);

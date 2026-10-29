@@ -13,7 +13,7 @@ const dir = process.argv[2] || '.';
 const A = require('./arnes')(dir, { props: {
   ROL_COMPRAS: 'efrain@helgen.tech, pedro@helgen.tech', ROL_REQUISICION: 'obrero@helgen.tech, pedro@helgen.tech',
   ROL_COBRANZA: 'efrain@helgen.tech', SUPER_ADMIN: 'leo@helgen.tech' } });
-const { P, ok, falla, plain, props, HOY_ISO, masDias, correr, ANIO, PDF } = A;
+const { P, ok, falla, plain, props, HOY_ISO, masDias, correr, ANIO, PDF, FOTOS } = A;
 const JPG = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3]).toString('base64');
 const TXT = Buffer.from('hola, no soy un PDF').toString('base64');
 const CLABE1 = '032180000118359719', CLABE2 = '002010077777777771';
@@ -339,14 +339,14 @@ assert.deepEqual([v3.orden.formaPago, v3.puedeCerrar, v3.recibeAntesDePagar, v3.
 assert.deepEqual([ok('pedro', 'getRequisicion', r4).puedeCerrar], [false]);
 falla('obrero', 'cerrarRequisicion', [r4, ''], /no se puede cerrar/);
 const c3 = A.correos.length;
-const l3 = ok('obrero', 'cerrarRequisicion', r3, 'Llegó completo');
+const l3 = ok('obrero', 'cerrarRequisicion', r3, 'Llegó completo', FOTOS); // H: una foto por renglón
 assert.deepEqual([l3.find(x => x.folio === r3).estado, l3.find(x => x.folio === r3).puedeCerrar], ['Recibida', false]);
 const fo3 = filaOc(a3.ocFolio);
 assert.deepEqual([fo3[28], fo3[29], fo3[30]], ['Emitida', HOY_ISO, 'obrero@helgen.tech'], 'la orden sigue Emitida (sin pagar) con su recepción');
 const aviso3 = A.correos.slice(c3).find(m => /pedro@helgen\.tech/.test(m.to));
 assert(aviso3 && /Falta registrar el pago/.test(aviso3.body), 'compras sabe que falta pagar');
 assert(/Recibir antes de pagar \(crédito del proveedor\)/.test(bitCompras().map(r => r[2]).join('|')));
-falla('pedro', 'cancelarOrdenCompra', [a3.ocFolio, 'Ya no la queremos'], /ya se recibió \(falta pagarla\)/);
+falla('pedro', 'cancelarOrdenCompra', [a3.ocFolio, 'Ya no la queremos'], /ya se recibió \(falta pagarla\)|ya tiene material recibido/);
 assert(!ok('obrero', 'pendientes', false).items.some(x => x.folio === r3), 'ya no espera a quien pidió');
 assert(ok('pedro', 'pendientes', false).items.some(x => x.folio === r3 && x.tipo === 'pagarRecibida'), 'compras: recibida, falta pagar');
 v3 = ok('pedro', 'getRequisicion', r3);
