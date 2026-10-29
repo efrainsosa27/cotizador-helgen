@@ -16,6 +16,8 @@
 //  A. (Revisión 5b) Tarjetas escritas con puntos, dobles espacios, "/" o "_" entre grupos, y formas 4-4-4-(1…4) y Diners 4-6-4;
 //     fechas y folios siguen separados.
 //  E. (Revisión 5b) listarDevoluciones no da a quien pide la liga de la foto sin acceso a la carpeta de compras (accesoFotos_).
+//  F. (Revisión 5b) mod-recepcion: los folios dentro de onclick van con jsArg (JSON + escape del atributo), nunca con esc entre
+//     comillas simples.
 // Uso: node tests/revision5.test.js .
 'use strict';
 const assert = require('assert');
@@ -375,6 +377,26 @@ aprobaciones(false);
   assert(/^https:\/\//.test(fotoDe('obrero')), 'con acceso (lector de la carpeta) sí');
   delete carpeta.getEditors; delete carpeta.getViewers; delete carpeta.getOwner;
   for (const k of Object.keys(A.cache)) delete A.cache[k];
+}
+
+// ================= F. Folios en onclick con jsArg =================
+{
+  const html = require('fs').readFileSync(require('path').join(dir, 'web/cotizador/index.html'), 'utf8');
+  const src = (html.match(/<script id="mod-recepcion">([\s\S]*?)<\/script>/) || [])[1] || '';
+  assert(src.length > 1000, 'existe mod-recepcion');
+  assert(!/\('" \+ esc\(/.test(src) && !/\(\\'' \+ esc\(/.test(src), 'ningún esc(…) entre comillas de un argumento de onclick');
+  for (const llamada of ['RECEPCION.abrirReporte(" + jsArg(r.folio)', 'RECEPCION.abrirResolver(" + jsArg(d.folio) + ",\'com\')',
+    'RECEPCION.abrirReporte(" + jsArg(v.requisicion.folio)', "RECEPCION.abrirReq(' + jsArg(d.reqFolio)", 'RECEPCION.abrirResolver(" + jsArg(d.folio) + ",\'lista\')']) {
+    assert(src.includes(llamada), 'usa jsArg: ' + llamada);
+  }
+  // jsArg deja un folio con comilla como texto de JS dentro del atributo (no se sale del argumento)
+  const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const jsArg = x => esc(JSON.stringify(String(x ?? '')));
+  const attr = 'RECEPCION.abrirReq(' + jsArg("REQ-1');alert(1);('") + ');return false';
+  const decodificado = attr.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+  let recibido = null;
+  new Function('RECEPCION', decodificado)({ abrirReq: f => { recibido = f; } });
+  assert.equal(recibido, "REQ-1');alert(1);('", 'el folio llega como texto');
 }
 
 console.log('revision5: ok');

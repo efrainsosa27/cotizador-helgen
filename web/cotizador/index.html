@@ -5293,7 +5293,7 @@
         partes.push('<div class="nota" style="margin-top:4px"><b>Fotos:</b> ' + r.fotos.map(x => esc(x.folio) + ' r' + esc(x.renglon) + ' ' + ligaFoto(x.url)).join(' · ') + '</div>');
       }
       if ((r.reportables || []).length && !(RD.reporte && RD.reporte.folio === r.folio && RD.reporte.desde === 'req')) {
-        partes.push('<div class="acciones" style="margin-top:6px">' + botonChico('Reportar problema', "RECEPCION.abrirReporte('" + esc(r.folio) + "','req')") + '</div>');
+        partes.push('<div class="acciones" style="margin-top:6px">' + botonChico('Reportar problema', "RECEPCION.abrirReporte(" + jsArg(r.folio) + ",'req')") + '</div>');
       }
       partes.push('<div id="devForm-' + esc(r.folio) + '"></div>');
       return partes.join('');
@@ -5336,10 +5336,10 @@
             (d.origen === 'Centro de mando' ? '<div class="nota">centro de mando</div>' : '') + '</td><td>' + (d.estado === 'Abierta' ? '<span class="chip aceptada">Abierta</span>'
             : '<span class="chip firmado">' + esc(d.resolucion) + '</span>' + (d.notaResolucion ? '<div class="nota">' + esc(d.notaResolucion) + '</div>' : '') +
               (d.guia ? '<div class="nota">Guía ' + esc(d.guia) + '</div>' : '')) + '</td><td>' +
-            (d.puedeResolver ? botonChico('Resolver', "RECEPCION.abrirResolver('" + esc(d.folio) + "','com')", false) : '') + '</td></tr>').join('') + '</tbody></table></div>' : '') +
+            (d.puedeResolver ? botonChico('Resolver', "RECEPCION.abrirResolver(" + jsArg(d.folio) + ",'com')", false) : '') + '</td></tr>').join('') + '</tbody></table></div>' : '') +
         '<div id="rcDevResolver"></div>' +
         ((v.reportables || []).length && !(RD.reporte && RD.reporte.desde === 'com') ? '<div class="acciones" style="margin-top:6px">' +
-          botonChico('Reportar problema', "RECEPCION.abrirReporte('" + esc(v.requisicion.folio) + "','com')") + '</div>' : '') +
+          botonChico('Reportar problema', "RECEPCION.abrirReporte(" + jsArg(v.requisicion.folio) + ",'com')") + '</div>' : '') +
         '<div id="rcDevForm"></div>';
       if (abiertoRes) { const dv = devs.find(d => d.folio === abiertoRes.folio); $('rcDevResolver').innerHTML = htmlResolver(abiertoRes.clave, dv); }
       if (RD.reporte && RD.reporte.desde === 'com') {
@@ -5359,11 +5359,11 @@
       if (RD.resolver && RD.resolver.desde === 'lista') { RD.listaPendiente = l; return; } // no se borra lo capturado
       RD.lista = l || [];
       $('devLista').innerHTML = RD.lista.length ? RD.lista.map(d => '<tr><td><b>' + esc(d.folio) + '</b>' + (d.origen === 'Centro de mando' ? '<div class="nota">centro de mando</div>' : '') +
-        '</td><td>' + esc(fechaMx(d.fecha)) + '</td><td><a href="#" onclick="RECEPCION.abrirReq(\'' + esc(d.reqFolio) + '\');return false">' + esc(d.reqFolio) + '</a><div class="nota">' +
+        '</td><td>' + esc(fechaMx(d.fecha)) + '</td><td><a href="#" onclick="RECEPCION.abrirReq(' + jsArg(d.reqFolio) + ');return false">' + esc(d.reqFolio) + '</a><div class="nota">' +
         esc(d.proyectoVisible) + ' · ' + esc(d.proyectoNombre) + '</div></td><td>' + textoMaterial(d) + '</td><td>' + esc(d.tipo) +
         (d.comentario ? '<div class="nota">' + esc(d.comentario) + '</div>' : '') + (d.fotoUrl ? '<div>' + ligaFoto(d.fotoUrl) + '</div>' : '') + '</td><td>' + esc(d.reporto) +
         '</td><td>' + (d.estado === 'Abierta' ? '<span class="chip aceptada">Abierta</span>' : '<span class="chip firmado">' + esc(d.resolucion) + '</span>') + '</td><td>' +
-        (d.puedeResolver ? botonChico('Resolver', "RECEPCION.abrirResolver('" + esc(d.folio) + "','lista')", false) : '') + '</td></tr>').join('')
+        (d.puedeResolver ? botonChico('Resolver', "RECEPCION.abrirResolver(" + jsArg(d.folio) + ",'lista')", false) : '') + '</td></tr>').join('')
         : '<tr><td colspan="8" class="nota">No hay devoluciones' + ($('devEstado').value === 'Abierta' ? ' por resolver' : '') + '.</td></tr>';
     }
     function abrirResolver(folio, desde) {

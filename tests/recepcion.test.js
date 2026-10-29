@@ -699,7 +699,7 @@ const archivo = n => ({ name: n || 'IMG_0001.HEIC', type: 'image/jpeg', size: 20
   assert(/cerrada: material recibido/.test($('aviso').innerHTML), $('aviso').innerHTML);
   assert.equal(mia('obrero', s5.req).estado, 'Cerrada');
   // ---- Reportar problema después ----
-  assert(/RECEPCION\.abrirReporte\('REQ-/.test($('devCaja-' + s5.req).innerHTML), '"Reportar problema" en lo recibido');
+  assert(/RECEPCION\.abrirReporte\(&quot;REQ-/.test($('devCaja-' + s5.req).innerHTML), '"Reportar problema" en lo recibido (folio con jsArg)');
   U.run("RECEPCION.abrirReporte('" + s5.req + "','req')");
   const k = 'dvrreq' + s5.req.replace(/[^A-Za-z0-9]/g, '');
   assert(/Reportar problema/.test($('devForm-' + s5.req).innerHTML) && /recibido sin reportar: 80 M/.test($('devForm-' + s5.req).innerHTML));
