@@ -962,8 +962,9 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
 - **CAPRI — incremento 5: construido e integrado el 29/10/2026 (rama `incremento-5`), SIN PUBLICAR.** Módulos F (proveedores y
   forma de pago) y H (fotos y devoluciones) + centro de mando (repo `hbox-docs`, rama `fotos-devoluciones`). Publicar: respaldo del
   libro de compras; `clasp push`; como facilities@: `prepararCapri()` y nueva versión del deployment; `CLOUDFLARE_ACCOUNT_ID=… wrangler
-  deploy`; centro de mando: parches + `./scripts/deploy.sh` + `sudo systemctl restart actas-hbox` (antes o junto con CAPRI); nginx debe
-  dejar pasar `/api/integracion/` sin sesión (pendiente de revisar con `curl`). Avisar a compras: transferencias bloqueadas sin CSF y
+  deploy`; centro de mando: parches + `./scripts/deploy.sh` + `sudo systemctl restart actas-hbox` (antes o junto con CAPRI); nginx
+  bloqueaba `/api/integracion/` (`"sesion":false`, confirmado por Leo el 29/10): el arreglo va en `hbox-docs`
+  (`backend/nginx/drogheda.helgen.online.conf`, `location ^~ /api/integracion/` sin sesión; lo instala `cambiar-entrada.sh aplicar`). Avisar a compras: transferencias bloqueadas sin CSF y
   carátula; órdenes con días de crédito se reciben antes de pagar; recibir pide foto por renglón.
 - **CAPRI — incremento 4: PUBLICADO el 29/10/2026 ~11:55** (API **@13** publicada por `facilities@helgen.tech` sobre el mismo
   deployment `AKfycbwBjF7…`, "Ejecutar como: facilities@"; interfaz con `CLOUDFLARE_ACCOUNT_ID=badd8bca… npx wrangler@4 deploy`,
