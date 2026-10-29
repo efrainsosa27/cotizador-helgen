@@ -125,6 +125,11 @@ for (const [estado, cuantas] of [['cerrada', 12], ['pagada', 8], ['autorizada', 
 }
 // Una requisición del proyecto ligado, autorizada (marca En camino y recibe el centro de mando)
 { const f = nuevaReq('obrero', P1); aprobar(f); cotizar(f, 1); reqs.ligada = { folio: f, oc: vistoBueno(f) }; }
+// La carpeta de compras tiene editores y lectores, como en Drive (accesoFotos_ los guarda 1 h en caché; sin esto el arnés la
+// buscaría en cada llamada)
+{ const cc = A.carpetas[A.props.COMPRAS_FOLDER_ID];
+  cc.getEditors = () => [{ getEmail: () => 'pedro@helgen.tech' }]; cc.getViewers = () => [{ getEmail: () => 'leo@helgen.tech' }];
+  cc.getOwner = () => ({ getEmail: () => 'facilities@helgen.tech' }); }
 // Correos y avisos que quedaron por mandar: se mandan aquí (el activador los manda cada 15 min)
 P.cadaQuinceMinutos();
 

@@ -14,8 +14,8 @@ module.exports = function crearArnes(dir, opciones) {
   // ---- Perfil: tipos = lee, escribe, formato, ultimaFila, dataRange, abrir, drive, driveCrea, cache, props, candado,
   // urlfetch, correo, pdf. candado = ¿se hizo con el candado de script tomado? pila = funciones de Code.js (con perfil.pila) ----
   const perfil = { activo: !!op.perfil, pila: false, ops: [], enCandado: 0 };
-  const pilaCode = () => String(new Error().stack).split('\n').filter(l => /capri\.js/.test(l))
-    .map(l => (l.match(/at (?:Object\.)?([\w$.]+) \(/) || [])[1]).filter(Boolean).slice(0, 8);
+  const pilaCode = () => { const lim = Error.stackTraceLimit; Error.stackTraceLimit = 60; const e = new Error(); Error.stackTraceLimit = lim; return String(e.stack).split('\n').filter(l => /capri\.js/.test(l))
+    .map(l => (l.match(/at (?:Object\.)?([\w$.]+) \(/) || [])[1]).filter(Boolean).slice(0, 20); };
   const anota = (tipo, extra) => {
     if (!perfil.activo) return;
     const o = Object.assign({ tipo, candado: perfil.enCandado > 0 }, extra || {});
