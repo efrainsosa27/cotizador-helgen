@@ -414,7 +414,7 @@ function migrarPermisos_(libro) {
   }
   const ahora = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
   const filas = Object.keys(usuarios).sort().map(c => filaDeUsuario(usuarios[c], 'migración', ahora).map(textoCelda));
-  if (filas.length) hoja.getRange(2, 1, filas.length, HOJAS_ADMIN.Permisos.enc.length).setValues(filas);
+  if (filas.length) escribe_(hoja).getRange(2, 1, filas.length, HOJAS_ADMIN.Permisos.enc.length).setValues(filas);
   return filas.length;
 }
 
@@ -460,9 +460,89 @@ function propiedades_(releer) {
   return MEMO_.props;
 }
 
+/**
+ * Rapidez (30/10/2026): ID guardado en Script Properties (SPREADSHEET_ID, CATALOGO_ID, COMPRAS_DB_ID, carpetas…) tomado de la
+ * lectura de esta petición (propiedades_) en lugar de una lectura por cada uso (0.05 s cada una). Si no está, se lee directo:
+ * quien lo crea (bajo candado) lo guarda y la siguiente lectura ya lo ve. Solo para IDs, que no cambian una vez creados;
+ * los contadores de folio (CONSECUTIVO_…) y las versiones se siguen leyendo frescos.
+ */
+function idGuardado_(clave) {
+  return propiedades_()[clave] || PropertiesService.getScriptProperties().getProperty(clave);
+}
+
+/** Rapidez: un libro de Sheets se abre una vez por petición (openById tarda) y se reusa lo abierto. */
+function abrirLibro_(id) {
+  const abiertos = MEMO_.libros || (MEMO_.libros = {});
+  return abiertos[id] || (abiertos[id] = SpreadsheetApp.openById(id));
+}
+
+/** Filas 2…última (n columnas) de una pestaña, con una sola llamada a getLastRow (cada llamada es un viaje a Sheets). */
+function filasDatos_(hoja, n) {
+  const ultima = hoja.getLastRow();
+  return ultima > 1 ? hoja.getRange(2, 1, ultima - 1, n).getValues() : [];
+}
+
+// ---- Rapidez (30/10/2026): filas leídas en esta petición ----
+// Una pestaña se leía completa varias veces en la misma llamada (p. ej. Requisiciones 4 veces al sincronizar compras: mis
+// requisiciones, la lista, la requisición abierta y Pendientes). filasEnPeticion_ guarda lo leído en MEMO_.filas (clave que
+// termina en "/<pestaña>/<id de la pestaña>") y lo reparte en copias. Nunca devuelve algo viejo:
+//  - toda escritura pasa por escribe_(hoja) (lo exige tests/rapidez.test.js), que olvida lo leído de esa pestaña (y Config
+//    ya leída, si es Config); una escritura al libro (crear o borrar una pestaña) o a algo que no es una pestaña olvida todo;
+//  - al tomar y al soltar el candado (candado_) se olvida todo: adentro se relee lo que otra persona pudo cambiar mientras
+//    se esperaba;
+//  - cada vez que se leen las versiones (versiones_) se olvida todo: una lista que se guarda en caché con una versión se arma
+//    con filas leídas después de esa versión, nunca antes.
+// Las pestañas que se guardan (compras, cobranza, administración y Proyectos) no tienen fórmulas que dependan de otras.
+function filasEnPeticion_(clave, leer) {
+  const memo = MEMO_.filas || (MEMO_.filas = {});
+  if (!memo[clave]) memo[clave] = leer();
+  return memo[clave].map(r => r.slice()); // copias: quien las recibe puede cambiarlas sin tocar las de los demás
+}
+
+function olvidarFilas_() {
+  MEMO_.filas = null;
+  MEMO_.cfgLigera = null; // Config ya leída en la petición (configLigera_)
+}
+
+/** Sufijo de las claves de MEMO_.filas de una pestaña ("/Requisiciones/123"); '' si no se sabe. */
+function sufijoFilas_(hoja) {
+  if (!hoja || typeof hoja.getSheetId !== 'function' || typeof hoja.getName !== 'function') return '';
+  return '/' + hoja.getName() + '/' + hoja.getSheetId();
+}
+
+/**
+ * Toda escritura a una hoja va así: escribe_(hoja).getRange(…).setValues(…) / escribe_(hoja).appendRow(…). Olvida lo leído
+ * de esa pestaña en la petición; si no es una pestaña (el libro: insertSheet, deleteSheet), todo.
+ */
+function escribe_(hoja) {
+  const sufijo = sufijoFilas_(hoja);
+  if (!sufijo) { olvidarFilas_(); return hoja; }
+  // Encabezados confiados sin leer (confiarEncabezados_): antes de la primera escritura, si la pestaña está vacía, se reponen
+  const confiados = MEMO_.encConfiado && MEMO_.encConfiado[sufijo];
+  if (confiados) {
+    delete MEMO_.encConfiado[sufijo];
+    (MEMO_.encVacia = MEMO_.encVacia || {})[sufijo] = true;
+    if (hoja.getLastRow() === 0) Object.keys(confiados).forEach(k => confiados[k]());
+  }
+  const memo = MEMO_.filas || {};
+  Object.keys(memo).forEach(k => { if (k.slice(-sufijo.length) === sufijo) delete memo[k]; });
+  if (/^\/Config\//.test(sufijo)) MEMO_.cfgLigera = null;
+  return hoja;
+}
+
+/** El candado de script. Al tomarlo o soltarlo se olvidan las filas leídas en la petición (filasEnPeticion_). */
+function candado_() {
+  const lock = LockService.getScriptLock();
+  return {
+    tryLock: ms => { const ok = lock.tryLock(ms); if (ok) olvidarFilas_(); return ok; },
+    releaseLock: () => { lock.releaseLock(); olvidarFilas_(); },
+  };
+}
+
 /** {proyectos: 12, contratos: 3, …} desde Script Properties (VER_<colección>). */
 function versiones_(releer) {
   if (!VERSIONES_ || releer) {
+    olvidarFilas_(); // rapidez: lo que se arme con estas versiones se lee después de ellas (filasEnPeticion_)
     const props = propiedades_(releer);
     VERSIONES_ = {};
     COLECCIONES.forEach(c => { VERSIONES_[c] = Number(props['VER_' + c]) || 0; });
@@ -476,7 +556,7 @@ function versiones_(releer) {
  */
 function subirVersiones_(colecciones) {
   if (!colecciones || !colecciones.length) return;
-  const lock = LockService.getScriptLock();
+  const lock = candado_();
   if (!lock.tryLock(10000)) { console.warn('Sin candado: no subió la versión de ' + colecciones.join(', ')); return; }
   try {
     const props = PropertiesService.getScriptProperties();
@@ -491,10 +571,16 @@ function subirVersiones_(colecciones) {
 
 const TROZO_CACHE = 30000; // caracteres por entrada (CacheService admite 100 KB por valor; un acento ocupa 2 bytes)
 
-/** Lee un valor JSON guardado en trozos por guardarCache_; undefined si no está o le falta un trozo. */
+/**
+ * Lee un valor JSON guardado por guardarCache_; undefined si no está o le falta un trozo. Rapidez (30/10/2026): un valor que
+ * cabe en un trozo va en la misma entrada ("V:<json>", una lectura); uno más grande, en trozos ("N:<n>" + <clave>#0…).
+ */
 function leerCache_(clave) {
   const cache = CacheService.getScriptCache();
   const meta = cache.get(clave);
+  if (meta && meta.slice(0, 2) === 'V:') {
+    try { return JSON.parse(meta.slice(2)); } catch (e) { return undefined; }
+  }
   if (!meta || !/^N:\d+$/.test(meta)) return undefined;
   const claves = [];
   for (let i = 0; i < Number(meta.slice(2)); i++) claves.push(clave + '#' + i);
@@ -510,6 +596,8 @@ function leerCache_(clave) {
 function guardarCache_(clave, valor, ttl) {
   try {
     const texto = JSON.stringify(valor), datos = {};
+    // Rapidez: lo que cabe en un trozo va en la misma entrada (al leerlo, un viaje a CacheService en lugar de dos)
+    if (texto.length <= TROZO_CACHE) { CacheService.getScriptCache().put(clave, 'V:' + texto, ttl); return; }
     let n = 0;
     for (let i = 0; i < texto.length; i += TROZO_CACHE) datos[clave + '#' + (n++)] = texto.slice(i, i + TROZO_CACHE);
     if (n > 30) return; // demasiado grande: se seguirá leyendo de la hoja
@@ -556,12 +644,20 @@ const TTL_CACHE = 21600; // 6 h (lo máximo de CacheService): cada escritura sub
 function fuenteConHuella_(nombre, coleccion, cadaSeg, leer, revisar) {
   if (SIN_CACHE_) return leer();
   const memo = MEMO_['F_' + nombre];
-  if (memo && (!revisar || memo.revisado)) return memo.valor;
-  const cache = CacheService.getScriptCache();
   const v = versiones_()[coleccion];
+  // Lo ya leído en la petición sirve solo con la misma versión (30/10/2026): si la versión cambió (otra petición escribió y
+  // esta volvió a leer las versiones), una lista que se guarda con la versión nueva no se arma con el valor de antes
+  if (memo && memo.version === v && (!revisar || memo.revisado)) return memo.valor;
+  const cache = CacheService.getScriptCache();
+  // Rapidez: ya está en la petición con esta versión (p. ej. Permisos, que se leen para los roles): para revisarla basta
+  // saber si ya toca releer la hoja (marca R_); no se vuelve a traer el valor del caché
+  if (memo && memo.version === v && cache.get('R_' + nombre)) {
+    memo.revisado = true;
+    return memo.valor;
+  }
   const previo = leerCache_('F_' + nombre + '_' + v);
   if (previo !== undefined && (!revisar || cache.get('R_' + nombre))) {
-    MEMO_['F_' + nombre] = { valor: previo, revisado: !!revisar };
+    MEMO_['F_' + nombre] = { valor: previo, revisado: !!revisar, version: v };
     return previo;
   }
   const valor = leer();
@@ -575,18 +671,13 @@ function fuenteConHuella_(nombre, coleccion, cadaSeg, leer, revisar) {
   guardarCache_('F_' + nombre + '_' + version, valor, TTL_CACHE);
   cache.put('H_' + nombre, version + '|' + huella, TTL_CACHE);
   cache.put('R_' + nombre, '1', cadaSeg);
-  MEMO_['F_' + nombre] = { valor: valor, revisado: true };
+  MEMO_['F_' + nombre] = { valor: valor, revisado: true, version: version };
   return valor;
 }
 
 /** Todos los proyectos de la pestaña Proyectos (con carpetaId: solo para uso interno). */
 function proyectosCache_(revisar) {
-  return fuenteConHuella_('proyectos', 'proyectos', 300, () => {
-    const hoja = hojaProyectos_();
-    const filas = hoja.getLastRow() > 1
-      ? hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
-    return proyectosDesdeFilas(filas);
-  }, revisar);
+  return fuenteConHuella_('proyectos', 'proyectos', 300, () => proyectosDesdeFilas(filasProyectos_()), revisar);
 }
 
 /** {folio: proyecto} con los proyectos en caché. */
@@ -626,10 +717,14 @@ function clientesCache_(revisar) {
 
 /** IVA y vigencia para la interfaz (la Config completa se sigue leyendo fresca al guardar). */
 function configLigera_() {
-  return enCache_('config2', [], 600, () => { // 10 min: la lista de sitios se edita a mano en Config
-    const cfg = getConfig_();
-    return { ivaTasa: cfg.IVA_TASA, vigenciaDias: cfg.VIGENCIA_DIAS, sitios: String(cfg.SITIOS == null ? '' : cfg.SITIOS) };
-  });
+  // Rapidez: una vez por petición (también en las escrituras, donde no se usa el caché y se leía Config en cada uso)
+  if (!MEMO_.cfgLigera) {
+    MEMO_.cfgLigera = enCache_('config2', [], 600, () => { // 10 min: la lista de sitios se edita a mano en Config
+      const cfg = getConfig_();
+      return { ivaTasa: cfg.IVA_TASA, vigenciaDias: cfg.VIGENCIA_DIAS, sitios: String(cfg.SITIOS == null ? '' : cfg.SITIOS) };
+    });
+  }
+  return MEMO_.cfgLigera;
 }
 
 /**
@@ -856,9 +951,9 @@ function setup() {
     props.setProperty('SPREADSHEET_ID', ss.getId());
   }
 
-  const hCot = ss.getSheetByName('Cotizaciones') || ss.insertSheet('Cotizaciones');
+  const hCot = ss.getSheetByName('Cotizaciones') || escribe_(ss).insertSheet('Cotizaciones');
   if (hCot.getLastRow() === 0) {
-    hCot.appendRow(ENCABEZADOS_COTIZACIONES);
+    escribe_(hCot).appendRow(ENCABEZADOS_COTIZACIONES);
     hCot.setFrozenRows(1);
     hCot.getRange(1, 1, 1, ENCABEZADOS_COTIZACIONES.length)
       .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
@@ -866,15 +961,15 @@ function setup() {
 
   // El catálogo vive en su propio archivo ("Catálogo Helgen"): ver hojaCatalogo_()
 
-  const hCfg = ss.getSheetByName('Config') || ss.insertSheet('Config');
+  const hCfg = ss.getSheetByName('Config') || escribe_(ss).insertSheet('Config');
   if (hCfg.getLastRow() === 0) {
     hCfg.getRange('B:B').setNumberFormat('@'); // texto: evita que "+52 ..." se lea como fórmula
-    hCfg.getRange(1, 1, CONFIG_INICIAL.length + 1, 2).setValues([['Clave', 'Valor']].concat(CONFIG_INICIAL));
+    escribe_(hCfg).getRange(1, 1, CONFIG_INICIAL.length + 1, 2).setValues([['Clave', 'Valor']].concat(CONFIG_INICIAL));
     hCfg.setColumnWidth(2, 600);
   }
 
   const hoja1 = ss.getSheetByName('Hoja 1') || ss.getSheetByName('Sheet1');
-  if (hoja1 && ss.getSheets().length > 1) ss.deleteSheet(hoja1);
+  if (hoja1 && ss.getSheets().length > 1) escribe_(ss).deleteSheet(hoja1);
 
   // Carpeta de Drive para los PDF
   if (!props.getProperty('FOLDER_ID')) {
@@ -889,10 +984,11 @@ function setup() {
 // ====== 3. LECTURA DE DATOS ======
 
 function db_() {
-  const props = PropertiesService.getScriptProperties();
-  if (!props.getProperty('SPREADSHEET_ID') || !props.getProperty('FOLDER_ID')) {
+  // Rapidez: los IDs salen de la lectura de propiedades de la petición y el libro se abre una vez (idGuardado_, abrirLibro_)
+  if (!idGuardado_('SPREADSHEET_ID') || !idGuardado_('FOLDER_ID')) {
+    const props = PropertiesService.getScriptProperties();
     // Primera vez: se instala sola (hoja + carpeta) en lugar de exigir correr setup() a mano.
-    const lock = LockService.getScriptLock();
+    const lock = candado_();
     if (!lock.tryLock(30000)) throw new Error('Se está preparando el cotizador. Recarga la página en unos segundos.');
     try {
       if (!props.getProperty('SPREADSHEET_ID') || !props.getProperty('FOLDER_ID')) setup();
@@ -900,13 +996,15 @@ function db_() {
       lock.releaseLock();
     }
   }
-  return SpreadsheetApp.openById(props.getProperty('SPREADSHEET_ID'));
+  return abrirLibro_(idGuardado_('SPREADSHEET_ID'));
 }
 
 function getConfig_() {
   const hoja = db_().getSheetByName('Config');
-  migrarConfig_(hoja);
-  const filas = hoja.getDataRange().getValues().slice(1);
+  // Rapidez: una sola lectura (migrarConfig_ revisa sobre ella); si hubo que migrar (o esperar a quien migraba), se relee
+  let valores = hoja.getDataRange().getValues();
+  if (migrarConfig_(hoja, valores)) valores = hoja.getDataRange().getValues();
+  const filas = valores.slice(1);
   const cfg = {};
   filas.forEach(([k, v]) => { if (k) cfg[String(k).trim()] = v; });
   cfg.IVA_TASA = Number(cfg.IVA_TASA) || 0.16;
@@ -920,19 +1018,20 @@ function getConfig_() {
  * - Valores de ejemplo (CONFIG_EJEMPLO_ANTERIOR) -> datos reales de Helgen
  * - Valores que Sheets leyó como fórmula con error (p. ej. "+52 ..." -> #ERROR!) se reponen como texto.
  */
-function migrarConfig_(hoja) {
-  const necesita = () => {
-    const v = hoja.getDataRange().getValues();
+function migrarConfig_(hoja, leidos) {
+  // leidos = lo que quien llama ya leyó de Config (rapidez: no se vuelve a leer para saber si hay algo que migrar).
+  // Devuelve true si pasó de la primera revisión (migró, otra petición migraba o no hubo candado): quien llama relee.
+  const necesita = v => {
     const claves = v.map(r => r[0]);
     return CONFIG_INICIAL.some(([k]) => claves.indexOf(k) === -1) ||
       v.some(r => /^#[A-Z/0!?]+/.test(String(r[1])) || CONFIG_EJEMPLO_ANTERIOR[r[0]] === String(r[1]));
   };
-  if (!necesita()) return;
+  if (!necesita(leidos || hoja.getDataRange().getValues())) return false;
 
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(30000)) return;
+  const lock = candado_();
+  if (!lock.tryLock(30000)) return true;
   try {
-    if (!necesita()) return;
+    if (!necesita(hoja.getDataRange().getValues())) return true;
     const valores = hoja.getDataRange().getValues();
     const iniciales = {};
     CONFIG_INICIAL.forEach(([k, v]) => { iniciales[k] = v; });
@@ -941,17 +1040,18 @@ function migrarConfig_(hoja) {
     valores.forEach((r, i) => {
       const fila = i + 1;
       if (r[0] === 'TERMINOS') {
-        hoja.getRange(fila, 1, 1, 2).setValues([['TERMINOS_ENERGY', iniciales.TERMINOS_ENERGY]]);
+        escribe_(hoja).getRange(fila, 1, 1, 2).setValues([['TERMINOS_ENERGY', iniciales.TERMINOS_ENERGY]]);
       } else if (i > 0 && r[0] in iniciales &&
           (/^#[A-Z/0!?]+/.test(String(r[1])) || CONFIG_EJEMPLO_ANTERIOR[r[0]] === String(r[1]))) {
-        hoja.getRange(fila, 2).setValue(String(iniciales[r[0]]));
+        escribe_(hoja).getRange(fila, 2).setValue(String(iniciales[r[0]]));
       }
     });
     const claves = hoja.getDataRange().getValues().map(r => r[0]);
     CONFIG_INICIAL.forEach(([k, v]) => {
-      if (claves.indexOf(k) === -1) hoja.appendRow([k, v]);
+      if (claves.indexOf(k) === -1) escribe_(hoja).appendRow([k, v]);
     });
     SpreadsheetApp.flush();
+    return true;
   } finally {
     lock.releaseLock();
   }
@@ -966,8 +1066,8 @@ const ENCABEZADOS_CATALOGO = ['Clave', 'Descripción', 'Unidad', 'Precio unitari
 /** Hoja del catálogo. La primera vez crea el archivo y pasa ahí los productos de la pestaña anterior. */
 function hojaCatalogo_() {
   const props = PropertiesService.getScriptProperties();
-  if (!props.getProperty('CATALOGO_ID')) {
-    const lock = LockService.getScriptLock();
+  if (!idGuardado_('CATALOGO_ID')) {
+    const lock = candado_();
     if (!lock.tryLock(30000)) throw new Error('Se está preparando el catálogo. Recarga la página en unos segundos.');
     try {
       if (!props.getProperty('CATALOGO_ID')) crearCatalogo_();
@@ -975,9 +1075,9 @@ function hojaCatalogo_() {
       lock.releaseLock();
     }
   }
-  const ss = SpreadsheetApp.openById(props.getProperty('CATALOGO_ID'));
+  const ss = abrirLibro_(idGuardado_('CATALOGO_ID'));
   const hoja = ss.getSheetByName('Catalogo') || ss.getSheets()[0];
-  asegurarColumnasSat_(hoja);
+  asegurarColumnasSat_(hoja, ss);
   // Precio en USD: dato extra; si falla, el catálogo funciona igual (en USD el precio se captura a mano)
   try { asegurarPrecioUsd_(hoja); } catch (e) { console.warn('Sin columna de precio USD: ' + e.message); }
   return hoja;
@@ -1000,8 +1100,8 @@ const formulaPrecioUsd_ = fila => '=IF(ISNUMBER(D' + fila + '),IFERROR(ROUND(D' 
 function asegurarPrecioUsd_(hoja) {
   const ss = hoja.getParent();
   if (!ss.getSheetByName(HOJA_TIPO_CAMBIO)) {
-    const tc = ss.insertSheet(HOJA_TIPO_CAMBIO);
-    tc.getRange(1, 1, 5, 2).setValues([
+    const tc = escribe_(ss).insertSheet(HOJA_TIPO_CAMBIO);
+    escribe_(tc).getRange(1, 1, 5, 2).setValues([
       ['Concepto', 'Valor'],
       ['Automático: Google Finance (pesos por dólar)', ''],
       ['Manual (opcional): si escribes un valor aquí, se usa en lugar del automático', ''],
@@ -1009,8 +1109,8 @@ function asegurarPrecioUsd_(hoja) {
       ['Nota', 'Los precios en USD del catálogo (columna I) se calculan solos con el tipo de cambio en uso. Google Finance ' +
         'se actualiza durante el día y puede tener unos minutos de retraso; no es el FIX de Banxico.'],
     ]);
-    tc.getRange(2, 2).setFormula('=GOOGLEFINANCE("CURRENCY:USDMXN")');
-    tc.getRange(4, 2).setFormula('=IF(ISNUMBER(B3),B3,IFERROR(ROUND(B2,4),""))');
+    escribe_(tc).getRange(2, 2).setFormula('=GOOGLEFINANCE("CURRENCY:USDMXN")');
+    escribe_(tc).getRange(4, 2).setFormula('=IF(ISNUMBER(B3),B3,IFERROR(ROUND(B2,4),""))');
     tc.getRange(2, 2, 3, 1).setNumberFormat('0.0000');
     tc.getRange(1, 1, 1, 2).setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
     tc.setColumnWidth(1, 470); tc.setColumnWidth(2, 160);
@@ -1018,21 +1118,28 @@ function asegurarPrecioUsd_(hoja) {
     // GOOGLEFINANCE se recalcula cada hora aunque nadie abra el archivo
     ss.setRecalculationInterval(SpreadsheetApp.RecalculationInterval.HOUR);
   }
-  if (hoja.getRange(1, COL_PRECIO_USD).getValue() !== ENC_PRECIO_USD) {
-    hoja.getRange(1, COL_PRECIO_USD).setValue(ENC_PRECIO_USD)
-      .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
-    hoja.getRange('I:I').setNumberFormat('$#,##0.00');
-    hoja.setColumnWidth(COL_PRECIO_USD, 210);
-    hoja.getRange('I:I').protect().setDescription('Precio USD automático: no escribir aquí (cambia el precio en pesos ' +
-      'o el tipo de cambio)').setWarningOnly(true);
-  }
+  // Rapidez: el encabezado de la columna I se lee solo si no se revisó hace poco (encabezadosRevisados_)
+  const claveUsd = claveEncabezados_(ss, hoja, 'Catalogo/USD', [ENC_PRECIO_USD]);
+  const revisarUsd = () => {
+    if (hoja.getRange(1, COL_PRECIO_USD).getValue() !== ENC_PRECIO_USD) {
+      escribe_(hoja).getRange(1, COL_PRECIO_USD).setValue(ENC_PRECIO_USD)
+        .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+      hoja.getRange('I:I').setNumberFormat('$#,##0.00');
+      hoja.setColumnWidth(COL_PRECIO_USD, 210);
+      hoja.getRange('I:I').protect().setDescription('Precio USD automático: no escribir aquí (cambia el precio en pesos ' +
+        'o el tipo de cambio)').setWarningOnly(true);
+    }
+    anotarEncabezados_(claveUsd);
+  };
+  if (!encabezadosRevisados_(claveUsd)) revisarUsd();
+  else confiarEncabezados_(hoja, claveUsd, revisarUsd);
   // Renglones con producto y sin fórmula en I: se les pone (incluye los dados de alta a mano en Sheets)
   const n = hoja.getLastRow() - 1;
   if (n < 1) return;
   const claves = hoja.getRange(2, 1, n, 1).getValues();
   const formulas = hoja.getRange(2, COL_PRECIO_USD, n, 1).getFormulas();
   claves.forEach((r, i) => {
-    if (String(r[0] || '').trim() && !formulas[i][0]) hoja.getRange(i + 2, COL_PRECIO_USD).setFormula(formulaPrecioUsd_(i + 2));
+    if (String(r[0] || '').trim() && !formulas[i][0]) escribe_(hoja).getRange(i + 2, COL_PRECIO_USD).setFormula(formulaPrecioUsd_(i + 2));
   });
 }
 
@@ -1050,14 +1157,22 @@ function tipoCambioCatalogo_(hoja) {
 }
 
 /** Catálogos creados antes de las columnas SAT: agrega los encabezados G:H con formato texto. */
-function asegurarColumnasSat_(hoja) {
+function asegurarColumnasSat_(hoja, ss) {
   const n = ENCABEZADOS_CATALOGO.length;
-  const enc = hoja.getRange(1, 7, 1, 2).getValues()[0];
-  if (enc[0] === ENCABEZADOS_CATALOGO[6] && enc[1] === ENCABEZADOS_CATALOGO[7]) return;
-  hoja.getRange('G:H').setNumberFormat('@'); // "01010101" no pierde el cero inicial
-  hoja.getRange(1, 7, 1, 2).setValues([ENCABEZADOS_CATALOGO.slice(6, n)])
-    .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
-  hoja.setColumnWidth(7, 110); hoja.setColumnWidth(8, 100);
+  // Rapidez: G1:H1 se leen solo si no se revisaron hace poco (encabezadosRevisados_; ss = el libro del catálogo)
+  const clave = ss ? claveEncabezados_(ss, hoja, 'Catalogo/SAT', ENCABEZADOS_CATALOGO.slice(6, n)) : '';
+  const revisar = () => {
+    const enc = hoja.getRange(1, 7, 1, 2).getValues()[0];
+    if (!(enc[0] === ENCABEZADOS_CATALOGO[6] && enc[1] === ENCABEZADOS_CATALOGO[7])) {
+      hoja.getRange('G:H').setNumberFormat('@'); // "01010101" no pierde el cero inicial
+      escribe_(hoja).getRange(1, 7, 1, 2).setValues([ENCABEZADOS_CATALOGO.slice(6, n)])
+        .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+      hoja.setColumnWidth(7, 110); hoja.setColumnWidth(8, 100);
+    }
+    if (clave) anotarEncabezados_(clave);
+  };
+  if (clave && encabezadosRevisados_(clave)) confiarEncabezados_(hoja, clave, revisar);
+  else revisar();
 }
 
 function crearCatalogo_() {
@@ -1066,7 +1181,7 @@ function crearCatalogo_() {
   const hoja = ss.getSheets()[0].setName('Catalogo');
   const n = ENCABEZADOS_CATALOGO.length;
 
-  hoja.getRange(1, 1, 1, n).setValues([ENCABEZADOS_CATALOGO])
+  escribe_(hoja).getRange(1, 1, 1, n).setValues([ENCABEZADOS_CATALOGO])
     .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
   hoja.setFrozenRows(1);
   hoja.getRange('A:C').setNumberFormat('@'); // texto: claves como "001" no pierden ceros
@@ -1090,8 +1205,8 @@ function crearCatalogo_() {
     const filas = vieja.getDataRange().getValues().slice(1)
       .filter(r => r[1] && String(r[0]) !== 'EJ-001')
       .map(r => [String(r[0]).trim().toUpperCase(), String(r[1]), String(r[2] || 'PZA'), Number(r[3]) || 0, '', 'Migrado', '', '']);
-    if (filas.length) hoja.getRange(2, 1, filas.length, n).setValues(filas);
-    if (db.getSheets().length > 1) db.deleteSheet(vieja); // los datos ya quedaron en el archivo nuevo
+    if (filas.length) escribe_(hoja).getRange(2, 1, filas.length, n).setValues(filas);
+    if (db.getSheets().length > 1) escribe_(db).deleteSheet(vieja); // los datos ya quedaron en el archivo nuevo
   }
 
   // Lo deja en la misma carpeta de Drive que la base de datos
@@ -1131,8 +1246,8 @@ const FUENTE_SAT = 'catCFDI_V_4_20261015.xls — Anexo 20 del SAT (CFDI 4.0), de
 
 function libroSat_() {
   const props = PropertiesService.getScriptProperties();
-  if (!props.getProperty('SAT_ID')) {
-    const lock = LockService.getScriptLock();
+  if (!idGuardado_('SAT_ID')) {
+    const lock = candado_();
     if (!lock.tryLock(60000)) throw new Error('Se está cargando el catálogo del SAT. Intenta en unos segundos.');
     try {
       if (!props.getProperty('SAT_ID')) importarCatalogosSat_();
@@ -1140,7 +1255,7 @@ function libroSat_() {
       lock.releaseLock();
     }
   }
-  return SpreadsheetApp.openById(props.getProperty('SAT_ID'));
+  return abrirLibro_(idGuardado_('SAT_ID'));
 }
 
 function importarCatalogosSat_() {
@@ -1155,16 +1270,16 @@ function importarCatalogosSat_() {
   const cargar = (hoja, nombre, csv, anchos) => {
     const filas = Utilities.parseCsv(csv.getBlob().getDataAsString('UTF-8'));
     hoja.setName(nombre);
-    if (hoja.getMaxRows() < filas.length) hoja.insertRowsAfter(hoja.getMaxRows(), filas.length - hoja.getMaxRows());
+    if (hoja.getMaxRows() < filas.length) escribe_(hoja).insertRowsAfter(hoja.getMaxRows(), filas.length - hoja.getMaxRows());
     hoja.getRange('A:A').setNumberFormat('@');
-    hoja.getRange(1, 1, filas.length, filas[0].length).setValues(filas);
+    escribe_(hoja).getRange(1, 1, filas.length, filas[0].length).setValues(filas);
     hoja.getRange(1, 1, 1, filas[0].length).setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
     hoja.setFrozenRows(1);
     anchos.forEach((w, i) => hoja.setColumnWidth(i + 1, w));
   };
   cargar(ss.getSheets()[0], 'ClaveProdServ', csvProd, [100, 600]);
-  cargar(ss.insertSheet(), 'ClaveUnidad', csvUni, [100, 320, 90]);
-  ss.insertSheet('Fuente').getRange(1, 1, 2, 1).setValues([[FUENTE_SAT],
+  cargar(escribe_(ss).insertSheet(), 'ClaveUnidad', csvUni, [100, 320, 90]);
+  escribe_(ss).insertSheet('Fuente').getRange(1, 1, 2, 1).setValues([[FUENTE_SAT],
     ['Uso interno de contabilidad. Para actualizar: reemplazar los CSV y borrar la propiedad SAT_ID del proyecto.']]);
 
   try { DriveApp.getFileById(ss.getId()).moveTo(csvProd.getParents().next()); } catch (e) { /* queda en Mi unidad */ }
@@ -1255,7 +1370,7 @@ function guardarProducto(p) {
   }
   const hoja = hojaCatalogo_(); // fuera del candado: la primera vez crea el archivo con su propio candado
 
-  const lock = LockService.getScriptLock();
+  const lock = candado_();
   if (!lock.tryLock(30000)) throw new Error('El catálogo está ocupado. Intenta de nuevo en unos segundos.');
   try {
     const datos = hoja.getDataRange().getValues().slice(1);
@@ -1271,9 +1386,9 @@ function guardarProducto(p) {
     const fila = [prod.clave, prod.descripcion, prod.unidad, prod.precio, new Date(), usuarioActual_(),
       prod.claveSat, prod.unidadSat];
     if (iOriginal !== -1) {
-      hoja.getRange(iOriginal + 2, 1, 1, fila.length).setValues([fila]);
+      escribe_(hoja).getRange(iOriginal + 2, 1, 1, fila.length).setValues([fila]);
     } else {
-      hoja.appendRow(fila);
+      escribe_(hoja).appendRow(fila);
     }
     try { asegurarPrecioUsd_(hoja); } catch (e) { console.warn('Sin columna de precio USD: ' + e.message); }
     SpreadsheetApp.flush();
@@ -1351,7 +1466,7 @@ function guardarCotizacion(payload) {
   // Siempre la llave interna PRY-AAAA-NNNN en la columna T, aunque llegue el folio con clave
   const proyectoFolio = folioInterno(payload && payload.proyectoFolio);
 
-  const lock = LockService.getScriptLock();
+  const lock = candado_();
   // Evita folios duplicados si dos personas guardan a la vez
   if (!lock.tryLock(30000)) {
     throw new Error('El sistema está ocupado guardando otra cotización. Intenta de nuevo en unos segundos.');
@@ -1396,13 +1511,20 @@ function guardarCotizacion(payload) {
     // Registro (Marca, Dirección, vendedor_* y proyecto_folio se agregaron después: se reescribe solo la fila 1
     // de encabezados; las filas de datos no se mueven y las viejas quedan vacías en las columnas nuevas)
     const nCols = ENCABEZADOS_COTIZACIONES.length;
-    const actuales = hojaCot.getRange(1, 1, 1, nCols).getValues()[0];
-    if (ENCABEZADOS_COTIZACIONES.some((h, i) => actuales[i] !== h)) {
-      hojaCot.getRange(1, 1, 1, nCols).setValues([ENCABEZADOS_COTIZACIONES])
-        .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
-    }
+    // Rapidez: la fila 1 se lee solo si no se revisó hace poco (encabezadosRevisados_)
+    const claveEnc = claveEncabezados_(db_(), hojaCot, 'Cotizaciones', ENCABEZADOS_COTIZACIONES);
+    const revisarEnc = () => {
+      const actuales = hojaCot.getRange(1, 1, 1, nCols).getValues()[0];
+      if (ENCABEZADOS_COTIZACIONES.some((h, i) => actuales[i] !== h)) {
+        escribe_(hojaCot).getRange(1, 1, 1, nCols).setValues([ENCABEZADOS_COTIZACIONES])
+          .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+      }
+      anotarEncabezados_(claveEnc);
+    };
+    if (!encabezadosRevisados_(claveEnc)) revisarEnc();
+    else confiarEncabezados_(hojaCot, claveEnc, revisarEnc);
     const t = textoCelda;
-    hojaCot.appendRow([
+    escribe_(hojaCot).appendRow([
       folio, ahora, t(datos.cliente.nombre), t(datos.cliente.empresa), t(datos.cliente.rfc),
       t(datos.cliente.email), t(datos.cliente.telefono),
       datos.subtotal, datos.iva, datos.total, datos.elaboro, archivo.getUrl(),
@@ -1430,7 +1552,7 @@ function siguienteFolio_(prefijo, hoja, baseContador) {
   const anio = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy');
   // Cotizaciones: CONSECUTIVO_AAAA; proyectos: CONSECUTIVO_PROY_AAAA (cada tipo de folio lleva su contador)
   const clave = (baseContador || 'CONSECUTIVO_') + anio;
-  const filas = hoja.getLastRow() > 1 ? hoja.getRange(2, 1, hoja.getLastRow() - 1, 1).getValues() : [];
+  const filas = filasDatos_(hoja, 1);
   const enHoja = maxConsecutivo(filas.map(r => r[0]), prefijo, anio);
   const n = Math.max(Number(props.getProperty(clave) || 0), enHoja) + 1;
   props.setProperty(clave, String(n));
@@ -1438,7 +1560,7 @@ function siguienteFolio_(prefijo, hoja, baseContador) {
 }
 
 function carpetaDelAnio_(anio) {
-  const raiz = DriveApp.getFolderById(PropertiesService.getScriptProperties().getProperty('FOLDER_ID'));
+  const raiz = DriveApp.getFolderById(idGuardado_('FOLDER_ID'));
   const it = raiz.getFoldersByName(String(anio));
   return it.hasNext() ? it.next() : raiz.createFolder(String(anio));
 }
@@ -1477,10 +1599,11 @@ const PREFIJO_PROYECTO = 'PRY';
  */
 function hojaProyectos_() {
   const ss = db_();
-  let hoja = ss.getSheetByName('Proyectos');
+  let hoja = ss.getSheetByName('Proyectos'), creada = false;
   if (!hoja) {
+    creada = true;
     try {
-      hoja = ss.insertSheet('Proyectos');
+      hoja = escribe_(ss).insertSheet('Proyectos');
     } catch (e) {
       // Otra petición la acaba de crear
       hoja = ss.getSheetByName('Proyectos');
@@ -1495,12 +1618,19 @@ function hojaProyectos_() {
     hoja.setColumnWidth(3, 260); hoja.setColumnWidth(4, 260); hoja.setColumnWidth(6, 220);
   }
   const n = ENCABEZADOS_PROYECTOS.length;
-  const actuales = hoja.getRange(1, 1, 1, n).getValues()[0];
-  if (ENCABEZADOS_PROYECTOS.some((h, i) => actuales[i] !== h)) {
-    hoja.getRange(1, 1, 1, n).setValues([ENCABEZADOS_PROYECTOS])
-      .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
-    hoja.getRange(1, COL_CLAVE_PROYECTO, hoja.getMaxRows(), 1).setNumberFormat('@'); // la clave es texto (columna L, al final)
-  }
+  // Rapidez: la fila 1 se lee solo si no se revisó hace poco (encabezadosRevisados_, como en hojaDeArea_)
+  const clave = claveEncabezados_(ss, hoja, 'Proyectos', ENCABEZADOS_PROYECTOS);
+  const revisar = () => {
+    const actuales = hoja.getRange(1, 1, 1, n).getValues()[0];
+    if (ENCABEZADOS_PROYECTOS.some((h, i) => actuales[i] !== h)) {
+      escribe_(hoja).getRange(1, 1, 1, n).setValues([ENCABEZADOS_PROYECTOS])
+        .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+      hoja.getRange(1, COL_CLAVE_PROYECTO, hoja.getMaxRows(), 1).setNumberFormat('@'); // la clave es texto (columna L, al final)
+    }
+    anotarEncabezados_(clave);
+  };
+  if (creada || !encabezadosRevisados_(clave)) revisar();
+  else confiarEncabezados_(hoja, clave, revisar);
   return hoja;
 }
 
@@ -1521,11 +1651,19 @@ function errorProyecto_(mensaje) {
   return e;
 }
 
+/** Filas de la pestaña Proyectos, leídas una vez por petición (filasEnPeticion_). */
+function filasProyectos_(hoja) {
+  const h = hoja || hojaProyectos_(), sufijo = sufijoFilas_(h);
+  const leer = () => filasDatos_(h, ENCABEZADOS_PROYECTOS.length);
+  return sufijo ? filasEnPeticion_('base' + sufijo, leer) : leer();
+}
+
 /** Proyecto por folio (con su número de fila), o null. */
 function buscarProyecto_(hoja, folio) {
   const buscado = folioInterno(folio);
-  if (!buscado || hoja.getLastRow() < 2) return null;
-  const filas = hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues();
+  if (!buscado) return null;
+  const filas = filasProyectos_(hoja);
+  if (!filas.length) return null;
   const lista = proyectosDesdeFilas(filas);
   for (let i = 0; i < lista.length; i++) {
     if (lista[i].folio.toUpperCase() === buscado) return Object.assign(lista[i], { hoja: hoja, fila: i + 2 });
@@ -1548,7 +1686,7 @@ function crearProyecto(p) {
   const cache = CacheService.getScriptCache();
   const claveCache = idSolicitud ? 'PRY_' + idSolicitud : '';
 
-  const lock = LockService.getScriptLock();
+  const lock = candado_();
   if (!lock.tryLock(30000)) {
     throw new Error('El sistema está ocupado guardando otro registro. Intenta de nuevo en unos segundos.');
   }
@@ -1564,7 +1702,7 @@ function crearProyecto(p) {
     const carpeta = crearCarpetaProyecto_(folioVisible(folio, datos.clave), datos, ahora.getFullYear());
 
     const t = textoCelda;
-    hoja.appendRow([
+    escribe_(hoja).appendRow([
       folio, ahora, t(datos.nombre), t(datos.cliente), t(datos.clienteId), t(datos.ubicacion), 'Activo', carpeta.getId(),
       t(vendedor.email), t(vendedor.nombre), t(vendedor.apellido), datos.clave,
     ]);
@@ -1589,8 +1727,7 @@ function crearProyecto(p) {
 function asignarClavesProyectos(aplicar) {
   const cambios = conCandado_(() => {
     const hoja = hojaProyectos_();
-    const filas = hoja.getLastRow() > 1
-      ? hoja.getRange(2, 1, hoja.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
+    const filas = filasDatos_(hoja, ENCABEZADOS_PROYECTOS.length);
     const lista = [];
     filas.forEach((r, i) => {
       const folio = String(r[0] || '').trim();
@@ -1609,7 +1746,7 @@ function asignarClavesProyectos(aplicar) {
       } catch (e) {
         x.carpeta = '(no se encontró la carpeta: ' + e.message + ')';
       }
-      if (aplicar) hoja.getRange(i + 2, COL_CLAVE_PROYECTO).setNumberFormat('@').setValue(clave);
+      if (aplicar) escribe_(hoja).getRange(i + 2, COL_CLAVE_PROYECTO).setNumberFormat('@').setValue(clave);
       lista.push(x);
     });
     if (aplicar) SpreadsheetApp.flush();
@@ -1629,14 +1766,14 @@ function asignarClavesProyectosAplicar() {
 /** Carpeta "Proyectos" junto a la base de datos (en la carpeta maestra). Se crea sola y se guarda en PROYECTOS_FOLDER_ID. */
 function carpetaProyectos_() {
   const props = PropertiesService.getScriptProperties();
-  const id = props.getProperty('PROYECTOS_FOLDER_ID');
+  const id = idGuardado_('PROYECTOS_FOLDER_ID');
   if (id) {
     try {
       const f = DriveApp.getFolderById(id);
       if (!f.isTrashed()) return f;
     } catch (e) { /* se borró: se vuelve a crear abajo */ }
   }
-  const padres = DriveApp.getFileById(props.getProperty('SPREADSHEET_ID')).getParents();
+  const padres = DriveApp.getFileById(idGuardado_('SPREADSHEET_ID')).getParents();
   const maestra = padres.hasNext() ? padres.next() : DriveApp.getRootFolder();
   const carpeta = subcarpeta_(maestra, 'Proyectos');
   props.setProperty('PROYECTOS_FOLDER_ID', carpeta.getId());
@@ -1676,7 +1813,7 @@ function subcarpetaProyecto_(proyecto, nombreSub) {
     const anio = Number(String(proyecto.folio).split('-')[1]) || new Date().getFullYear();
     carpeta = crearCarpetaProyecto_(folioVisible(proyecto.folio, proyecto.clave), proyecto, anio);
     proyecto.carpetaId = carpeta.getId();
-    if (proyecto.hoja && proyecto.fila) proyecto.hoja.getRange(proyecto.fila, COL_CARPETA_PROYECTO).setValue(carpeta.getId());
+    if (proyecto.hoja && proyecto.fila) escribe_(proyecto.hoja).getRange(proyecto.fila, COL_CARPETA_PROYECTO).setValue(carpeta.getId());
   }
   return subcarpeta_(carpeta, nombreSub);
 }
@@ -1765,26 +1902,31 @@ const AREA_COBRANZA = { que: 'cobranza', propCarpeta: 'COBRANZA_FOLDER_ID', prop
 
 /** Carpeta del área. Se crea sola en Mi unidad (restringida). Si se borró, error. */
 function carpetaArea_(area) {
+  // Rapidez: una vez por petición (buscarla y revisar que siga restringida cuesta dos viajes; varias funciones la piden)
+  const yaVista = (MEMO_.carpetasArea || {})[area.propCarpeta];
+  if (yaVista) return yaVista;
   const props = PropertiesService.getScriptProperties();
-  const id = props.getProperty(area.propCarpeta);
-  if (!id) {
-    const carpeta = privado_(DriveApp.createFolder(area.carpeta));
-    props.setProperty(area.propCarpeta, carpeta.getId());
-    return carpeta;
-  }
+  const id = idGuardado_(area.propCarpeta);
   let carpeta = null;
-  try { carpeta = DriveApp.getFolderById(id); } catch (e) { carpeta = null; }
-  if (!carpeta || carpeta.isTrashed()) {
-    throw new Error('No se encontró la carpeta de ' + area.que + ' (' + area.propCarpeta + '). Revisa la Papelera de Drive.');
+  if (!id) {
+    carpeta = privado_(DriveApp.createFolder(area.carpeta));
+    props.setProperty(area.propCarpeta, carpeta.getId());
+  } else {
+    try { carpeta = DriveApp.getFolderById(id); } catch (e) { carpeta = null; }
+    if (!carpeta || carpeta.isTrashed()) {
+      throw new Error('No se encontró la carpeta de ' + area.que + ' (' + area.propCarpeta + '). Revisa la Papelera de Drive.');
+    }
+    privado_(carpeta);
   }
-  return privado_(carpeta);
+  (MEMO_.carpetasArea = MEMO_.carpetasArea || {})[area.propCarpeta] = carpeta;
+  return carpeta;
 }
 
 /** Libro del área; la primera vez lo crea dentro de su carpeta (bajo candado). */
 function libroArea_(area) {
   const props = PropertiesService.getScriptProperties();
-  if (!props.getProperty(area.propLibro)) {
-    const lock = LockService.getScriptLock();
+  if (!idGuardado_(area.propLibro)) {
+    const lock = candado_();
     if (!lock.tryLock(30000)) throw new Error('Se está preparando ' + area.que + '. Intenta de nuevo en unos segundos.');
     try {
       if (!props.getProperty(area.propLibro)) crearLibroArea_(area);
@@ -1792,18 +1934,18 @@ function libroArea_(area) {
       lock.releaseLock();
     }
   }
-  return abrirLibroArea_(area, props.getProperty(area.propLibro));
+  return abrirLibroArea_(area, idGuardado_(area.propLibro));
 }
 
 /** Libro del área si ya existe; null si todavía no se crea. */
 function libroAreaSiExiste_(area) {
-  const id = PropertiesService.getScriptProperties().getProperty(area.propLibro);
+  const id = idGuardado_(area.propLibro);
   return id ? abrirLibroArea_(area, id) : null;
 }
 
 function abrirLibroArea_(area, id) {
   try {
-    return SpreadsheetApp.openById(id);
+    return abrirLibro_(id);
   } catch (e) {
     throw new Error('No se pudo abrir el libro de ' + area.que + ' (' + area.propLibro + '). Revisa que no esté en la Papelera.');
   }
@@ -1815,7 +1957,7 @@ function crearLibroArea_(area) {
   privado_(DriveApp.getFileById(ss.getId())).moveTo(carpeta);
   Object.keys(area.hojas).forEach(nombre => hojaDeArea_(ss, area.hojas, nombre));
   const sobrante = ss.getSheetByName('Hoja 1') || ss.getSheetByName('Sheet1');
-  if (sobrante && ss.getSheets().length > 1) ss.deleteSheet(sobrante);
+  if (sobrante && ss.getSheets().length > 1) escribe_(ss).deleteSheet(sobrante);
   PropertiesService.getScriptProperties().setProperty(area.propLibro, ss.getId());
 }
 
@@ -1832,19 +1974,87 @@ function hojaCobranza_(libro, nombre) {
 /** Pestaña de un libro de área (estructura en `hojas`); la crea o le repone los encabezados. */
 function hojaDeArea_(libro, hojas, nombre) {
   const def = hojas[nombre];
-  let hoja = libro.getSheetByName(nombre);
+  let hoja = libro.getSheetByName(nombre), creada = false;
   if (!hoja) {
-    hoja = libro.insertSheet(nombre);
+    hoja = escribe_(libro).insertSheet(nombre);
+    creada = true;
     hoja.setFrozenRows(1);
     hoja.getRange(1, 1, hoja.getMaxRows(), def.enc.length).setNumberFormat('@'); // texto: nada se lee como fórmula
     def.numeros.forEach(c => hoja.getRange(2, c, hoja.getMaxRows() - 1, 1).setNumberFormat('#,##0.00##'));
   }
-  const actuales = hoja.getRange(1, 1, 1, def.enc.length).getValues()[0];
-  if (def.enc.some((h, i) => actuales[i] !== h)) {
-    hoja.getRange(1, 1, 1, def.enc.length).setValues([def.enc])
-      .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
-  }
+  // Rapidez: la fila 1 se lee solo si esta pestaña no se revisó hace poco (encabezadosRevisados_)
+  const clave = claveEncabezados_(libro, hoja, nombre, def.enc);
+  const revisar = () => {
+    const actuales = hoja.getRange(1, 1, 1, def.enc.length).getValues()[0];
+    if (def.enc.some((h, i) => actuales[i] !== h)) {
+      escribe_(hoja).getRange(1, 1, 1, def.enc.length).setValues([def.enc])
+        .setFontWeight('bold').setBackground('#2C3C5B').setFontColor('#FFFFFF');
+    }
+    anotarEncabezados_(clave);
+  };
+  if (creada || !encabezadosRevisados_(clave)) revisar();
+  else confiarEncabezados_(hoja, clave, revisar);
   return hoja;
+}
+
+// ---- Rapidez (30/10/2026): encabezados ya revisados ----
+// Revisar los encabezados de una pestaña cuesta leer su fila 1 (un viaje a Sheets) y se hacía en cada uso de la pestaña, varias
+// veces por llamada. Una pestaña revisada (o reparada) queda anotada en la petición (MEMO_.enc) y en CacheService
+// (ENCABEZADOS_OK) por máximo 6 h, con la firma de los encabezados que espera el código y el id de la pestaña: si una versión
+// nueva agrega columnas, o alguien borra la pestaña y la vuelve a crear, se revisa otra vez; una pestaña recién creada por el
+// código siempre se revisa. Solo se deja de leer la fila 1: los datos se siguen leyendo de la hoja. Lo único distinto: si
+// alguien cambia o borra a mano la fila de encabezados de una pestaña que ya existe, se repara a más tardar 6 h después (antes,
+// en la siguiente llamada que la usara). Las filas se leen por posición, así que eso no cambia lo que se lee.
+const CACHE_ENCABEZADOS = 'ENCABEZADOS_OK';
+
+/** Firma corta de un texto (djb2): cambia si cambia un encabezado esperado. */
+function firmaTexto_(t) {
+  let h = 5381;
+  for (let i = 0; i < t.length; i++) h = ((h * 33) ^ t.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+/** Libro, pestaña (nombre e id) y encabezados esperados. */
+function claveEncabezados_(libro, hoja, nombre, enc) {
+  const idHoja = typeof hoja.getSheetId === 'function' ? hoja.getSheetId() : '';
+  return libro.getId() + '/' + nombre + '/' + idHoja + '/' + enc.length + '.' + firmaTexto_(enc.join('\u0001'));
+}
+
+/** {clave: momento en que se revisó (ms)} de esta petición; se lee de CacheService una vez. */
+function encabezadosOk_() {
+  if (!MEMO_.enc) {
+    let previo = {};
+    try { previo = JSON.parse(CacheService.getScriptCache().get(CACHE_ENCABEZADOS) || '{}') || {}; } catch (e) { previo = {}; }
+    MEMO_.enc = previo;
+  }
+  return MEMO_.enc;
+}
+
+function encabezadosRevisados_(clave) {
+  const t = Number(encabezadosOk_()[clave]) || 0;
+  return t > 0 && Date.now() - t < TTL_CACHE * 1000;
+}
+
+function anotarEncabezados_(clave) {
+  const ok = encabezadosOk_(), ahora = Date.now();
+  ok[clave] = ahora;
+  // Solo las revisiones vigentes (cada una vence 6 h después de hecha, aunque el mapa se vuelva a guardar)
+  Object.keys(ok).forEach(k => { if (!(ahora - Number(ok[k]) < TTL_CACHE * 1000)) delete ok[k]; });
+  try { CacheService.getScriptCache().put(CACHE_ENCABEZADOS, JSON.stringify(ok), TTL_CACHE); } catch (e) { /* solo se pierde el ahorro */ }
+}
+
+/**
+ * La fila 1 se dio por buena sin leerla (anotada en las últimas 6 h). La primera escritura de la petición en esa pestaña
+ * (escribe_) revisa con getLastRow que no esté vacía: si alguien la vació a mano, corre `revisar` (repone los encabezados)
+ * antes de escribir, como antes; así un renglón nuevo nunca cae en la fila 1. Sin forma de reconocer la pestaña después
+ * (simulacros sin getSheetId/getName), se revisa ya.
+ */
+function confiarEncabezados_(hoja, clave, revisar) {
+  const sufijo = sufijoFilas_(hoja);
+  if (!sufijo) { revisar(); return; }
+  if ((MEMO_.encVacia || {})[sufijo]) return; // ya se vio en esta petición que no está vacía
+  const m = MEMO_.encConfiado || (MEMO_.encConfiado = {});
+  (m[sufijo] = m[sufijo] || {})[clave] = revisar;
 }
 
 /** Filas de datos (sin encabezado) de una pestaña, con el ancho de sus encabezados. */
@@ -1853,8 +2063,12 @@ function filasCobranza_(hoja, nombre) {
 }
 
 function filasDeArea_(hoja, hojas, nombre) {
-  const n = hojas[nombre].enc.length;
-  return hoja.getLastRow() > 1 ? hoja.getRange(2, 1, hoja.getLastRow() - 1, n).getValues() : [];
+  const leer = () => filasDatos_(hoja, hojas[nombre].enc.length);
+  // Rapidez: una vez por petición (filasEnPeticion_); el área fija el libro (compras, cobranza o administración)
+  const area = hojas === HOJAS_COMPRAS ? 'compras' : hojas === HOJAS_COBRANZA ? 'cobranza' : hojas === HOJAS_ADMIN ? 'admin' : '';
+  if (!area) return leer();
+  const sufijo = sufijoFilas_(hoja);
+  return sufijo ? filasEnPeticion_(area + sufijo, leer) : leer();
 }
 
 const marcaDeTexto_ = t => (String(t || '').trim() === MARCAS.energy || t === 'energy') ? 'energy' : 'helgen';
@@ -1966,7 +2180,7 @@ function proyectoParaCobranza_(folio) {
 /** Renglón en la Bitacora del libro (cobranza por omisión; compras pasa HOJAS_COMPRAS: mismas columnas). */
 function bitacora_(libro, accion, folio, detalle, motivo, hojas) {
   const t = textoCelda;
-  hojaDeArea_(libro, hojas || HOJAS_COBRANZA, 'Bitacora').appendRow([
+  escribe_(hojaDeArea_(libro, hojas || HOJAS_COBRANZA, 'Bitacora')).appendRow([
     Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), t(VENDEDOR_ ? VENDEDOR_.email : ''),
     t(accion), t(folio), t(detalle || ''), t(motivo || ''),
   ]);
@@ -1985,10 +2199,10 @@ function escribirEsquema_(hoja, folio, etapas, total) {
     if (String(filas[i][0]).toUpperCase() === f) {
       const fecha = fechaIso_(filas[i][cF]);
       if (fecha) fechas[textoNormal(filas[i][2])] = fecha;
-      hoja.deleteRow(i + 2);
+      escribe_(hoja).deleteRow(i + 2);
     }
   }
-  montosDeEsquema(etapas, total).forEach((e, i) => hoja.appendRow([f, i + 1, textoCelda(e.etapa), e.porcentaje, e.monto,
+  montosDeEsquema(etapas, total).forEach((e, i) => escribe_(hoja).appendRow([f, i + 1, textoCelda(e.etapa), e.porcentaje, e.monto,
     textoFecha_(fechas[textoNormal(e.etapa)] || '')]));
 }
 
@@ -2047,7 +2261,7 @@ function margenSinContrato_(proyectoFolio) {
 
 /** Candado de script (el mismo de folios) alrededor de una función. */
 function conCandado_(f) {
-  const lock = LockService.getScriptLock();
+  const lock = candado_();
   if (!lock.tryLock(30000)) throw new Error('El sistema está ocupado guardando otro registro. Intenta de nuevo en unos segundos.');
   try {
     return f();
@@ -2060,7 +2274,7 @@ function conCandado_(f) {
 function listarProyectosCobranza(busqueda) {
   exigirCobranza_();
   // La primera vez que alguien de cobranza entra se crean la carpeta y el libro (después ya no se abre aquí)
-  if (!PropertiesService.getScriptProperties().getProperty(AREA_COBRANZA.propLibro)) libroCobranza_();
+  if (!idGuardado_(AREA_COBRANZA.propLibro)) libroCobranza_();
   const contratos = contratosCache_();
   return listarProyectos(busqueda, true).map(p => Object.assign(p, { contrato: (contratos[p.folio.toUpperCase()] || {}).estado || '' }));
 }
@@ -2149,8 +2363,8 @@ function marcarAceptada(proyectoFolio, cotizacionFolio, confirmado) {
     const fila = [proyecto.folio, cot.folio, MARCAS[cot.marca], cot.moneda, cot.subtotal, cot.iva, cot.total, ESTADO_ACEPTADA,
       t(VENDEDOR_.email), Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm'), '', '',
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm')];
-    if (c) d.hojas.contratos.getRange(c.fila, 1, 1, fila.length).setValues([fila]);
-    else d.hojas.contratos.appendRow(fila);
+    if (c) escribe_(d.hojas.contratos).getRange(c.fila, 1, 1, fila.length).setValues([fila]);
+    else escribe_(d.hojas.contratos).appendRow(fila);
     escribirEsquema_(d.hojas.esquemas, proyecto.folio, etapas, cot.total);
     bitacora_(libro, c ? 'Cambiar cotización aceptada' : 'Marcar cotización aceptada', proyecto.folio,
       cot.folio + ' · ' + MARCAS[cot.marca] + ' · total ' + formatoMoneda(cot.total) + ' ' + cot.moneda +
@@ -2210,8 +2424,8 @@ function firmarContrato(proyectoFolio, fecha) {
         formatoMoneda(r.contratado) + ').');
     }
     escribirEsquema_(d.hojas.esquemas, proyecto.folio, etapas, c.total);
-    d.hojas.contratos.getRange(c.fila, 8).setValue(ESTADO_FIRMADO);
-    d.hojas.contratos.getRange(c.fila, 11, 1, 3).setValues([[textoFecha_(fechaFirma), textoCelda(VENDEDOR_.email),
+    escribe_(d.hojas.contratos).getRange(c.fila, 8).setValue(ESTADO_FIRMADO);
+    escribe_(d.hojas.contratos).getRange(c.fila, 11, 1, 3).setValues([[textoFecha_(fechaFirma), textoCelda(VENDEDOR_.email),
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm')]]);
     bitacora_(libro, 'Contrato firmado', proyecto.folio, 'Fecha de firma ' + fechaFirma + ' · ' + c.cotizacion + ' · ' +
       formatoMoneda(c.total) + ' ' + c.moneda + ' · ' + etapas.map(e => e.etapa + ' ' + e.porcentaje + '%').join(' · '));
@@ -2233,8 +2447,8 @@ function desbloquearContrato(proyectoFolio, motivo) {
     const d = datosCobranza_(libro, proyecto.folio);
     const c = d.contrato;
     if (!c || c.estado !== ESTADO_FIRMADO) throw new Error('El contrato de ' + proyecto.folio + ' no está firmado.');
-    d.hojas.contratos.getRange(c.fila, 8).setValue(ESTADO_ACEPTADA);
-    d.hojas.contratos.getRange(c.fila, 11, 1, 3).setValues([['', '',
+    escribe_(d.hojas.contratos).getRange(c.fila, 8).setValue(ESTADO_ACEPTADA);
+    escribe_(d.hojas.contratos).getRange(c.fila, 11, 1, 3).setValues([['', '',
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm')]]);
     bitacora_(libro, 'Desbloquear contrato', proyecto.folio,
       'Estaba firmado el ' + c.fechaFirma + ' por ' + c.firmadoPor + ' · ' + c.cotizacion, m);
@@ -2292,7 +2506,7 @@ function registrarPago(p) {
       nombreComprobante(folio, pago.metodo, pago.referencia, tipo.ext))));
 
     const t = textoCelda;
-    hojaPagos.appendRow([
+    escribe_(hojaPagos).appendRow([
       folio, textoFecha_(pago.fecha), Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), proyecto.folio,
       pago.monto, pago.monedaPago, pago.tipoCambio, pago.montoAplicado, c.moneda, pago.metodo, t(pago.referencia),
       pago.etapaOrden, t(d.etapas[pago.etapaOrden - 1].etapa), JSON.stringify(aplicacion), archivo.getId(), archivo.getUrl(),
@@ -2324,7 +2538,7 @@ function cancelarPago(folioPago, motivo) {
     if (!pago) throw new Error('No existe el pago ' + folio + '.');
     if (pago.estado === ESTADO_ANULADA) throw new Error('El pago ' + folio + ' está anulado.');
     if (pago.estado !== 'Vigente') throw new Error('El pago ' + folio + ' ya está cancelado.');
-    hoja.getRange(pago.fila, 19, 1, 4).setValues([['Cancelado', textoCelda(VENDEDOR_.email),
+    escribe_(hoja).getRange(pago.fila, 19, 1, 4).setValues([['Cancelado', textoCelda(VENDEDOR_.email),
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
     bitacora_(libro, 'Cancelar pago', pago.proyectoFolio, folio + ' · ' + formatoMoneda(pago.monto) + ' ' + pago.monedaPago, m);
     SpreadsheetApp.flush();
@@ -2516,8 +2730,8 @@ function guardarProveedor_(libro, prov) {
   const fila = [t(id), t(datos.razonSocial), t(datos.rfc), t(datos.contacto), t(datos.correo), t(datos.telefono),
     Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm'),
     datos.diasCredito === '' ? '' : diasCreditoGuardados(datos.diasCredito)];
-  if (existente) hoja.getRange(existente.fila, 1, 1, fila.length).setValues([fila]);
-  else hoja.appendRow(fila);
+  if (existente) escribe_(hoja).getRange(existente.fila, 1, 1, fila.length).setValues([fila]);
+  else escribe_(hoja).appendRow(fila);
   return Object.assign(datos, { id: id });
 }
 
@@ -2549,7 +2763,8 @@ function datosProyectoCompras_(p) {
  * puedeFacturar). Sin montos del contrato ni margen.
  */
 function vistaCompras_(libro, proyecto) {
-  const m = monedaDeProyecto_(contratosDelLibro_()[proyecto.folio.toUpperCase()] || null);
+  // Rapidez: moneda y línea del caché de contratos (como listarProyectosCompras; en una escritura se lee de la hoja)
+  const m = monedaDeProyecto_(contratosCache_()[proyecto.folio.toUpperCase()] || null);
   const facturas = facturasDelLibro_(libro);
   const ordenes = ordenesDeProyecto_(libro, proyecto.folio);
   // P (incremento 6): lo pagado y el saldo de cada orden (varios pagos; compras sí ve montos)
@@ -2633,7 +2848,7 @@ function emitirOrdenCompra_(libro, d0, proyecto, reqFolio, firma) {
   while (filaOc.length < colOc_('plan_pago')) filaOc.push('');
   filaOc[colOc_('forma_pago') - 1] = oc.formaPago;
   filaOc[colOc_('plan_pago') - 1] = oc.planPago ? JSON.stringify(oc.planPago) : ''; // P (incremento 6): plan de pagos opcional
-  hoja.appendRow(filaOc);
+  escribe_(hoja).appendRow(filaOc);
   bitacora_(libro, 'Emitir orden de compra', proyecto.folio, folio + (reqFolio ? ' · ' + reqFolio : '') + ' · ' +
     proveedor.razonSocial + ' · ' + formatoMoneda(oc.total) + ' ' + oc.moneda + ' · ' + oc.formaPago + ' · ' +
     (oc.planPago ? 'plan: ' + textoPlanPago(oc.planPago) + ' · ' : '') +
@@ -2708,8 +2923,8 @@ function cancelarOrdenCompra(folioOc, motivo, confirmado) {
     }
     // F (incremento 5): con crédito del proveedor una orden Emitida (sin pagar) ya puede estar recibida (flujo de siempre)
     if (orden.fechaRecepcion) throw new Error('La orden ' + orden.folio + ' ya se recibió (falta pagarla): no se puede cancelar.');
-    hoja.getRange(orden.fila, COL_ESTADO_OC).setValue(OC_CANCELADA);
-    hoja.getRange(orden.fila, COL_ESTADO_OC + 3, 1, 3).setValues([[textoCelda(VENDEDOR_.email),
+    escribe_(hoja).getRange(orden.fila, COL_ESTADO_OC).setValue(OC_CANCELADA);
+    escribe_(hoja).getRange(orden.fila, COL_ESTADO_OC + 3, 1, 3).setValues([[textoCelda(VENDEDOR_.email),
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
     bitacora_(libro, 'Cancelar orden de compra', orden.proyectoFolio, orden.folio + ' · ' + orden.proveedor + ' · ' +
       formatoMoneda(orden.total) + ' ' + orden.moneda, m, HOJAS_COMPRAS);
@@ -2855,7 +3070,7 @@ function camposReq_(hoja, req, campos) {
     if (k === 'aprobacion' || k === 'propuesta') celda = v ? JSON.stringify(v) : '';
     else if (k === 'fechaRequerida') celda = textoFecha_(v);
     else celda = textoCelda(String(v == null ? '' : v));
-    hoja.getRange(req.fila, COLS_REQ[k]).setValue(celda);
+    escribe_(hoja).getRange(req.fila, COLS_REQ[k]).setValue(celda);
     req[k] = v;
   });
 }
@@ -2878,18 +3093,18 @@ function cambiarReq_(hoja, req, estado, extra) {
   const x = extra || {};
   const ahora = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
   const t = textoCelda;
-  hoja.getRange(req.fila, 6, 1, 2).setValues([[estado, t('motivo' in x ? x.motivo : req.motivo)]]);
-  if ('ocFolio' in x) hoja.getRange(req.fila, 10).setValue(x.ocFolio);
-  if (x.revisar) hoja.getRange(req.fila, 11, 1, 2).setValues([[t(VENDEDOR_.email), ahora]]);
-  hoja.getRange(req.fila, 13).setValue(ahora);
-  if ('notasRecepcion' in x) hoja.getRange(req.fila, 14).setValue(t(x.notasRecepcion));
+  escribe_(hoja).getRange(req.fila, 6, 1, 2).setValues([[estado, t('motivo' in x ? x.motivo : req.motivo)]]);
+  if ('ocFolio' in x) escribe_(hoja).getRange(req.fila, 10).setValue(x.ocFolio);
+  if (x.revisar) escribe_(hoja).getRange(req.fila, 11, 1, 2).setValues([[t(VENDEDOR_.email), ahora]]);
+  escribe_(hoja).getRange(req.fila, 13).setValue(ahora);
+  if ('notasRecepcion' in x) escribe_(hoja).getRange(req.fila, 14).setValue(t(x.notasRecepcion));
   req.estado = estado;
 }
 
 /** Renglón del historial que ve el solicitante (sin montos). */
 function eventoReq_(libro, folio, estado, nota) {
   const t = textoCelda;
-  hojaCompras_(libro, 'RequisicionesEventos').appendRow([folio,
+  escribe_(hojaCompras_(libro, 'RequisicionesEventos')).appendRow([folio,
     Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), estado, t(VENDEDOR_.email),
     t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ') || VENDEDOR_.email), t(nota || '')]);
 }
@@ -2931,7 +3146,7 @@ function escribirRenglonesReq_(libro, folio, version, renglones) {
   const hoja = hojaCompras_(libro, 'RequisicionesRenglones');
   const t = textoCelda;
   // inventario_item (H) solo si el renglón tiene ítem del centro de mando
-  renglones.forEach((r, i) => hoja.appendRow([folio, version, i + 1, t(r.descripcion), r.cantidad, t(r.unidad), t(r.notas)]
+  renglones.forEach((r, i) => escribe_(hoja).appendRow([folio, version, i + 1, t(r.descripcion), r.cantidad, t(r.unidad), t(r.notas)]
     .concat(r.item ? [t(r.item)] : [])));
 }
 
@@ -3172,7 +3387,7 @@ function guardarRequisicion(p) {
       if (bytes) {
         const archivo = privado_(carpetaRequisiciones_(req.proyectoFolio).createFile(Utilities.newBlob(bytes, tipo.mime,
           nombreArchivoReq(folio, 'Cotización', tipo.ext, version))));
-        hoja.getRange(req.fila, 8, 1, 2).setValues([[archivo.getId(), archivo.getUrl()]]);
+        escribe_(hoja).getRange(req.fila, 8, 1, 2).setValues([[archivo.getId(), archivo.getUrl()]]);
       }
       escribirRenglonesReq_(libro, folio, version, renglones);
       cambiarReq_(hoja, req, nuevo, { motivo: '' });
@@ -3193,7 +3408,7 @@ function guardarRequisicion(p) {
       const archivo = bytes ? privado_(carpetaRequisiciones_(proyecto.folio).createFile(Utilities.newBlob(bytes, tipo.mime,
         nombreArchivoReq(folio, 'Cotización', tipo.ext, 1)))) : null;
       const ahora = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
-      hoja.appendRow([folio, textoFecha_(hoyIso_()), proyecto.folio, t(yo),
+      escribe_(hoja).appendRow([folio, textoFecha_(hoyIso_()), proyecto.folio, t(yo),
         t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ') || yo), REQ_SOLICITADA, '', archivo ? archivo.getId() : '',
         archivo ? archivo.getUrl() : '', '', '', '', ahora, '', t(sitio), textoFecha_(fechaRequerida), '', '', '', '', '', '', '', '', '']);
       escribirRenglonesReq_(libro, folio, 1, renglones);
@@ -3237,7 +3452,7 @@ function cerrarReq_(libro, hoja, req, nota, motivo) {
   const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
   if (orden.estado !== OC_PAGADA) throw new Error('La orden ' + orden.folio + ' no está pagada.');
   cambiarReq_(hoja, req, nuevo, { notasRecepcion: nota, motivo: motivo || req.motivo });
-  hO.getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(hoyIso_()), textoCelda(VENDEDOR_.email)]]);
+  escribe_(hO).getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(hoyIso_()), textoCelda(VENDEDOR_.email)]]);
   eventoReq_(libro, req.folio, REQ_CERRADA, [motivo ? 'Cerrada por compras: ' + motivo : 'Material recibido', nota].filter(Boolean).join(' · '));
   notificar_('req.recibida', { req: req.folio, nota: nota }); // correo a compras (6.B)
   bitacora_(libro, 'Cerrar requisición', req.proyectoFolio, req.folio + ' · ' + orden.folio + ' recibida el ' + hoyIso_() +
@@ -3345,7 +3560,8 @@ function vistaRequisicion_(libro, folioReq) {
   const f = req.folio.toUpperCase();
   const flujo = flujoOperaciones_();
   const proyecto = buscarProyecto_(hojaProyectos_(), req.proyectoFolio);
-  const c = monedaDeProyecto_(contratosDelLibro_()[req.proyectoFolio.toUpperCase()] || null);
+  // Rapidez: moneda y línea del caché de contratos por versión (en una escritura, contratosCache_ lee la hoja)
+  const c = monedaDeProyecto_(contratosCache_()[req.proyectoFolio.toUpperCase()] || null);
   let orden = null;
   if (req.ocFolio) { orden = buscarOrden_(libro, req.ocFolio).orden; delete orden.fila; }
   const pagos = req.ocFolio ? pagosDeOrden_(libro, req.ocFolio).map(x => { delete x.fila; return x; }) : [];
@@ -3562,7 +3778,7 @@ function registrarPagoProveedor(p, motivoExcepcion) {
     const archivo = privado_(carpetaRequisiciones_(req.proyectoFolio).createFile(Utilities.newBlob(bytes, tipo.mime,
       nombreArchivoReq(req.folio, 'Comprobante pago', tipo.ext, n))));
     const t = textoCelda;
-    hP.appendRow([folio, textoFecha_(pago.fecha), Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'),
+    escribe_(hP).appendRow([folio, textoFecha_(pago.fecha), Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'),
       orden.folio, req.folio, req.proyectoFolio, pago.monto, pago.monedaPago, pago.tipoCambio, pago.montoAplicado, orden.moneda,
       pago.metodo, t(pago.referencia), archivo.getId(), archivo.getUrl(), t(VENDEDOR_.email),
       t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '', tipoPago]);
@@ -3635,10 +3851,10 @@ function cancelarPagoProveedor(folioPago, motivo) {
       nuevo = transicionReq(req.estado, req.estado === REQ_EN_CAMINO ? 'cancelarPagoEnCamino' : req.estado === REQ_RECIBIDA
         ? 'cancelarPagoRecibida' : 'cancelarPago');
     }
-    hP.getRange(pago.fila, 18, 1, 4).setValues([['Cancelado', textoCelda(VENDEDOR_.email),
+    escribe_(hP).getRange(pago.fila, 18, 1, 4).setValues([['Cancelado', textoCelda(VENDEDOR_.email),
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
     olvidarPagosProv_();
-    if (completa && !despues.completo) hO.getRange(orden.fila, COL_ESTADO_OC).setValue(OC_EMITIDA);
+    if (completa && !despues.completo) escribe_(hO).getRange(orden.fila, COL_ESTADO_OC).setValue(OC_EMITIDA);
     cambiarReq_(hoja, req, nuevo, {});
     // El historial lo ve quien pidió: sin montos ni el motivo
     const quedan = despues.pagado > 0;
@@ -3995,7 +4211,7 @@ function separarRequisicion(folioReq, renglonesSep, motivo, opciones) {
     const nuevaFolio = siguienteFolio_(PREFIJO_REQ, hoja, 'CONSECUTIVO_REQ_');
     const ahora = ahoraTexto_(), t = textoCelda;
     const aprobNueva = Object.assign({}, req.aprobacion, { renglones: renumerar(mover), separadaDe: req.folio });
-    hoja.appendRow([nuevaFolio, textoFecha_(hoyIso_()), req.proyectoFolio, t(req.solicitanteEmail), t(req.solicitante), REQ_APROBADA, '',
+    escribe_(hoja).appendRow([nuevaFolio, textoFecha_(hoyIso_()), req.proyectoFolio, t(req.solicitanteEmail), t(req.solicitante), REQ_APROBADA, '',
       req.cotizacionId, req.cotizacionUrl, '', t(yo_()), ahora, ahora, '', t(req.sitio), textoFecha_(req.fechaRequerida), t(req.prioridad),
       JSON.stringify(aprobNueva), t(req.aproboEmail), (req.aprobacion && req.aprobacion.fecha) || ahora, '', '', '',
       t(req.recibeEmail), req.folio]);
@@ -4076,7 +4292,7 @@ function registrarRecepcion(p) {
       nombreArchivoReq(req.folio, 'Recepción ' + folio, tipo.ext, 1)))) : null;
     const guardadas = guardarFotosRecepcion_(req.proyectoFolio, folio, fotos, rec.renglones); // H: Drive, privado_
     const ahora = ahoraTexto_(), t = textoCelda;
-    rec.renglones.forEach(x => hM.appendRow(conFotoMov_([folio, textoFecha_(hoyIso_()), ahora, TIPO_ENTRADA_COMPRA, t(rec.sitio), req.proyectoFolio,
+    rec.renglones.forEach(x => escribe_(hM).appendRow(conFotoMov_([folio, textoFecha_(hoyIso_()), ahora, TIPO_ENTRADA_COMPRA, t(rec.sitio), req.proyectoFolio,
       req.folio, orden.folio, x.renglon, t(x.clave), t(x.descripcion), t(x.unidad), x.cantidad, t(yo), t(nombreYo_()), t(rec.notas),
       archivo ? archivo.getId() : '', archivo ? archivo.getUrl() : '', 'Vigente', '', '', ''], guardadas[x.renglon])));
     crearDevolucionesDeRecepcion_(libro, req, orden, problemas, fotos); // H: problema reportado al recibir → DEV-…
@@ -4087,13 +4303,13 @@ function registrarRecepcion(p) {
         devolucionAbiertaDe_(libro, req) : '';
       if (retenida) {
         nuevo = transicionReq(req.estado, 'recibirRetenida');
-        hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(yo)]]);
+        escribe_(hO).getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(yo)]]);
       } else if (req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && orden.estado === OC_PAGADA)) {
         nuevo = transicionReq(req.estado, 'recibirPagada');
-        hO.getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(hoyIso_()), t(yo)]]);
+        escribe_(hO).getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(hoyIso_()), t(yo)]]);
       } else {
         nuevo = transicionReq(req.estado, 'recibir'); // la orden sigue Emitida (sin pagar) con su fecha de recepción
-        hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(yo)]]);
+        escribe_(hO).getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(yo)]]);
       }
       cambiarReq_(hoja, req, nuevo, { notasRecepcion: rec.notas });
     } else {
@@ -4150,14 +4366,14 @@ function cancelarRecepcion(folioRec, motivo) {
     exigirSinDevoluciones_(libro, req, filas); // H: con una devolución de esos renglones, primero se resuelve
     const { hoja: hO, orden } = buscarOrden_(libro, filas[0].ocFolio);
     const ahora = ahoraTexto_(), t = textoCelda;
-    filas.forEach(x => hM.getRange(x.fila, 19, 1, 4).setValues([['Cancelado', t(yo_()), ahora, t(m)]]));
+    filas.forEach(x => escribe_(hM).getRange(x.fila, 19, 1, 4).setValues([['Cancelado', t(yo_()), ahora, t(m)]]));
     let nuevo = req.estado;
     if (req.estado === REQ_RECIBIDA) {
       // Si ya iba en camino (centro de mando), vuelve a En camino; si no, a Pagada (orden pagada: estaba retenida por una
       // devolución) o a Autorizada (accionCancelarRecepcion)
       nuevo = transicionReq(req.estado, accionCancelarRecepcion(orden));
       cambiarReq_(hoja, req, nuevo, { notasRecepcion: '' });
-      hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([['', '']]);
+      escribe_(hO).getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([['', '']]);
     } else {
       cambiarReq_(hoja, req, nuevo, {});
     }
@@ -4331,7 +4547,7 @@ function registrarFacturaProveedor(p) {
     const pdf = pdfBytes ? guardar(pdfBytes, pdfTipo.mime, pdfTipo.ext) : null;
 
     const t = textoCelda;
-    hoja.appendRow([
+    escribe_(hoja).appendRow([
       folio, factura.tipo, factura.uuid, t(factura.serieFolio), textoFecha_(factura.fecha),
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoFecha_(vence), dias,
       orden.folio, orden.reqFolio, orden.proyectoFolio, t(orden.proveedorId), t(factura.emisor.rfc || orden.rfc),
@@ -4361,7 +4577,7 @@ function cancelarFacturaProveedor(folioFpr, motivo, desde) {
   return conCandado_(() => {
     const { hoja, factura } = buscarFactura_(libro, folioFpr);
     if (factura.estado !== FPR_VIGENTE) throw new Error('La factura ' + factura.folio + ' ya está cancelada.');
-    hoja.getRange(factura.fila, COL_ESTADO_FPR, 1, 4).setValues([[FPR_CANCELADA, textoCelda(VENDEDOR_.email),
+    escribe_(hoja).getRange(factura.fila, COL_ESTADO_FPR, 1, 4).setValues([[FPR_CANCELADA, textoCelda(VENDEDOR_.email),
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
     bitacora_(libro, 'Cancelar factura de proveedor', factura.proyectoFolio, factura.folio + ' · ' + factura.ocFolio + ' · ' +
       (factura.uuid || factura.serieFolio) + ' · ' + formatoMoneda(factura.total) + ' ' + factura.moneda, m, HOJAS_COMPRAS);
@@ -4380,7 +4596,7 @@ function cambiarDiasCreditoFactura(folioFpr, dias, motivo, desde) {
     const { hoja, factura } = buscarFactura_(libro, folioFpr);
     if (factura.estado !== FPR_VIGENTE) throw new Error('La factura ' + factura.folio + ' está cancelada.');
     const vence = fechaVencimiento(factura.fechaEmision, n);
-    hoja.getRange(factura.fila, COL_VENCIMIENTO_FPR, 1, 2).setValues([[textoFecha_(vence), n]]);
+    escribe_(hoja).getRange(factura.fila, COL_VENCIMIENTO_FPR, 1, 2).setValues([[textoFecha_(vence), n]]);
     bitacora_(libro, 'Cambiar días de crédito de factura', factura.proyectoFolio, factura.folio + ' · ' + factura.diasCredito +
       ' → ' + n + ' días · vence ' + factura.fechaVencimiento + ' → ' + vence, m, HOJAS_COMPRAS);
     SpreadsheetApp.flush();
@@ -6965,8 +7181,8 @@ function guardarUsuario(p) {
     const ahora = ahoraTexto_();
     const fila = filaDeUsuario(u, yo, ahora).map(textoCelda);
     fila[8] = "'" + ahora; // texto: Sheets no lo convierte en fecha
-    if (i === -1) hoja.appendRow(fila);
-    else hoja.getRange(i + 2, 1, 1, fila.length).setValues([fila]);
+    if (i === -1) escribe_(hoja).appendRow(fila);
+    else escribe_(hoja).getRange(i + 2, 1, 1, fila.length).setValues([fila]);
     const cambio = cambioDeUsuario(antes, u);
     // Mientras está desactivado, exigirAcceso_ lo frena (ACCESO). Al reactivarlo, sus sesiones viejas ya no valen: entra con
     // un código nuevo (una sesión robada antes de desactivarlo no revive)
@@ -7053,7 +7269,7 @@ function crearDelegacion(p) {
     const ids = filasDeArea_(hoja, HOJAS_ADMIN, 'Delegaciones').map(r => r[0]);
     const id = formatearFolio('DEL', anio, maxConsecutivo(ids, 'DEL', anio) + 1);
     const t = textoCelda, ahora = ahoraTexto_();
-    hoja.appendRow([id, t(d.de), t(d.a), textoFecha_(d.desde), textoFecha_(d.hasta), d.roles.join(', '), 'Activa', t(yo),
+    escribe_(hoja).appendRow([id, t(d.de), t(d.a), textoFecha_(d.desde), textoFecha_(d.hasta), d.roles.join(', '), 'Activa', t(yo),
       "'" + ahora, '', '']);
     const nombres = d.roles.map(r => NOMBRES_ROLES[r]);
     bitacoraAdmin_('Delegar roles', id, d.de + ' → ' + d.a + ' · ' + nombres.join(', ') + ' · del ' + d.desde + ' al ' + d.hasta, '');
@@ -7081,8 +7297,8 @@ function cancelarDelegacion(id, motivo) {
     const estado = estadoDelegacion(d, hoyIso_());
     if (estado === 'Cancelada') throw new Error('La delegación ' + d.id + ' ya estaba cancelada.');
     if (estado === 'Terminada') throw new Error('La delegación ' + d.id + ' ya terminó: no hace falta cancelarla.');
-    hoja.getRange(i + 2, 7).setValue('Cancelada');
-    hoja.getRange(i + 2, 10, 1, 2).setValues([[textoCelda(yo), textoCelda(m)]]);
+    escribe_(hoja).getRange(i + 2, 7).setValue('Cancelada');
+    escribe_(hoja).getRange(i + 2, 10, 1, 2).setValues([[textoCelda(yo), textoCelda(m)]]);
     bitacoraAdmin_('Cancelar delegación', d.id, d.de + ' → ' + d.a, m);
     SpreadsheetApp.flush();
     return vistaDelegaciones_();
@@ -7125,7 +7341,7 @@ function usuarioParaCodigo_(correo) {
 function secretoSesion_(crear) {
   const actual = propiedades_().SESION_SECRETO;
   if (actual || !crear) return actual || '';
-  const lock = LockService.getScriptLock();
+  const lock = candado_();
   if (!lock.tryLock(10000)) throw new Error('El sistema está ocupado. Intenta de nuevo en unos segundos.');
   try {
     const props = PropertiesService.getScriptProperties();
@@ -7237,7 +7453,7 @@ function codigoAleatorio_() {
 
 /** Candado corto para los contadores del código (dos pestañas no se saltan los límites). */
 function candadoCodigo_(f) {
-  const lock = LockService.getScriptLock();
+  const lock = candado_();
   if (!lock.tryLock(15000)) throw new Error('El sistema está ocupado. Intenta de nuevo en unos segundos.');
   try { return f(); } finally { lock.releaseLock(); }
 }
@@ -7565,7 +7781,7 @@ function registrarCorreos_(registros) {
     const libro = libroAdminSiExiste_();
     if (!libro) return;
     const hoja = hojaAdmin_(libro, 'Correos'), t = textoCelda, fecha = "'" + ahoraTexto_();
-    registros.forEach(r => hoja.appendRow([fecha, t(r.para), t(r.asunto), t(r.tipo), t(r.folio || ''), t(r.estado),
+    registros.forEach(r => escribe_(hoja).appendRow([fecha, t(r.para), t(r.asunto), t(r.tipo), t(r.folio || ''), t(r.estado),
       t(String(r.error || '').slice(0, 500)), t(r.actor || '')]));
   } catch (e) {
     console.warn('No se registraron los correos: ' + e.message);
@@ -8481,7 +8697,7 @@ function avisarPortal_(tipo, folioOc, extra) { // extra (H, incremento 5): {devo
     if (texto.length > 45000) { cuerpo = cuerpoEventoPortal(tipo, previos + 1, datos, 40); texto = jsonAscii(cuerpo); } // cabe en una celda
     const montos = buscarMontos(cuerpo);
     if (montos.length) throw new Error('el aviso llevaba montos (' + montos.join(', ') + ')'); // nunca debe pasar
-    hoja.appendRow([cuerpo.evento_id, texto, 0, '', ahoraTexto_(), 'Pendiente', '']);
+    escribe_(hoja).appendRow([cuerpo.evento_id, texto, 0, '', ahoraTexto_(), 'Pendiente', '']);
     (MEMO_.portal = MEMO_.portal || []).push({ eventoId: cuerpo.evento_id, oc: orden.folio });
     return cuerpo.evento_id;
   } catch (e) {
@@ -8544,17 +8760,17 @@ function enviarPendientesPortal_(soloOcs) {
     const envio = enviarEventoPortal_(cfg, String(r[1] || ''));
     const fila = i + 2, intentos = (Number(r[2]) || 0) + 1;
     if (envio.ok) {
-      hoja.getRange(fila, 3, 1, 2).setValues([[intentos, envio.repetido ? 'ya lo tenía (repetido)' : '']]);
-      hoja.getRange(fila, 6, 1, 2).setValues([['Enviado', ahoraTexto_()]]);
+      escribe_(hoja).getRange(fila, 3, 1, 2).setValues([[intentos, envio.repetido ? 'ya lo tenía (repetido)' : '']]);
+      escribe_(hoja).getRange(fila, 6, 1, 2).setValues([['Enviado', ahoraTexto_()]]);
       res.enviados[id] = true;
     } else if (rechazoDefinitivo(envio.codigo, intentos)) {
       // El centro de mando lo rechaza por su contenido (4xx) varias veces: se aparta como Rechazado para que no detenga los
       // demás avisos de la orden (p. ej. oc.cancelada); compras lo ve en el estado del enlace
-      hoja.getRange(fila, 3, 1, 2).setValues([[intentos, textoCelda(String(envio.error).slice(0, 300))]]);
-      hoja.getRange(fila, 6, 1, 2).setValues([['Rechazado', ahoraTexto_()]]);
+      escribe_(hoja).getRange(fila, 3, 1, 2).setValues([[intentos, textoCelda(String(envio.error).slice(0, 300))]]);
+      escribe_(hoja).getRange(fila, 6, 1, 2).setValues([['Rechazado', ahoraTexto_()]]);
       res.fallidos++;
     } else {
-      hoja.getRange(fila, 3, 1, 2).setValues([[intentos, textoCelda(String(envio.error).slice(0, 300))]]);
+      escribe_(hoja).getRange(fila, 3, 1, 2).setValues([[intentos, textoCelda(String(envio.error).slice(0, 300))]]);
       detenidas[oc] = true;
       res.fallidos++;
     }
@@ -8611,7 +8827,7 @@ function marcarEnCamino(folioReq, d) {
     const e = normalizarEnCamino(d0, { hoy: hoyIso_(), nombre: nombreYo_() });
     if (recogido) fotosRecogido_(libro, req, orden, fotos); // H: una foto por renglón por recibir (se revisan antes de escribir)
     const t = textoCelda;
-    hO.getRange(orden.fila, colOc_('paqueteria'), 1, 5).setValues([[t(e.paqueteria), t(e.guia), textoFecha_(e.fechaEstimada),
+    escribe_(hO).getRange(orden.fila, colOc_('paqueteria'), 1, 5).setValues([[t(e.paqueteria), t(e.guia), textoFecha_(e.fechaEstimada),
       ahoraTexto_(), t(yo)]]);
     const nota = (req.estado === REQ_EN_CAMINO ? 'Envío corregido: ' : '') + textoEnCamino(e);
     cambiarReq_(hoja, req, nuevo, {});
@@ -8844,7 +9060,7 @@ function aplicarRecepcionPortal_(libro, x, det, res) {
     const hM = hojaCompras_(libro, 'MovimientosInventario');
     const folio = folioRec = siguienteFolio_(PREFIJO_REC, hM, 'CONSECUTIVO_REC_');
     const ahora = ahoraTexto_();
-    nuevos.forEach(n => hM.appendRow(conFotoMov_([folio, textoFecha_(fecha), ahora, TIPO_ENTRADA_COMPRA, t(sitio), req.proyectoFolio, req.folio,
+    nuevos.forEach(n => escribe_(hM).appendRow(conFotoMov_([folio, textoFecha_(fecha), ahora, TIPO_ENTRADA_COMPRA, t(sitio), req.proyectoFolio, req.folio,
       orden.folio, n.renglon, t(n.clave), t(n.descripcion), t(n.unidad), n.cantidad, t(CORREO_CENTRO_MANDO),
       t(recibio + ' (centro de mando)'), t('Recibido en ' + lugar), '', '', 'Vigente', '', '', ''],
       n.foto && !n.foto.archivada ? { id: MARCA_FOTO_CENTRO + n.foto.id, url: '' } : n.foto && n.foto.url ? { id: '', url: n.foto.url } : null)));
@@ -8858,8 +9074,8 @@ function aplicarRecepcionPortal_(libro, x, det, res) {
     const retenida = pagada ? devolucionAbiertaDe_(libro, req) : '';
     const nuevo = transicionReq(req.estado, retenida ? 'recibirRetenida' : pagada ? 'recibirPagada' : 'recibir');
     const nota = 'Recibido en ' + lugar;
-    if (pagada && !retenida) hO.getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(fecha), t(recibio + ' (centro de mando)')]]);
-    else hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(fecha), t(recibio + ' (centro de mando)')]]);
+    if (pagada && !retenida) escribe_(hO).getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(fecha), t(recibio + ' (centro de mando)')]]);
+    else escribe_(hO).getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(fecha), t(recibio + ' (centro de mando)')]]);
     cambiarReq_(hoja, req, nuevo, { notasRecepcion: nota });
     eventoReq_(libro, req.folio, nuevo, nota + (retenida ? ' · ' + textoRetenida(retenida) : pagada ? '' : ' · falta el pago al proveedor'));
     bitacora_(libro, 'Recepción del centro de mando', req.proyectoFolio, req.folio + ' · ' + orden.folio + ' · ' + nota +
@@ -8993,7 +9209,7 @@ function migrarSitiosConCodigo_() {
     if (String(v[i][1] || '').indexOf('|') === -1) console.log('Config → SITIOS: hay sitios sin código conocido; escríbelos como "VER | Veracruz (ICAVE)".');
     return false;
   }
-  hoja.getRange(i + 1, 2).setValue(nuevo);
+  escribe_(hoja).getRange(i + 1, 2).setValue(nuevo);
   console.log('Config → SITIOS con código: ' + nuevo.replace(/\n/g, ' · '));
   return true;
 }
@@ -9582,7 +9798,7 @@ function datosAnular_() {
       vendedorEmail: String(r[16] || r[10] || '') });
   });
   const hP = hojaProyectos_();
-  const filasP = hP.getLastRow() > 1 ? hP.getRange(2, 1, hP.getLastRow() - 1, ENCABEZADOS_PROYECTOS.length).getValues() : [];
+  const filasP = filasDatos_(hP, ENCABEZADOS_PROYECTOS.length);
   filasP.forEach((r, i) => {
     const p = proyectosDesdeFilas([r])[0];
     if (p) d.pry.push(Object.assign(p, { fila: i + 2, valores: r, vendedorEmail: String(r[8] || '') }));
@@ -9965,18 +10181,18 @@ function aplicarAnulacion_(d, plan, m) {
   const hojaCob = n => d.libroCob.getSheetByName(n), hojaCom = n => d.libroCom.getSheetByName(n);
   // Estado Anulada; quién, cuándo y por qué en las columnas de cancelación si están vacías (una cancelación previa se conserva)
   const marcar = (hoja, fila, colEstado, colCancelacion, yaCancelado) => {
-    hoja.getRange(fila, colEstado).setValue(ESTADO_ANULADA);
-    if (!yaCancelado) hoja.getRange(fila, colCancelacion, 1, 3).setValues([[t(yo), ahora, t('Anulada: ' + m)]]);
+    escribe_(hoja).getRange(fila, colEstado).setValue(ESTADO_ANULADA);
+    if (!yaCancelado) escribe_(hoja).getRange(fila, colCancelacion, 1, 3).setValues([[t(yo), ahora, t('Anulada: ' + m)]]);
   };
   const esquemasBorrar = [];
   plan.registros.forEach(r => {
     const x = r.x;
     if (r.clave === 'proyecto') {
-      hojaProyectos_().getRange(x.fila, COL_ESTADO_PROYECTO).setValue('Cancelado');
+      escribe_(hojaProyectos_()).getRange(x.fila, COL_ESTADO_PROYECTO).setValue('Cancelado');
     } else if (r.clave === 'contrato') {
       const h = hojaCob('Contratos');
-      h.getRange(x.fila, 8).setValue(ESTADO_ANULADA);
-      h.getRange(x.fila, 13).setValue(ahora);
+      escribe_(h).getRange(x.fila, 8).setValue(ESTADO_ANULADA);
+      escribe_(h).getRange(x.fila, 13).setValue(ahora);
       r.esquema = d.esquemas.filter(e => e.proyectoFolio === String(x.proyectoFolio).toUpperCase());
       r.esquema.forEach(e => esquemasBorrar.push(e.fila));
       bitacora_(d.libroCob, 'Anular contrato', x.proyectoFolio, r.descripcion + nota(r), m);
@@ -9985,8 +10201,8 @@ function aplicarAnulacion_(d, plan, m) {
       bitacora_(d.libroCob, 'Anular pago', x.proyectoFolio, r.descripcion + nota(r), m);
     } else if (r.clave === 'req') {
       const h = hojaCom('Requisiciones');
-      h.getRange(x.fila, 6, 1, 2).setValues([[ESTADO_ANULADA, t('Anulada: ' + m)]]);
-      h.getRange(x.fila, 13).setValue(ahora);
+      escribe_(h).getRange(x.fila, 6, 1, 2).setValues([[ESTADO_ANULADA, t('Anulada: ' + m)]]);
+      escribe_(h).getRange(x.fila, 13).setValue(ahora);
       eventoReq_(d.libroCom, x.folio, ESTADO_ANULADA, 'Requisición anulada por administración.');
     } else if (r.clave === 'oc') {
       marcar(hojaCom('OrdenesCompra'), x.fila, COL_ESTADO_OC, COL_ESTADO_OC + 3, !!x.canceladoPor);
@@ -10000,7 +10216,7 @@ function aplicarAnulacion_(d, plan, m) {
       x.filas.filter(f => f.estado !== ESTADO_ANULADA).forEach(f => marcar(h, f.fila, 19, 20, !!f.canceladoPor));
     } else if (r.clave === 'dev') {
       // Incremento 5 (revisión): la devolución queda Anulada (sale de listas y Pendientes) y sus movimientos también
-      hojaCom('Devoluciones').getRange(x.fila, 15).setValue(ESTADO_ANULADA);
+      escribe_(hojaCom('Devoluciones')).getRange(x.fila, 15).setValue(ESTADO_ANULADA);
       const h = hojaCom('MovimientosInventario');
       (x.movs || []).forEach(f => marcar(h, f.fila, 19, 20, !!f.canceladoPor));
       MEMO_.devs = null;
@@ -10012,7 +10228,7 @@ function aplicarAnulacion_(d, plan, m) {
   // Esquemas de pagos de los contratos anulados (de abajo hacia arriba para no mover las filas que faltan)
   if (esquemasBorrar.length) {
     const h = hojaCob('Esquemas');
-    esquemasBorrar.sort((a, b) => b - a).forEach(fila => h.deleteRow(fila));
+    esquemasBorrar.sort((a, b) => b - a).forEach(fila => escribe_(h).deleteRow(fila));
   }
 
   // Efectos en lo que sigue en pie
@@ -10025,7 +10241,7 @@ function aplicarAnulacion_(d, plan, m) {
         : 'Se anuló la orden de compra; queda pendiente de autorizar de nuevo.');
       bitacora_(d.libroCom, 'Requisición a ' + e.a, q.proyectoFolio, q.folio + ' · se anuló ' + e.orden.folio, m, HOJAS_COMPRAS);
     } else if (e.clave === 'pagoProveedor') {
-      if (e.orden) hojaCom('OrdenesCompra').getRange(e.orden.fila, COL_ESTADO_OC).setValue(e.oc);
+      if (e.orden) escribe_(hojaCom('OrdenesCompra')).getRange(e.orden.fila, COL_ESTADO_OC).setValue(e.oc);
       if (e.req) {
         cambiarReq_(hojaCom('Requisiciones'), e.req, e.a, {});
         eventoReq_(d.libroCom, e.req.folio, e.a, 'Se anuló el pago.');
@@ -10034,8 +10250,8 @@ function aplicarAnulacion_(d, plan, m) {
     } else if (e.clave === 'recepcion') {
       if (e.orden) {
         const hO = hojaCom('OrdenesCompra');
-        if (e.oc) hO.getRange(e.orden.fila, COL_ESTADO_OC).setValue(e.oc);
-        hO.getRange(e.orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([['', '']]);
+        if (e.oc) escribe_(hO).getRange(e.orden.fila, COL_ESTADO_OC).setValue(e.oc);
+        escribe_(hO).getRange(e.orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([['', '']]);
       }
       if (e.req) cambiarReq_(hojaCom('Requisiciones'), e.req, e.a, { notasRecepcion: '' });
       if (e.rec.reqFolio) {
@@ -10081,7 +10297,7 @@ function registrarAnulacion_(libroAdmin, plan, m) {
       : { hoja: { proyecto: 'Proyectos', cotizacion: 'Cotizaciones', contrato: 'Contratos', pago: 'Pagos', req: 'Requisiciones',
         oc: 'OrdenesCompra', pgp: 'PagosProveedores', fpr: 'FacturasProveedor' }[r.clave], fila: x.fila, valores: x.valores };
     if (r.clave === 'contrato') antes.esquema = (r.esquema || []).map(e => e.valores);
-    hoja.appendRow([ahora, t(yo), r.tipo, t(r.folio), t(m), jsonCelda(cascada), jsonCelda(antes)]);
+    escribe_(hoja).appendRow([ahora, t(yo), r.tipo, t(r.folio), t(m), jsonCelda(cascada), jsonCelda(antes)]);
   });
   bitacoraAdmin_('Anular ' + raiz.tipo.toLowerCase(), raiz.folio, plan.registros.length + ' registro(s): ' +
     plan.registros.map(r => r.folio).join(', ').slice(0, 2000), m);
@@ -10214,7 +10430,7 @@ function recibirSinPagar_(libro, hoja, req, nota, motivo) {
   const nuevo = transicionReq(req.estado, 'recibir');
   const t = textoCelda;
   cambiarReq_(hoja, req, nuevo, { notasRecepcion: nota, motivo: motivo || req.motivo });
-  hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(VENDEDOR_.email)]]); // sigue Emitida
+  escribe_(hO).getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(VENDEDOR_.email)]]); // sigue Emitida
   const parcial = formaPagoDeOrden(orden.formaPago, orden.diasCredito) !== FORMA_PAGO_CREDITO; // P (incremento 6): con un pago parcial
   eventoReq_(libro, req.folio, nuevo, [motivo ? 'Recibida por compras: ' + motivo : 'Material recibido',
     parcial ? 'falta el resto del pago al proveedor' : 'falta el pago al proveedor', nota].filter(Boolean).join(' · '));
@@ -10379,8 +10595,8 @@ function guardarProveedor(p) {
     const filaBase = [t(id), t(ficha.razonSocial), t(ficha.rfc), t(ficha.contacto), t(ficha.correo), t(ficha.telefono), ahora,
       ficha.diasCredito === '' ? '' : diasCreditoGuardados(ficha.diasCredito)];
     const fila = filaBase.concat(filaFichaProveedor_(guardada));
-    if (actual) hoja.getRange(actual.fila, 1, 1, fila.length).setValues([fila]);
-    else hoja.appendRow(fila);
+    if (actual) escribe_(hoja).getRange(actual.fila, 1, 1, fila.length).setValues([fila]);
+    else escribe_(hoja).appendRow(fila);
 
     const cambios = camposCambiados(actual, ficha);
     bitacora_(libro, actual ? 'Editar proveedor' : 'Alta de proveedor', id, ficha.razonSocial +
@@ -10423,8 +10639,8 @@ function subirDocumentoProveedor(id, tipo, archivo) {
     const subidos = subirDocumentos_(actual.razonSocial, actual.rfc, docs, actual);
     const guardada = Object.assign({}, actual, subidos, { actualizo: yo_() });
     const hoja = hojaCompras_(libro, 'Proveedores');
-    hoja.getRange(actual.fila, 7).setValue(ahoraTexto_());
-    hoja.getRange(actual.fila, COL_FICHA_PROVEEDOR, 1, HOJAS_COMPRAS.Proveedores.enc.length - COL_FICHA_PROVEEDOR + 1)
+    escribe_(hoja).getRange(actual.fila, 7).setValue(ahoraTexto_());
+    escribe_(hoja).getRange(actual.fila, COL_FICHA_PROVEEDOR, 1, HOJAS_COMPRAS.Proveedores.enc.length - COL_FICHA_PROVEEDOR + 1)
       .setValues([filaFichaProveedor_(guardada)]);
     bitacora_(libro, 'Subir documento de proveedor', actual.id, actual.razonSocial + ' · ' + DOCS_PROVEEDOR[k].corto + ' ' +
       subidos.nombres[k] + ' · fecha ' + docs[k].fecha, '', HOJAS_COMPRAS);
@@ -10978,7 +11194,7 @@ function recibirTodoConFotos_(libro, hoja, req, fotos, nota, exigirFotos) {
     const folio = siguienteFolio_(PREFIJO_REC, hM, 'CONSECUTIVO_REC_');
     const guardadas = guardarFotosRecepcion_(req.proyectoFolio, folio, fotos, recibidos);
     const ahora = ahoraTexto_(), notas = nota || (exigirFotos ? 'Recibí el material' : 'Cierre de compras');
-    recibidos.forEach(x => hM.appendRow(conFotoMov_([folio, textoFecha_(hoyIso_()), ahora, TIPO_ENTRADA_COMPRA, t(req.sitio), req.proyectoFolio,
+    recibidos.forEach(x => escribe_(hM).appendRow(conFotoMov_([folio, textoFecha_(hoyIso_()), ahora, TIPO_ENTRADA_COMPRA, t(req.sitio), req.proyectoFolio,
       req.folio, orden.folio, x.renglon, t(x.clave), t(x.descripcion), t(x.unidad), x.cantidad, t(yo_()), t(nombreYo_()), t(notas),
       '', '', 'Vigente', '', '', ''], guardadas[x.renglon])));
     crearDevolucionesDeRecepcion_(libro, req, orden, problemas);
@@ -10986,7 +11202,7 @@ function recibirTodoConFotos_(libro, hoja, req, fotos, nota, exigirFotos) {
   const abierta = exigirFotos && orden.estado === OC_PAGADA ? devolucionAbiertaDe_(libro, req) : '';
   if (!abierta) return false;
   const nuevo = transicionReq(req.estado, 'recibirRetenida');
-  hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(VENDEDOR_.email)]]);
+  escribe_(hO).getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(VENDEDOR_.email)]]);
   cambiarReq_(hoja, req, nuevo, { notasRecepcion: nota });
   eventoReq_(libro, req.folio, nuevo, ['Material recibido', nota, textoRetenida(abierta)].filter(Boolean).join(' · '));
   notificar_('req.recibida', { req: req.folio, nota: nota }); // correo a compras (6.B)
@@ -11021,7 +11237,7 @@ function fotosRecogido_(libro, req, orden, fotos) {
   const folio = siguienteFolio_(PREFIJO_REC, hM, 'CONSECUTIVO_REC_');
   const guardadas = guardarFotosRecepcion_(req.proyectoFolio, folio, soloFotos, recogidos);
   const ahora = ahoraTexto_(), t = textoCelda;
-  recogidos.forEach(x => hM.appendRow(conFotoMov_([folio, textoFecha_(hoyIso_()), ahora, TIPO_RECOGIDO, t(req.sitio), req.proyectoFolio,
+  recogidos.forEach(x => escribe_(hM).appendRow(conFotoMov_([folio, textoFecha_(hoyIso_()), ahora, TIPO_RECOGIDO, t(req.sitio), req.proyectoFolio,
     req.folio, orden.folio, x.renglon, t(x.clave), t(x.descripcion), t(x.unidad), x.cantidad, t(yo_()), t(nombreYo_()), t('Lo recogí'),
     '', '', 'Vigente', '', '', ''], guardadas[x.renglon])));
   return folio;
@@ -11135,7 +11351,7 @@ function crearDevolucion_(libro, req, orden, p, o) {
     foto = { id: a.getId(), url: a.getUrl() };
   }
   const origen = x.origen || ORIGEN_DEV_CAPRI, reporto = x.reporto || yo_(), t = textoCelda;
-  hD.appendRow([folio, "'" + ahoraTexto_(), req.folio, orden.folio, req.proyectoFolio, p.renglon, t(p.descripcion), p.cantidad, p.tipo,
+  escribe_(hD).appendRow([folio, "'" + ahoraTexto_(), req.folio, orden.folio, req.proyectoFolio, p.renglon, t(p.descripcion), p.cantidad, p.tipo,
     t(p.comentario), foto ? t(foto.id || '') : '', foto ? t(foto.url || '') : '', origen, t(reporto), DEV_ABIERTA, '', '', '', '', '', t(x.clave || '')]);
   MEMO_.devs = null;
   const material = p.cantidad + ' ' + (p.unidad || '') + ' de ' + String(p.descripcion).slice(0, 60);
@@ -11286,19 +11502,19 @@ function resolverDevolucion(folioDev, d) {
       throw new Error('Del renglón ' + dev.renglon + ' ya no hay ' + dev.cantidad + ' recibidos (¿se canceló la recepción?): resuélvela como "Conservar" o revisa las recepciones.');
     }
     if (cantidadMov > 1e-9) {
-      hojaCompras_(libro, 'MovimientosInventario').appendRow(conFotoMov_([dev.folio, textoFecha_(hoyIso_()), ahora, efecto.movimiento,
+      escribe_(hojaCompras_(libro, 'MovimientosInventario')).appendRow(conFotoMov_([dev.folio, textoFecha_(hoyIso_()), ahora, efecto.movimiento,
         t(req.sitio), req.proyectoFolio, req.folio, orden.folio, dev.renglon, t(linea.clave), t(linea.descripcion), t(linea.unidad),
         efecto.signo * cantidadMov, t(yo_()), t(nombreYo_()), t('Devolución ' + dev.folio + ' · ' + r.resolucion), '', '', 'Vigente', '', '', ''], null));
     }
-    hojaCompras_(libro, 'Devoluciones').getRange(dev.fila, 15, 1, 6).setValues([[DEV_RESUELTA, r.resolucion, t(r.nota), t(r.guia),
+    escribe_(hojaCompras_(libro, 'Devoluciones')).getRange(dev.fila, 15, 1, 6).setValues([[DEV_RESUELTA, r.resolucion, t(r.nota), t(r.guia),
       t(yo_()), "'" + ahora]]);
     MEMO_.devs = null;
     let nuevo = req.estado;
     if (efecto.reabre && (req.estado === REQ_RECIBIDA || req.estado === REQ_CERRADA)) {
       const pagada = orden.estado === OC_PAGADA || orden.estado === OC_RECIBIDA;
       nuevo = transicionReq(req.estado, orden.enCaminoEn ? 'devolucionEnCamino' : pagada ? 'devolucionPagada' : 'devolucionAutorizada');
-      if (orden.estado === OC_RECIBIDA) { hO.getRange(orden.fila, COL_ESTADO_OC).setValue(OC_PAGADA); orden.estado = OC_PAGADA; }
-      hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([['', '']]); // ya no está recibido todo
+      if (orden.estado === OC_RECIBIDA) { escribe_(hO).getRange(orden.fila, COL_ESTADO_OC).setValue(OC_PAGADA); orden.estado = OC_PAGADA; }
+      escribe_(hO).getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([['', '']]); // ya no está recibido todo
       cambiarReq_(hoja, req, nuevo, {});
     } else {
       cambiarReq_(hoja, req, req.estado, {});
@@ -11339,8 +11555,8 @@ function completarTrasDevolucion_(libro, hoja, req, hO, orden, folioDev) {
   if (!avance.completo || !avance.algo) return '';
   const pagada = orden.estado === OC_PAGADA, t = textoCelda;
   const nuevo = transicionReq(req.estado, pagada ? 'recibirPagada' : 'recibir');
-  if (pagada) { hO.getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(hoyIso_()), t(yo_())]]); orden.estado = OC_RECIBIDA; }
-  else hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(yo_())]]);
+  if (pagada) { escribe_(hO).getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(hoyIso_()), t(yo_())]]); orden.estado = OC_RECIBIDA; }
+  else escribe_(hO).getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(yo_())]]);
   cambiarReq_(hoja, req, nuevo, {});
   eventoReq_(libro, req.folio, nuevo, 'Recepción completa: ya no se espera lo que faltaba (' + folioDev + ')' + (pagada ? '.' : ' · falta el pago al proveedor.'));
   bitacora_(libro, 'Completar recepción (devolución resuelta)', req.proyectoFolio, req.folio + ' · ' + orden.folio + ' · ' + folioDev + ' · ' + nuevo, '', HOJAS_COMPRAS);
@@ -11355,7 +11571,7 @@ function cerrarRetenida_(libro, hoja, req, hO, orden) {
   if (req.estado !== REQ_RECIBIDA || orden.estado !== OC_PAGADA || devolucionAbiertaDe_(libro, req)) return '';
   if (!avanceDeReq_(libro, req, orden).completo) return '';
   const nuevo = transicionReq(req.estado, 'cerrarRetenida');
-  hO.getRange(orden.fila, COL_ESTADO_OC).setValue(OC_RECIBIDA);
+  escribe_(hO).getRange(orden.fila, COL_ESTADO_OC).setValue(OC_RECIBIDA);
   orden.estado = OC_RECIBIDA;
   cambiarReq_(hoja, req, nuevo, {});
   eventoReq_(libro, req.folio, nuevo, 'Cerrada: ya no hay devoluciones abiertas y el material está recibido y pagado.');
@@ -11590,10 +11806,10 @@ function anotarFotoPortal_(libro, tarea, id, url) {
         m.estado === 'Vigente' && !m.fotoId && !m.fotoUrl) { i = k; break; }
     }
   }
-  if (i !== -1) { hM.getRange(i + 2, cI, 1, 2).setValues([[id, url]]); return 'mov'; }
+  if (i !== -1) { escribe_(hM).getRange(i + 2, cI, 1, 2).setValues([[id, url]]); return 'mov'; }
   const hD = hojaCompras_(libro, 'Devoluciones'), cD = HOJAS_COMPRAS.Devoluciones.enc.indexOf('foto_id') + 1;
   const j = filasDeArea_(hD, HOJAS_COMPRAS, 'Devoluciones').findIndex(r => String(r[cD - 1]) === marca);
-  if (j !== -1) { hD.getRange(j + 2, cD, 1, 2).setValues([[id, url]]); MEMO_.devs = null; return 'dev'; }
+  if (j !== -1) { escribe_(hD).getRange(j + 2, cD, 1, 2).setValues([[id, url]]); MEMO_.devs = null; return 'dev'; }
   bitacora_(libro, 'Foto del centro de mando sin renglón', tarea.proyecto, tarea.oc + ' · renglón ' + tarea.renglon + ' · ' + url, '', HOJAS_COMPRAS);
   return '';
 }
@@ -11982,7 +12198,7 @@ function aplicarPagoCompleto_(libro, hoja, req, hO, orden) {
   const retenida = yaRecibida ? devolucionAbiertaDe_(libro, req) : '';
   const nuevo = transicionReq(req.estado, retenida ? 'pagarRetenida' : yaRecibida ? 'pagarRecibida' : enCamino ? 'pagarEnCamino' : 'pagar');
   const estadoOc = yaRecibida && !retenida ? OC_RECIBIDA : OC_PAGADA;
-  hO.getRange(orden.fila, COL_ESTADO_OC).setValue(estadoOc);
+  escribe_(hO).getRange(orden.fila, COL_ESTADO_OC).setValue(estadoOc);
   orden.estado = estadoOc;
   cambiarReq_(hoja, req, nuevo, {});
   return { nuevo: nuevo, yaRecibida: yaRecibida, enCamino: enCamino, retenida: retenida };
@@ -12180,7 +12396,7 @@ function guardarFechasEsperadas(proyectoFolio, fechas) {
       }
       if (e.fecha !== x.fecha) cambios.push({ e: e, x: x });
     });
-    cambios.forEach(c => hoja.getRange(c.e.fila, cF).setValue(textoFecha_(c.x.fecha)));
+    cambios.forEach(c => escribe_(hoja).getRange(c.e.fila, cF).setValue(textoFecha_(c.x.fecha)));
     if (cambios.length) {
       bitacora_(libro, 'Fechas esperadas de cobro', proyecto.folio, cambios.map(c => c.e.etapa + ': ' + (c.e.fecha || 'sin fecha') +
         ' → ' + (c.x.fecha || 'sin fecha')).join(' · '));

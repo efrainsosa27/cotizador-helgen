@@ -19,7 +19,7 @@ const ctx={console,Date,
  LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},
  Session:{getActiveUser:()=>({getEmail:()=>'efrain@helgen.tech'})},
  Utilities:{formatDate:(d,tz,f)=>f==='yyyy'?'2026':'15/10/2026',newBlob:h=>({getAs:()=>({setName:n=>({name:n,html:h})})}),base64Encode:b=>Buffer.from(b).toString('base64'),base64EncodeWebSafe:b=>Buffer.from(b).toString('base64url'),DigestAlgorithm:{SHA_256:'sha256',MD5:'md5'},computeDigest:(a,s)=>[...require('crypto').createHash(a||'sha256').update(s).digest()]},
- SpreadsheetApp:{flush(){},openById:()=>({getSheetByName:n=>n==='Config'?cfg:cot})},
+ SpreadsheetApp:{flush(){},openById:id=>({getId:()=>id,getSheetByName:n=>n==='Config'?cfg:cot})},
  DriveApp:{getFolderById:()=>({getFoldersByName:()=>({hasNext:()=>true,next:()=>({createFile:b=>{pdfs.push(b);return{getUrl:()=>'u'}}})})})},
 };
 vm.createContext(ctx); vm.runInContext(src,ctx);

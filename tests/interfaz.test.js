@@ -116,6 +116,17 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   assert.equal(llamadas.filter(c=>c.funcion==='listarProyectos').length,antes);
   assert(/ocupado/.test($('aviso').innerHTML)&&!/Se quitó/.test($('aviso').innerHTML));
 
+  // Rapidez: al guardar bien, una sola consulta (sincronizar) trae clientes y proyectos; ya no getClientes + listarProyectos
+  respuestas.guardarCotizacion={ok:true,datos:{folio:'HLG-2026-0009',url:'u',total:116,moneda:'MXN',proyectoFolio:'PRY-2026-0001'}};
+  respuestas.sincronizar=()=>({ok:true,datos:{versiones:{cotizaciones:9},permisos:{cobranza:false,desbloqueo:false},soloRequisicion:false,
+    cambios:['cotizaciones'],clientes:[{id:'X',etiqueta:'Cliente Nuevo',nombre:'Cliente Nuevo',empresa:''}]}});
+  const nGuardar=llamadas.length;
+  A.run('guardar()'); await esperar(); await esperar();
+  const despues=llamadas.slice(nGuardar).map(c=>c.funcion);
+  assert.deepEqual(despues.filter(f=>f!=='guardarCotizacion'),['sincronizar'],'después de guardar: '+despues.join(', '));
+  assert(/Cliente Nuevo/.test($('clientesList').innerHTML),'pinta los clientes que trajo la sincronización');
+  respuestas.sincronizar=()=>({ok:true,datos:{versiones:{},permisos:{cobranza:false,desbloqueo:false},soloRequisicion:false,cambios:[]}});
+
   // Moneda: en MXN el catálogo pone el precio en pesos; en USD, su precio convertido con el tipo de cambio del día
   const fila=$('filas').hijos[0];
   fila.querySelector('.desc').value='Panel solar 550 W'; fila.querySelector('.desc').disparar('change');
