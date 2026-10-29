@@ -364,7 +364,7 @@ vo = ok('leo', 'aprobarRequisicion', rL, todo(), '  Pedro y Adriana están fuera
 assert.equal(vo.requisicion.estado, 'Aprobada');
 assert.deepEqual(ultBit().slice(1, 6), ['leo@helgen.tech', 'Excepción de super admin: aprobar su propia requisición', rL, '', 'Pedro y Adriana están fuera hoy']);
 // Visto bueno a lo propio y a lo que uno preparó
-const PROP = id => ({ proveedor: { razonSocial: 'Ferretera del Puerto' }, fechaEntrega: masDias(1), condicionesPago: 'Contado', diasCredito: 0,
+const PROP = id => ({ proveedor: { razonSocial: 'Ferretera del Puerto' }, fechaEntrega: masDias(1), formaPago: 'Transferencia', condicionesPago: 'Contado', diasCredito: 0,
   recibe: 'pedro@helgen.tech', renglones: [{ renglon: 1, disponibilidad: 'Exacto', costo: 10 }, { renglon: 2, disponibilidad: 'Exacto', costo: 1 }], idSolicitud: id });
 ok('leo', 'cotizarRequisicion', rL, PROP('pl1'));
 vo = ok('leo', 'getRequisicionOperaciones', rL);

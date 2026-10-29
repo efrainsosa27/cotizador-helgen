@@ -121,6 +121,9 @@ const plain=x=>JSON.parse(JSON.stringify(x));
 
 // ================= Lógica pura =================
 const P=ctx;
+// F (incremento 5): sin CSF y carátula del proveedor no se registra un pago; estas pruebas no son de documentos (eso va en
+// tests/proveedores.test.js), así que aquí se salta ese bloqueo
+P.exigirDocumentosParaPagar_=function(){};
 assert.deepEqual(plain(P.sitiosDeTexto('Querétaro\nManzanillo (TIMSA),  Ensenada  (EIT);querétaro\n\n')),['Querétaro','Manzanillo (TIMSA)','Ensenada (EIT)']);
 const SIT=plain(P.sitiosDeTexto('Querétaro\nManzanillo (TIMSA)\nEnsenada (EIT)\nLázaro Cárdenas (LCT)\nVeracruz (ICAVE)'));
 assert.equal(P.sitioDeLista('lazaro cardenas (lct)',SIT,true),'Lázaro Cárdenas (LCT)','sin acentos ni mayúsculas');
@@ -153,7 +156,7 @@ assert.deepEqual(APR.map(a=>a.renglon+':'+a.cantidad+'/'+a.pedida),['1:80/100','
 
 // Propuesta de compras
 const CTXP={aprobados:APR,moneda:'MXN',ubicacion:'Manzanillo, Col.',hoy:HOY_ISO,ivaTasa:0.16,solicitante:'obrero@helgen.tech',receptores:['obrero@helgen.tech','rosa@helgen.tech']};
-const BASEP={proveedor:{razonSocial:'Ferretera del Puerto'},fechaEntrega:MANANA,condicionesPago:'Contado',diasCredito:0,
+const BASEP={proveedor:{razonSocial:'Ferretera del Puerto'},fechaEntrega:MANANA,formaPago: 'Transferencia', condicionesPago:'Contado',diasCredito:0,
   renglones:[{renglon:1,disponibilidad:'exacto',costo:10},{renglon:3,disponibilidad:'Sustituto',descripcion:'Tubo conduit 1"',costo:50},
     {renglon:0,disponibilidad:'Adicional',descripcion:'Flete',unidad:'SERV',cantidad:1,costo:200,recibir:false}]};
 const pr=P.normalizarPropuesta(BASEP,CTXP);
@@ -275,7 +278,7 @@ assert.equal(ok('leo','aprobarRequisicion',rA,todo(2)).requisicion.estado,'Aprob
 vc=ok('pedro','getRequisicion',r1);
 assert.deepEqual([vc.puedeCotizar,vc.puedeDevolver,vc.puedeSeparar,vc.aprobados.map(a=>a.renglon+':'+a.cantidad).join()],[true,true,true,'1:80,3:12']);
 assert.deepEqual(plain(vc.sitios),SIT); assert(vc.receptores.includes('rosa@helgen.tech')&&!vc.receptores.includes('ana@helgen.tech'));
-const PROP=extra=>({proveedor:{razonSocial:'Ferretera del Puerto',rfc:''},fechaEntrega:MANANA,condicionesPago:'Contado',diasCredito:0,recibe:'rosa@helgen.tech',
+const PROP=extra=>({proveedor:{razonSocial:'Ferretera del Puerto',rfc:''},fechaEntrega:MANANA,formaPago: 'Transferencia', condicionesPago:'Contado',diasCredito:0,recibe:'rosa@helgen.tech',
   renglones:[{renglon:1,disponibilidad:'Exacto',costo:10},{renglon:3,disponibilidad:'Sustituto',descripcion:'Tubo conduit 1"',costo:50},
     {renglon:0,disponibilidad:'Adicional',descripcion:'Flete',unidad:'SERV',cantidad:1,costo:200,recibir:false}],idSolicitud:'pp'+(++nId),...extra});
 falla('pedro','cotizarRequisicion',[r1,PROP({recibe:'ana@helgen.tech'})],/debe tener acceso a Requisiciones/);
@@ -309,7 +312,7 @@ rp=ok('pedro','cotizarRequisicion',r1,PROP({renglones:lineas(8)}));
 assert.equal(rp.version,3);
 
 // Quien preparó no da el visto bueno (leo: compras y operaciones) y nadie a su propia requisición
-ok('leo','cotizarRequisicion',rA,{proveedor:{razonSocial:'Tornillos SA'},fechaEntrega:MANANA,condicionesPago:'Contado',diasCredito:0,
+ok('leo','cotizarRequisicion',rA,{proveedor:{razonSocial:'Tornillos SA'},fechaEntrega:MANANA,formaPago: 'Transferencia', condicionesPago:'Contado',diasCredito:0,
   renglones:[{renglon:1,disponibilidad:'Exacto',costo:5},{renglon:2,disponibilidad:'Exacto',costo:1}],idSolicitud:'pa'});
 let voA=ok('leo','getRequisicionOperaciones',rA);
 assert.deepEqual([voA.preparoPropuesta,voA.puedeVisto],[true,false]);
@@ -405,7 +408,7 @@ assert.deepEqual([v3.requisicion.estado,v3.requisicion.aprobacion,v3.renglones[0
 falla('pedro','cotizarRequisicion',[r3,PROP()],/está solicitada: no se puede mandar la propuesta de/);
 
 // Pagar antes de recibir; cancelar una recepción equivocada; última recepción con faltante → Cerrada
-const prop2={proveedor:{razonSocial:'GNSS Store'},fechaEntrega:MANANA,condicionesPago:'Contado',diasCredito:0,
+const prop2={proveedor:{razonSocial:'GNSS Store'},fechaEntrega:MANANA,formaPago: 'Transferencia', condicionesPago:'Contado',diasCredito:0,
   renglones:[{renglon:1,disponibilidad:'Exacto',costo:1000},{renglon:2,disponibilidad:'Exacto',costo:10}],idSolicitud:'p2x'};
 ok('pedro','cotizarRequisicion',r2,prop2);
 const oc2=ok('adri','autorizarPropuesta',r2,1,'vb2',huella(r2)).ocFolio;

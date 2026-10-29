@@ -107,6 +107,9 @@ function vivos(f){return f.hijos.filter(h=>!h.trashed)}
 
 // ================= Lógica pura =================
 const P=ctx;
+// F (incremento 5): sin CSF y carátula del proveedor no se registra un pago; estas pruebas no son de documentos (eso va en
+// tests/proveedores.test.js), así que aquí se salta ese bloqueo
+P.exigirDocumentosParaPagar_=function(){};
 // Proveedor
 const pv=P.normalizarProveedor({razonSocial:'  Paneles   del Bajío ',rfc:'pdb-200101-ab1',correo:' Ventas@PDB.mx ',telefono:'+52 442 000 0000'});
 assert.deepEqual([pv.razonSocial,pv.rfc,pv.correo],['Paneles del Bajío','PDB200101AB1','ventas@pdb.mx']);
@@ -122,7 +125,7 @@ const pl=P.proveedoresDesdeFilas([['X1','Zeta','','','','',''],['R1','Acme','AAA
 assert.deepEqual(pl.map(p=>p.etiqueta+'@'+p.fila),['Acme — AAA010101AA1@3','acme — BBB010101BB1@4','Zeta@2']);
 // Orden de compra
 const PRO={moneda:'MXN',ubicacion:'Querétaro, Qro.',hoy:'2026-10-20',ivaTasa:0.16};
-const base={proveedor:{razonSocial:'Paneles del Bajío'},fechaEntrega:'2026-10-25',condicionesPago:' Crédito  30 días ',diasCredito:'30',
+const base={proveedor:{razonSocial:'Paneles del Bajío'},fechaEntrega:'2026-10-25',formaPago:'Transferencia',condicionesPago:' Crédito  30 días ',diasCredito:'30',
   renglones:[{clave:'pan-550',descripcion:'Panel solar 550 W',unidad:'pza',cantidad:'10',costo:'2500.5'},{descripcion:'',cantidad:1,costo:''}]};
 let o=P.normalizarOrdenCompra(base,PRO);
 assert.deepEqual([o.lugarEntrega,o.condicionesPago,o.moneda,o.ivaTasa,o.subtotal,o.iva,o.total,o.tipoCambio,o.subtotalProyecto],
@@ -441,7 +444,7 @@ fr=fact(OC('0002'),{uuid:U(4),moneda:'USD',subtotal:'100.00',tras:'0.00',total:'
 assert.equal(fr.folio,FPR('0004'));
 
 // --- Proveedor extranjero sin CFDI (p. ej. Ardusimple, JLCPCB): PDF obligatorio, de contado ---
-const oAr=emitir('pedro',p2,oc({moneda:'USD',ivaTasa:0,diasCredito:'0',condicionesPago:'Contado',proveedor:{razonSocial:'Ardusimple SL'},
+const oAr=emitir('pedro',p2,oc({moneda:'USD',ivaTasa:0,diasCredito:'0',formaPago: 'Transferencia', condicionesPago:'Contado',proveedor:{razonSocial:'Ardusimple SL'},
   renglones:[{descripcion:'simpleRTK2B Pro',cantidad:2,costo:250}]}));
 assert.deepEqual([oAr.folio,oAr.total,H('OrdenesCompra').find(x=>x[0]===oAr.folio)[35],H('Proveedores').find(x=>x[1]==='Ardusimple SL')[7]],
   [OC('0006'),500,0,0],'contado: 0 días en la orden y en el proveedor');

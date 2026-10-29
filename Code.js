@@ -89,7 +89,8 @@ function verificarTokenGoogle_(idToken) {
  * Las mod*_ son declaraciones de función: se pueden llamar aquí aunque estén más abajo. Dentro de `api` solo van
  * declaraciones de función (una const de más abajo todavía no existe al cargar el archivo).
  */
-const MODULOS_ = [modIdentidad_(), modAnular_(), modCorreos_(), modCentroMando_(), modPantallas_()];
+const MODULOS_ = [modIdentidad_(), modAnular_(), modCorreos_(), modCentroMando_(), modPantallas_(),
+  modProveedores_()]; // incremento 5: F · Proveedores y forma de pago (§6.F)
 /** Une un campo de todos los módulos: objetos con Object.assign, listas con concat. */
 function deModulos_(campo, inicial) {
   return MODULOS_.reduce((acc, m) => Array.isArray(inicial) ? acc.concat(m[campo] || []) : Object.assign(acc, m[campo] || {}), inicial);
@@ -1996,7 +1997,7 @@ function vistaCobranza_(libro, proyecto) {
     puedeDesbloquear: !!c && c.estado === ESTADO_FIRMADO && esAdminDesbloqueo_(),
     // Solo llega al rol de cobranza (vistaCobranza_ se llama después de exigirCobranza_)
     margen: c ? margenDeContrato_(c) : margenSinContrato_(proyecto.folio),
-    metodos: METODOS_PAGO,
+    metodos: METODOS_COBRO,
     hoy: hoyIso_(),
   };
 }
@@ -2344,11 +2345,17 @@ const HOJAS_COMPRAS = {
       'fecha_registro', 'estado', 'fecha_recepcion', 'recibio', 'cancelado_por', 'fecha_cancelacion', 'motivo_cancelacion',
       'req_folio', 'dias_credito',
       // Incremento 4 (centro de mando): En camino (paquetería, guía, fecha estimada, cuándo y quién lo marcó)
-      'paqueteria', 'guia', 'fecha_estimada', 'en_camino_en', 'en_camino_por'],
+      'paqueteria', 'guia', 'fecha_estimada', 'en_camino_en', 'en_camino_por',
+      // Incremento 5 (F): forma de pago de la orden (FORMAS_PAGO_OC; se busca por nombre; vacía en órdenes de antes)
+      'forma_pago'],
     numeros: [15, 16, 17, 18, 20, 21],
   },
-  // dias_credito (H): crédito habitual del proveedor; precarga las órdenes nuevas (la orden guarda el suyo en AJ)
-  Proveedores: { enc: ['id', 'razon_social', 'rfc', 'contacto', 'correo', 'telefono', 'actualizado', 'dias_credito'], numeros: [] },
+  // dias_credito (H): crédito habitual del proveedor; precarga las órdenes nuevas (la orden guarda el suyo en AJ). Desde el
+  // incremento 5 (F) también es el "días de crédito habituales" de la ficha. Las columnas I:Z son la ficha del proveedor (6.F):
+  // datos bancarios, forma de pago habitual y documentos (CSF, carátula bancaria, comprobante de domicilio) con su fecha
+  Proveedores: { enc: ['id', 'razon_social', 'rfc', 'contacto', 'correo', 'telefono', 'actualizado', 'dias_credito',
+    'direccion', 'banco', 'clabe', 'cuenta', 'titular', 'forma_pago_habitual', 'csf_id', 'csf_url', 'csf_fecha', 'caratula_id',
+    'caratula_url', 'caratula_fecha', 'domicilio_id', 'domicilio_url', 'domicilio_fecha', 'notas', 'activo', 'actualizo'], numeros: [] },
   // Facturas de proveedor (4.5): CFDI (con XML) o Extranjera (PDF + datos capturados); nunca se borran filas
   FacturasProveedor: {
     enc: ['folio', 'tipo', 'uuid', 'serie_folio', 'fecha_emision', 'fecha_registro', 'fecha_vencimiento', 'dias_credito',
@@ -2418,7 +2425,10 @@ function exigirCompras_() {
 function ordenDesdeFila_(r, fila) {
   let renglones = [];
   try { renglones = JSON.parse(String(r[21] || '[]')); } catch (e) { renglones = []; }
+  const dias = r[35] === '' || r[35] == null ? diasCreditoDeCondiciones(r[12]) : diasCreditoGuardados(r[35]);
   return {
+    // Forma de pago (F, incremento 5): la guardada o, en órdenes de antes, la que dicen sus días de crédito (formaPagoDeOrden)
+    formaPago: formaPagoDeOrden(r[colOc_('forma_pago') - 1], dias),
     folio: String(r[0]), fecha: fechaIso_(r[1]), proyectoFolio: String(r[2]), marca: marcaDeTexto_(r[3]),
     proveedorId: String(r[4] || ''), proveedor: String(r[5] || ''), rfc: String(r[6] || ''), contacto: String(r[7] || ''),
     correo: String(r[8] || ''), telefono: String(r[9] || ''), fechaEntrega: fechaIso_(r[10]), lugarEntrega: String(r[11] || ''),
@@ -2429,7 +2439,7 @@ function ordenDesdeFila_(r, fila) {
     estado: String(r[28] || OC_EMITIDA), fechaRecepcion: fechaIso_(r[29]), recibio: String(r[30] || ''),
     canceladoPor: String(r[31] || ''), motivoCancelacion: String(r[33] || ''), reqFolio: String(r[34] || ''),
     // Orden anterior a los días de crédito (AJ vacía): los de sus condiciones de pago ("Crédito 30 días"); si no dicen, contado
-    diasCredito: r[35] === '' || r[35] == null ? diasCreditoDeCondiciones(r[12]) : diasCreditoGuardados(r[35]), fila: fila,
+    diasCredito: dias, fila: fila,
     // En camino (centro de mando): paquetería, guía, fecha estimada, cuándo y quién
     paqueteria: String(r[colOc_('paqueteria') - 1] || ''), guia: String(r[colOc_('guia') - 1] || ''),
     fechaEstimada: fechaIso_(r[colOc_('fecha_estimada') - 1]), enCaminoEn: fechaTexto_(r[colOc_('en_camino_en') - 1]),
@@ -2568,19 +2578,25 @@ function emitirOrdenCompra_(libro, d0, proyecto, reqFolio, firma) {
   const archivo = privado_(carpetaProyectoCompras_(proyecto.folio).createFile(pdf));
 
   const t = textoCelda;
-  hoja.appendRow([
+  const filaOc = [
     folio, textoFecha_(hoyIso_()), proyecto.folio, MARCAS[c.marca] || '', t(proveedor.id), t(proveedor.razonSocial), t(proveedor.rfc),
     t(proveedor.contacto), t(proveedor.correo), t(proveedor.telefono), textoFecha_(oc.fechaEntrega), t(oc.lugarEntrega),
     t(oc.condicionesPago), oc.moneda, oc.ivaTasa, oc.subtotal, oc.iva, oc.total, oc.monedaProyecto, oc.tipoCambio,
     oc.subtotalProyecto, JSON.stringify(oc.renglones), t(oc.notas), archivo.getId(), archivo.getUrl(), t(correoElaboro),
     t(elaboro), Utilities.formatDate(ahora, 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), OC_EMITIDA, '', '', '', '', '',
     reqFolio || '', oc.diasCredito,
-  ]);
+  ];
+  // F (incremento 5): forma de pago en su columna (por nombre, al final; las del centro de mando quedan vacías)
+  while (filaOc.length < colOc_('forma_pago')) filaOc.push('');
+  filaOc[colOc_('forma_pago') - 1] = oc.formaPago;
+  hoja.appendRow(filaOc);
   bitacora_(libro, 'Emitir orden de compra', proyecto.folio, folio + (reqFolio ? ' · ' + reqFolio : '') + ' · ' +
-    proveedor.razonSocial + ' · ' + formatoMoneda(oc.total) + ' ' + oc.moneda + ' · ' +
+    proveedor.razonSocial + ' · ' + formatoMoneda(oc.total) + ' ' + oc.moneda + ' · ' + oc.formaPago + ' · ' +
     (oc.diasCredito ? 'crédito ' + oc.diasCredito + ' días' : 'contado') + (oc.tipoCambio ? ' · TC ' + oc.tipoCambio + ' = ' +
     formatoMoneda(oc.subtotalProyecto) + ' ' + oc.monedaProyecto + ' sin IVA' : '') + ' · ' + (MARCAS[c.marca] || 'sin contrato'), '', HOJAS_COMPRAS);
-  return { folio: folio, url: archivo.getUrl(), total: oc.total, moneda: oc.moneda };
+  // avisoProveedor (F): documentos que le faltan al proveedor (no bloquea la orden; sin CSF y carátula no se le podrá pagar)
+  return { folio: folio, url: archivo.getUrl(), total: oc.total, moneda: oc.moneda,
+    avisoProveedor: avisoDeProveedor_(libro, proveedor.id, proveedor.razonSocial) };
 }
 
 /** Compras/AAAA/<folio del proyecto>/ (restringidas de arriba abajo: un permiso heredado no se puede quitar en el hijo). */
@@ -2640,6 +2656,8 @@ function cancelarOrdenCompra(folioOc, motivo, confirmado) {
       throw new Error('La orden ' + orden.folio + ' ya tiene material recibido (' + recepcionesDe_(recibidas).map(x => x.folio).join(', ') +
         '): cancela primero la recepción.');
     }
+    // F (incremento 5): con crédito del proveedor una orden Emitida (sin pagar) ya puede estar recibida (flujo de siempre)
+    if (orden.fechaRecepcion) throw new Error('La orden ' + orden.folio + ' ya se recibió (falta pagarla): no se puede cancelar.');
     hoja.getRange(orden.fila, COL_ESTADO_OC).setValue(OC_CANCELADA);
     hoja.getRange(orden.fila, COL_ESTADO_OC + 3, 1, 3).setValues([[textoCelda(VENDEDOR_.email),
       Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
@@ -2968,6 +2986,8 @@ function reqParaSolicitante_(req, ren, eventos, proyectos, x) {
   const recibe = req.recibeEmail || req.solicitanteEmail;
   const ocPagada = !!orden && orden.estado === OC_PAGADA;
   const porEnviar = !!orden && [REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO].indexOf(req.estado) !== -1;
+  // F (incremento 5): con crédito del proveedor se confirma que llegó con la orden sin pagar (queda Recibida; el pago la cierra)
+  const antesDePagar = recibirSinPagarPosible_(req, orden);
   return {
     folio: req.folio, fecha: req.fecha, proyectoFolio: req.proyectoFolio, proyectoNombre: p ? p.nombre : '',
     proyectoVisible: p ? p.folioVisible : req.proyectoFolio, estado: req.estado, notasRecepcion: req.notasRecepcion,
@@ -2981,7 +3001,7 @@ function reqParaSolicitante_(req, ren, eventos, proyectos, x) {
     puedeEditar: req.estado === REQ_DEVUELTA && yo === req.solicitanteEmail,
     puedeCancelar: (req.estado === REQ_SOLICITADA || req.estado === REQ_DEVUELTA) && yo === req.solicitanteEmail,
     // En camino y ya pagada también se cierra; un proyecto ligado se recibe en el centro de mando
-    puedeCerrar: !flujo && !centro && (req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && ocPagada)) &&
+    puedeCerrar: !flujo && !centro && (req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && ocPagada) || antesDePagar) &&
       yo === req.solicitanteEmail,
     // Con operaciones se recibe renglón por renglón (también las requisiciones de antes que ya tenían orden)
     puedeRecibir: flujo && !centro && !!avance && !avance.completo &&
@@ -3149,6 +3169,8 @@ function cancelarRequisicion(folioReq, motivo) {
 
 /** Cierre: la requisición pasa a Cerrada y su orden a Recibida (hoy, con el correo de quien cierra). */
 function cerrarReq_(libro, hoja, req, nota, motivo) {
+  // F (incremento 5): con crédito del proveedor y la orden sin pagar, queda Recibida (el pago la cierra); ver recibirSinPagar_
+  if (recibirSinPagar_(libro, hoja, req, nota, motivo)) return;
   const nuevo = transicionReq(req.estado, req.estado === REQ_EN_CAMINO ? 'cerrarEnCamino' : 'cerrar');
   const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
   if (orden.estado !== OC_PAGADA) throw new Error('La orden ' + orden.folio + ' no está pagada.');
@@ -3160,7 +3182,10 @@ function cerrarReq_(libro, hoja, req, nota, motivo) {
     (nota ? ' · ' + nota : ''), motivo || '', HOJAS_COMPRAS);
 }
 
-/** "Recibí el material": solo el solicitante y solo si está Pagada. notas opcionales (p. ej. "faltó 1 pieza"). */
+/**
+ * "Recibí el material": solo el solicitante y solo si está Pagada (o, con crédito del proveedor, Autorizada o En camino con la
+ * orden sin pagar: queda Recibida; F, incremento 5). notas opcionales (p. ej. "faltó 1 pieza").
+ */
 function cerrarRequisicion(folioReq, notas) {
   exigirRequisicion_();
   if (flujoOperaciones_()) throw new Error('Confirma lo que recibiste renglón por renglón con "Registrar recepción".');
@@ -3262,6 +3287,8 @@ function vistaRequisicion_(libro, folioReq) {
   const porCotizar = req.estado === REQ_APROBADA || req.estado === REQ_COTIZADA;
   const ocPagada = !!orden && orden.estado === OC_PAGADA;
   const conOrden = [REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO].indexOf(req.estado) !== -1;
+  // F (incremento 5): crédito del proveedor en el flujo de siempre: compras registra que llegó con la orden sin pagar
+  const antesDePagar = !flujo && recibirSinPagarPosible_(req, orden);
   return {
     requisicion: r,
     flujoOperaciones: flujo,
@@ -3280,8 +3307,10 @@ function vistaRequisicion_(libro, folioReq) {
     totalFacturado: orden ? totalFacturadoDeOrden(todas, orden.folio) : 0,
     facturaCompleta: !!orden && facturacionDeOrden(todas, orden).completa,
     puedeFacturar: !!orden && orden.estado !== OC_CANCELADA,
-    proveedores: proveedoresDelLibro_(libro).map(p => { const x = Object.assign({}, p); delete x.fila; return x; }),
-    ivaTasas: IVA_OC, metodos: METODOS_PAGO, hoy: hoyIso_(),
+    // F (incremento 5): para la orden, sin datos bancarios (con forma de pago habitual y documentos que faltan); para el pago,
+    // banco, CLABE y documentos del proveedor de la orden (formasPago: las de la orden; metodos: las del pago real)
+    proveedores: proveedoresDelLibro_(libro).map(proveedorParaOrden_), proveedorPago: orden ? proveedorDePago_(libro, orden) : null,
+    formasPago: FORMAS_PAGO_OC, ivaTasas: IVA_OC, metodos: METODOS_PAGO, hoy: hoyIso_(),
     sitios: sitios_(), receptores: receptores_(),
     avance: avance ? avance.lineas : null, recepcionCompleta: !!avance && avance.completo,
     recepciones: recepcionesDe_(movs, true),
@@ -3295,7 +3324,8 @@ function vistaRequisicion_(libro, folioReq) {
     puedePagar: (req.estado === REQ_AUTORIZADA || req.estado === REQ_RECIBIDA || req.estado === REQ_EN_CAMINO) && !!orden &&
       orden.estado === OC_EMITIDA,
     puedeCancelarPago: req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && ocPagada),
-    puedeCerrar: req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && ocPagada),
+    puedeCerrar: req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && ocPagada) || antesDePagar,
+    recibeAntesDePagar: antesDePagar, // F: "Registrar que llegó" en vez de "Cerrar" (la requisición queda Recibida)
     puedeRecibir: flujo && !!avance && !avance.completo && conOrden,
     puedeCancelarRecepcion: req.estado !== REQ_CERRADA && !!orden && orden.estado !== OC_CANCELADA,
     // Centro de mando (incremento 4): proyecto ligado (recibir o cerrar aquí es el respaldo de compras) y registrar el envío
@@ -3348,7 +3378,7 @@ function autorizarRequisicion(folioReq, oc, motivoExcepcion) {
     avisarPortal_('oc.autorizada', r.folio);
     SpreadsheetApp.flush();
     const resultado = { folio: req.folio, ocFolio: r.folio, url: r.url, total: r.total, moneda: r.moneda,
-      vista: vistaRequisicion_(libro, req.folio) };
+      avisoProveedor: r.avisoProveedor, vista: vistaRequisicion_(libro, req.folio) };
     if (claveCache) cache.put(claveCache, JSON.stringify(resultado), 21600); // 6 h
     return resultado;
   }));
@@ -3387,8 +3417,10 @@ function devolverRequisicion(folioReq, motivo) { return revisarRequisicion_(foli
  * Pago a proveedor (uno por orden): p = {reqFolio o ocFolio, fecha, monto, monedaPago, tipoCambio, metodo, referencia,
  * comprobante: {nombre, datos}, idSolicitud}. La requisición debe estar Autorizada y su orden Emitida; el monto (convertido a
  * la moneda de la orden) debe ser el total de la orden ±1.00. La orden y la requisición pasan a Pagada.
+ * F (incremento 5): sin constancia de situación fiscal y carátula bancaria del proveedor no se registra (control contra fraude:
+ * se le paga a la CLABE de la carátula), salvo un super admin con motivoExcepcion ≥ 10 caracteres (Bitacora de Administración).
  */
-function registrarPagoProveedor(p) {
+function registrarPagoProveedor(p, motivoExcepcion) {
   exigirCompras_();
   const d0 = p || {};
   const bytes = bytesDeAdjunto_(d0.comprobante, 'No se pudo leer el comprobante. Vuelve a adjuntarlo.');
@@ -3420,6 +3452,8 @@ function registrarPagoProveedor(p) {
     const fac = facturacionDeOrden(facturasDelLibro_(libro), orden);
     const pago = normalizarPagoProveedor(d0, { moneda: orden.moneda, total: orden.total, fechaOrden: orden.fecha, hoy: hoyIso_(),
       totalFacturado: fac.completa ? fac.total : 0, facturadoParcial: fac.completa ? 0 : fac.total });
+    // F (incremento 5): documentos del proveedor (CSF y carátula) o excepción de super admin con motivo (antes de escribir)
+    exigirDocumentosParaPagar_(libro, orden, motivoExcepcion);
 
     const hP = hojaCompras_(libro, 'PagosProveedores');
     const folio = siguienteFolio_(PREFIJO_PGP, hP, 'CONSECUTIVO_PGP_');
@@ -3555,12 +3589,14 @@ function vistaOperaciones_(libro, folioReq) {
   if (req.ocFolio) {
     const o = buscarOrden_(libro, req.ocFolio).orden;
     orden = { folio: o.folio, fecha: o.fecha, estado: o.estado, proveedor: o.proveedor, total: o.total, moneda: o.moneda,
+      formaPago: o.formaPago, diasCredito: o.diasCredito, // F (incremento 5): forma de pago (aprobaciones sí la ve)
       fechaEntrega: o.fechaEntrega, lugarEntrega: o.lugarEntrega, paqueteria: o.paqueteria, guia: o.guia,
       fechaEstimada: o.fechaEstimada, enCaminoEn: o.enCaminoEn };
     movs = movimientosPorOc_(libro)[o.folio.toUpperCase()] || [];
     if (o.estado !== OC_CANCELADA) avance = avanceRecepcion(o.renglones, movs, renglonesSinRecepcion(actual));
   }
   const prop = actual ? Object.assign({}, actual, { huella: huellaPropuesta_(actual),
+    formaPago: formaPagoDeOrden(actual.formaPago, actual.diasCredito), // F: las propuestas de antes no la traen
     archivos: (actual.archivos || []).map(a => ({ id: a.id, nombre: a.nombre || '' })) }) : null;
   const esPropia = req.solicitanteEmail === yo;
   const preparo = !!prop && String(prop.elaboroEmail || '').toLowerCase() === yo;
@@ -3677,7 +3713,7 @@ function cotizarRequisicion(folioReq, p) {
     const guardada = { version: version, fecha: ahora, elaboroEmail: yo_(), elaboroNombre: nombreYo_(), recibe: prop.recibe,
       proveedor: prop.proveedor, moneda: prop.moneda, ivaTasa: prop.ivaTasa, tipoCambio: prop.tipoCambio,
       fechaEntrega: prop.fechaEntrega, lugarEntrega: prop.lugarEntrega, condicionesPago: prop.condicionesPago,
-      diasCredito: prop.diasCredito, notas: prop.notas, renglones: prop.renglones, subtotal: prop.subtotal, iva: prop.iva,
+      diasCredito: prop.diasCredito, formaPago: prop.formaPago, notas: prop.notas, renglones: prop.renglones, subtotal: prop.subtotal, iva: prop.iva,
       total: prop.total, monedaProyecto: prop.monedaProyecto, subtotalProyecto: prop.subtotalProyecto, archivos: archivos };
     if (JSON.stringify(guardada).length > 45000) {
       throw new Error('La propuesta es demasiado grande para guardarse: acorta descripciones y notas, o separa renglones.');
@@ -3694,7 +3730,8 @@ function cotizarRequisicion(folioReq, p) {
     bitacora_(libro, 'Propuesta de compra', proyecto.folio, req.folio + ' · v' + version + ' · ' + prop.proveedor.razonSocial + ' · ' +
       formatoMoneda(prop.total) + ' ' + prop.moneda + ' · ' + resumen + ' · recibe ' + prop.recibe, '', HOJAS_COMPRAS);
     SpreadsheetApp.flush();
-    const resultado = { folio: req.folio, version: version, vista: vistaRequisicion_(libro, req.folio) };
+    const resultado = { folio: req.folio, version: version, vista: vistaRequisicion_(libro, req.folio),
+      avisoProveedor: avisoDeProveedor_(libro, proveedorId(prop.proveedor), prop.proveedor.razonSocial) }; // F: documentos que le faltan
     guardarIdempotencia_(cache, claveCache, resultado);
     return resultado;
   });
@@ -4499,7 +4536,10 @@ function precioEnDolares(precioMxn, tipoCambio) {
 
 const ESQUEMA_POR_OMISION = [['Anticipo', 60], ['Instalación', 30], ['Encendido del sistema', 10]];
 const MAX_ETAPAS = 10;
-const METODOS_PAGO = ['Transferencia', 'Efectivo', 'Cheque'];
+// Métodos del pago real a un proveedor (F, incremento 5; con tarjeta la referencia es la autorización o el ticket, nunca el
+// número de la tarjeta). Los cobros a clientes (cobranza) siguen con METODOS_COBRO.
+const METODOS_PAGO = ['Transferencia', 'Tarjeta de crédito', 'Tarjeta de débito', 'Efectivo', 'Cheque'];
+const METODOS_COBRO = ['Transferencia', 'Efectivo', 'Cheque'];
 const TOLERANCIA_PAGO = 1.00;              // en la moneda del proyecto (diferencias de redondeo)
 const MAX_COMPROBANTE = 10 * 1024 * 1024;  // 10 MB
 
@@ -4633,8 +4673,10 @@ function validarFechaIso(s, hoy, campo) {
 }
 
 /**
- * Valida y limpia un pago. proyecto = {moneda, etapas (número de etapas), hoy "AAAA-MM-DD"}.
+ * Valida y limpia un pago. proyecto = {moneda, etapas (número de etapas), hoy "AAAA-MM-DD", metodos (opcional: los que se
+ * aceptan; por omisión los de cobranza, METODOS_COBRO)}.
  * Devuelve {fecha, monto, monedaPago, tipoCambio, montoAplicado, metodo, referencia, etapaOrden}.
+ * Nunca guarda el número de una tarjeta: una referencia que parece uno se rechaza (pareceNumeroTarjeta, F).
  */
 function normalizarPago(p, proyecto) {
   const d = p || {};
@@ -4645,13 +4687,20 @@ function normalizarPago(p, proyecto) {
   if (monto > 1e10) throw new Error('El monto del pago no es válido.');
   const monedaPago = String(d.monedaPago || proyecto.moneda).trim().toUpperCase();
   if (MONEDAS.indexOf(monedaPago) === -1) throw new Error('Moneda del pago no válida. Usa MXN o USD.');
-  const metodo = METODOS_PAGO.find(m => textoNormal(m) === textoNormal(d.metodo));
-  if (!metodo) throw new Error('Elige el método de pago: ' + METODOS_PAGO.join(', ') + '.');
+  const metodos = proyecto.metodos || METODOS_COBRO;
+  const metodo = metodos.find(m => textoNormal(m) === textoNormal(d.metodo));
+  if (!metodo) throw new Error('Elige el método de pago: ' + metodos.join(', ') + '.');
   const referencia = String(d.referencia || '').trim().replace(/\s+/g, ' ');
+  const conTarjeta = /^tarjeta/i.test(metodo);
   if (!referencia && metodo !== 'Efectivo') {
-    throw new Error('Captura la referencia (' + (metodo === 'Cheque' ? 'número de cheque' : 'clave de rastreo o folio') + ').');
+    throw new Error('Captura la referencia (' + (metodo === 'Cheque' ? 'número de cheque' : conTarjeta
+      ? 'número de autorización o del ticket; nunca el número de la tarjeta' : 'clave de rastreo o folio') + ').');
   }
   if (referencia.length > 100) throw new Error('La referencia debe tener máximo 100 caracteres.');
+  if (pareceNumeroTarjeta(referencia, metodo)) {
+    throw new Error('La referencia parece un número de tarjeta: nunca lo captures. Escribe ' + (conTarjeta
+      ? 'solo el número de autorización o del ticket.' : 'la clave de rastreo, el folio o el número de autorización.'));
+  }
   const etapaOrden = Number(d.etapaOrden);
   if (!Number.isInteger(etapaOrden) || etapaOrden < 1 || etapaOrden > proyecto.etapas) throw new Error('Elige la etapa del pago.');
   let tipoCambio = '';
@@ -4757,12 +4806,12 @@ function fusionarProveedor(anterior, nuevo) {
  * etiqueta, fila}], por razón social. etiqueta = razón social, o "razón social — RFC" si la razón social se repite.
  */
 function proveedoresDesdeFilas(filas) {
-  const lista = (filas || []).map((r, i) => ({
+  const lista = (filas || []).map((r, i) => Object.assign({
     id: String(r[0] || '').trim(), razonSocial: String(r[1] || '').trim(), rfc: String(r[2] || '').trim(),
     contacto: String(r[3] || '').trim(), correo: String(r[4] || '').trim(), telefono: String(r[5] || '').trim(),
     actualizado: r[6] instanceof Date ? r[6].toISOString().slice(0, 10) : String(r[6] || ''),
     diasCredito: r[7] === '' || r[7] == null ? '' : diasCreditoGuardados(r[7]), fila: i + 2,
-  })).filter(p => p.razonSocial);
+  }, fichaDeFila(r))).filter(p => p.razonSocial); // ficha (columnas I:Z): F, incremento 5
   const veces = {};
   lista.forEach(p => { const n = textoNormal(p.razonSocial); veces[n] = (veces[n] || 0) + 1; });
   lista.forEach(p => { p.etiqueta = veces[textoNormal(p.razonSocial)] > 1 && p.rfc ? p.razonSocial + ' — ' + p.rfc : p.razonSocial; });
@@ -4788,6 +4837,7 @@ function normalizarOrdenCompra(p, proyecto) {
   if (!condicionesPago) throw new Error('Escribe las condiciones de pago (p. ej. contado, crédito 30 días).');
   if (condicionesPago.length > 200) throw new Error('Las condiciones de pago deben tener máximo 200 caracteres.');
   const diasCredito = normalizarDiasCredito(d.diasCredito); // fija el vencimiento de las facturas de la orden (4.5)
+  const formaPago = normalizarFormaPago(d.formaPago, diasCredito); // F (incremento 5): obligatoria; crédito exige días ≥ 1
   const notas = limpio(d.notas);
   if (notas.length > 1000) throw new Error('Las notas deben tener máximo 1000 caracteres.');
 
@@ -4830,7 +4880,7 @@ function normalizarOrdenCompra(p, proyecto) {
   }
   return {
     proveedor: proveedor, fechaEntrega: fechaEntrega, lugarEntrega: lugarEntrega, condicionesPago: condicionesPago,
-    diasCredito: diasCredito, moneda: moneda, ivaTasa: ivaTasa, renglones: renglones, subtotal: subtotal, iva: iva, total: redondear(subtotal + iva),
+    diasCredito: diasCredito, formaPago: formaPago, moneda: moneda, ivaTasa: ivaTasa, renglones: renglones, subtotal: subtotal, iva: iva, total: redondear(subtotal + iva),
     monedaProyecto: proyecto.moneda, tipoCambio: tipoCambio,
     subtotalProyecto: convertirMoneda(subtotal, moneda, proyecto.moneda, tipoCambio), notas: notas,
   };
@@ -5076,7 +5126,8 @@ function normalizarPagoProveedor(p, orden) {
   if (orden.fechaOrden && fecha < orden.fechaOrden) throw new Error('La fecha del pago no puede ser anterior a la orden (' + orden.fechaOrden + ').');
   let pago;
   try {
-    pago = normalizarPago(Object.assign({}, d, { fecha: fecha, etapaOrden: 1 }), { moneda: orden.moneda, etapas: 1, hoy: orden.hoy });
+    pago = normalizarPago(Object.assign({}, d, { fecha: fecha, etapaOrden: 1 }), { moneda: orden.moneda, etapas: 1, hoy: orden.hoy,
+      metodos: METODOS_PAGO });
   } catch (e) {
     throw new Error(String(e.message).replace('El proyecto es en', 'La orden es en')); // aquí la moneda de referencia es la de la orden
   }
@@ -5270,6 +5321,7 @@ function ordenDePropuesta(prop) {
   return {
     proveedor: prop.proveedor, fechaEntrega: prop.fechaEntrega, lugarEntrega: prop.lugarEntrega,
     condicionesPago: prop.condicionesPago, diasCredito: prop.diasCredito, moneda: prop.moneda, tipoCambio: prop.tipoCambio,
+    formaPago: formaPagoDeOrden(prop.formaPago, prop.diasCredito), // F: las propuestas de antes no la traen (regla de lectura)
     ivaTasa: prop.ivaTasa, notas: prop.notas,
     renglones: (prop.renglones || []).filter(r => r.disponibilidad !== DISP_NO).map(r => {
       const x = { clave: r.clave, descripcion: r.descripcion, unidad: r.unidad, cantidad: r.cantidad, costo: r.costo };
@@ -6214,7 +6266,7 @@ function construirHtmlOrdenCompra(d, cfg, logoUrl) {
     dato('Teléfono', p.telefono) +
     '</table></td><td style="width:50%;padding:0;"><table>' +
     dato('Fecha de entrega', fechaLarga(d.fechaEntrega)) + dato('Lugar de entrega', d.lugarEntrega) +
-    dato('Condiciones de pago', d.condicionesPago) +
+    dato('Forma de pago', d.formaPago) + dato('Condiciones de pago', d.condicionesPago) + // forma de pago: F, incremento 5
     '</table></td></tr></table>' +
 
     // Módulo 2: Conceptos
@@ -7325,6 +7377,7 @@ function infoDeAviso_(tipo, d, actor, memo) {
   if (tipo === 'usuario.alta') {
     Object.assign(info, { nuevo: correoCapri(d.correo), nuevoNombre: String(d.nombre || '').trim() || nombreDeCorreo_(d.correo) });
   }
+  if (tipo === 'proveedor.banco') Object.assign(info, datosAvisoBanco(d)); // F (incremento 5): solo banco y últimos 4 dígitos
   if (tipo === 'anulado') {
     const folio = String(d.folio || d.oc || '').trim(); // el folio de una orden nunca va en el correo
     info.anuladoFolio = /^OC-/i.test(folio) ? '' : folio;
@@ -7499,6 +7552,7 @@ function destinatariosAviso(tipo, d, info, roles) {
   const sol = i.solicitanteEmail || '', rec = i.recibeEmail || sol, ap = r.aprobaciones || [], co = r.compras || [];
   const sinSol = l => l.filter(c => c !== sol);
   const revisan = i.flujo ? { quien: 'aprobaciones', para: sinSol(ap) } : { quien: 'compras', para: sinSol(co) };
+  if (tipo === 'proveedor.banco') return [{ quien: 'compras', para: co }]; // F (incremento 5): cambio de banco de un proveedor
   switch (tipo) {
     case 'req.solicitada': return [revisan];
     case 'req.aprobada': return [{ quien: 'compras', para: co }];
@@ -7561,6 +7615,7 @@ function contenidoAviso(tipo, quien, info) {
   const recibeEsSol = !i.recibeEmail || i.recibeEmail === i.solicitanteEmail;
   const entrega = i.entrega ? ' Entrega esperada: ' + fechaCorreo(i.entrega) + '.' : '';
   const registrar = i.centro ? ' Cuando llegue, se recibe en el centro de mando (inventario del sitio).' : ' Cuando llegue, regístralo en CAPRI.';
+  if (tipo === 'proveedor.banco') return contenidoAvisoBanco(x, i, quienHizo); // F (incremento 5): sin nombre del proveedor
   switch (tipo) {
     case 'req.solicitada':
       if (quien === 'compras') req(i.reenviada ? 'Corregida, por autorizar' : 'Por autorizar', 'Revisa la requisición y la cotización ' +
@@ -8816,7 +8871,9 @@ function basePendientes_() {
         prioridad: q.prioridad, fechaRequerida: q.fechaRequerida, recibeEmail: q.recibeEmail,
         elaboroEmail: prop ? String(prop.elaboroEmail || '').toLowerCase() : '',
         propuesta: prop ? { proveedor: prop.proveedor ? prop.proveedor.razonSocial : '', total: prop.total, moneda: prop.moneda } : null,
-        oc: oc ? { folio: oc.folio, estado: oc.estado, proveedor: oc.proveedor, total: oc.total, moneda: oc.moneda } : null };
+        // formaPago y diasCredito (F): con crédito del proveedor se recibe antes de pagar (recibeAntesDePagar_)
+        oc: oc ? { folio: oc.folio, estado: oc.estado, proveedor: oc.proveedor, total: oc.total, moneda: oc.moneda,
+          formaPago: oc.formaPago, diasCredito: oc.diasCredito, recibida: !!oc.fechaRecepcion } : null };
     });
   });
 }
@@ -8924,7 +8981,8 @@ function itemsPendientes(base, o) {
           titulo: recibida ? 'Recibida, falta pagar' : encamino ? 'En camino, falta pagar' : 'Orden por pagar',
           accion: recibida || encamino ? 'Pagar' : 'Enviar y pagar', destino: 'com',
           urgente: q.prioridad === 'Urgente' || fs.some(f => Number(f.dias) > 0),
-          detalle: [proyecto(q), oc.folio, oc.proveedor, dinero(oc.total, oc.moneda)].concat(fs.map(textoVence)) }, 'Compras');
+          // F (incremento 5): la forma de pago (con crédito, se paga al vencer la factura)
+          detalle: [proyecto(q), oc.folio, oc.proveedor, dinero(oc.total, oc.moneda), oc.formaPago].concat(fs.map(textoVence)) }, 'Compras');
       }
       if (oc && q.estado === REQ_PAGADA && ligado(q.proyectoFolio)) {
         agregar(q, 'compras', { tipo: 'encamino', titulo: 'Por marcar En camino', accion: 'Marcar En camino', destino: 'com',
@@ -8937,10 +8995,12 @@ function itemsPendientes(base, o) {
         agregar(q, 'mias', { tipo: 'corregir', titulo: suya ? 'Te la devolvieron' : 'Devuelta', accion: 'Corregir y reenviar',
           destino: suya ? 'req' : 'com', detalle: [proyecto(q), q.motivo ? 'motivo: ' + q.motivo : ''] }, nombre(q.solicitanteEmail));
       }
-      const porRecibir = flujo ? [REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO] : [REQ_PAGADA, REQ_EN_CAMINO];
+      // F (incremento 5): con crédito del proveedor también se confirma con la orden sin pagar (recibeAntesDePagar_)
+      const credito = !flujo && !!q.oc && q.oc.estado === OC_EMITIDA && !q.oc.recibida && recibeAntesDePagar_(q.oc);
+      const porRecibir = flujo || credito ? [REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO] : [REQ_PAGADA, REQ_EN_CAMINO];
       const mia = suya || recibe === yo;
-      // Flujo de siempre: En camino sin pagar todavía no se puede confirmar (el servidor pide la orden pagada)
-      const sinPagar = !flujo && q.estado === REQ_EN_CAMINO && !(q.oc && q.oc.estado === OC_PAGADA);
+      // Flujo de siempre: En camino sin pagar todavía no se puede confirmar (el servidor pide la orden pagada), salvo con crédito
+      const sinPagar = !flujo && !credito && q.estado === REQ_EN_CAMINO && !(q.oc && q.oc.estado === OC_PAGADA);
       if (porRecibir.indexOf(q.estado) !== -1 && !sinPagar && (todos || mia)) {
         const enCentro = ligado(q.proyectoFolio);
         agregar(q, 'mias', { tipo: 'recibir', titulo: q.estado === REQ_EN_CAMINO ? 'En camino' : 'Por recibir',
@@ -9619,4 +9679,642 @@ function listarAnuladosDeHoja_(texto) {
     lista.push(x);
   });
   return lista.reverse().slice(0, 200);
+}
+
+// ---- 6.F Proveedores y forma de pago (incremento 5) ----
+// Pedido de Leo (29/10/2026). Contrato: docs/incremento-5.md §1–2; notas: docs/incremento-5-proveedores.md.
+// - Forma de pago por orden de compra (FORMAS_PAGO_OC, columna forma_pago al final de OrdenesCompra). "Crédito del proveedor" =
+//   se recibe el material antes de pagar, también en el flujo de siempre (sin aprobaciones): quien pidió confirma que llegó con la
+//   orden Emitida (Autorizada / En camino → Recibida) y el pago la cierra. Una sola regla: recibeAntesDePagar_(orden).
+// - Métodos del pago real (METODOS_PAGO, en 5): nunca se guarda un número de tarjeta (pareceNumeroTarjeta).
+// - Ficha del proveedor (Proveedores, columnas I:Z): dirección, banco, CLABE (con dígito verificador), cuenta, titular, forma de
+//   pago y días de crédito habituales, documentos (CSF, carátula bancaria, comprobante de domicilio) en
+//   Compras/Proveedores/<RFC o SIN-RFC> — <razón social>/ (privados). Solo compras (y super admin) la ve y la edita.
+// - Cambiar banco, CLABE o cuenta exige subir la carátula nueva en el mismo guardado; queda en la Bitácora de compras y avisa a
+//   compras por correo (proveedor.banco: solo el banco y los últimos 4 dígitos; nunca el nombre del proveedor, regla 17).
+// - Avisos (no bloquean): falta algún documento, comprobante de domicilio con más de 3 meses, CSF con más de 12 meses; la orden y
+//   la propuesta los traen en avisoProveedor. Sin CSF y carátula no se registra un pago (registrarPagoProveedor), salvo un super
+//   admin con motivo (excepcionSuperAdmin_).
+
+function modProveedores_() {
+  // Solo declaraciones de función y literales: las const de esta sección todavía no existen cuando se llama (arriba)
+  return { nombre: 'Proveedores',
+    api: { listarProveedores: listarProveedores, getProveedor: getProveedor, guardarProveedor: guardarProveedor,
+      subirDocumentoProveedor: subirDocumentoProveedor },
+    // Los proveedores viven en el libro de compras: su versión es la de las órdenes ('oc'), así la vista de una requisición abierta
+    // (documentos y CLABE del pago) y la lista de proveedores se actualizan solas en los demás navegadores
+    cambios: { guardarProveedor: ['oc'], subirDocumentoProveedor: ['oc'] },
+    solo: [], publicas: [],
+    sincronizar: function (permisos, ctx, algo, r, errores) {
+      if (permisos.compras && ctx.comProveedores && algo('oc')) {
+        r.comProveedores = intentar_(errores, 'Proveedores', () => listarProveedores(ctx.provFiltro || {}));
+      }
+    } };
+}
+
+/** Formas de pago de una orden de compra (contrato §1). */
+const FORMAS_PAGO_OC = ['Transferencia', 'Crédito del proveedor', 'Tarjeta de crédito', 'Tarjeta de débito (en sitio)', 'Efectivo', 'Cheque'];
+const FORMA_PAGO_CREDITO = 'Crédito del proveedor';
+/** Documentos del proveedor: tipo → nombre (para avisos), corto (chips) y nombre del archivo. */
+const DOCS_PROVEEDOR = {
+  csf: { nombre: 'la constancia de situación fiscal', corto: 'CSF', archivo: 'CSF' },
+  caratula: { nombre: 'la carátula bancaria', corto: 'Carátula', archivo: 'Carátula bancaria' },
+  domicilio: { nombre: 'el comprobante de domicilio', corto: 'Domicilio', archivo: 'Comprobante de domicilio' },
+};
+const DOCS_PARA_PAGAR = ['csf', 'caratula'];
+const MESES_AVISO_DOMICILIO = 3, MESES_AVISO_CSF = 12;
+const SUBCARPETA_PROVEEDORES = 'Proveedores';
+/** Columna (desde 1) donde empieza la ficha en Proveedores (I: direccion … Z: actualizo). */
+const COL_FICHA_PROVEEDOR = 9;
+
+// Aviso por correo del cambio de banco (módulo de correos, 6.B): a compras, sin la CLABE completa
+EVENTOS_CORREO.push('proveedor.banco');
+
+// -- Forma de pago --
+
+/**
+ * ¿Se puede recibir el material antes de pagarlo? Sí, si la forma de pago de la orden es Crédito del proveedor (órdenes de antes:
+ * si tienen días de crédito; formaPagoDeOrden). Es la única regla: la usan "Recibí el material" (reqParaSolicitante_,
+ * cerrarRequisicion / cerrarReq_), la vista de compras (vistaRequisicion_) y Pendientes (itemsPendientes). orden = {formaPago,
+ * diasCredito} (la de ordenDesdeFila_ o la de basePendientes_). Sin orden: no.
+ */
+function recibeAntesDePagar_(orden) {
+  return !!orden && formaPagoDeOrden(orden.formaPago, orden.diasCredito) === FORMA_PAGO_CREDITO;
+}
+
+/** Requisición con orden Emitida (sin pagar ni recibir) que se puede recibir ya: Autorizada o En camino con crédito del proveedor. */
+function recibirSinPagarPosible_(req, orden) {
+  return !!orden && orden.estado === OC_EMITIDA && !orden.fechaRecepcion &&
+    (req.estado === REQ_AUTORIZADA || req.estado === REQ_EN_CAMINO) && recibeAntesDePagar_(orden);
+}
+
+/**
+ * Cierre con crédito del proveedor (lo llama cerrarReq_: quien pidió con "Recibí el material" o compras en su lugar): si la orden
+ * todavía no se paga y es a crédito, la requisición queda Recibida (transición recibir) y la orden sigue Emitida con su fecha de
+ * recepción y quién recibió; registrarPagoProveedor la cierra después (pagarRecibida). Devuelve true si la recibió; false si no
+ * aplica (cerrarReq_ sigue como siempre). Módulo H también toca cerrarRequisicion/cerrarReq_ (fotos y devoluciones).
+ */
+function recibirSinPagar_(libro, hoja, req, nota, motivo) {
+  if (!req.ocFolio || (req.estado !== REQ_AUTORIZADA && req.estado !== REQ_EN_CAMINO)) return false;
+  // Con aprobaciones se recibe renglón por renglón (registrarRecepcion), antes o después del pago: aquí no aplica
+  if (flujoOperaciones_()) return false;
+  const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
+  if (!recibirSinPagarPosible_(req, orden)) return false;
+  const nuevo = transicionReq(req.estado, 'recibir');
+  const t = textoCelda;
+  cambiarReq_(hoja, req, nuevo, { notasRecepcion: nota, motivo: motivo || req.motivo });
+  hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(VENDEDOR_.email)]]); // sigue Emitida
+  eventoReq_(libro, req.folio, nuevo, [motivo ? 'Recibida por compras: ' + motivo : 'Material recibido', 'falta el pago al proveedor', nota]
+    .filter(Boolean).join(' · '));
+  notificar_('req.recibida', { req: req.folio, nota: nota }); // correo a compras: "Falta registrar el pago" (6.B)
+  bitacora_(libro, 'Recibir antes de pagar (crédito del proveedor)', req.proyectoFolio, req.folio + ' · ' + orden.folio +
+    ' recibida el ' + hoyIso_() + ' sin pagar' + (nota ? ' · ' + nota : ''), motivo || '', HOJAS_COMPRAS);
+  return true;
+}
+
+// -- Proveedores: lectura --
+
+/** Proveedor del libro por id (RFC o SIN-RFC:…); null si no existe. */
+function proveedorPorId_(libro, id) {
+  const x = String(id || '').trim();
+  return x ? proveedoresDelLibro_(libro).find(p => p.id === x) || null : null;
+}
+
+/** Proveedor de una orden: por su id; si no, por RFC; si no, por razón social (órdenes de antes o RFC corregido). */
+function proveedorDeOrden_(libro, orden) {
+  const lista = proveedoresDelLibro_(libro);
+  const rfc = String(orden.rfc || '').toUpperCase(), razon = textoNormal(orden.proveedor);
+  return lista.find(p => p.id === orden.proveedorId) || (rfc ? lista.find(p => p.rfc.toUpperCase() === rfc) : null) ||
+    lista.find(p => textoNormal(p.razonSocial) === razon) || null;
+}
+
+/** Para el formulario de la orden o la propuesta: sin datos bancarios (con forma de pago habitual y lo que le falta). */
+function proveedorParaOrden_(p) {
+  const a = avisosProveedor(p, hoyIso_());
+  return { id: p.id, razonSocial: p.razonSocial, rfc: p.rfc, contacto: p.contacto, correo: p.correo, telefono: p.telefono,
+    actualizado: p.actualizado, diasCredito: p.diasCredito, formaPagoHabitual: formaPagoHabitualDe(p), etiqueta: p.etiqueta,
+    activo: p.activo, faltan: a.faltan, avisos: a.avisos };
+}
+
+/**
+ * Lo que necesita el pago de una orden (vista de compras): banco, CLABE, cuenta y titular de la ficha, ligas a la carátula y a la
+ * CSF, lo que falta para pagar (CSF y carátula) y los avisos. Sin ficha: le falta todo.
+ */
+function proveedorDePago_(libro, orden) {
+  const p = proveedorDeOrden_(libro, orden);
+  if (!p) {
+    return { id: orden.proveedorId, razonSocial: orden.proveedor, registrado: false, faltanPago: DOCS_PARA_PAGAR.slice(),
+      avisos: ['El proveedor no está en la lista de proveedores.'], banco: '', clabe: '', cuenta: '', titular: '' };
+  }
+  const a = avisosProveedor(p, hoyIso_());
+  return { id: p.id, razonSocial: p.razonSocial, rfc: p.rfc, registrado: true, banco: p.banco, clabe: p.clabe, cuenta: p.cuenta,
+    titular: p.titular, caratulaUrl: p.caratulaUrl, caratulaFecha: p.caratulaFecha, csfUrl: p.csfUrl, faltanPago: a.faltanPago,
+    avisos: a.avisos };
+}
+
+/**
+ * Texto para avisoProveedor (orden o propuesta): lo que le falta o está viejo; '' si todo está bien. Un proveedor que todavía no
+ * está en la lista (propuesta con un proveedor nuevo: se agrega al emitir la orden) no tiene ningún documento.
+ */
+function avisoDeProveedor_(libro, id, razonSocial) {
+  try {
+    const p = proveedorPorId_(libro, id) || { razonSocial: razonSocial || String(id || '') };
+    return textoAvisoProveedor(p, avisosProveedor(p, hoyIso_()));
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * Bloqueo del pago (registrarPagoProveedor, dentro del candado y antes de escribir): sin CSF y carátula, error PERMISO con lo que
+ * falta + textoExcepcion_(); un super admin con motivo ≥ 10 pasa y queda en la Bitacora de Administración.
+ */
+function exigirDocumentosParaPagar_(libro, orden, motivoExcepcion) {
+  const p = proveedorDePago_(libro, orden);
+  if (!p.faltanPago.length) return;
+  const falta = listaConY(p.faltanPago.map(k => DOCS_PROVEEDOR[k].nombre));
+  if (!excepcionPosible_(motivoExcepcion)) {
+    throw errorPermiso_('Falta ' + falta + ' de ' + (orden.proveedor || 'el proveedor') + ': no se registra el pago hasta subirlas en ' +
+      'Compras → Proveedores (se le paga a la CLABE de la carátula).' + textoExcepcion_());
+  }
+  excepcionSuperAdmin_('pagar a un proveedor sin documentos (falta ' + falta + ')', orden.folio, motivoExcepcion);
+}
+
+/**
+ * Lista de proveedores (solo compras o super admin). filtro = {texto, estado: 'activos' (por omisión) | 'inactivos' | 'todos' |
+ * 'faltan' (le falta algún documento) | 'avisos' (con algún aviso)} o el texto. Sin la CLABE completa (solo los últimos 4).
+ * Devuelve {proveedores: [resumenProveedor], total, hoy, formasPago, documentos}.
+ */
+function listarProveedores(filtro) {
+  exigirCompras_();
+  const f = filtro && typeof filtro === 'object' ? filtro : { texto: filtro };
+  const libro = libroComprasSiExiste_(); // solo lee: el libro lo crea la primera requisición
+  const hoy = hoyIso_();
+  const todos = libro ? proveedoresDelLibro_(libro).map(p => resumenProveedor(p, hoy)) : [];
+  const lista = filtrarProveedores(todos, f);
+  return { proveedores: lista.slice(0, 300), total: lista.length, hoy: hoy, formasPago: FORMAS_PAGO_OC,
+    documentos: Object.keys(DOCS_PROVEEDOR).map(k => ({ tipo: k, corto: DOCS_PROVEEDOR[k].corto, archivo: DOCS_PROVEEDOR[k].archivo })) };
+}
+
+/** Ficha completa de un proveedor (solo compras o super admin): datos, CLABE, cuenta, documentos con ligas y avisos. */
+function getProveedor(id) {
+  exigirCompras_();
+  const libro = libroComprasSiExiste_();
+  const p = libro ? proveedorPorId_(libro, id) : null;
+  if (!p) throw new Error('No existe el proveedor ' + String(id || '') + '.');
+  return fichaParaVista(p, hoyIso_());
+}
+
+// -- Proveedores: escritura --
+
+/**
+ * Alta o edición de un proveedor (solo compras o super admin). p = {id (vacío = nuevo), razonSocial, rfc, contacto, correo,
+ * telefono, direccion, banco, clabe, cuenta, titular, formaPagoHabitual, diasCredito, notas, activo, documentos: {csf | caratula
+ * | domicilio: {nombre, datos (base64), fecha (del documento, AAAA-MM-DD)}}, idSolicitud}. La edición reemplaza la ficha (un
+ * campo vacío se borra), a diferencia de la alta automática al emitir una orden (guardarProveedor_). El id se conserva; si llega
+ * con RFC y era SIN-RFC, toma el RFC. Cambiar banco, CLABE o cuenta exige la carátula nueva en el mismo guardado: Bitácora y
+ * correo proveedor.banco a compras. Devuelve {proveedor (la ficha, como getProveedor), nuevo}.
+ */
+function guardarProveedor(p) {
+  exigirCompras_();
+  const d0 = p || {};
+  const ficha = normalizarFichaProveedor(d0);
+  const docs = documentosDelEnvio_(d0.documentos); // se validan antes del candado
+  const libro = libroCompras_();
+  const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
+  const cache = CacheService.getScriptCache();
+  const claveCache = idSolicitud ? 'PRV_' + idSolicitud : '';
+
+  return conCandado_(() => {
+    if (claveCache) {
+      const previo = cache.get(claveCache);
+      if (previo) return JSON.parse(previo);
+    }
+    const hoja = hojaCompras_(libro, 'Proveedores');
+    const lista = proveedoresDelLibro_(libro);
+    const idOriginal = String(d0.id || '').trim();
+    const actual = idOriginal ? lista.find(x => x.id === idOriginal) : null;
+    if (idOriginal && !actual) throw new Error('No existe el proveedor ' + idOriginal + '.');
+    const conRfc = proveedorId(ficha);
+    const id = actual ? (conRfc.indexOf('SIN-RFC:') === 0 ? actual.id : conRfc) : conRfc;
+    const otro = lista.find(x => x.id === id && x !== actual) ||
+      (!actual && id.indexOf('SIN-RFC:') !== 0 ? lista.find(x => x.id === proveedorId({ razonSocial: ficha.razonSocial })) : null);
+    if (otro) {
+      throw new Error('Ya existe el proveedor "' + otro.razonSocial + '"' + (otro.rfc ? ' (RFC ' + otro.rfc + ')' : ' sin RFC') +
+        ': ábrelo en la lista y edítalo.');
+    }
+    const antes = actual || { banco: '', clabe: '', cuenta: '' };
+    const cambioBanco = cambioDeBanco(antes, ficha);
+    const conDatosNuevos = !!(ficha.banco || ficha.clabe || ficha.cuenta);
+    if (cambioBanco && conDatosNuevos && !docs.caratula) {
+      throw new Error((actual && (actual.clabe || actual.cuenta || actual.banco) ? 'Cambiaste' : 'Capturaste') + ' el banco, la CLABE o ' +
+        'la cuenta: sube la carátula bancaria (con su fecha) en el mismo guardado. Se le paga a la CLABE de la carátula.');
+    }
+    const ahora = ahoraTexto_();
+    const subidos = subirDocumentos_(ficha.razonSocial, ficha.rfc, docs, actual);
+    const guardada = Object.assign({}, actual || {}, ficha, subidos, { id: id, actualizo: yo_() });
+    const t = textoCelda;
+    const filaBase = [t(id), t(ficha.razonSocial), t(ficha.rfc), t(ficha.contacto), t(ficha.correo), t(ficha.telefono), ahora,
+      ficha.diasCredito === '' ? '' : diasCreditoGuardados(ficha.diasCredito)];
+    const fila = filaBase.concat(filaFichaProveedor_(guardada));
+    if (actual) hoja.getRange(actual.fila, 1, 1, fila.length).setValues([fila]);
+    else hoja.appendRow(fila);
+
+    const cambios = camposCambiados(actual, ficha);
+    bitacora_(libro, actual ? 'Editar proveedor' : 'Alta de proveedor', id, ficha.razonSocial +
+      (actual && id !== actual.id ? ' · id ' + actual.id + ' → ' + id : '') + (cambios.length ? ' · ' + cambios.join(', ') : '') +
+      Object.keys(subidos.nombres).map(k => ' · ' + DOCS_PROVEEDOR[k].corto + ' ' + subidos.nombres[k]).join(''), '', HOJAS_COMPRAS);
+    if (cambioBanco) {
+      bitacora_(libro, 'Cambiar datos bancarios de proveedor', id, ficha.razonSocial + ' · ' + textoCambioBanco(antes, ficha) +
+        (subidos.nombres.caratula ? ' · carátula ' + subidos.nombres.caratula : ''), '', HOJAS_COMPRAS);
+      // Correo a compras solo cuando había una cuenta antes (un cambio, no la primera captura): banco y últimos 4 dígitos
+      if (actual && (actual.clabe || actual.cuenta || actual.banco)) {
+        notificar_('proveedor.banco', { folio: id, banco: ficha.banco, bancoAntes: antes.banco, clabe4: ultimos4(ficha.clabe),
+          clabeAntes4: ultimos4(antes.clabe), cuenta4: ultimos4(ficha.cuenta), cuentaAntes4: ultimos4(antes.cuenta) });
+      }
+    }
+    SpreadsheetApp.flush();
+    const nuevo = proveedorPorId_(libro, id);
+    const resultado = { proveedor: fichaParaVista(nuevo || guardada, hoyIso_()), nuevo: !actual };
+    guardarIdempotencia_(cache, claveCache, resultado);
+    return resultado;
+  });
+}
+
+/**
+ * Sube un documento de un proveedor (solo compras o super admin): tipo = csf | caratula | domicilio; archivo = {nombre, datos
+ * (base64), fecha (del documento)}. El anterior se conserva en Drive (el nuevo lleva "(2)", "(3)"…). Una carátula sola no cambia
+ * los datos bancarios (eso se hace en guardarProveedor, con la carátula). Devuelve {proveedor (la ficha)}.
+ */
+function subirDocumentoProveedor(id, tipo, archivo) {
+  exigirCompras_();
+  const k = String(tipo || '').trim();
+  if (!DOCS_PROVEEDOR[k]) throw new Error('Tipo de documento no válido: usa csf, caratula o domicilio.');
+  const envio = {};
+  envio[k] = archivo || {};
+  const docs = documentosDelEnvio_(envio);
+  if (!docs[k]) throw new Error('Adjunta ' + DOCS_PROVEEDOR[k].nombre + ' (PDF o imagen).');
+  const libro = libroCompras_();
+  return conCandado_(() => {
+    const actual = proveedorPorId_(libro, id);
+    if (!actual) throw new Error('No existe el proveedor ' + String(id || '') + '.');
+    const subidos = subirDocumentos_(actual.razonSocial, actual.rfc, docs, actual);
+    const guardada = Object.assign({}, actual, subidos, { actualizo: yo_() });
+    const hoja = hojaCompras_(libro, 'Proveedores');
+    hoja.getRange(actual.fila, 7).setValue(ahoraTexto_());
+    hoja.getRange(actual.fila, COL_FICHA_PROVEEDOR, 1, HOJAS_COMPRAS.Proveedores.enc.length - COL_FICHA_PROVEEDOR + 1)
+      .setValues([filaFichaProveedor_(guardada)]);
+    bitacora_(libro, 'Subir documento de proveedor', actual.id, actual.razonSocial + ' · ' + DOCS_PROVEEDOR[k].corto + ' ' +
+      subidos.nombres[k] + ' · fecha ' + docs[k].fecha, '', HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    return { proveedor: fichaParaVista(proveedorPorId_(libro, actual.id) || guardada, hoyIso_()) };
+  });
+}
+
+/**
+ * Documentos de un guardado: {tipo: {bytes, mime, ext, fecha}} (solo los que traen archivo). Cada uno es PDF o imagen (≤ 10 MB,
+ * tipo por contenido) y lleva la fecha del documento (no futura).
+ */
+function documentosDelEnvio_(documentos) {
+  const r = {};
+  const d = documentos && typeof documentos === 'object' ? documentos : {};
+  Object.keys(DOCS_PROVEEDOR).forEach(k => {
+    const x = d[k];
+    if (!x || !x.datos) return;
+    const doc = DOCS_PROVEEDOR[k];
+    const sujeto = doc.nombre.replace(/^(la|el) /, '');
+    const bytes = bytesDeAdjunto_(x, 'No se pudo leer ' + doc.nombre + '. Vuelve a adjuntarla.');
+    const tipo = validarArchivo(bytes, doc.nombre, sujeto.charAt(0).toUpperCase() + sujeto.slice(1));
+    const fecha = validarFechaIso(x.fecha, hoyIso_(), 'La fecha de ' + doc.nombre);
+    r[k] = { bytes: bytes, mime: tipo.mime, ext: tipo.ext, fecha: fecha };
+  });
+  return r;
+}
+
+/**
+ * Guarda los documentos en Compras/Proveedores/<RFC o SIN-RFC> — <razón social>/ (privados de arriba abajo). Devuelve los campos
+ * de la ficha que cambian ({csfId, csfUrl, csfFecha, …}) y nombres ({tipo: nombre del archivo}).
+ */
+function subirDocumentos_(razonSocial, rfc, docs, actual) {
+  const r = { nombres: {} };
+  const tipos = Object.keys(docs);
+  if (!tipos.length) return r;
+  const carpeta = carpetaProveedor_(rfc, razonSocial);
+  tipos.forEach(k => {
+    const x = docs[k];
+    const nombre = nombreLibreEnCarpeta_(carpeta, n => nombreDocProveedor(rfc, k, x.ext, n), actual && actual[k + 'Id'] ? 2 : 1);
+    const archivo = privado_(carpeta.createFile(Utilities.newBlob(x.bytes, x.mime, nombre)));
+    r[k + 'Id'] = archivo.getId(); r[k + 'Url'] = archivo.getUrl(); r[k + 'Fecha'] = x.fecha;
+    r.nombres[k] = nombre;
+  });
+  return r;
+}
+
+/** Compras/Proveedores/<RFC o SIN-RFC> — <razón social>/ (se busca por nombre; restringidas de arriba abajo). */
+function carpetaProveedor_(rfc, razonSocial) {
+  return privado_(subcarpeta_(privado_(subcarpeta_(carpetaCompras_(), SUBCARPETA_PROVEEDORES)), nombreCarpetaProveedor(rfc, razonSocial)));
+}
+
+/** Primer nombre libre (desde n) en la carpeta: el documento anterior se conserva y el nuevo lleva "(2)", "(3)"… */
+function nombreLibreEnCarpeta_(carpeta, nombreDe, desde) {
+  let n = desde || 1;
+  if (typeof carpeta.getFilesByName !== 'function') return nombreDe(n);
+  for (; n < 100; n++) {
+    const it = carpeta.getFilesByName(nombreDe(n));
+    let ocupado = false;
+    while (it.hasNext()) { if (!it.next().isTrashed()) { ocupado = true; break; } }
+    if (!ocupado) return nombreDe(n);
+  }
+  return nombreDe(n);
+}
+
+/** Columnas I:Z de la ficha (CLABE y cuenta con apóstrofo: Sheets las convertiría en número y perdería dígitos). */
+function filaFichaProveedor_(f) {
+  const t = textoCelda, txt = v => v ? "'" + v : '';
+  return [t(f.direccion || ''), t(f.banco || ''), txt(f.clabe), txt(f.cuenta), t(f.titular || ''), f.formaPagoHabitual || '',
+    f.csfId || '', f.csfUrl || '', textoFecha_(f.csfFecha), f.caratulaId || '', f.caratulaUrl || '', textoFecha_(f.caratulaFecha),
+    f.domicilioId || '', f.domicilioUrl || '', textoFecha_(f.domicilioFecha), t(f.notas || ''), f.activo === false ? 'No' : 'Sí',
+    t(f.actualizo || '')];
+}
+
+// -- Lógica pura de 6.F (sin servicios de Google; se prueba en Node) --
+
+/**
+ * Forma de pago de una orden: la guardada (forma_pago) si es una de FORMAS_PAGO_OC; en órdenes de antes (vacía), Transferencia
+ * si son de contado (dias_credito = 0) y Crédito del proveedor si tienen días de crédito (contrato §1).
+ */
+function formaPagoDeOrden(guardada, diasCredito) {
+  const t = textoNormal(guardada);
+  const f = t ? FORMAS_PAGO_OC.find(x => textoNormal(x) === t) : '';
+  if (f) return f;
+  return Number(diasCredito) > 0 ? FORMA_PAGO_CREDITO : 'Transferencia';
+}
+
+/** Forma de pago capturada en una orden o propuesta nueva: obligatoria y de FORMAS_PAGO_OC; Crédito del proveedor exige días ≥ 1. */
+function normalizarFormaPago(v, diasCredito) {
+  const t = textoNormal(v);
+  if (!t) throw new Error('Elige la forma de pago de la orden (' + FORMAS_PAGO_OC.join(', ') + ').');
+  const f = FORMAS_PAGO_OC.find(x => textoNormal(x) === t);
+  if (!f) throw new Error('Forma de pago no válida: usa ' + FORMAS_PAGO_OC.join(', ') + '.');
+  if (f === FORMA_PAGO_CREDITO && !(Number(diasCredito) >= 1)) {
+    throw new Error('Con crédito del proveedor captura los días de crédito (1 o más): con 0 es de contado.');
+  }
+  return f;
+}
+
+/** Forma de pago habitual de un proveedor: la de su ficha o, si no tiene, la que dicen sus días de crédito habituales. */
+function formaPagoHabitualDe(p) {
+  const x = p || {};
+  const f = FORMAS_PAGO_OC.find(y => textoNormal(y) === textoNormal(x.formaPagoHabitual));
+  if (f) return f;
+  return x.diasCredito === '' || x.diasCredito == null ? '' : formaPagoDeOrden('', x.diasCredito);
+}
+
+/** Prueba de Luhn (la cumplen todos los números de tarjeta). d = solo dígitos. */
+function pasaLuhn(d) {
+  let s = 0, doble = false;
+  for (let i = d.length - 1; i >= 0; i--) {
+    let n = d.charCodeAt(i) - 48;
+    if (doble) { n *= 2; if (n > 9) n -= 9; }
+    s += n;
+    doble = !doble;
+  }
+  return d.length > 0 && s % 10 === 0;
+}
+
+/**
+ * ¿El texto trae lo que parece un número de tarjeta? 13 a 19 dígitos seguidos (también con espacios o guiones entre grupos, como
+ * se escriben las tarjetas). Con un método de tarjeta basta el largo (13 o más); con los demás además debe pasar la prueba de
+ * Luhn, para no confundir una clave de rastreo numérica. Nunca se pide ni se guarda el número de una tarjeta (contrato §1).
+ */
+function pareceNumeroTarjeta(texto, metodo) {
+  const s = String(texto == null ? '' : texto);
+  const tarjeta = /tarjeta/i.test(String(metodo || ''));
+  const corridas = s.match(/\d(?:[ -]?\d)*/g) || [];
+  return corridas.some(c => {
+    const unida = c.replace(/[ -]/g, '');
+    if (tarjeta && unida.length >= 13) return true;
+    const partes = [unida].concat(c.split(/[ -]/));
+    return partes.some(d => d.length >= 13 && d.length <= 19 && pasaLuhn(d));
+  });
+}
+
+/**
+ * CLABE interbancaria: 18 dígitos y dígito verificador (Banxico: pesos 3, 7, 1 sobre los primeros 17, cada producto módulo 10;
+ * verificador = (10 − suma mod 10) mod 10). Vacía = sin CLABE (''). Lanza error si no es válida.
+ */
+function validarClabe(v) {
+  const c = String(v == null ? '' : v).replace(/[\s-]/g, '');
+  if (!c) return '';
+  if (!/^\d{18}$/.test(c)) throw new Error('La CLABE debe tener 18 dígitos.');
+  const pesos = [3, 7, 1];
+  let suma = 0;
+  for (let i = 0; i < 17; i++) suma += (Number(c[i]) * pesos[i % 3]) % 10;
+  if ((10 - (suma % 10)) % 10 !== Number(c[17])) {
+    throw new Error('La CLABE no es válida (no coincide su dígito verificador): revísala contra la carátula bancaria.');
+  }
+  return c;
+}
+
+/** Últimos 4 caracteres (para avisos y listas: nunca la CLABE completa); '' si no hay. */
+function ultimos4(v) {
+  const s = String(v == null ? '' : v).replace(/[\s-]/g, '');
+  return s ? s.slice(-4) : '';
+}
+
+/** "a", "a y b", "a, b y c". */
+function listaConY(l) {
+  const x = (l || []).filter(Boolean);
+  return x.length < 2 ? (x[0] || '') : x.slice(0, -1).join(', ') + ' y ' + x[x.length - 1];
+}
+
+/** "AAAA-MM-DD" + n meses (el día se ajusta al último del mes: 31/01 + 1 = 28 o 29/02). */
+function sumarMeses(iso, n) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return '';
+  const total = (+m[2] - 1) + Number(n || 0), anio = +m[1] + Math.floor(total / 12), mes = ((total % 12) + 12) % 12;
+  const ultimo = new Date(Date.UTC(anio, mes + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(anio, mes, Math.min(+m[3], ultimo))).toISOString().slice(0, 10);
+}
+
+/** Fecha de un documento leída de la hoja ("AAAA-MM-DD" con apóstrofo, o un Date si alguien la escribió a mano). */
+function fechaDocDeCelda(v) {
+  if (v instanceof Date) {
+    return v.getFullYear() + '-' + String(v.getMonth() + 1).padStart(2, '0') + '-' + String(v.getDate()).padStart(2, '0');
+  }
+  return String(v == null ? '' : v).trim().replace(/^'/, '');
+}
+
+/** Ficha de una fila de Proveedores (columnas I:Z; vacías en proveedores de antes). activo: vacío = sí. */
+function fichaDeFila(r) {
+  const s = i => String(r[i] == null ? '' : r[i]).trim().replace(/^'/, '');
+  return { direccion: s(8), banco: s(9), clabe: s(10), cuenta: s(11), titular: s(12), formaPagoHabitual: s(13),
+    csfId: s(14), csfUrl: s(15), csfFecha: fechaDocDeCelda(r[16]), caratulaId: s(17), caratulaUrl: s(18), caratulaFecha: fechaDocDeCelda(r[19]),
+    domicilioId: s(20), domicilioUrl: s(21), domicilioFecha: fechaDocDeCelda(r[22]), notas: s(23),
+    activo: !/^(no|false|0|inactivo)$/i.test(s(24)), actualizo: s(25) };
+}
+
+/**
+ * Valida y limpia la ficha de un proveedor (guardarProveedor): los datos de siempre (normalizarProveedor) + dirección, banco,
+ * CLABE (validarClabe), cuenta (números y letras: también el IBAN de un proveedor extranjero; nunca un número de tarjeta),
+ * titular, forma de pago y días de crédito habituales (crédito exige días ≥ 1), notas y activo.
+ */
+function normalizarFichaProveedor(p) {
+  const d = p || {};
+  const base = normalizarProveedor(d);
+  const limpio = s => String(s == null ? '' : s).trim().replace(/\s+/g, ' ');
+  const direccion = limpio(d.direccion);
+  if (direccion.length > 300) throw new Error('La dirección debe tener máximo 300 caracteres.');
+  const banco = limpio(d.banco);
+  if (banco.length > 60) throw new Error('El nombre del banco debe tener máximo 60 caracteres.');
+  const clabe = validarClabe(d.clabe);
+  const cuenta = String(d.cuenta == null ? '' : d.cuenta).replace(/[\s-]/g, '').toUpperCase();
+  if (cuenta && !/^[A-Z0-9]{4,34}$/.test(cuenta)) {
+    throw new Error('La cuenta solo lleva números y letras (de 4 a 34; de un proveedor extranjero, su IBAN o número de cuenta).');
+  }
+  if (cuenta && pareceNumeroTarjeta(cuenta, '')) {
+    throw new Error('La cuenta parece un número de tarjeta: no lo guardes. Usa la CLABE (18 dígitos) o el número de cuenta de la carátula.');
+  }
+  const titular = limpio(d.titular);
+  if (titular.length > 150) throw new Error('El titular debe tener máximo 150 caracteres.');
+  if ((clabe || cuenta) && !banco) throw new Error('Escribe el banco de la CLABE o la cuenta.');
+  const diasTxt = String(d.diasCredito == null ? '' : d.diasCredito).trim();
+  const diasCredito = diasTxt === '' ? '' : normalizarDiasCredito(diasTxt);
+  let formaPagoHabitual = '';
+  if (limpio(d.formaPagoHabitual)) {
+    formaPagoHabitual = FORMAS_PAGO_OC.find(x => textoNormal(x) === textoNormal(d.formaPagoHabitual)) || '';
+    if (!formaPagoHabitual) throw new Error('Forma de pago habitual no válida: usa ' + FORMAS_PAGO_OC.join(', ') + '.');
+    if (formaPagoHabitual === FORMA_PAGO_CREDITO && !(Number(diasCredito) >= 1)) {
+      throw new Error('Con crédito del proveedor captura sus días de crédito habituales (1 o más).');
+    }
+  }
+  const notas = String(d.notas == null ? '' : d.notas).trim();
+  if (notas.length > 1000) throw new Error('Las notas deben tener máximo 1000 caracteres.');
+  const activo = !(d.activo === false || /^(no|false|0)$/i.test(String(d.activo == null ? '' : d.activo)));
+  return Object.assign(base, { direccion: direccion, banco: banco, clabe: clabe, cuenta: cuenta, titular: titular,
+    diasCredito: diasCredito, formaPagoHabitual: formaPagoHabitual, notas: notas, activo: activo });
+}
+
+/** ¿Cambió el banco, la CLABE o la cuenta? (el banco sin distinguir mayúsculas ni acentos) */
+function cambioDeBanco(antes, nuevo) {
+  const a = antes || {}, n = nuevo || {};
+  return textoNormal(a.banco) !== textoNormal(n.banco) || String(a.clabe || '') !== String(n.clabe || '') ||
+    String(a.cuenta || '') !== String(n.cuenta || '');
+}
+
+/** "banco BBVA → Banorte · CLABE ··1234 → ··5678 · cuenta ··…" (para la Bitácora: nunca la CLABE completa). */
+function textoCambioBanco(antes, nuevo) {
+  const a = antes || {}, n = nuevo || {};
+  const term = v => v ? '··' + ultimos4(v) : '(sin)';
+  const partes = [];
+  if (textoNormal(a.banco) !== textoNormal(n.banco)) partes.push('banco ' + (a.banco || '(sin)') + ' → ' + (n.banco || '(sin)'));
+  if (String(a.clabe || '') !== String(n.clabe || '')) partes.push('CLABE ' + term(a.clabe) + ' → ' + term(n.clabe));
+  if (String(a.cuenta || '') !== String(n.cuenta || '')) partes.push('cuenta ' + term(a.cuenta) + ' → ' + term(n.cuenta));
+  return partes.join(' · ');
+}
+
+/** Campos de la ficha que cambiaron (nombres en español, para la Bitácora; sin valores bancarios). */
+function camposCambiados(antes, nuevo) {
+  if (!antes) return [];
+  const nombres = { razonSocial: 'razón social', rfc: 'RFC', contacto: 'contacto', correo: 'correo', telefono: 'teléfono',
+    direccion: 'dirección', banco: 'banco', clabe: 'CLABE', cuenta: 'cuenta', titular: 'titular', formaPagoHabitual: 'forma de pago',
+    diasCredito: 'días de crédito', notas: 'notas', activo: 'activo' };
+  return Object.keys(nombres).filter(k => String(antes[k] == null ? '' : antes[k]) !== String(nuevo[k] == null ? '' : nuevo[k]))
+    .map(k => k === 'activo' ? (nuevo.activo ? 'reactivado' : 'desactivado') : nombres[k]);
+}
+
+/**
+ * Avisos de un proveedor (no bloquean nada salvo el pago): {faltan (tipos de documento que no tiene), faltanPago (los que exige el
+ * pago: CSF y carátula), vencidos (domicilio > 3 meses, CSF > 12 meses), avisos (textos)}. hoy = "AAAA-MM-DD".
+ */
+function avisosProveedor(p, hoy) {
+  const x = p || {};
+  const faltan = Object.keys(DOCS_PROVEEDOR).filter(k => !x[k + 'Id']);
+  const avisos = [], vencidos = [];
+  if (faltan.length) avisos.push('Falta ' + listaConY(faltan.map(k => DOCS_PROVEEDOR[k].nombre)) + '.');
+  const dmy = iso => iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4);
+  const viejo = (k, meses, texto) => {
+    const f = x[k + 'Fecha'];
+    if (!x[k + 'Id'] || !/^\d{4}-\d{2}-\d{2}$/.test(String(f || '')) || !hoy) return;
+    if (sumarMeses(f, meses) < hoy) { vencidos.push(k); avisos.push(texto + ' (' + dmy(f) + ').'); }
+  };
+  viejo('domicilio', MESES_AVISO_DOMICILIO, 'El comprobante de domicilio tiene más de ' + MESES_AVISO_DOMICILIO + ' meses');
+  viejo('csf', MESES_AVISO_CSF, 'La constancia de situación fiscal tiene más de ' + MESES_AVISO_CSF + ' meses');
+  return { faltan: faltan, faltanPago: DOCS_PARA_PAGAR.filter(k => !x[k + 'Id']), vencidos: vencidos, avisos: avisos };
+}
+
+/** Texto de avisoProveedor (orden o propuesta); '' si no hay nada que avisar. */
+function textoAvisoProveedor(p, a) {
+  if (!a || !a.avisos.length) return '';
+  return 'Proveedor ' + p.razonSocial + ': ' + a.avisos.join(' ') + (a.faltanPago.length ? ' Sin ' +
+    listaConY(a.faltanPago.map(k => DOCS_PROVEEDOR[k].nombre.replace(/^(la|el) /, ''))) + ' no se le podrá registrar el pago: ' +
+    'súbelas en Compras → Proveedores.' : '');
+}
+
+/** Lo que va en la lista de proveedores: sin la CLABE completa ni la cuenta (solo sus últimos 4), con documentos y avisos. */
+function resumenProveedor(p, hoy) {
+  const a = avisosProveedor(p, hoy);
+  const docs = {};
+  Object.keys(DOCS_PROVEEDOR).forEach(k => {
+    docs[k] = { tiene: !!p[k + 'Id'], fecha: p[k + 'Fecha'] || '', url: p[k + 'Url'] || '', vencido: a.vencidos.indexOf(k) !== -1 };
+  });
+  return { id: p.id, razonSocial: p.razonSocial, rfc: p.rfc, contacto: p.contacto, correo: p.correo, telefono: p.telefono,
+    banco: p.banco, clabe4: ultimos4(p.clabe), cuenta4: ultimos4(p.cuenta), formaPagoHabitual: formaPagoHabitualDe(p),
+    diasCredito: p.diasCredito, activo: p.activo !== false, actualizado: p.actualizado, etiqueta: p.etiqueta || p.razonSocial,
+    documentos: docs, faltan: a.faltan, faltanPago: a.faltanPago, avisos: a.avisos };
+}
+
+/** Ficha completa para la vista (getProveedor / guardarProveedor): todo lo de la hoja + documentos y avisos (sin la fila). */
+function fichaParaVista(p, hoy) {
+  const r = resumenProveedor(p, hoy);
+  return Object.assign(r, { direccion: p.direccion || '', clabe: p.clabe || '', cuenta: p.cuenta || '', titular: p.titular || '',
+    formaPagoGuardada: p.formaPagoHabitual || '', notas: p.notas || '', actualizo: p.actualizo || '' });
+}
+
+/** Filtro de la lista: texto (razón social, RFC, contacto, correo, banco o terminación de la CLABE) y estado. */
+function filtrarProveedores(lista, f) {
+  const x = f || {};
+  const q = textoNormal(x.texto);
+  const estado = String(x.estado || 'activos');
+  return (lista || []).filter(p => {
+    if (estado === 'activos' && !p.activo) return false;
+    if (estado === 'inactivos' && p.activo) return false;
+    if (estado === 'faltan' && !(p.activo && p.faltan.length)) return false;
+    if (estado === 'avisos' && !(p.activo && p.avisos.length)) return false;
+    return !q || textoNormal([p.razonSocial, p.rfc, p.contacto, p.correo, p.banco, p.clabe4, p.cuenta4].join(' ')).includes(q);
+  });
+}
+
+/** "<RFC o SIN-RFC> — <razón social>" (sin / \ : * ? " < > |). */
+function nombreCarpetaProveedor(rfc, razonSocial) {
+  const limpio = s => String(s || '').replace(/[\/\\:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim();
+  return (limpio(rfc) || 'SIN-RFC') + ' — ' + limpio(razonSocial).slice(0, 100);
+}
+
+/** "<RFC> — CSF.pdf", "<RFC> — Carátula bancaria (2).jpg"… (n > 1 lleva "(n)": el anterior se conserva). */
+function nombreDocProveedor(rfc, tipo, ext, n) {
+  return (String(rfc || '').trim() || 'SIN-RFC') + ' — ' + DOCS_PROVEEDOR[tipo].archivo + (n > 1 ? ' (' + n + ')' : '') + '.' + ext;
+}
+
+/** Datos del aviso proveedor.banco (infoDeAviso_): solo el banco y los últimos 4 dígitos (nunca la CLABE ni el proveedor). */
+function datosAvisoBanco(d) {
+  const x = d || {};
+  const s = v => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, 60);
+  return { banco: s(x.banco), bancoAntes: s(x.bancoAntes), clabe4: ultimos4(x.clabe4), clabeAntes4: ultimos4(x.clabeAntes4),
+    cuenta4: ultimos4(x.cuenta4), cuentaAntes4: ultimos4(x.cuentaAntes4) };
+}
+
+/** Texto del correo proveedor.banco (contenidoAviso): a compras, sin el nombre del proveedor ni la CLABE completa. */
+function contenidoAvisoBanco(x, i, quienHizo) {
+  const term = (n, a) => n ? 'terminación ' + n + (a && a !== n ? ' (antes ' + a + ')' : '') : a ? 'se quitó (era la terminación ' + a + ')' : '';
+  x.asunto = '[CAPRI] Cambió la cuenta bancaria de un proveedor';
+  x.titulo = 'Cambió la cuenta bancaria de un proveedor';
+  x.que = 'Se cambiaron los datos bancarios de un proveedor, con su carátula nueva. Si no esperabas el cambio, confírmalo por ' +
+    'teléfono con el proveedor antes de pagarle. Lo ves en CAPRI: Compras → Proveedores (busca por la terminación).';
+  x.filas = [['Banco', i.bancoAntes && textoNormal(i.bancoAntes) !== textoNormal(i.banco) ? (i.banco || '(sin banco)') + ' (antes ' + i.bancoAntes + ')' : i.banco],
+    ['CLABE', term(i.clabe4, i.clabeAntes4)], ['Cuenta', term(i.cuenta4, i.cuentaAntes4)], ['Lo hizo', quienHizo],
+    ['Cuándo', fechaCorreo(i.fecha)]].filter(f => f && f[1]);
+  x.boton = { texto: 'Abrir proveedores en CAPRI', url: URL_AVISOS_CAPRI + '#proveedores' };
+  x.nota = '';
+  return x;
 }

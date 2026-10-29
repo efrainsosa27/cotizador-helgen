@@ -33,7 +33,7 @@ const pry = ok('leo', 'crearProyecto', { nombre: 'Revisión', ubicacion: 'Queré
 let n = 0;
 const req = (quien, extra) => ok(quien, 'guardarRequisicion', Object.assign({ proyectoFolio: pry, sitio: 'Querétaro',
   renglones: [{ descripcion: 'Brida', cantidad: 4 }], cotizacion: { nombre: 'c.pdf', datos: PDF }, idSolicitud: 'r' + (++n) }, extra || {})).folio;
-const OC = () => ({ proveedor: { razonSocial: 'Eléctrica del Centro' }, fechaEntrega: masDias(2), condicionesPago: 'Contado', diasCredito: 0,
+const OC = () => ({ proveedor: { razonSocial: 'Eléctrica del Centro' }, fechaEntrega: masDias(2), formaPago: 'Transferencia', condicionesPago: 'Contado', diasCredito: 0,
   ivaTasa: 0.16, renglones: [{ descripcion: 'Brida', unidad: 'PZA', cantidad: 4, costo: 100 }], idSolicitud: 'oc' + (++n) });
 const adri = Object.assign(usuario('adri@helgen.tech'), { nombre: 'Adriana' }); // los migrados llegan sin nombre
 ok('leo', 'guardarUsuario', Object.assign({}, adri, { activo: false }));

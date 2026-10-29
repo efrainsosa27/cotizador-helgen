@@ -166,7 +166,7 @@ nuevos();
 
 // Propuesta → aprobaciones (menos quien la preparó); regresada → compras con la nota limpia
 const PROP = extra => Object.assign({ proveedor: { razonSocial: 'Ferretera del Puerto', rfc: '', correo: 'ventas@ferreteria.mx' }, fechaEntrega: MANANA,
-  condicionesPago: 'Contado', diasCredito: 0, recibe: 'rosa@helgen.tech',
+  formaPago: 'Transferencia', condicionesPago: 'Contado', diasCredito: 0, recibe: 'rosa@helgen.tech',
   renglones: [{ renglon: 1, disponibilidad: 'Exacto', costo: 10 }, { renglon: 3, disponibilidad: 'Sustituto', descripcion: 'Tubo conduit 1"', costo: 50 },
     { renglon: 0, disponibilidad: 'Adicional', descripcion: 'Flete', unidad: 'SERV', cantidad: 1, costo: 200, recibir: false }], idSolicitud: 'pp' + (++n) }, extra || {});
 ok('pedro', 'cotizarRequisicion', r1, PROP());
@@ -391,7 +391,10 @@ A.correos.forEach(revisarCorreo);
 // ================= Flujo de siempre (sin aprobaciones ni libro de Administración) =================
 const B = require('./arnes')(dir, { props: { ROL_COMPRAS: 'efrain@helgen.tech, pedro@helgen.tech', ROL_REQUISICION: 'obrero@helgen.tech',
   ROL_COBRANZA: 'efrain@helgen.tech' } });
-const pB = B.ok('ana', 'crearProyecto', { nombre: 'Casa del Lago', ubicacion: 'Qro', cliente: { nombre: 'Cliente Secreto' }, idSolicitud: 'pb' }).folio;
+// F (incremento 5): sin CSF y carátula del proveedor no se registra un pago; estas pruebas no son de documentos (eso va en
+// tests/proveedores.test.js), así que aquí se salta ese bloqueo
+B.P.exigirDocumentosParaPagar_ = function () {};
+const pB =B.ok('ana', 'crearProyecto', { nombre: 'Casa del Lago', ubicacion: 'Qro', cliente: { nombre: 'Cliente Secreto' }, idSolicitud: 'pb' }).folio;
 const rB = B.ok('obrero', 'guardarRequisicion', { proyectoFolio: pB, renglones: [{ descripcion: 'Brida', cantidad: 4 }], cotizacion: { nombre: 'c.pdf', datos: B.PDF },
   idSolicitud: 'rb' }).folio;
 assert.equal(B.correos.length, 1);
@@ -399,7 +402,7 @@ assert.deepEqual([para(B.correos[0]), B.correos[0].subject], [['efrain@helgen.te
 // Revisión 28/10/2026: sin aprobaciones, la solicitud de cotización sale desde Solicitada con lo pedido
 const solB = B.ok('pedro', 'solicitudCotizacion', rB, {});
 assert.equal(solB.renglones, 1, 'lo pedido');
-const ocB = B.ok('pedro', 'autorizarRequisicion', rB, { proveedor: { razonSocial: 'Eléctrica del Centro' }, fechaEntrega: B.masDias(2), condicionesPago: 'Contado',
+const ocB = B.ok('pedro', 'autorizarRequisicion', rB, { proveedor: { razonSocial: 'Eléctrica del Centro' }, fechaEntrega: B.masDias(2), formaPago: 'Transferencia', condicionesPago: 'Contado',
   diasCredito: 0, ivaTasa: 0.16, renglones: [{ descripcion: 'Brida', unidad: 'PZA', cantidad: 4, costo: 100 }], idSolicitud: 'ob' }).ocFolio;
 assert.equal(B.correos.length, 3);
 assert(/ · Autorizada · /.test(porPara(B.correos.slice(1), 'obrero@helgen.tech').subject));
