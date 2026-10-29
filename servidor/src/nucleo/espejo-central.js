@@ -12,6 +12,7 @@
 //                  cambio, o una edición que el sondeo no vio) se reemplaza y queda en el registro como "deriva".
 'use strict';
 const crypto = require('crypto');
+const M = require('../espejo/modelo');
 
 const huella = libro => crypto.createHash('sha1').update(JSON.stringify(libro.hojas, (k, v) => (k === 'mostrar' ? undefined : v))).digest('hex');
 
@@ -41,7 +42,8 @@ class EspejoCentral {
       this.cargando.set(id, (async () => {
         try {
           const libro = await this.conductor.cargarLibro(id);
-          this.libros.set(id, { libro, version: libro.version, huella: huella(libro), cargado: Date.now() });
+          libro.rev = 1;
+          this.libros.set(id, { libro, version: libro.version, huella: null, cargado: Date.now() });
           return libro;
         } finally {
           this.cargando.delete(id);
@@ -54,13 +56,14 @@ class EspejoCentral {
   async crear(nombre) {
     if (this.soloLectura) throw new Error('Servidor en modo solo lectura: no se crean libros.');
     const libro = await this.conductor.crearLibro(nombre);
-    this.libros.set(libro.id, { libro, version: libro.version, huella: huella(libro), cargado: Date.now() });
+    libro.rev = 1;
+    this.libros.set(libro.id, { libro, version: libro.version, huella: null, cargado: Date.now() });
     return libro;
   }
 
   /**
    * Confirma lo que mandó un trabajador. Hay que llamarla con el candado tomado (la llama quien lo tiene).
-   * @returns {libros: [libro]} copias canónicas nuevas de los libros tocados
+   * @returns {libros: [parche]} lo que cambió de cada libro (sus hojas tocadas tal como quedaron en Sheets)
    */
   async confirmar(libros, opciones) {
     const o = opciones || {};
@@ -80,18 +83,27 @@ class EspejoCentral {
         const libro = await this.conductor.confirmar(actual.libro, ops);
         this.metricas.msGoogle += Date.now() - t0;
         this.metricas.confirmaciones++;
+        libro.rev = (actual.libro.rev || 0) + 1;
+        const tocadas = new Set(), borradas = [];
+        ops.forEach(op => {
+          if (op.op === 'borrarHoja') { borradas.push(op.hoja); tocadas.delete(op.hoja); } else if (op.op === 'nuevaHoja') tocadas.add(op.id);
+          else if (op.hoja != null) tocadas.add(op.hoja);
+        });
         // La versión de Drive después de nuestro cambio: se pide aparte (sin esperar) para no confundirla con una edición
-        // a mano; si mientras tanto alguien editó, la reconciliación lo corrige
-        this.libros.set(id, { libro, version: actual.version, huella: huella(libro), cargado: Date.now(), pidiendoVersion: true });
+        // a mano; si mientras tanto alguien editó, la reconciliación lo corrige. La huella se calcula hasta que se necesite.
+        this.libros.set(id, { libro, version: actual.version, huella: null, cargado: Date.now(), pidiendoVersion: true });
         this.anotarVersion(id);
-        nuevos.push(libro);
+        nuevos.push(M.parcheDe(libro, actual.libro.rev || 0, tocadas, borradas));
       } catch (e) {
         this.metricas.fallas++;
         this.registro('error', 'No se confirmó el libro ' + id + ': ' + e.message, { ops: ops.length });
         // Lo que haya en Google manda: se vuelve a leer (si tampoco se puede, se olvida y se cargará al pedirlo)
         let recargado = null;
         try { recargado = await this.conductor.cargarLibro(id); } catch (e2) { this.libros.delete(id); }
-        if (recargado) this.libros.set(id, { libro: recargado, version: recargado.version, huella: huella(recargado), cargado: Date.now() });
+        if (recargado) {
+          recargado.rev = (actual.libro.rev || 0) + 1;
+          this.libros.set(id, { libro: recargado, version: recargado.version, huella: null, cargado: Date.now() });
+        }
         const confirmados = nuevos.map(l => l.id);
         if (nuevos.length) this.difundir(nuevos, o.trabajador);
         this.difundir(recargado ? [recargado] : [], o.trabajador, recargado ? [] : [id]);
@@ -141,9 +153,11 @@ class EspejoCentral {
       // Si mientras se leía se confirmó algo en este libro, lo leído puede ser más viejo: se deja para el siguiente sondeo
       if (antes && antes.cargado > inicio) return false;
       const h = huella(libro);
+      const hAntes = antes ? (antes.huella || huella(antes.libro)) : null;
+      libro.rev = (antes ? antes.libro.rev || 0 : 0) + 1;
       this.libros.set(id, { libro, version: libro.version, huella: h, cargado: Date.now() });
       this.metricas.recargas++;
-      if (antes && antes.huella !== h) {
+      if (antes && hAntes !== h) {
         this.registro('info', 'libro releído: ' + id + ' (' + motivo + ')');
         this.difundir([libro], null);
         this.alCambioExterno(id);

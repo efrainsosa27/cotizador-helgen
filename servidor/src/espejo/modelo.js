@@ -1,7 +1,8 @@
 // Modelo del espejo en memoria de un libro de Google Sheets. Lo usan igual el hilo principal (copia canónica) y cada
 // trabajador (copia local + lo que escribió la transacción en curso). Sin E/S: solo datos y las operaciones del diario.
 //
-// Libro: { id, titulo, zona, version, hojas: [Hoja], nombrados: {nombre: {hoja, r, c, nr, nc}} }
+// Libro: { id, titulo, zona, version, rev, hojas: [Hoja], nombrados: {nombre: {hoja, r, c, nr, nc}} }
+//   rev: revisión de la copia canónica (el principal la sube en cada cambio); los parches dicen sobre cuál se aplican
 // Hoja:  { id (sheetId), titulo, indice, filasMax, columnasMax, congeladas,
 //          valores: [[valor]]          lo que da getValues: '' · número · texto · booleano · Date
 //          formulas: {"f,c": '=…'}     celdas con fórmula (su valor es el último que calculó Sheets)
@@ -23,7 +24,7 @@ function nuevaHoja(d) {
 }
 
 function nuevoLibro(d) {
-  return { id: d.id, titulo: d.titulo || '', zona: d.zona || 'America/Mexico_City', version: d.version || '0',
+  return { id: d.id, titulo: d.titulo || '', zona: d.zona || 'America/Mexico_City', version: d.version || '0', rev: d.rev || 0,
     hojas: (d.hojas || []).map(nuevaHoja), nombrados: d.nombrados || {} };
 }
 
@@ -300,7 +301,39 @@ function rangoA1(a1, filasMax) {
   return { r: r1, c: c1, nr: r2 - r1 + 1, nc: c2 - c1 + 1, columnas: abierto && r1 === 1, abierto: abierto };
 }
 
+/**
+ * Parche de un libro: las hojas que cambiaron completas (no el libro entero: copiar un libro de un año a cada trabajador
+ * después de cada guardado costaría decenas de ms en el principal). revBase = revisión sobre la que se aplica.
+ */
+function parcheDe(libro, revBase, idsHojas, borradas) {
+  return { id: libro.id, rev: libro.rev, revBase, titulo: libro.titulo, zona: libro.zona, version: libro.version, nombrados: libro.nombrados,
+    orden: libro.hojas.map(h => h.id), hojas: libro.hojas.filter(h => idsHojas.has(h.id)), borradas: borradas || [] };
+}
+
+/**
+ * Aplica a un espejo (Map id → libro) un libro completo o un parche. Devuelve false si el parche no corresponde a la
+ * copia local (se borra: la siguiente lectura trae la canónica). Lo viejo nunca pisa lo nuevo.
+ */
+function aplicarLibroOParche(espejo, x) {
+  const local = espejo.get(x.id);
+  if (x.revBase === undefined) {
+    if (!local || !(local.rev > x.rev)) espejo.set(x.id, x);
+    return true;
+  }
+  if (!local) return true;            // no la tiene: la pedirá completa cuando la use
+  if (local.rev >= x.rev) return true; // ya incluye este cambio
+  if (local.rev !== x.revBase) { espejo.delete(x.id); return false; }
+  const nuevas = new Map(x.hojas.map(h => [h.id, h]));
+  const hojas = local.hojas.filter(h => !x.borradas.includes(h.id)).map(h => nuevas.get(h.id) || h);
+  x.hojas.forEach(h => { if (!hojas.some(y => y.id === h.id)) hojas.push(h); });
+  const orden = new Map(x.orden.map((id, i) => [id, i]));
+  hojas.sort((a, b) => (orden.has(a.id) ? orden.get(a.id) : 1e9) - (orden.has(b.id) ? orden.get(b.id) : 1e9));
+  espejo.set(x.id, Object.assign({}, local, { rev: x.rev, titulo: x.titulo, zona: x.zona, version: x.version, nombrados: x.nombrados, hojas }));
+  return true;
+}
+
 module.exports = {
+  parcheDe, aplicarLibroOParche,
   clave, nuevaHoja, nuevoLibro, ultimaFila, ultimaColumna, leer, leerFormulas, leerVisibles, textoVisible, interpretar,
   aplicar, hojaPorId, tipoDePatron, formatoDe, serialDesdeFecha, fechaDesdeSerial, desfase, columnaANumero,
   numeroAColumna, rangoA1, vacio,

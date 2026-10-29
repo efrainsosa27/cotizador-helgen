@@ -11,8 +11,8 @@ function crearSpreadsheetApp(amb) {
   function libroDe(id) {
     let l = amb.espejo.get(id);
     if (!l) {
-      l = amb.rpc('hojas.abrir', { id: id });
-      amb.espejo.set(id, l);
+      amb.aplicarLibro(amb.rpc('hojas.abrir', { id: id }));
+      l = amb.espejo.get(id);
     }
     return l;
   }

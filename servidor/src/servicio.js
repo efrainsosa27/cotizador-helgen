@@ -130,7 +130,7 @@ function crearServicio(conf, piezas) {
   pool = new Pool({ n: conf.trabajadores, atender, registro, limiteMs: conf.limiteMs, limiteActivadorMs: conf.limiteActivadorMs,
     confTrabajador: { archivos: archivosCodigo, plantillas: conductor.plantillas, zona: conf.zonaHoraria, cuentaServicio: conf.cuentaServicio,
       marcaToken: MARCA_TOKEN, silencioso: !!conf.silencioso, memoriaMb: conf.memoriaTrabajadorMb, idScript: conf.idScript,
-      relojFijo: conf.relojFijo || null },
+      relojFijo: conf.relojFijo || null, escrituraInmediata: !!conf.escrituraInmediata },
     alMorir: async (t, dueno) => { candado.soltar(dueno); } });
 
   const timers = [];

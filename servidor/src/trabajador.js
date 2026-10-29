@@ -19,26 +19,29 @@ const S = require('./fachada/servicios');
 
 const conf = workerData.conf;
 const amb = {
-  espejo: new Map(), pendientes: new Map(), tx: null,
+  espejo: new Map(), pendientes: [], tx: null,
   plantillas: conf.plantillas, zona: conf.zona, cuentaServicio: conf.cuentaServicio, marcaToken: conf.marcaToken,
   idScript: conf.idScript,
 };
 const puente = new PuenteTrabajador(workerData.puerto, workerData.memoria, aviso => {
-  if (aviso && aviso.tipo === 'libros') aviso.libros.forEach(l => amb.pendientes.set(l.id, l));
-  else if (aviso && aviso.tipo === 'olvidar') aviso.ids.forEach(id => { amb.pendientes.delete(id); amb.espejo.delete(id); });
+  if (aviso && aviso.tipo === 'libros') aviso.libros.forEach(l => amb.pendientes.push(l));
+  else if (aviso && aviso.tipo === 'olvidar') aviso.ids.forEach(id => amb.pendientes.push({ id, olvidar: true }));
 });
 amb.rpc = (tipo, datos, limite) => puente.llamar(tipo, datos, limite);
 amb.dormir = ms => puente.dormir(ms);
+amb.aplicarLibro = x => (x.olvidar ? amb.espejo.delete(x.id) : M.aplicarLibroOParche(amb.espejo, x));
 amb.aplicarPendientes = () => {
   puente.vaciar();
-  amb.pendientes.forEach((l, id) => amb.espejo.set(id, l));
-  amb.pendientes.clear();
+  const lista = amb.pendientes.splice(0);
+  lista.forEach(amb.aplicarLibro);
 };
 amb.escribirHoja = (libroId, op) => {
   const libro = amb.espejo.get(libroId);
   if (!libro) throw new Error('El libro ' + libroId + ' no está en el espejo.');
   M.aplicar(libro, op);
   amb.tx.anotar(libroId, op);
+  // Solo para medir la estrategia (a) "escribir en cada llamada": cada operación va a Google en el momento
+  if (conf.escrituraInmediata) amb.tx.confirmar(amb.tx.enCandado);
 };
 amb.nuevoIdHoja = libro => {
   for (;;) { const id = crypto.randomInt(1, 2147483647); if (!libro.hojas.some(h => h.id === id)) return id; }
@@ -137,7 +140,7 @@ function ejecutar(msg) {
   }
   const cpu = process.cpuUsage(cpu0);
   const metricas = { ms: Number(process.hrtime.bigint() - inicio) / 1e6, cpuMs: (cpu.user + cpu.system) / 1000,
-    rpc: puente.metricas, confirmaciones: amb.tx.confirmaciones };
+    rpc: puente.metricas, confirmaciones: amb.tx.confirmaciones, operaciones: amb.tx.operaciones };
   puente.metricas = null;
   trabajoActual = null;
   amb.tx = null;

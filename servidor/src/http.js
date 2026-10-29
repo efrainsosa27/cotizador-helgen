@@ -51,17 +51,20 @@ function crearServidorHttp(servicio, o) {
     const llego = Date.now();
     const trozos = [];
     let bytes = 0, demasiado = false;
+    const rechazarGrande = () => {
+      demasiado = true;
+      responder(res, 413, { ok: false, error: 'Los archivos pesan demasiado para una sola llamada (máx. ' + Math.round(limite / 1048576) + ' MB).' },
+        Object.assign({ Connection: 'close' }, cors));
+      res.on('finish', () => setTimeout(() => req.destroy(), 200));
+    };
+    if (Number(req.headers['content-length']) > limite) { rechazarGrande(); return; }
     req.on('data', d => {
+      if (demasiado) return;
       bytes += d.length;
-      if (bytes > limite) { demasiado = true; req.destroy(); return; }
+      if (bytes > limite) { trozos.length = 0; rechazarGrande(); return; }
       trozos.push(d);
     });
     req.on('error', () => {});
-    req.on('close', () => {
-      if (demasiado && !res.headersSent) {
-        responder(res, 413, { ok: false, error: 'Los archivos pesan demasiado para una sola llamada (máx. ' + Math.round(limite / 1048576) + ' MB).' }, cors);
-      }
-    });
     req.on('end', () => {
       if (demasiado) return;
       const cuerpo = Buffer.concat(trozos).toString('utf8');
@@ -74,7 +77,7 @@ function crearServidorHttp(servicio, o) {
         const m = r.metricas || {};
         registro('info', 'llamada', { funcion: r.funcion, usuario: correoDelToken(token), ok, codigo, ms: Date.now() - llego,
           msCola: m.msCola, msTrabajo: m.ms && Math.round(m.ms), cpuMs: m.cpuMs && Math.round(m.cpuMs), rpc: m.rpc,
-          confirmaciones: m.confirmaciones, entrada: bytes, salida: r.texto.length, trabajador: m.trabajador });
+          confirmaciones: m.confirmaciones, operaciones: m.operaciones, entrada: bytes, salida: r.texto.length, trabajador: m.trabajador });
       }, e => {
         responder(res, 200, { ok: false, error: 'Error interno del servidor: ' + e.message }, cors);
         registro('error', 'llamada', { error: e.message });

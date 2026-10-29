@@ -78,10 +78,14 @@ function formatDate(fecha, zona, patron) {
   while (i < pat.length) {
     const ch = pat[i];
     if (ch === "'") {
-      const fin = pat.indexOf("'", i + 1);
-      if (fin === i + 1) { out += "'"; i += 2; continue; }
-      out += pat.slice(i + 1, fin === -1 ? pat.length : fin);
-      i = fin === -1 ? pat.length : fin + 1;
+      if (pat[i + 1] === "'") { out += "'"; i += 2; continue; }
+      // Texto entre comillas: '' adentro es una comilla
+      i++;
+      while (i < pat.length) {
+        if (pat[i] === "'" && pat[i + 1] === "'") { out += "'"; i += 2; continue; }
+        if (pat[i] === "'") { i++; break; }
+        out += pat[i++];
+      }
       continue;
     }
     if (!/[A-Za-z]/.test(ch)) { out += ch; i++; continue; }

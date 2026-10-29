@@ -80,7 +80,10 @@ function crearConductorGoogle(conf, inyectado) {
         responseType: 'arraybuffer', validateStatus: () => true, retry: false, timeout: tiempo });
       const cab = {};
       if (r.headers) (typeof r.headers.forEach === 'function' ? r.headers.forEach((v, k) => { cab[k] = v; }) : Object.assign(cab, r.headers));
-      return { codigo: r.status, cabeceras: cab, cuerpo: Buffer.from(r.data || []) };
+      const d = r.data;
+      const cuerpo = d == null ? Buffer.alloc(0) : Buffer.isBuffer(d) ? d : d instanceof ArrayBuffer ? Buffer.from(d)
+        : typeof d === 'string' ? Buffer.from(d) : Buffer.from(JSON.stringify(d));
+      return { codigo: r.status, cabeceras: cab, cuerpo };
     },
 
     /** Red normal (centro de mando, API de Claude). Como UrlFetchApp: sigue redirecciones salvo que se pida lo contrario. */

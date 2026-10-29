@@ -18,6 +18,7 @@ class Transaccion {
     this.cache = new Map();    // clave → {v, ttl} | null (borrada)
     this.profundidad = 0;      // candados tomados por este trabajo (reentrante)
     this.confirmaciones = 0;
+    this.operaciones = 0;      // operaciones de hoja anotadas (para medir)
   }
 
   get enCandado() { return this.profundidad > 0; }
@@ -25,6 +26,7 @@ class Transaccion {
   anotar(libroId, op) {
     if (!this.diarios.has(libroId)) this.diarios.set(libroId, []);
     this.diarios.get(libroId).push(op);
+    this.operaciones++;
   }
 
   hayDiario() { return this.diarios.size > 0; }
@@ -50,7 +52,9 @@ class Transaccion {
       libros.forEach(x => this.amb.espejo.delete(x.id));
       throw e;
     }
-    (r && r.libros || []).forEach(l => this.amb.espejo.set(l.id, l));
+    // Primero lo que llegó antes (más viejo), luego los parches de esta confirmación
+    this.amb.aplicarPendientes();
+    (r && r.libros || []).forEach(l => this.amb.aplicarLibro(l));
     return r;
   }
 }

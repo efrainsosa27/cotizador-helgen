@@ -96,7 +96,9 @@ class Pool {
       const k = this.cola.findIndex(x => x.clase === 'lectura' || ocupadosEscribiendo < this.n - 1);
       if (k === -1) return;
       const trabajo = this.cola.splice(k, 1)[0];
-      const t = libres[0];
+      // El que lleva más tiempo sin trabajar: reparte la carga (y cada trabajador ve lo que confirmaron los otros)
+      const t = libres.reduce((a, b) => ((a.ultimoUso || 0) <= (b.ultimoUso || 0) ? a : b));
+      t.ultimoUso = Date.now() + Math.random();
       t.trabajo = trabajo;
       trabajo.inicio = Date.now();
       trabajo.limite = trabajo.inicio + (trabajo.clase === 'activador' ? this.limiteActivadorMs : this.limiteMs);
