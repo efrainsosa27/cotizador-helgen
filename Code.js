@@ -9574,7 +9574,10 @@ function basePendientes_() {
     return abiertas.map(x => {
       const q = x.q, p = proyectos[q.proyectoFolio.toUpperCase()], prop = propuestaVigente_(q);
       const oc = q.ocFolio ? ordenes[q.ocFolio.toUpperCase()] || null : null;
-      const s = oc && oc.estado === OC_EMITIDA && (pagosOc[oc.folio.toUpperCase()] || []).some(y => y.estado === 'Vigente') ? saldo(oc) : null;
+      // Integración: el saldo de toda orden Emitida (no solo con pagos): sin pagos, lo devuelto sin reponer o las retenciones de sus
+      // facturas también bajan lo que se debe (lo mismo que dice la vista del pago)
+      const conPagos = !!oc && (pagosOc[oc.folio.toUpperCase()] || []).some(y => y.estado === 'Vigente');
+      const s = oc && oc.estado === OC_EMITIDA ? saldo(oc) : null;
       return { folio: q.folio, fecha: q.fecha, desde: x.desde, proyectoFolio: q.proyectoFolio,
         proyectoVisible: p ? p.folioVisible : q.proyectoFolio, proyectoNombre: p ? p.nombre : '',
         solicitanteEmail: q.solicitanteEmail, solicitante: q.solicitante, estado: q.estado, motivo: q.motivo, sitio: q.sitio,
@@ -9585,7 +9588,7 @@ function basePendientes_() {
         oc: oc ? { folio: oc.folio, estado: oc.estado, proveedor: oc.proveedor, total: oc.total, moneda: oc.moneda,
           formaPago: oc.formaPago, diasCredito: oc.diasCredito, recibida: !!oc.fechaRecepcion,
           // P (incremento 6): pagos parciales (con montos: itemsPendientes solo los muestra a compras)
-          pagoParcial: !!s && !s.completo, pagado: s ? s.pagado : 0, saldo: s ? s.saldo : null, siguiente: s ? s.siguiente : null } : null };
+          pagoParcial: conPagos && !!s && !s.completo, pagado: s ? s.pagado : 0, saldo: s ? s.saldo : null, siguiente: s ? s.siguiente : null } : null };
     });
   });
 }
@@ -9701,6 +9704,8 @@ function itemsPendientes(base, o) {
           // F (incremento 5): la forma de pago (con crédito, se paga al vencer la factura); P (incremento 6): con pagos parciales, el
           // saldo y lo que sigue del plan
           detalle: [proyecto(q), oc.folio, oc.proveedor, parcial ? 'saldo ' + dinero(oc.saldo, oc.moneda) + ' de ' + dinero(oc.total, oc.moneda)
+            // Integración: sin pagos, lo que de verdad se debe (lo devuelto sin reponer o las retenciones lo bajan), como en la vista del pago
+            : oc.saldo != null && aCentavos(oc.saldo) !== aCentavos(oc.total) ? 'por pagar ' + dinero(oc.saldo, oc.moneda) + ' de ' + dinero(oc.total, oc.moneda)
             : dinero(oc.total, oc.moneda), oc.formaPago, sig && sig.concepto !== 'Saldo' ? 'sigue: ' + sig.concepto + ' ' + dinero(sig.monto, oc.moneda) +
             (sig.vence ? ' (vence el ' + fecha(sig.vence) + ')' : '') : ''].concat(fs.map(textoVence)) }, 'Compras');
       }

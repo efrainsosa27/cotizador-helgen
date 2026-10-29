@@ -86,8 +86,10 @@ Manual (Compras, Requisiciones, Tareas frecuentes, Historial, Pendientes).
 - `recibeAntesDePagar_` (§6.F: crédito **o** pago parcial) y `recibirSinPagar_` (textos y bitácora "Recibir antes de pagar todo
   (pago parcial)").
 - `antiguedadCxp` (reescrita, ver §5) y `cuentasPorPagar` (le pasa los movimientos; la requisición de un saldo sin factura).
-- `basePendientes_` (saldo de las órdenes Emitidas con pagos; la clave del caché incluye `facturasProveedor`) e `itemsPendientes`
-  (compras: "Pagada parcial, falta el saldo", saldo y lo que sigue; facturas por lo pendiente; filas "Saldo").
+- `basePendientes_` (saldo de las órdenes Emitidas, con pagos o sin ellos —integración—; "pago parcial" solo con un pago
+  Vigente; la clave del caché incluye `facturasProveedor`) e `itemsPendientes` (compras: "Pagada parcial, falta el saldo", saldo y lo
+  que sigue; sin pagos, "por pagar X de Y" cuando lo devuelto sin reponer o las retenciones bajan lo que se debe; facturas por lo
+  pendiente; filas "Saldo").
 - Correos (6.B): `destinatariosAviso` y `contenidoAviso` (`req.pagoparcial`).
 - `facturacionDeOrden` (solo el comentario). **No hay funciones nuevas en la API**: todo viaja por las de siempre
   (`autorizarRequisicion`, `cotizarRequisicion`, `registrarPagoProveedor`, `cancelarPagoProveedor`), que ya declaraban sus
@@ -250,8 +252,8 @@ más por orden) y `totalesAFavor` por moneda: aparte, nunca se restan de lo que 
 
 - **Registrar la nota de crédito o el reembolso** de un saldo a favor: hoy no hay cómo, así que el pendiente "Saldo a favor con el
   proveedor" se queda mientras exista (idea: un movimiento de reembolso en `PagosProveedores` que reste a lo pagado).
-- Pendientes de compras de una orden sin pagos con material devuelto muestra el total de la orden (no el total por pagar): viene del
-  incremento 5; la vista, el tope y Cuentas por pagar ya dicen el saldo.
+- ~~Pendientes de compras de una orden sin pagos con material devuelto muestra el total de la orden~~ **Resuelto en la integración**:
+  dice "por pagar X de Y" con el saldo de la orden, lo mismo que la vista del pago (`tests/pagos-revision.test.js` §11).
 
 - Probar en PRUEBAS o en el real con Claude in Chrome (regla 13): anticipo, recibir antes de pagar todo, liquidación, cancelar uno
   de en medio, plan en el PDF, cuentas por pagar; y en el teléfono el formulario del pago y el plan.

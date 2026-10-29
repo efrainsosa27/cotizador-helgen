@@ -17,6 +17,8 @@
 //     recibido algo cuando se registró).
 //  9. El porcentaje de una etapa del plan es un número o un texto con un número (true, [50], "50%"… se rechazan).
 // 10. Anular un pago a proveedor no le manda correo a quien pidió (llevaba el folio PGP en el asunto).
+// 11. (Integración) Pendientes "por pagar" de una orden sin pagos con material devuelto sin reponer: el monto es lo que de verdad se
+//     debe (el saldo de la orden, lo mismo que la vista del pago), no el total de la orden; sin devolución, el total como siempre.
 // Uso: node tests/pagos-revision.test.js .
 'use strict';
 const assert = require('assert');
@@ -414,6 +416,24 @@ const guardado = {}; // lo que usa la sección de interfaz
   ok('leo', 'anular', s.req, 'Requisición duplicada por error', id('an'));
   const c2 = correosNuevos().filter(x => /obrero/.test(String(x.to)));
   assert(c2.length && c2.every(x => !/PGP-|\$/.test(x.subject + x.body)), JSON.stringify(c2.map(x => x.subject)));
+}
+
+// ================= 11. Pendientes: una orden sin pagos con material devuelto pide lo que se debe =================
+{
+  // Crédito del proveedor (se recibe antes de pagar): 1,624, recibida con 40 m dañados devueltos sin reponer → se deben 1,160
+  const a = siempre(CREDITO, P3);
+  recibirYDevolver40(a.req);
+  assert.deepEqual([filaOc(a.oc)[col('OrdenesCompra', 'estado')], vista(a.req).saldo.saldo, vista(a.req).saldo.pagado], ['Emitida', 1160, 0],
+    'la vista del pago: se deben 1,160');
+  const pend = ok('pedro', 'pendientes', false).items.filter(x => x.req === a.req && /pagar/i.test(x.tipo));
+  assert.equal(pend.length, 1, JSON.stringify(pend));
+  const det = String(pend[0].detalle);
+  assert(/por pagar \$1,160\.00[^·]* de \$1,624\.00/.test(det), 'lo que se debe, no el total de la orden: ' + det);
+  assert(!/falta el saldo|Pagada parcial/.test(pend[0].titulo), 'sin pagos no es "pago parcial": ' + pend[0].titulo);
+  // Sin devolución (en camino, sin pagos): el total, como siempre
+  const b = siempre(CREDITO, P3);
+  const pb = ok('pedro', 'pendientes', false).items.find(x => x.req === b.req && /pagar/i.test(x.tipo));
+  assert(/\$1,624\.00/.test(String(pb.detalle)) && !/por pagar/.test(String(pb.detalle)), String(pb.detalle));
 }
 
 // ================= Interfaz (al final: es asíncrona; DOM simulado conectado al servidor simulado) =================
