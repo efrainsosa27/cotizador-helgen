@@ -3,11 +3,25 @@
 // Las pruebas de antes tienen su propia copia de este simulacro; las nuevas usan este.
 //   const A = require('./arnes')(dir, {props: {...}, tokens: {nombre: claims}, rutas: [{re, fn}]});
 //   A.ok('efrain','bootstrap'); A.falla('ana','listarUsuarios',[],/super admin/,'PERMISO'); A.correos (lo que mandó MailApp)
+// Perfil (tests/perfil.js; docs/rapidez-apps-script.md): con {perfil: true} cada operación con un servicio de Google queda en
+// A.perfil.ops ({tipo, hoja, celdas, candado, pila}) y A.ultimaRespuesta guarda los bytes del JSON de la última llamada.
+// Sin la opción no se anota nada (las pruebas corren igual).
 'use strict';
 const fs = require('fs'), vm = require('vm'), assert = require('assert'), path = require('path'), crypto = require('crypto');
 
 module.exports = function crearArnes(dir, opciones) {
   const op = opciones || {};
+  // ---- Perfil: tipos = lee, escribe, formato, ultimaFila, dataRange, abrir, drive, driveCrea, cache, props, candado,
+  // urlfetch, correo, pdf. candado = ¿se hizo con el candado de script tomado? pila = funciones de Code.js (con perfil.pila) ----
+  const perfil = { activo: !!op.perfil, pila: false, ops: [], enCandado: 0 };
+  const pilaCode = () => String(new Error().stack).split('\n').filter(l => /capri\.js/.test(l))
+    .map(l => (l.match(/at (?:Object\.)?([\w$.]+) \(/) || [])[1]).filter(Boolean).slice(0, 8);
+  const anota = (tipo, extra) => {
+    if (!perfil.activo) return;
+    const o = Object.assign({ tipo, candado: perfil.enCandado > 0 }, extra || {});
+    if (perfil.pila) o.pila = pilaCode();
+    perfil.ops.push(o);
+  };
   let src = fs.readFileSync(path.join(dir, 'Logo.js'), 'utf8') + '\n' + fs.readFileSync(path.join(dir, 'Code.js'), 'utf8');
   const CID = '123-abc.apps.googleusercontent.com';
   src = src.replace(/const CLIENT_ID_GOOGLE = '[^']*';/, "const CLIENT_ID_GOOGLE = '" + CID + "';");
@@ -23,23 +37,30 @@ module.exports = function crearArnes(dir, opciones) {
     const x = v.match(/^(\d{4})-(\d\d)-(\d\d)(?: (\d\d):(\d\d)(?::(\d\d))?)?$/);
     return x ? new Date(+x[1], +x[2] - 1, +x[3], +(x[4] || 0), +(x[5] || 0), +(x[6] || 0)) : v;
   };
+  // Nombre "libro/pestaña" de una hoja (solo para el perfil)
+  const quien = m => { for (const id in libros) for (const n in libros[id].pest) if (libros[id].pest[n].m === m) return (libros[id].nombre || id) + '/' + n; return '?'; };
+  const an = (tipo, m, celdas) => perfil.activo && anota(tipo, { hoja: quien(m), celdas: celdas || 0 });
   function hoja(m) {
-    return { m, getLastRow: () => m.length, getMaxRows: () => 1000, setFrozenRows() {}, setColumnWidth() {},
-      getDataRange: () => ({ getValues: () => m.map(r => r.slice()), getDisplayValues: () => m.map(r => r.map(x => String(x ?? ''))) }),
-      appendRow: a => m.push(a.map(comoSheets)), deleteRow: n => m.splice(n - 1, 1),
-      getRange: (r, c = 1, nr = 1, nc = 1) => typeof r === 'string' ? { setNumberFormat() { return this; }, setDataValidation() { return this; } } : ({
-        getValues: () => Array.from({ length: nr }, (_, i) => { const f = (m[r - 1 + i] || []).slice(c - 1, c - 1 + nc); while (f.length < nc) f.push(''); return f; }),
-        getValue: () => ((m[r - 1] || [])[c - 1] ?? ''),
-        setValue(v) { m[r - 1] = m[r - 1] || []; m[r - 1][c - 1] = comoSheets(v); return this; },
-        setValues(vs) { vs.forEach((x, i) => { m[r - 1 + i] = m[r - 1 + i] || []; x.forEach((y, j) => m[r - 1 + i][c - 1 + j] = comoSheets(y)); }); return this; },
-        setNumberFormat() { return this; }, setFontWeight() { return this; }, setBackground() { return this; }, setFontColor() { return this; },
-        setDataValidation() { return this; } }) };
+    const fmt = function () { an('formato', m); return this; };
+    return { m, getLastRow: () => { an('ultimaFila', m); return m.length; }, getMaxRows: () => { an('ultimaFila', m); return 1000; },
+      setFrozenRows() { an('formato', m); }, setColumnWidth() { an('formato', m); },
+      getDataRange: () => { an('dataRange', m); return {
+        getValues: () => { an('lee', m, m.reduce((s, r) => s + r.length, 0)); return m.map(r => r.slice()); },
+        getDisplayValues: () => { an('lee', m, m.reduce((s, r) => s + r.length, 0)); return m.map(r => r.map(x => String(x ?? ''))); } }; },
+      appendRow: a => { an('escribe', m, a.length); return m.push(a.map(comoSheets)); },
+      deleteRow: n => { an('escribe', m, 1); return m.splice(n - 1, 1); },
+      getRange: (r, c = 1, nr = 1, nc = 1) => typeof r === 'string' ? { setNumberFormat: fmt, setDataValidation: fmt } : ({
+        getValues: () => { an('lee', m, nr * nc); return Array.from({ length: nr }, (_, i) => { const f = (m[r - 1 + i] || []).slice(c - 1, c - 1 + nc); while (f.length < nc) f.push(''); return f; }); },
+        getValue: () => { an('lee', m, 1); return ((m[r - 1] || [])[c - 1] ?? ''); },
+        setValue(v) { an('escribe', m, 1); m[r - 1] = m[r - 1] || []; m[r - 1][c - 1] = comoSheets(v); return this; },
+        setValues(vs) { an('escribe', m, vs.length * ((vs[0] || []).length)); vs.forEach((x, i) => { m[r - 1 + i] = m[r - 1 + i] || []; x.forEach((y, j) => m[r - 1 + i][c - 1 + j] = comoSheets(y)); }); return this; },
+        setNumberFormat: fmt, setFontWeight: fmt, setBackground: fmt, setFontColor: fmt, setDataValidation: fmt }) };
   }
   const libros = {};
   function libro(id, nombre, pestanas) {
     const L = { id, nombre, pest: pestanas || {}, getId: () => id, getUrl: () => 'https://sheets/' + id,
       getSheetByName: n => L.pest[n] || null, getSheets: () => Object.values(L.pest),
-      insertSheet: n => { if (L.pest[n]) throw new Error('ya existe'); return L.pest[n] = hoja([]); },
+      insertSheet: n => { if (L.pest[n]) throw new Error('ya existe'); perfil.activo && anota('escribe', { hoja: (nombre || id) + '/' + n, celdas: 0 }); return L.pest[n] = hoja([]); },
       deleteSheet: h => { for (const k in L.pest) if (L.pest[k] === h) delete L.pest[k]; } };
     libros[id] = L;
     return L;
@@ -64,15 +85,15 @@ module.exports = function crearArnes(dir, opciones) {
   function carpeta(nombre, padre) {
     const f = compartible({ id: 'F' + (++nId), nombre, padre, hijos: [], archivos: [], trashed: false });
     Object.assign(f, { getId: () => f.id, getName: () => f.nombre, getUrl: () => urlCarpeta(f.id), isTrashed: () => f.trashed,
-      setName: n => { f.nombre = n; return f; },
-      getFoldersByName: n => { const l = f.hijos.filter(h => h.nombre === n); let i = 0; return { hasNext: () => i < l.length, next: () => l[i++] }; },
+      setName: n => { anota('drive', { que: 'setName' }); f.nombre = n; return f; },
+      getFoldersByName: n => { anota('drive', { que: 'getFoldersByName ' + n }); const l = f.hijos.filter(h => h.nombre === n); let i = 0; return { hasNext: () => i < l.length, next: () => l[i++] }; },
       // Incremento 5 (F): archivos por nombre (documentos de proveedor: "(2)", "(3)"… sin borrar el anterior)
-      getFilesByName: n => { const l = f.archivos.filter(a => a.nombre === n); let i = 0;
+      getFilesByName: n => { anota('drive', { que: 'getFilesByName' }); const l = f.archivos.filter(a => a.nombre === n); let i = 0;
         return { hasNext: () => i < l.length, next: () => { const a = l[i++]; return { isTrashed: () => !!a.trashed, getId: () => a.id }; } }; },
-      createFolder: n => { const h = carpeta(n, f); f.hijos.push(h); return h; },
-      createFile: b => { const id = 'A' + (++nId); const a = compartible({ id, blob: b, padre: f, nombre: b && b.name });
+      createFolder: n => { anota('driveCrea', { que: 'createFolder ' + n }); const h = carpeta(n, f); f.hijos.push(h); return h; },
+      createFile: b => { anota('driveCrea', { que: 'createFile' }); const id = 'A' + (++nId); const a = compartible({ id, blob: b, padre: f, nombre: b && b.name });
         archivos[id] = a; f.archivos.push(a);
-        return Object.assign(a, { getId: () => id, getUrl: () => urlArchivo(id), getName: () => a.nombre, setName: n => { a.nombre = n; return a; } }); } });
+        return Object.assign(a, { getId: () => id, getUrl: () => urlArchivo(id), getName: () => a.nombre, setName: n => { anota('drive', { que: 'setName' }); a.nombre = n; return a; } }); } });
     carpetas[f.id] = f;
     return f;
   }
@@ -104,6 +125,7 @@ module.exports = function crearArnes(dir, opciones) {
     getContent: () => Buffer.isBuffer(cuerpo) ? [...cuerpo].map(x => x > 127 ? x - 256 : x) : [...Buffer.from(String(cuerpo == null ? '' : cuerpo))],
     getContentText: () => Buffer.isBuffer(cuerpo) ? cuerpo.toString('binary') : typeof cuerpo === 'string' ? cuerpo : JSON.stringify(cuerpo == null ? {} : cuerpo) });
   function fetch(url, opf) {
+    anota('urlfetch', { que: String(url).replace(/^https:\/\/([^/]+)(\/[^?]*)?.*$/, '$1$2').replace(/\/files\/[^/]+/, '/files/…').slice(0, 80) });
     llamadas.push({ url, opciones: opf });
     if (/googleapis\.com\/drive\//.test(url)) return apiDrive(url, opf);
     const ruta = rutas.find(r => r.re.test(url));
@@ -118,7 +140,7 @@ module.exports = function crearArnes(dir, opciones) {
   // ---- MailApp: guarda lo que se manda (A.correos); A.fallarCorreo = true hace que falle ----
   const correos = [];
   const A = {};
-  const MailApp = { sendEmail: m => { if (A.fallarCorreo) throw new Error('Servicio de correo no disponible'); correos.push(m); },
+  const MailApp = { sendEmail: m => { anota('correo'); if (A.fallarCorreo) throw new Error('Servicio de correo no disponible'); correos.push(m); },
     getRemainingDailyQuota: () => 1500 };
 
   const fmt = (d, tz, f) => f.replace('yyyy', d.getFullYear()).replace('MM', pad(d.getMonth() + 1)).replace('dd', pad(d.getDate()))
@@ -126,15 +148,24 @@ module.exports = function crearArnes(dir, opciones) {
   const firmados = b => [...b].map(x => x > 127 ? x - 256 : x);
   const activadores = [];
   const ctx = { console: { ...console, warn() {}, log() {} }, Date, JSON, Math,
-    PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] ?? null, setProperty: (k, v) => props[k] = String(v),
-      deleteProperty: k => { delete props[k]; }, getProperties: () => Object.assign({}, props), setProperties: o => Object.assign(props, o) }) },
-    CacheService: { getScriptCache: () => ({ get: k => cache[k] ?? null, put: (k, v) => cache[k] = v, remove: k => { delete cache[k]; },
-      getAll: ks => Object.fromEntries(ks.filter(k => k in cache).map(k => [k, cache[k]])), putAll: o => Object.assign(cache, o) }) },
-    LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: k => { anota('props', { que: 'get ' + k }); return props[k] ?? null; },
+      setProperty: (k, v) => { anota('props', { que: 'set ' + k }); return props[k] = String(v); },
+      deleteProperty: k => { anota('props', { que: 'delete ' + k }); delete props[k]; },
+      getProperties: () => { anota('props', { que: 'getProperties' }); return Object.assign({}, props); },
+      setProperties: o => { anota('props', { que: 'setProperties' }); return Object.assign(props, o); } }) },
+    CacheService: { getScriptCache: () => ({ get: k => { anota('cache', { que: 'get', clave: k, acierto: k in cache }); return cache[k] ?? null; },
+      put: (k, v) => { anota('cache', { que: 'put', clave: k }); return cache[k] = v; },
+      remove: k => { anota('cache', { que: 'remove', clave: k }); delete cache[k]; },
+      getAll: ks => { anota('cache', { que: 'getAll', clave: ks[0] }); return Object.fromEntries(ks.filter(k => k in cache).map(k => [k, cache[k]])); },
+      putAll: o => { anota('cache', { que: 'putAll', clave: Object.keys(o)[0] }); return Object.assign(cache, o); } }) },
+    // El candado de script: el perfil lleva la cuenta de lo que se hace con él tomado
+    LockService: { getScriptLock: () => ({ tomado: false,
+      tryLock() { anota('candado'); if (!this.tomado) { this.tomado = true; perfil.enCandado++; } return true; },
+      releaseLock() { if (this.tomado) { this.tomado = false; perfil.enCandado--; } } }) },
     Session: { getActiveUser: () => ({ getEmail: () => '' }) },
     Logger: { log() {} },
     Utilities: { formatDate: fmt, newBlob: (a, b, c) => typeof a === 'string'
-        ? { getAs: () => ({ setName: n => ({ name: n, html: a, getBytes: () => [...Buffer.from(a)] }) }), getDataAsString: () => a }
+        ? { getAs: () => { anota('pdf'); return { setName: n => ({ name: n, html: a, getBytes: () => [...Buffer.from(a)] }) }; }, getDataAsString: () => a }
         : { bytes: a, mime: b, name: c, getBytes: () => a, getName: () => c, getContentType: () => b },
       base64Encode: b => Buffer.from(typeof b === 'string' ? b : b.map(x => (x + 256) % 256)).toString('base64'),
       base64Decode: s => firmados(Buffer.from(s, 'base64')),
@@ -151,24 +182,29 @@ module.exports = function crearArnes(dir, opciones) {
     UrlFetchApp: { fetch },
     MailApp,
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: t => ({ t, setMimeType() { return this; } }) },
-    SpreadsheetApp: { flush() {}, openById: id => { if (!libros[id]) throw new Error('No encontrado'); return libros[id]; },
-      create: n => { const L = libro('S' + (++nId), n, { 'Hoja 1': hoja([]) }); archivos[L.id] = compartible({ id: L.id, padre: miUnidad }); return L; },
+    SpreadsheetApp: { flush() {}, openById: id => { anota('abrir', { hoja: id }); if (!libros[id]) throw new Error('No encontrado'); return libros[id]; },
+      create: n => { anota('driveCrea', { que: 'SpreadsheetApp.create' }); const L = libro('S' + (++nId), n, { 'Hoja 1': hoja([]) }); archivos[L.id] = compartible({ id: L.id, padre: miUnidad }); return L; },
       newDataValidation: () => { const b = { requireValueInList: () => b, setAllowInvalid: () => b, setHelpText: () => b, build: () => ({}) }; return b; } },
-    DriveApp: { getFolderById: id => { if (!carpetas[id]) throw new Error('No se encontró'); return carpetas[id]; },
-      createFolder: n => miUnidad.createFolder(n), getRootFolder: () => miUnidad,
-      getFileById: id => { const a = archivos[id]; if (!a) throw new Error('No se encontró el archivo');
-        return { getParents: () => { let d = false; return { hasNext: () => !d, next: () => { d = true; return a.padre; } }; },
-          moveTo: f => { a.padre = f; }, setSharing: () => a.setSharing(), getId: () => id, getUrl: () => urlArchivo(id),
-          getName: () => a.nombre || (a.blob && a.blob.name) || '', setName: n => { a.nombre = n; },
+    DriveApp: { getFolderById: id => { anota('drive', { que: 'getFolderById' }); if (!carpetas[id]) throw new Error('No se encontró'); return carpetas[id]; },
+      createFolder: n => miUnidad.createFolder(n), getRootFolder: () => { anota('drive', { que: 'getRootFolder' }); return miUnidad; },
+      getFileById: id => { anota('drive', { que: 'getFileById' }); const a = archivos[id]; if (!a) throw new Error('No se encontró el archivo');
+        return { getParents: () => { anota('drive', { que: 'getParents' }); let d = false; return { hasNext: () => !d, next: () => { d = true; return a.padre; } }; },
+          moveTo: f => { anota('drive', { que: 'moveTo' }); a.padre = f; }, setSharing: () => a.setSharing(), getId: () => id, getUrl: () => urlArchivo(id),
+          getName: () => a.nombre || (a.blob && a.blob.name) || '', setName: n => { anota('drive', { que: 'setName' }); a.nombre = n; },
           isTrashed: () => !!a.trashed,
           getBlob: () => ({ getName: () => a.blob.name, getContentType: () => a.blob.mime, getBytes: () => a.blob.bytes }) }; },
       Access: { PRIVATE: 'PRIVATE', DOMAIN: 'DOMAIN' }, Permission: { NONE: 'NONE', VIEW: 'VIEW' } },
   };
   if (op.ctxExtra) Object.assign(ctx, op.ctxExtra);
   vm.createContext(ctx);
-  vm.runInContext(src, ctx);
+  vm.runInContext(src, ctx, perfil.activo ? { filename: 'capri.js' } : undefined);
 
-  const post = (quien, funcion, ...args) => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ funcion, args, token: quien }) } }).t);
+  // ultimaRespuesta = bytes (UTF-8) del JSON que devolvió doPost en la última llamada (perfil)
+  const post = (quien, funcion, ...args) => {
+    const t = ctx.doPost({ postData: { contents: JSON.stringify({ funcion, args, token: quien }) } }).t;
+    A.ultimaRespuesta = Buffer.byteLength(t, 'utf8');
+    return JSON.parse(t);
+  };
   const ok = (quien, funcion, ...args) => { const r = post(quien, funcion, ...args); assert(r.ok, funcion + ': ' + r.error); return r.datos; };
   const falla = (quien, funcion, args, re, codigo) => {
     const r = post(quien, funcion, ...(args || []));
@@ -186,7 +222,7 @@ module.exports = function crearArnes(dir, opciones) {
   const FOTO = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0, 16, 0x4A, 0x46, 0x49, 0x46, 0, 1]).toString('base64');
   const conFotos = rs => rs.map(r => Object.assign({ foto: { nombre: 'foto.jpg', datos: FOTO, mime: 'image/jpeg' } }, r));
   const FOTOS = { renglones: conFotos(Array.from({ length: 20 }, (_, i) => ({ renglon: i + 1 }))) };
-  return Object.assign(A, { urlArchivo, urlCarpeta, ctx, P: ctx, correr, como, post, ok, falla, plain, props, cache, libros, carpetas, archivos, correos, llamadas, rutas,
+  return Object.assign(A, { perfil, urlArchivo, urlCarpeta, ctx, P: ctx, correr, como, post, ok, falla, plain, props, cache, libros, carpetas, archivos, correos, llamadas, rutas,
     tokens, claims, activadores, HOY, HOY_ISO, masDias, ANIO: String(HOY.getFullYear()), miUnidad, maestra, hoja, libro,
     PDF: Buffer.from('%PDF-1.4 cotizacion del proveedor').toString('base64'), FOTO, conFotos, FOTOS });
 };
