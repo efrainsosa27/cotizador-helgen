@@ -49,6 +49,16 @@ cobranza. Los permisos los revisa el servidor en cada llamada.
   montos), quien recibe marca "En camino" o "Lo recogí", el material se recibe en el centro de mando (entra al inventario
   del sitio) y CAPRI trae la recepción cada 15 minutos para cerrar la requisición.
 
+**Incremento 5 (CAPRI; ver `CLAUDE.md` §4.9 y `docs/incremento-5*.md`)**
+
+- **Forma de pago** en cada orden: transferencia, crédito del proveedor (el material se recibe antes de pagar), tarjeta de
+  crédito, tarjeta de débito en sitio, efectivo o cheque.
+- **Proveedores**: datos bancarios y documentos (constancia de situación fiscal, carátula bancaria, comprobante de
+  domicilio). Sin ellos la orden avisa y el pago **por transferencia** no se registra.
+- **Foto por renglón** al recibir (en CAPRI y en el centro de mando); se guarda en Drive.
+- **Devoluciones** (`DEV-AAAA-NNNN`): quien recibe reporta material equivocado, dañado o faltante, con comentario y foto;
+  compras decide reponer, devolver al proveedor, cancelar el renglón o conservarlo.
+
 ## Cómo está armado
 
 | Parte | Tecnología | Dónde |
@@ -113,10 +123,11 @@ Pasos completos y precauciones en `CLAUDE.md` §8.
    ```
    Si el cambio usa un servicio nuevo de Google: `clasp push`, autorizar corriendo una función desde el editor, y hasta
    entonces `clasp deploy`. **CAPRI (incremento 4):** después del `push`, correr `prepararCapri()` desde el editor (pide
-   mandar correo y el activador; manda un correo de prueba a efrain@) **antes** del `deploy`. Pasos completos en `CLAUDE.md` §9.
-4. **Interfaz** (si cambió algo en `web/`):
+   mandar correo y el activador; manda un correo de prueba a efrain@) **antes** del `deploy`. Desde el 29/10/2026 el
+   deployment lo publica **facilities@helgen.tech** (la API corre como quien la publica). Pasos completos en `CLAUDE.md` §9.
+4. **Interfaz** (si cambió algo en `web/`; la cuenta de Cloudflare de Helgen, no la personal):
    ```bash
-   npx --yes wrangler@4 deploy
+   CLOUDFLARE_ACCOUNT_ID=badd8bca60b008822a73ca24e983ff43 npx --yes wrangler@4 deploy
    ```
 5. Actualizar `CLAUDE.md` y el Manual del Cotizador en el mismo cambio.
 
