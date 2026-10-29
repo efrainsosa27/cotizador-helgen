@@ -23,6 +23,10 @@
 //     usan los permisos nuevos, como antes).
 // 10. Una fuente ya leída en la petición (proyectos) no se reusa si la versión cambió a media petición: una lista que se guarda
 //     en caché con la versión nueva no lleva el dato de antes (antes quedaba así hasta 6 h).
+// Revisión independiente de la rapidez (una sección por hallazgo):
+// 11. Memos derivados (MEMOS_DERIVADOS_: devoluciones, pagos a proveedor, anulados, roles, Config ligera): se olvidan al releer
+//     las versiones, con el candado (menos los roles) y al escribir en su pestaña; el arnés falla una escritura en su pestaña con
+//     el memo guardado; el activador ya no guarda «mis requisiciones» con una devolución resuelta como Abierta.
 // Uso: node tests/rapidez.test.js .
 'use strict';
 const assert = require('assert');
@@ -386,6 +390,79 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   correr('versiones_(true)');
   assert.equal(correr("listarRequisiciones('', '')")[0].proyectoNombre, 'Nombre nuevo', 'en la misma petición');
   assert.equal(ok('pedro', 'listarRequisiciones', '', '')[0].proyectoNombre, 'Nombre nuevo', 'lo que quedó en caché');
+}
+
+// Para las pruebas de la revisión (11 en adelante): el flujo de compras de punta a punta y "otra ejecución" en medio de esta
+const compras = A => {
+  const { ok } = A;
+  A.P.exigirDocumentosParaPagar_ = function () {};
+  let n = 0;
+  const id = p => p + (++n);
+  const proyecto = nombre => ok('ana', 'crearProyecto', { nombre: nombre || 'Uno', cliente: { nombre: 'Luis' }, idSolicitud: id('p') }).folio;
+  const pedir = pry => ok('obrero', 'guardarRequisicion', { proyectoFolio: pry, sitio: 'Querétaro', cotizacion: { nombre: 'c.pdf', datos: A.PDF },
+    renglones: [{ descripcion: 'Cable THW 10', cantidad: 80, unidad: 'm' }, { descripcion: 'Tubo conduit 3/4', cantidad: 12, unidad: 'pza' }],
+    idSolicitud: id('q') }).folio;
+  const autorizar = req => ok('pedro', 'autorizarRequisicion', req, { proveedor: { razonSocial: 'Ferretera del Puerto' }, fechaEntrega: A.masDias(1),
+    lugarEntrega: 'Querétaro', condicionesPago: 'Contado', diasCredito: 0, formaPago: 'Transferencia', idSolicitud: id('oc'),
+    renglones: [{ descripcion: 'Cable THW 10', unidad: 'M', cantidad: 80, costo: 10 }, { descripcion: 'Tubo conduit 3/4', unidad: 'PZA', cantidad: 12, costo: 50 }] }).ocFolio;
+  const pagar = req => ok('pedro', 'registrarPagoProveedor', { reqFolio: req, fecha: A.HOY_ISO, monto: 1624, monedaPago: 'MXN', metodo: 'Transferencia',
+    referencia: 'SPEI ' + id(''), comprobante: { nombre: 'c.pdf', datos: A.PDF }, idSolicitud: id('pg') });
+  // Apps Script aísla cada ejecución; aquí comparten el contexto de vm: se guardan las globales de la ejecución en curso, la otra
+  // corre por doPost y se restauran
+  const otraEjecucion = fn => {
+    A.correr('globalThis.__g = { MEMO_: MEMO_, VERSIONES_: VERSIONES_, SIN_CACHE_: SIN_CACHE_, VENDEDOR_: VENDEDOR_ };');
+    try { return fn(); } finally {
+      A.correr('MEMO_ = __g.MEMO_; VERSIONES_ = __g.VERSIONES_; SIN_CACHE_ = __g.SIN_CACHE_; VENDEDOR_ = __g.VENDEDOR_;');
+    }
+  };
+  return { id, proyecto, pedir, autorizar, pagar, otraEjecucion, LC: () => A.libros[A.props.COMPRAS_DB_ID] };
+};
+
+// ================= 11. Memos derivados (devoluciones, pagos, anulados, roles, Config ligera) =================
+{
+  const A = crear();
+  const { ok, correr, plain } = A;
+  const C = compras(A);
+  // a) Todos se olvidan al tomar el candado y al releer las versiones; escribir en una pestaña olvida los que salen de ella
+  const derivados = plain(correr('MEMOS_DERIVADOS_'));
+  ['devs', 'pagosProv', 'anulados', 'ctxRoles', 'rolesYo', 'cfgLigera'].forEach(k => assert(derivados[k], 'MEMOS_DERIVADOS_.' + k));
+  const llenar = () => correr(`Object.keys(MEMOS_DERIVADOS_).forEach(k => { MEMO_[k] = { de: 'antes' }; })`);
+  const vivos = () => plain(correr(`Object.keys(MEMOS_DERIVADOS_).filter(k => MEMO_[k] != null)`));
+  const P1 = C.proyecto('Uno');
+  const req = C.pedir(P1);
+  C.autorizar(req);
+  C.pagar(req);
+  llenar(); correr('versiones_(true)');
+  assert.deepEqual(vivos(), [], 'releer las versiones los olvida');
+  llenar(); correr('conCandado_(() => null)');
+  assert.deepEqual(vivos(), plain(correr('MEMOS_DE_LA_LLAMADA_')), 'el candado los olvida (menos los roles: una vez por llamada)');
+  llenar(); correr(`escribe_({ getName: () => 'Permisos', getSheetId: () => 999, getLastRow: () => 1 })`);
+  assert.deepEqual(vivos().filter(k => k === 'ctxRoles' || k === 'rolesYo'), [], 'escribir en Permisos olvida los roles');
+  llenar();
+  correr(`escribe_(libroCompras_().getSheetByName('PagosProveedores'))`);
+  assert.equal(vivos().indexOf('pagosProv'), -1, 'escribir en PagosProveedores olvida los pagos');
+  assert.notEqual(vivos().indexOf('devs'), -1, '…y no las devoluciones');
+  // b) El arnés falla una escritura en la pestaña de un memo derivado que sigue guardado (no pasó por escribe_)
+  correr(`hojaCompras_(libroCompras_(), 'Devoluciones')`);
+  correr('MEMO_.devs = []');
+  assert.throws(() => correr(`libroCompras_().getSheetByName('Devoluciones').appendRow(['x'])`), /MEMO_\.devs/);
+  correr('MEMO_ = {}');
+  // c) El activador (cadaQuinceMinutos) paso a paso: lee las devoluciones bajo candado, otra ejecución resuelve una, el activador
+  //    sube las versiones y calienta el caché con la lista de quien pidió: esa lista no puede llevar la devolución de antes
+  ok('obrero', 'cerrarRequisicion', req, 'Llegó', { renglones: A.conFotos([{ renglon: 1 }, { renglon: 2 }]) });
+  const dev = ok('obrero', 'reportarProblema', req, { renglon: 1, cantidad: 10, tipo: 'Dañado', comentario: 'Rollo aplastado',
+    foto: { nombre: 'foto.jpg', datos: A.FOTO, mime: 'image/jpeg' }, idSolicitud: 'd1' }).folio;
+  const enHoja = () => C.LC().pest.Devoluciones.m.find(r => r[0] === dev)[14];
+  ok('obrero', 'misRequisiciones');
+  correr('VENDEDOR_ = null; VERSIONES_ = null; SIN_CACHE_ = false; MEMO_ = {};');
+  correr(`conCandado_(() => { const l = libroCompras_(); devolucionAbiertaDe_(l, buscarReq_(l, ${JSON.stringify(req)}).req); })`);
+  C.otraEjecucion(() => ok('pedro', 'resolverDevolucion', dev, { resolucion: 'Conservar', nota: 'Se queda así', idSolicitud: 'rs1' }));
+  assert.notEqual(enHoja(), 'Abierta', 'la otra ejecución la resolvió');
+  correr("subirVersiones_(['requisiciones', 'oc'])");
+  correr(`(() => { VENDEDOR_ = { email: 'obrero@helgen.tech', nombre: '', apellido: '' }; misRequisiciones(); })()`);
+  correr('VENDEDOR_ = null; MEMO_ = {};');
+  const mia = ok('obrero', 'misRequisiciones').find(x => x.folio === req);
+  assert.deepEqual(mia.devoluciones.map(d => d.estado), [enHoja()], 'lo que quedó en caché trae la devolución como está en la hoja');
 }
 
 console.log('rapidez: todo bien');

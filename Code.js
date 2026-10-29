@@ -499,9 +499,32 @@ function filasEnPeticion_(clave, leer) {
   return memo[clave].map(r => r.slice()); // copias: quien las recibe puede cambiarlas sin tocar las de los demás
 }
 
-function olvidarFilas_() {
+/**
+ * Memos derivados: lo que la petición arma con filas de una pestaña y guarda en MEMO_.<campo> (campo → pestañas de donde sale).
+ * olvidarFilas_ los borra todos y escribe_(hoja) los que salen de esa pestaña: si no, al tomar el candado o al releer las versiones
+ * seguirían los de antes (y una lista que se guarda en caché con la versión nueva llevaría el dato viejo). Quien agregue un memo
+ * armado con filas de una hoja lo registra aquí; el arnés de pruebas falla una escritura en su pestaña mientras siga guardado.
+ * Las fuentes (MEMO_['F_…'], fuenteConHuella_) no van aquí: se reusan solo con la misma versión.
+ */
+const MEMOS_DERIVADOS_ = {
+  devs: ['Devoluciones'],                 // devolucionesDelLibro_
+  pagosProv: ['PagosProveedores'],        // pagosProvPorOc_
+  anulados: ['Anulaciones'],              // foliosAnulados_
+  ctxRoles: ['Permisos', 'Delegaciones'], // contextoRoles_
+  rolesYo: ['Permisos', 'Delegaciones'],  // rolesYo_ (sale de ctxRoles)
+  cfgLigera: ['Config'],                  // configLigera_
+};
+// Los roles se calculan una vez por llamada (como siempre: cada función revisa el permiso al entrar) y se conservan al tomar
+// el candado: dentro de una escritura no hay caché (SIN_CACHE_) y recalcularlos releería Permisos y Delegaciones (~1 s más en
+// cada escritura). Sí se olvidan al releer las versiones y al escribir en Permisos o Delegaciones.
+const MEMOS_DE_LA_LLAMADA_ = ['ctxRoles', 'rolesYo'];
+
+/** Olvida las filas leídas y los memos derivados. alCandado = lo llama candado_ (conserva los de MEMOS_DE_LA_LLAMADA_). */
+function olvidarFilas_(alCandado) {
   MEMO_.filas = null;
-  MEMO_.cfgLigera = null; // Config ya leída en la petición (configLigera_)
+  Object.keys(MEMOS_DERIVADOS_).forEach(k => {
+    if (!alCandado || MEMOS_DE_LA_LLAMADA_.indexOf(k) === -1) MEMO_[k] = null;
+  });
 }
 
 /** Sufijo de las claves de MEMO_.filas de una pestaña ("/Requisiciones/123"); '' si no se sabe. */
@@ -526,7 +549,8 @@ function escribe_(hoja) {
   }
   const memo = MEMO_.filas || {};
   Object.keys(memo).forEach(k => { if (k.slice(-sufijo.length) === sufijo) delete memo[k]; });
-  if (/^\/Config\//.test(sufijo)) MEMO_.cfgLigera = null;
+  const pestana = sufijo.slice(1, sufijo.lastIndexOf('/')); // sufijo = '/<pestaña>/<id>' (el nombre puede llevar '/')
+  Object.keys(MEMOS_DERIVADOS_).forEach(k => { if (MEMOS_DERIVADOS_[k].indexOf(pestana) !== -1) MEMO_[k] = null; });
   return hoja;
 }
 
@@ -534,8 +558,8 @@ function escribe_(hoja) {
 function candado_() {
   const lock = LockService.getScriptLock();
   return {
-    tryLock: ms => { const ok = lock.tryLock(ms); if (ok) olvidarFilas_(); return ok; },
-    releaseLock: () => { lock.releaseLock(); olvidarFilas_(); },
+    tryLock: ms => { const ok = lock.tryLock(ms); if (ok) olvidarFilas_(true); return ok; },
+    releaseLock: () => { lock.releaseLock(); olvidarFilas_(true); },
   };
 }
 

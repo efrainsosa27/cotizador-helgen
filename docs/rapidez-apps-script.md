@@ -181,6 +181,13 @@ tabla se midieron al hacer cada commit (con el perfil de ese momento); la tabla 
   al tomar o soltar el candado y al leer las versiones; la carpeta del área se vuelve a buscar y revisar en cada petición.
 - **Rapidez 10 · revisar fuentes.** Si la fuente ya está en la petición con la misma versión, basta la marca `R_` para saber si
   toca releer la hoja; si toca, se relee como antes.
+- **Revisión 1 · memos derivados (`MEMOS_DERIVADOS_`).** Lo que se arma con filas de una pestaña y se guarda en `MEMO_`
+  (`devs` ← Devoluciones, `pagosProv` ← PagosProveedores, `anulados` ← Anulaciones, `ctxRoles`/`rolesYo` ← Permisos y
+  Delegaciones, `cfgLigera` ← Config) se olvida como las filas: al leer las versiones, al tomar o soltar el candado y al escribir
+  en su pestaña (`escribe_`). Antes solo `cfgLigera`: el activador guardaba «mis requisiciones» con la versión nueva y una
+  devolución ya resuelta como Abierta. Excepción a propósito: los roles se conservan al tomar el candado (una vez por llamada,
+  como siempre; recalcularlos dentro de una escritura releería Permisos y Delegaciones, ~1 s). El arnés también falla una
+  escritura en la pestaña de un memo derivado que sigue guardado. Prueba: §11.
 
 ### 5.3 Rapidez 11: corrección de una carrera que ya existía
 
