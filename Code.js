@@ -340,12 +340,18 @@ function verificarSesion_(token) {
   return verificarTokenGoogle_(t);
 }
 
-/** Correos activos que hoy tienen el rol (con super admin y delegaciones): a quién avisar o quién puede recibir. */
+/**
+ * Correos activos a quienes avisar de algo de un rol: lo tienen hoy y es suyo en Permisos o por una delegación vigente. Un
+ * super admin que no tiene el rol en su fila no recibe esos avisos (si no, le llegaría todo: puede verlo en Pendientes).
+ */
 function correosConRol_(rol) {
   const ctx = contextoRoles_();
   const candidatos = Object.keys(ctx.usuarios).concat(ctx.superAdmins, ctx.delegaciones.map(d => d.a));
-  return candidatos.filter((c, i) => candidatos.indexOf(c) === i)
-    .filter(c => rolesEfectivos(c, ctx).roles.indexOf(rol) !== -1).sort();
+  return candidatos.filter((c, i) => candidatos.indexOf(c) === i).filter(c => {
+    const r = rolesEfectivos(c, ctx), u = ctx.usuarios[c];
+    if (r.roles.indexOf(rol) === -1) return false;
+    return (u && u.roles.indexOf(rol) !== -1) || r.delegaciones.some(d => d.roles.indexOf(rol) !== -1);
+  }).sort();
 }
 
 /** Usuario de Permisos por correo (null si no está). */
@@ -396,6 +402,13 @@ function migrarPermisos_(libro) {
   const hoja = hojaAdmin_(libro, 'Permisos');
   if (hoja.getLastRow() > 1) return 0;
   const usuarios = usuariosDesdePropiedades(PropertiesService.getScriptProperties().getProperties());
+  // Nombres: los que cada correo tiene como vendedor en Cotizaciones (si cotizó); los demás se escriben en la página
+  try {
+    const nombres = nombresDeVendedores(db_().getSheetByName('Cotizaciones').getDataRange().getValues().slice(1));
+    Object.keys(usuarios).forEach(c => { if (!usuarios[c].nombre && nombres[c]) usuarios[c].nombre = nombres[c]; });
+  } catch (e) {
+    console.warn('Sin nombres de Cotizaciones: ' + e.message);
+  }
   const ahora = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
   const filas = Object.keys(usuarios).sort().map(c => filaDeUsuario(usuarios[c], 'migración', ahora).map(textoCelda));
   if (filas.length) hoja.getRange(2, 1, filas.length, HOJAS_ADMIN.Permisos.enc.length).setValues(filas);
@@ -7717,7 +7730,8 @@ function basePendientes_() {
     filasDeArea_(hojaReq_(libro), HOJAS_COMPRAS, 'Requisiciones').forEach((r, i) => {
       if (!String(r[0] || '').trim()) return;
       const q = reqDesdeFila_(r, i + 2);
-      if (ESTADOS_PENDIENTES.indexOf(q.estado) !== -1) abiertas.push({ q: q, desde: marcaPendiente_(r[12], q.fecha) });
+      // Lo anulado no espera a nadie (aunque alguien le cambie el estado a mano en la hoja)
+      if (ESTADOS_PENDIENTES.indexOf(q.estado) !== -1 && !esAnulado_(q.folio)) abiertas.push({ q: q, desde: marcaPendiente_(r[12], q.fecha) });
     });
     const ordenes = abiertas.some(x => x.q.ocFolio) ? ordenesPorFolio_(libro) : {};
     return abiertas.map(x => {

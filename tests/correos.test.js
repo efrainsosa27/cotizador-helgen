@@ -22,7 +22,7 @@ const URL_APP = 'https://cotizador-helgen.cotizador-helgen.workers.dev/cotizador
 
 // Sitios con dirección (tercer campo, opcional) y libro de Administración (bitácora Correos)
 A.libros.DB.pest.Config.m.push(['SITIOS', 'QRO | Querétaro\nZLO | Manzanillo (TIMSA) | Av. del Puerto 123, Manzanillo, Col.\nVER | Veracruz (ICAVE)']);
-P.prepararCapri(); // SUPER_ADMIN = leo (recibe lo de aprobaciones y compras); el arnés no tiene getEffectiveUser: preparar no manda prueba
+P.prepararCapri(); // SUPER_ADMIN = leo (no tiene aprobaciones ni compras en su fila: no recibe esos avisos); el arnés no tiene getEffectiveUser: preparar no manda prueba
 assert.equal(A.correos.length, 0);
 const LA = A.libros[props.ADMIN_DB_ID];
 const log = () => LA.pest.Correos.m;
@@ -118,7 +118,7 @@ assert.equal(nuevos().length, 0, 'cotizar no manda avisos');
 // Delegación: tania deja compras a ana hoy (los dos reciben los avisos de compras)
 LA.pest.Delegaciones.m.push(['DEL-1', 'tania@helgen.tech', 'ana@helgen.tech', "'" + HOY_ISO, "'" + masDias(3), 'compras', 'Activa', 'tania@helgen.tech', '']);
 P.subirVersiones_(['permisos']);
-const COMPRAS = ['ana@helgen.tech', 'efrain@helgen.tech', 'leo@helgen.tech', 'pedro@helgen.tech', 'tania@helgen.tech'];
+const COMPRAS = ['ana@helgen.tech', 'efrain@helgen.tech', 'pedro@helgen.tech', 'tania@helgen.tech'];
 const sinQuien = (l, x) => l.filter(c => c !== x);
 
 let n = 0;
@@ -126,15 +126,15 @@ const nuevaReq = extra => Object.assign({ proyectoFolio: p1, sitio: 'Manzanillo 
   renglones: [{ descripcion: 'Cable THW 10', cantidad: 100, unidad: 'm', notas: 'Para la caseta norte' }, { descripcion: 'Pintura', cantidad: 2, unidad: 'cubeta' },
     { descripcion: 'Tubo conduit 3/4', cantidad: 12, unidad: 'pza' }], idSolicitud: 'q' + (++n) }, extra || {});
 
-// Nueva → aprobaciones (adri y el super admin leo), menos quien pidió
+// Nueva → aprobaciones (adri; el super admin leo no tiene aprobaciones en su fila: no le llegan esos avisos), menos quien pidió
 const r1 = ok('obrero', 'guardarRequisicion', nuevaReq()).folio;
 let m = nuevos();
 assert.equal(m.length, 1);
-assert.deepEqual(para(m[0]), ['adri@helgen.tech', 'leo@helgen.tech']);
+assert.deepEqual(para(m[0]), ['adri@helgen.tech']);
 assert.equal(m[0].subject, '[CAPRI] ' + r1 + ' · Por aprobar · DROGHEDA · Manzanillo (TIMSA)');
 assert.equal(m[0].replyTo, 'obrero@helgen.tech', 'Reply-To = quien hizo el cambio');
 assert(m[0].htmlBody.indexOf(URL_APP + '#req=' + r1) !== -1 && /Pidió: Juan Obrero/.test(m[0].body) && /Se necesita: /.test(m[0].body));
-assert.deepEqual(ultimoLog().slice(1), ['adri@helgen.tech, leo@helgen.tech', m[0].subject, 'req.solicitada', r1, 'Enviado', '', 'obrero@helgen.tech']);
+assert.deepEqual(ultimoLog().slice(1), ['adri@helgen.tech', m[0].subject, 'req.solicitada', r1, 'Enviado', '', 'obrero@helgen.tech']);
 assert(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(ultimoLog()[0]), 'fecha como texto: ' + ultimoLog()[0]);
 
 // Aprobada → compras (con la delegada ana), con la nota de aprobaciones sin montos
@@ -152,7 +152,7 @@ assert.deepEqual([m.length, para(m[0]), m[0].replyTo], [1, ['obrero@helgen.tech'
 assert(/ · Devuelta para corregir · /.test(m[0].subject) && /Nota: ¿El cable es THW o THHW\?/.test(m[0].body));
 ok('obrero', 'guardarRequisicion', nuevaReq({ folio: r1 }));
 m = nuevos();
-assert(/ · Corregida, por aprobar · /.test(m[0].subject) && para(m[0]).join() === 'adri@helgen.tech,leo@helgen.tech');
+assert(/ · Corregida, por aprobar · /.test(m[0].subject) && para(m[0]).join() === 'adri@helgen.tech');
 ok('adri', 'aprobarRequisicion', r1, { version: 2, prioridad: 'Urgente',
   renglones: [{ renglon: 1, aprobado: true, cantidad: 80 }, { renglon: 2, aprobado: false, comentario: 'Ya hay en almacén' }, { renglon: 3, aprobado: true }] });
 nuevos();
@@ -164,7 +164,7 @@ const PROP = extra => Object.assign({ proveedor: { razonSocial: 'Ferretera del P
     { renglon: 0, disponibilidad: 'Adicional', descripcion: 'Flete', unidad: 'SERV', cantidad: 1, costo: 200, recibir: false }], idSolicitud: 'pp' + (++n) }, extra || {});
 ok('pedro', 'cotizarRequisicion', r1, PROP());
 m = nuevos();
-assert.deepEqual([m.length, para(m[0])], [1, ['adri@helgen.tech', 'leo@helgen.tech']]);
+assert.deepEqual([m.length, para(m[0])], [1, ['adri@helgen.tech']]);
 assert(/ · Propuesta por revisar · /.test(m[0].subject));
 ok('adri', 'regresarACompras', r1, 'Ferretera del Puerto cobra $1,856.00 por todo; busca otro');
 m = nuevos();
@@ -215,10 +215,10 @@ ok('adri', 'devolverRequisicion', r2, 'Falta el calibre del cable');
 assert.equal(nuevos().length, 0);
 assert.deepEqual(ultimoLog().slice(3, 6), ['req.devuelta', r2, 'Sin enviar']);
 assert(/cuota diaria/.test(ultimoLog()[6]));
-A.ctx.MailApp.getRemainingDailyQuota = () => 1; // alcanza para 1 destinatario, no para 2
+A.ctx.MailApp.getRemainingDailyQuota = () => 1; // alcanza para el único destinatario (adri; el super admin ya no recibe estos)
 ok('obrero', 'guardarRequisicion', nuevaReq({ folio: r2 }));
-assert.equal(nuevos().length, 0);
-assert.equal(ultimoLog()[5], 'Sin enviar');
+assert.equal(nuevos().length, 1);
+assert.equal(ultimoLog()[5], 'Enviado');
 A.ctx.MailApp.getRemainingDailyQuota = cuota;
 
 // Cancelada: si estaba Devuelta, a quien la devolvió; si estaba Solicitada, a aprobaciones
@@ -231,7 +231,7 @@ assert(/ · Cancelada · /.test(m[0].subject) && /Nota: Ya no se necesita/.test(
 const r3 = ok('obrero', 'guardarRequisicion', nuevaReq()).folio;
 nuevos();
 ok('obrero', 'cancelarRequisicion', r3, 'Me equivoqué de proyecto');
-assert.deepEqual(para(nuevos()[0]), ['adri@helgen.tech', 'leo@helgen.tech']);
+assert.deepEqual(para(nuevos()[0]), ['adri@helgen.tech']);
 
 // Rechazada → quien pidió
 const r4 = ok('obrero', 'guardarRequisicion', nuevaReq()).folio;
@@ -367,7 +367,7 @@ assert.deepEqual(lc.correos[1].tipo + ':' + lc.correos[1].folio, 'req.solicitada
 assert(ok('leo', 'listarCorreos', { texto: r2 }).correos.every(c => c.folio === r2));
 const errores = ok('leo', 'listarCorreos', { estado: 'Error' }).correos;
 assert(errores.length === 2 && errores.some(c => c.error === 'Servicio de correo no disponible'));
-assert.deepEqual(ok('leo', 'listarCorreos', { texto: 'cuota', estado: 'Sin enviar' }).correos.length, 2);
+assert.deepEqual(ok('leo', 'listarCorreos', { texto: 'cuota', estado: 'Sin enviar' }).correos.length, 1); // el segundo intento ya alcanzó (un solo destinatario)
 for (let i = 0; i < 250; i++) LA.pest.Correos.m.push(["2026-10-01 10:00:00", 'a@helgen.tech', 'x', 'req.aprobada', 'REQ-2025-' + i, 'Enviado', '', '']);
 lc = ok('leo', 'listarCorreos', null);
 assert.deepEqual([lc.correos.length, lc.total >= 250], [200, true]);
