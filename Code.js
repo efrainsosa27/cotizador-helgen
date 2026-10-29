@@ -4744,9 +4744,9 @@ function normalizarPago(p, proyecto) {
       ? 'número de autorización o del ticket; nunca el número de la tarjeta' : 'clave de rastreo o folio') + ').');
   }
   if (referencia.length > 100) throw new Error('La referencia debe tener máximo 100 caracteres.');
-  if (pareceNumeroTarjeta(referencia, metodo)) {
-    throw new Error('La referencia parece un número de tarjeta: nunca lo captures. Escribe ' + (conTarjeta
-      ? 'solo el número de autorización o del ticket.' : 'la clave de rastreo, el folio o el número de autorización.'));
+  if (pareceNumeroTarjeta(referencia)) {
+    throw new Error('La referencia parece un número de tarjeta: nunca lo captures. Escribe el número de autorización o solo los ' +
+      'últimos 4 dígitos de la tarjeta' + (conTarjeta ? '.' : ' (o la clave de rastreo o el folio, sin el número de la tarjeta).'));
   }
   const etapaOrden = Number(d.etapaOrden);
   if (!Number.isInteger(etapaOrden) || etapaOrden < 1 || etapaOrden > proyecto.etapas) throw new Error('Elige la etapa del pago.');
@@ -10282,21 +10282,36 @@ function pasaLuhn(d) {
   return d.length > 0 && s % 10 === 0;
 }
 
+/** Agrupaciones con que se escribe una tarjeta (largo de cada grupo): 4-4-4-4, 4-4-4-4-1…3 (19 dígitos) y American Express 4-6-5. */
+const AGRUPACIONES_TARJETA = ['4,4,4,4', '4,4,4,4,1', '4,4,4,4,2', '4,4,4,4,3', '4,6,5'];
+
 /**
- * ¿El texto trae lo que parece un número de tarjeta? 13 a 19 dígitos seguidos (también con espacios o guiones entre grupos, como
- * se escriben las tarjetas). Con un método de tarjeta basta el largo (13 o más); con los demás además debe pasar la prueba de
- * Luhn, para no confundir una clave de rastreo numérica. Nunca se pide ni se guarda el número de una tarjeta (contrato §1).
+ * ¿El texto trae lo que parece un número de tarjeta? Una sola regla para todo método (pago a proveedor, cobranza y la cuenta de la
+ * ficha del proveedor; revisión del 29/10/2026). Candidatos: cada corrida de dígitos sin cortes y cada tramo agrupado exactamente
+ * como una tarjeta (AGRUPACIONES_TARJETA, con un espacio o un guion entre grupos); nunca se juntan otros grupos (una fecha y un
+ * folio quedan separados). Parece tarjeta si un candidato tiene de 13 a 19 dígitos, empieza con 3, 4, 5 o 6 (American Express,
+ * Visa, Mastercard, Discover/Carnet) y pasa la prueba de Luhn; una CLABE válida de 18 dígitos (STP empieza con 646) nunca es
+ * tarjeta, y una corrida de 20 dígitos o más (clave de rastreo, ticket) tampoco. Nunca se pide ni se guarda un número de tarjeta
+ * (contrato §1). El segundo parámetro (método) ya no cuenta: se acepta por compatibilidad.
  */
-function pareceNumeroTarjeta(texto, metodo) {
+function pareceNumeroTarjeta(texto) {
   const s = String(texto == null ? '' : texto);
-  const tarjeta = /tarjeta/i.test(String(metodo || ''));
-  const corridas = s.match(/\d(?:[ -]?\d)*/g) || [];
-  return corridas.some(c => {
-    const unida = c.replace(/[ -]/g, '');
-    if (tarjeta && unida.length >= 13) return true;
-    const partes = [unida].concat(c.split(/[ -]/));
-    return partes.some(d => d.length >= 13 && d.length <= 19 && pasaLuhn(d));
+  const candidatos = (s.match(/\d+/g) || []).slice();
+  (s.match(/\d+(?:[ -]\d+)+/g) || []).forEach(cadena => {
+    const g = cadena.split(/[ -]/);
+    for (let i = 0; i < g.length; i++) {
+      for (let n = 3; n <= 5 && i + n <= g.length; n++) {
+        const tramo = g.slice(i, i + n);
+        if (AGRUPACIONES_TARJETA.indexOf(tramo.map(x => x.length).join(',')) !== -1) candidatos.push(tramo.join(''));
+      }
+    }
   });
+  return candidatos.some(d => d.length >= 13 && d.length <= 19 && /^[3-6]/.test(d) && pasaLuhn(d) && !(d.length === 18 && esClabe(d)));
+}
+
+/** ¿18 dígitos con el dígito verificador de una CLABE? (Lógica pura; validarClabe sin lanzar error.) */
+function esClabe(d) {
+  try { return /^\d{18}$/.test(String(d)) && validarClabe(d) === String(d); } catch (e) { return false; }
 }
 
 /**
@@ -10372,7 +10387,7 @@ function normalizarFichaProveedor(p) {
   if (cuenta && !/^[A-Z0-9]{4,34}$/.test(cuenta)) {
     throw new Error('La cuenta solo lleva números y letras (de 4 a 34; de un proveedor extranjero, su IBAN o número de cuenta).');
   }
-  if (cuenta && pareceNumeroTarjeta(cuenta, '')) {
+  if (cuenta && pareceNumeroTarjeta(cuenta)) {
     throw new Error('La cuenta parece un número de tarjeta: no lo guardes. Usa la CLABE (18 dígitos) o el número de cuenta de la carátula.');
   }
   const titular = limpio(d.titular);

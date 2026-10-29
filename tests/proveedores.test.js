@@ -62,7 +62,9 @@ assert.equal(P.pasaLuhn('4111111111111111'), true);
 assert.equal(P.pasaLuhn('4111111111111112'), false);
 for (const [ref, metodo, esperado] of [
   ['4111111111111111', 'Transferencia', true], ['4111 1111 1111 1111', 'Transferencia', true], ['tarjeta 5555-5555-5555-4444', 'Efectivo', true],
-  ['Pago con 4111111111111111 ok', 'Cheque', true], ['1234567890123', 'Tarjeta de crédito', true], ['1234 5678 9012 3', 'Tarjeta de débito', true],
+  // Revisión (29/10/2026): una sola regla para todo método (13–19 dígitos, empieza con 3–6 y pasa Luhn): un ticket de 13 dígitos ya no
+  // se rechaza con tarjeta
+  ['Pago con 4111111111111111 ok', 'Cheque', true], ['1234567890123', 'Tarjeta de crédito', false], ['1234 5678 9012 3', 'Tarjeta de débito', false],
   ['1234567890123', 'Transferencia', false], ['2019111940014', 'Transferencia', false], ['MBAN01002210290012345678', 'Transferencia', false],
   ['AUT 123456', 'Tarjeta de crédito', false], ['Ticket 0042 · caja 3', 'Tarjeta de débito', false], ['SPEI 123', 'Transferencia', false], ['', 'Transferencia', false]]) {
   assert.equal(P.pareceNumeroTarjeta(ref, metodo), esperado, ref + ' (' + metodo + ')');

@@ -111,11 +111,17 @@ Manual (Compras, Tareas frecuentes, Reglas de oro, Historial, Pendientes).
 1. **`dias_credito_habituales` no es una columna nueva**: `Proveedores` ya tenía `dias_credito` (H) con exactamente ese uso
    (precarga la orden siguiente y lo actualiza la última orden emitida). Una segunda columna serían dos fuentes para el mismo dato.
    **Desviación del contrato** (columna 7 de su lista); la ficha lo expone como `diasCredito`.
-2. **Número de tarjeta**: se rechaza una corrida de 13 a 19 dígitos (también con espacios o guiones entre grupos). Con un método de
-   tarjeta basta el largo; con transferencia, efectivo y cheque además debe pasar la prueba de Luhn (la cumplen **todas** las
-   tarjetas), para no rechazar una clave de rastreo SPEI numérica (≈ 1 de cada 10 lo haría sin Luhn). La regla aplica también a los
-   cobros de clientes (`normalizarPago` es la misma) y a la "cuenta" de la ficha (un número de tarjeta de débito no se guarda: se usa
-   la CLABE). Interpretación del contrato ("13 a 19 dígitos seguidos").
+2. **Número de tarjeta** (regla corregida en la revisión del 29/10/2026; `tests/revision5.test.js` §3): **una sola regla para todo
+   método**. Candidatos: cada corrida de dígitos sin cortes y cada tramo agrupado exactamente como una tarjeta (4-4-4-4, 4-4-4-4-1…3
+   o American Express 4-6-5, con un espacio o un guion entre grupos); nunca se juntan otros grupos (en "SPEI 29-10-2026 1234567" la
+   fecha y el folio quedan separados). Se rechaza si un candidato tiene de 13 a 19 dígitos, **empieza con 3, 4, 5 o 6** y pasa la
+   prueba de Luhn. Una CLABE válida de 18 dígitos nunca es tarjeta (las de STP empiezan con 646) y una corrida de 20 dígitos o más
+   (clave de rastreo, ticket de tienda) se permite. El mensaje pide el número de autorización o los últimos 4 dígitos. Antes: con
+   tarjeta bastaba el largo (≥ 13, sin tope: se rechazaban los tickets de 20 dígitos que la interfaz pide) y con los demás métodos
+   bastaba Luhn: la nota decía "≈ 1 de cada 10 lo haría sin Luhn", pero era al revés: **con** Luhn todavía se rechazaba ≈ 1 de cada
+   10 claves numéricas de 13 a 19 dígitos (sin Luhn, todas), y además se juntaban fecha y folio. Ahora el prefijo deja ≈ 4 de cada
+   100 de esas claves (las que empiezan con 3–6 y pasan Luhn; ninguna CLABE). La regla aplica también a los cobros de clientes
+   (`normalizarPago` es la misma) y a la "cuenta" de la ficha (un número de tarjeta de débito no se guarda: se usa la CLABE).
 3. **Cobranza no cambia de métodos**: `METODOS_PAGO` (el nombre del contrato) es el del pago a proveedor; cobranza usa
    `METODOS_COBRO` (los 3 de siempre). Si Leo quiere tarjetas también en cobros de clientes, es cambiar `vistaCobranza_` y el
    default de `normalizarPago`.

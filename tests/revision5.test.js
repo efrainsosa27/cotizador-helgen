@@ -5,6 +5,8 @@
 //  2. Anular × devoluciones: anular una orden o una requisición anula sus devoluciones (vista previa, Anulaciones, estado Anulada,
 //     fuera de Pendientes); una devolución de una orden anterior no retiene a la orden nueva; anular sola una recepción con
 //     devoluciones se rechaza (como cancelarRecepcion); anular "Lo recogí" no reabre la requisición.
+//  3. pareceNumeroTarjeta: una regla para todo método (corrida sin cortes o agrupada como tarjeta; 13–19 dígitos, empieza con 3–6,
+//     Luhn; una CLABE válida no es tarjeta; 20 dígitos o más sí se permiten); fecha y folio no se juntan.
 // Uso: node tests/revision5.test.js .
 'use strict';
 const assert = require('assert');
@@ -192,6 +194,49 @@ aprobaciones(false);
   ok('leo', 'anular', recogi, 'Foto de recogida equivocada', id('an'));
   const v5 = ok('pedro', 'getRequisicion', s5.req);
   assert.deepEqual([v5.requisicion.estado, v5.orden.estado], ['Cerrada', 'Recibida'], 'sigue Cerrada');
+}
+
+// ================= 3. Referencias que parecían número de tarjeta =================
+{
+  const tarjeta = (ref, metodo) => P.pareceNumeroTarjeta(ref, metodo);
+  // Antes se rechazaban (falsos positivos de la revisión)
+  for (const [ref, metodo] of [
+    ['SPEI 29-10-2026 1234567', 'Transferencia'],                 // fecha y folio ya no se juntan
+    ['Ticket TC# 7319 0482 3561 8820 4417', 'Tarjeta de débito'],   // ticket de 20 dígitos (como Walmart)
+    ['Ticket 06001234567890123456', 'Tarjeta de débito'],          // 22 dígitos seguidos
+    ['1234567890123', 'Tarjeta de crédito'],                        // 13 dígitos que no empiezan como tarjeta
+    ['Folio 2026-1029-0001-2345', 'Cheque']]) {
+    assert.equal(tarjeta(ref, metodo), false, ref + ' (' + metodo + ') no es tarjeta');
+  }
+  // Claves de rastreo numéricas de 13 a 19 dígitos con Luhn válido: solo las que empiezan con 3–6 parecen tarjeta
+  const luhn = base => { for (let d = 0; d < 10; d++) if (P.pasaLuhn(base + d)) return base + d; };
+  assert.equal(tarjeta(luhn('008590123456789012'), 'Transferencia'), false, 'empieza con 0');
+  assert.equal(tarjeta(luhn('2025102940014'), 'Transferencia'), false, 'empieza con 2');
+  assert.equal(tarjeta(luhn('7311029001234'), 'Transferencia'), false, 'empieza con 7');
+  // Una CLABE de STP (646…) válida que además pasa Luhn no es tarjeta
+  let clabeLuhn = '';
+  for (let n = 0; n < 100000 && !clabeLuhn; n++) {
+    const base = '64618000' + String(n).padStart(9, '0');
+    for (let v = 0; v < 10; v++) { const c = base + v; let ok = false; try { ok = P.validarClabe(c) === c; } catch (e) { ok = false; }
+      if (ok && P.pasaLuhn(c)) { clabeLuhn = c; break; } }
+  }
+  assert(clabeLuhn, 'hay una CLABE STP con Luhn válido');
+  assert.equal(tarjeta(clabeLuhn, 'Transferencia'), false, 'CLABE válida ' + clabeLuhn);
+  assert.equal(tarjeta('CLABE ' + clabeLuhn, 'Cheque'), false);
+  // Se siguen rechazando las tarjetas, con cualquier método y escritas como se escriben
+  for (const [ref, metodo] of [['4111111111111111', 'Transferencia'], ['4111 1111 1111 1111', 'Tarjeta de crédito'],
+    ['tarjeta 5555-5555-5555-4444', 'Efectivo'], ['378282246310005', 'Tarjeta de crédito'], ['3782 822463 10005', 'Cheque'],
+    ['6011 1111 1111 1117', 'Tarjeta de débito'], ['29-10-2026 4111 1111 1111 1111', 'Transferencia'], ['Pago con 4111111111111111 ok', 'Cheque']]) {
+    assert.equal(tarjeta(ref, metodo), true, ref + ' (' + metodo + ') es tarjeta');
+  }
+  assert.equal(tarjeta('AUT 482913 · 4111', 'Tarjeta de crédito'), false, 'autorización y últimos 4');
+  // Por el servidor: pago a proveedor con la referencia de antes y el mensaje nuevo
+  const s = siempre(false);
+  ok('efrain', 'registrarPagoProveedor', pago(s.req, { referencia: 'SPEI 29-10-2026 1234567' }));
+  const s2 = siempre(false);
+  falla('efrain', 'registrarPagoProveedor', [pago(s2.req, { metodo: 'Tarjeta de crédito', referencia: '4111 1111 1111 1111' })],
+    /parece un número de tarjeta: nunca lo captures\. Escribe el número de autorización o solo los últimos 4 dígitos de la tarjeta\./);
+  ok('efrain', 'registrarPagoProveedor', pago(s2.req, { metodo: 'Tarjeta de débito', referencia: 'Ticket TC# 7319 0482 3561 8820 4417' }));
 }
 
 console.log('revision5: ok');
