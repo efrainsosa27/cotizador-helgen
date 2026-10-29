@@ -634,7 +634,10 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   S.respuestas.listarProyectosRequisicion={ok:true,datos:[]}; S.respuestas.misRequisiciones={ok:true,datos:[]};
   await esperar(10);
   for(const t of ['tabNueva','tabHist','tabCat','tabCob','tabCom']) assert(S.$(t).classList.contains('oculto'),'oculta '+t);
-  assert(!S.$('tabReq').classList.contains('oculto')&&!S.$('vistaReq').classList.contains('oculto')&&S.$('vistaNueva').classList.contains('oculto'));
+  // Incremento 4: el inicio es Pendientes (antes se abría Requisiciones); al abrir Requisiciones se piden sus listas
+  assert(!S.$('tabReq').classList.contains('oculto')&&!S.$('vistaPend').classList.contains('oculto')&&S.$('vistaReq').classList.contains('oculto')&&S.$('vistaNueva').classList.contains('oculto'));
+  S.run("verTab('req')"); await esperar(10);
+  assert(!S.$('vistaReq').classList.contains('oculto'));
   assert(S.llamadas.some(c=>c.funcion==='misRequisiciones')&&/Todavía no tienes requisiciones/.test(S.$('reqLista').innerHTML));
   assert(!S.llamadas.some(c=>['listarCotizaciones','getCatalogo','listarProyectos'].includes(c.funcion)),'no llama nada más');
 
@@ -716,7 +719,8 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   await esperar(10);
   for(const t of ['tabNueva','tabHist','tabCat','tabCob','tabCom']) assert(O.$(t).classList.contains('oculto'),'oculta '+t);
   assert(!O.$('tabOps').classList.contains('oculto')&&!O.$('tabReq').classList.contains('oculto'),'operaciones con SOLO_REQUISICION: Requisiciones y Operaciones');
-  assert.equal(O.$('tabOps').textContent,'Operaciones (2)','pendientes: aprobar la de otro y el visto bueno; no la propia ni la cerrada');
+  // Incremento 4: la pestaña se llama Aprobaciones y el número va en su globo (cntOps); también suma en el grupo Compras
+  assert.deepEqual([O.$('cntOps').textContent,O.$('cntCompras').textContent],['2','2'],'pendientes: aprobar la de otro y el visto bueno; no la propia ni la cerrada');
   O.$('opsFiltro').value='pendientes'; O.run("verTab('ops')"); await esperar();
   assert(!O.llamadas.some(c=>c.funcion==='listarOperaciones'),'la lista vino en la carga inicial');
   let ol=O.$('opsLista').innerHTML;
@@ -807,7 +811,7 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   Q.run("verTab('req')"); await esperar();
   assert(/Manzanillo \(TIMSA\)/.test(Q.$('reqSitio').innerHTML)&&/Elige el sitio/.test(Q.$('reqSitio').innerHTML)&&/\*$/.test(Q.$('reqLblSitio').textContent));
   assert(/\(opcional\)/.test(Q.$('reqLblArchivo').textContent)&&/Operaciones la revisa/.test(Q.$('reqNotaEnvio').textContent));
-  assert.equal(Q.$('tabReq').textContent,'Requisiciones (1)','una por recibir');
+  assert.equal(Q.$('cntReq').textContent,'1','una por recibir (el número va en el globo de la pestaña)');
   let ql=Q.$('reqLista').innerHTML;
   assert(/No se compra/.test(ql)&&/Ya hay en almacén/.test(ql)&&/Aprobado: 80/.test(ql)&&/Lo que se compra/.test(ql)&&/no se recibe en sitio/.test(ql)&&
     /REC-2026-0001/.test(ql)&&/<b>50<\/b>/.test(ql)&&/abrirRecepcion\('REQ-2026-0005'\)/.test(ql)&&!/recibiMaterial/.test(ql),ql);
