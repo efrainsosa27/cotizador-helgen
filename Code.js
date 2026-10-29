@@ -6330,11 +6330,13 @@ function antiguedadCxp(d) {
       if (pendiente > 0) agregar(filaFactura(f, o, pendiente, cubre, parcial), true);
     });
     if (resto > 0) {
-      // Lo que no cubre ninguna factura vence por el plan o la entrega (no por las facturas: esas ya tienen su fila)
-      const sig = saldoOrdenCompra(Object.assign({}, o, { facturas: null }), pagosPorOc[k] || [], ms).siguiente || s.siguiente || {};
-      agregar({ folio: o.folio, tipo: TIPO_CXP_SALDO, serieFolio: sig.concepto || 'Saldo', ocFolio: o.folio, proyectoFolio: o.proyectoFolio,
-        proveedor: o.proveedor || '', fechaEmision: o.fecha || '', fechaVencimiento: sig.vence || o.fecha || hoy, moneda: o.moneda,
-        total: resto / 100, pendiente: resto / 100, pagado: s.pagado, pagoParcial: parcial }, false);
+      // Lo que no cubre ninguna factura vence por el plan o la entrega (no por las facturas: esas ya tienen su fila). Revisión del
+      // incremento 6: una fila por etapa del plan, cada una con su vencimiento (antes todo con la etapa que sigue)
+      const sinFacturas = saldoOrdenCompra(Object.assign({}, o, { facturas: null }), pagosPorOc[k] || [], ms);
+      tramosSinFactura(sinFacturas, resto).forEach(t => agregar({ folio: o.folio, tipo: TIPO_CXP_SALDO, serieFolio: t.concepto,
+        ocFolio: o.folio, proyectoFolio: o.proyectoFolio, proveedor: o.proveedor || '', fechaEmision: o.fecha || '',
+        fechaVencimiento: t.vence || o.fecha || hoy, moneda: o.moneda, total: t.cts / 100, pendiente: t.cts / 100, pagado: s.pagado,
+        pagoParcial: parcial, etapa: t.etapa || 0 }, false));
     }
   });
   const listaTotales = Object.keys(totales).sort((a, b) => (a === 'MXN' ? -1 : b === 'MXN' ? 1 : a < b ? -1 : 1)).map(m => {
@@ -12221,7 +12223,9 @@ function saldoOrdenCompra(orden, pagos, movimientos) {
   const saldoCts = Math.max(0, objetivoCts - pagadoCts);
   const completo = cancelada || saldoCts <= tol || ((o.estado === OC_PAGADA || o.estado === OC_RECIBIDA) && vigentes.length > 0);
   const plan = Array.isArray(o.planPago) && o.planPago.length ? o.planPago : null;
-  // Etapas del plan: monto de cada una (sobre lo que se debe) y lo que ya cubren los pagos, en orden
+  const base = o.fechaRecepcion || o.fechaEntrega || o.fecha;
+  // Etapas del plan: monto de cada una (sobre lo que se debe), lo que ya cubren los pagos, en orden, y cuándo vence (revisión del
+  // incremento 6: la primera de un plan de varias, con la orden —anticipo—; las demás, recepción/entrega/orden + días de crédito)
   let etapas = null;
   if (plan) {
     let previo = 0;
@@ -12229,18 +12233,17 @@ function saldoOrdenCompra(orden, pagos, movimientos) {
       const montoCts = aCentavos(e.monto), cubiertoCts = Math.min(montoCts, Math.max(0, pagadoCts - previo));
       previo += montoCts;
       return { etapa: i + 1, concepto: e.etapa, porcentaje: e.porcentaje, monto: montoCts / 100, cubierto: cubiertoCts / 100,
-        acumulado: previo / 100, completa: montoCts - cubiertoCts <= tol };
+        acumulado: previo / 100, completa: montoCts - cubiertoCts <= tol,
+        vence: i === 0 && plan.length > 1 ? String(o.fecha || '') : fechaMasDias_(base, o.diasCredito) };
     });
   }
-  const base = o.fechaRecepcion || o.fechaEntrega || o.fecha;
   let siguiente = null;
   if (!completo) {
     if (etapas) {
       const k = Math.max(0, etapas.findIndex(e => aCentavos(e.acumulado) - pagadoCts > tol));
       const e = etapas[k] || etapas[etapas.length - 1];
       siguiente = { concepto: e.concepto, monto: Math.min(saldoCts, Math.max(0, aCentavos(e.acumulado) - pagadoCts)) / 100,
-        vence: venceFactura || (k === 0 && etapas.length > 1 ? String(o.fecha || '') : fechaMasDias_(base, o.diasCredito)),
-        etapa: e.etapa, etapas: etapas.length };
+        vence: venceFactura || e.vence, etapa: e.etapa, etapas: etapas.length };
     } else {
       siguiente = { concepto: 'Saldo', monto: saldoCts / 100, vence: venceFactura || fechaMasDias_(base, o.diasCredito) };
     }
@@ -12250,6 +12253,32 @@ function saldoOrdenCompra(orden, pagos, movimientos) {
     // Revisión del incremento 6: lo pagado de más (p. ej. se devolvió material de una orden ya pagada): el proveedor le debe a Helgen
     // una nota de crédito o un reembolso. Solo arriba de la tolerancia (como el saldo); de esta orden, nunca contra otra
     aFavor: !cancelada && pagadoCts - objetivoCts > tol ? (pagadoCts - objetivoCts) / 100 : 0 };
+}
+
+/**
+ * (Lógica pura; revisión del incremento 6) Lo que de una orden todavía no tiene factura, por etapa del plan de pagos: [{cts, concepto,
+ * vence, etapa}]. s = saldoOrdenCompra de la orden SIN facturas; restoCts = lo que no cubre ninguna factura (antiguedadCxp). Los pagos
+ * cubren primero las primeras etapas y las facturas pendientes lo que sigue, así que lo que falta facturar es lo último del total:
+ * se toma de la última etapa hacia atrás y cada parte vence con su etapa (etapas[].vence). Sin plan, un solo tramo con lo que sigue
+ * ("Saldo"). (Reportes → CxP reparte distinto: tramosPorPagar de R pone el plan por encima de las facturas; aquí las facturas ya
+ * tienen su fila.)
+ */
+function tramosSinFactura(s, restoCts) {
+  const resto = Math.max(0, Math.round(Number(restoCts) || 0));
+  if (!resto) return [];
+  if (!s || !Array.isArray(s.etapas) || !s.etapas.length) {
+    const sig = (s && s.siguiente) || {};
+    return [{ cts: resto, concepto: sig.etapa ? sig.concepto : 'Saldo', vence: sig.vence || '', etapa: 0 }];
+  }
+  const total = aCentavos(s.etapas[s.etapas.length - 1].acumulado), desde = Math.max(0, total - resto);
+  const tramos = s.etapas.map(e => {
+    const fin = aCentavos(e.acumulado), ini = fin - aCentavos(e.monto), c = fin - Math.max(ini, desde);
+    return c > 0 ? { cts: c, concepto: e.concepto, vence: e.vence || '', etapa: e.etapa } : null;
+  }).filter(Boolean);
+  // (resto nunca pasa del total; si pasara por redondeo, lo de más va a la primera parte)
+  const suma = tramos.reduce((t, x) => t + x.cts, 0);
+  if (tramos.length && suma < resto) tramos[0].cts += resto - suma;
+  return tramos;
 }
 
 // -- Servidor --

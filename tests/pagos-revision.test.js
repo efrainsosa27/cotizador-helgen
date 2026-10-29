@@ -12,6 +12,7 @@
 //  5. Cuentas por pagar mide toda orden por su saldo (con o sin pagos; sin lo devuelto): la misma cifra que Reportes → CxP.
 //  6. Saldo a favor (lo pagado de más, p. ej. tras devolver material ya pagado): en la vista, órdenes por proyecto, cuentas por
 //     pagar (aparte, por orden: nunca se resta de lo que se debe) y como pendiente de compras; quien pidió no lo ve.
+//  7. Cuentas por pagar: lo que no tiene factura, una fila por etapa del plan con su vencimiento (antes todo con la que sigue).
 // Uso: node tests/pagos-revision.test.js .
 'use strict';
 const assert = require('assert');
@@ -316,6 +317,30 @@ const guardado = {}; // lo que usa la sección de interfaz
   const fr = [{ folio: 'FPR-Y', ocFolio: 'OC-Y', estado: 'Vigente', moneda: 'MXN', subtotal: 1400, descuento: 0, total: 1484, fechaVencimiento: HOY_ISO }];
   assert.equal(P.saldoOrdenCompra(Object.assign({}, o, { subtotal: 1400, facturas: fr }), pg(1624), []).aFavor, 140, 'se pagó el total y la factura trae retenciones');
   guardado.aFavor = k;
+}
+
+// ================= 7. Lo que no tiene factura, por etapa del plan (cada una con su vencimiento) =================
+{
+  const PLAN2 = [{ concepto: 'Anticipo', porcentaje: 30 }, { concepto: 'Contra entrega', porcentaje: 70 }];
+  const PLAN3 = [{ concepto: 'Anticipo', porcentaje: 30 }, { concepto: 'Avance', porcentaje: 30 }, { concepto: 'Final', porcentaje: 40 }];
+  const C15 = { diasCredito: 15, condicionesPago: 'Crédito 15 días' };
+  // a) 30/70 sin pagos y con la factura del anticipo: lo que falta facturar es el 70 % "Contra entrega" y vence con la entrega + 15
+  //    días (antes salía como "Anticipo" con la fecha de la orden)
+  const a = siempre(Object.assign({ planPago: PLAN2 }, C15), P3);
+  facturar(a.oc, 420, 67.2);
+  // b) 30/30/40 con 100 pagados y sin facturas: una fila por etapa (lo que falta del anticipo vence con la orden; lo demás, con la
+  //    entrega + 15 días)
+  const b = siempre(Object.assign({ planPago: PLAN3 }, C15), P3);
+  pagar(b.req, 100);
+  const cxp = ok('pedro', 'cuentasPorPagar'), rep = ok('pedro', 'reporteCxp');
+  const filas = oc => cxp.abiertas.filter(x => x.ocFolio === oc).map(x => [x.tipo, x.serieFolio, x.pendiente, x.fechaVencimiento]);
+  assert.deepEqual(filas(a.oc), [['Extranjera', filas(a.oc)[0][1], 487.2, masDias(15)], ['Saldo', 'Contra entrega', 1136.8, masDias(16)]]);
+  assert.deepEqual(filas(b.oc), [['Saldo', 'Anticipo', 387.2, HOY_ISO], ['Saldo', 'Avance', 487.2, masDias(16)], ['Saldo', 'Final', 649.6, masDias(16)]]);
+  // Las cifras por orden siguen iguales a la vista y a Reportes → CxP
+  for (const s of [a, b]) assert.deepEqual([enCxp(cxp, s.oc), enReporteCxp(rep, s.oc)], [vista(s.req).saldo.saldo, vista(s.req).saldo.saldo]);
+  assert.equal(cxp.totales.find(t => t.moneda === 'MXN').saldos >= 4, true, 'cada etapa cuenta como saldo sin factura');
+  // Cada etapa de saldoOrdenCompra trae su vencimiento
+  assert.deepEqual(vista(b.req).saldo.etapas.map(e => e.vence), [HOY_ISO, masDias(16), masDias(16)]);
 }
 
 // ================= Interfaz (al final: es asíncrona; DOM simulado conectado al servidor simulado) =================
