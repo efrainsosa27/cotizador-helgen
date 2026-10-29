@@ -19,14 +19,14 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
    | Caso | Reporte de CxP (R) | Cuentas por pagar | Total de R |
    |---|---|---|---|
    | Orden de un proyecto de prueba (`FOLIOS_PRUEBA_REPORTES` + `FOLIOS_PRUEBA`, decisión 4) | fuera | cuenta | **menor** |
-   | Orden **sin pagos** con lo devuelto sin reponer | su saldo: descuenta lo devuelto (`saldoOrdenCompra` con los movimientos) | sus facturas completas | **menor** |
-   | Lo **no facturado** de una orden sin pagos (sin factura, o facturas por menos que la orden) | en la antigüedad, con IVA: sin plan, en recepción/entrega + crédito; con plan, por etapa (decisión 10) | solo en "Falta factura" (sin IVA, sin antigüedad), fuera de los totales | **mayor** |
+   | Una orden **sin facturas ni pagos** | en la antigüedad, con IVA: sin plan, en recepción/entrega + crédito; con plan, por etapa (decisión 10) | en "Falta factura", sin IVA, fuera de los totales | **mayor** |
    | Orden anterior sin pago registrado (decisión 11) | bloque aparte con cuántas son, fuera de los totales y del flujo | en "Falta factura", fuera de los totales | igual (ninguno la suma) |
    | Saldo sin factura de una orden sin ninguna fecha válida (solo editando la hoja a mano) | "Sin fecha" | vence hoy ("Por vencer") | mismo monto, otro rango |
-   | Factura en otra moneda que su orden (solo a mano: `validarFacturaProveedor` lo rechaza) | se ignora: el saldo va en la moneda de la orden, "Sin factura" | en la moneda de la factura | otra moneda |
-   | Orden con **plan de pagos con el anticipo pagado en parte** (transitorio: hasta integrar el cambio de P) | por etapa: lo que falta del anticipo en la fecha de la orden y las demás etapas en recepción/entrega + crédito (decisión 10) | hoy, todo el resto en una fila "Saldo" en la fecha del anticipo; P lo está cambiando para partir igual por etapa | mismo monto; R pone las etapas siguientes después |
+   | Factura en otra moneda que su orden (solo a mano: `validarFacturaProveedor` lo rechaza) | se ignora: el saldo va en la moneda de la orden, "Sin factura" | la factura completa en su moneda **y** el saldo de la orden en la suya (nunca se resta una moneda de otra) | igual en la moneda de la orden |
 
-   Iguales en los dos: órdenes con pagos parciales (facturas en orden de vencimiento con lo pagado + fila "Saldo" en la fecha del
+   Iguales en los dos (desde la integración con la revisión de P, 29/10/2026): órdenes sin pagos con lo devuelto sin reponer (las dos
+   descuentan), lo no facturado de una orden con facturas (fila "Saldo" por etapa del plan en las dos), plan con el
+   anticipo pagado en parte (por etapa en las dos), órdenes con pagos parciales (facturas en orden de vencimiento con lo pagado + fila "Saldo" en la fecha del
    siguiente pago de P), plan de pagos con el anticipo ya pagado (el resto en recepción/entrega + crédito), retenciones, órdenes de proyectos Cancelados (cuentan, decisión 2), canceladas y anuladas
    (fuera), lo pagado dentro de la tolerancia (no se lista).
 
@@ -93,9 +93,9 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
       anticipo pagado, solo los 700; con una factura del anticipo sin pagar, la factura en su vencimiento y los 700 en su fecha.
       Las etapas salen de `s.etapas` (P) o, con la función provisional, de `montosDeEsquema` sobre el plan (`etapasDelPlan_`).
     - Por qué por etapa: el flujo de efectivo tiene que ser exacto. La primera versión de esta revisión ponía todo el saldo en la
-      fecha del anticipo (una sola fecha, como la fila "Saldo"), y eso adelantaba el 70 % semanas antes de que se deba. El módulo P
-      está cambiando Cuentas por pagar para partir igual lo no facturado por etapa; mientras no se integre, una orden con plan y el
-      anticipo pagado en parte sale en Cuentas por pagar en una sola fila (§0.1, fila transitoria).
+      fecha del anticipo (una sola fecha, como la fila "Saldo"), y eso adelantaba el 70 % semanas antes de que se deba. Desde la
+      integración con la revisión de P (29/10/2026), Cuentas por pagar parte igual lo no facturado por etapa (`tramosSinFactura`) y
+      las dos pantallas dan las mismas fechas y montos.
 11. **Órdenes anteriores sin pago registrado** (revisión 6b): una orden vigente **sin requisición, sin pago Vigente y sin factura
     Vigente** (las de la fase 3, de antes de las requisiciones: Recibidas, Emitidas y alguna Pagada sin renglón de pago) no es deuda
     que se pueda saldar desde CAPRI: `registrarPagoProveedor` exige requisición y una Recibida tampoco se puede cancelar (una Emitida
