@@ -497,6 +497,7 @@ function filasEnPeticion_(clave, leer) {
 
 function olvidarFilas_() {
   MEMO_.filas = null;
+  MEMO_.cfgLigera = null; // Config ya leída en la petición (configLigera_)
 }
 
 /** Toda escritura a una hoja va así: escribe_(hoja).getRange(…).setValues(…) / escribe_(hoja).appendRow(…). */
@@ -676,10 +677,14 @@ function clientesCache_(revisar) {
 
 /** IVA y vigencia para la interfaz (la Config completa se sigue leyendo fresca al guardar). */
 function configLigera_() {
-  return enCache_('config2', [], 600, () => { // 10 min: la lista de sitios se edita a mano en Config
-    const cfg = getConfig_();
-    return { ivaTasa: cfg.IVA_TASA, vigenciaDias: cfg.VIGENCIA_DIAS, sitios: String(cfg.SITIOS == null ? '' : cfg.SITIOS) };
-  });
+  // Rapidez: una vez por petición (también en las escrituras, donde no se usa el caché y se leía Config en cada uso)
+  if (!MEMO_.cfgLigera) {
+    MEMO_.cfgLigera = enCache_('config2', [], 600, () => { // 10 min: la lista de sitios se edita a mano en Config
+      const cfg = getConfig_();
+      return { ivaTasa: cfg.IVA_TASA, vigenciaDias: cfg.VIGENCIA_DIAS, sitios: String(cfg.SITIOS == null ? '' : cfg.SITIOS) };
+    });
+  }
+  return MEMO_.cfgLigera;
 }
 
 /**
@@ -956,8 +961,10 @@ function db_() {
 
 function getConfig_() {
   const hoja = db_().getSheetByName('Config');
-  migrarConfig_(hoja);
-  const filas = hoja.getDataRange().getValues().slice(1);
+  // Rapidez: una sola lectura (migrarConfig_ revisa sobre ella); si hubo que migrar (o esperar a quien migraba), se relee
+  let valores = hoja.getDataRange().getValues();
+  if (migrarConfig_(hoja, valores)) valores = hoja.getDataRange().getValues();
+  const filas = valores.slice(1);
   const cfg = {};
   filas.forEach(([k, v]) => { if (k) cfg[String(k).trim()] = v; });
   cfg.IVA_TASA = Number(cfg.IVA_TASA) || 0.16;
@@ -971,19 +978,20 @@ function getConfig_() {
  * - Valores de ejemplo (CONFIG_EJEMPLO_ANTERIOR) -> datos reales de Helgen
  * - Valores que Sheets leyó como fórmula con error (p. ej. "+52 ..." -> #ERROR!) se reponen como texto.
  */
-function migrarConfig_(hoja) {
-  const necesita = () => {
-    const v = hoja.getDataRange().getValues();
+function migrarConfig_(hoja, leidos) {
+  // leidos = lo que quien llama ya leyó de Config (rapidez: no se vuelve a leer para saber si hay algo que migrar).
+  // Devuelve true si pasó de la primera revisión (migró, otra petición migraba o no hubo candado): quien llama relee.
+  const necesita = v => {
     const claves = v.map(r => r[0]);
     return CONFIG_INICIAL.some(([k]) => claves.indexOf(k) === -1) ||
       v.some(r => /^#[A-Z/0!?]+/.test(String(r[1])) || CONFIG_EJEMPLO_ANTERIOR[r[0]] === String(r[1]));
   };
-  if (!necesita()) return;
+  if (!necesita(leidos || hoja.getDataRange().getValues())) return false;
 
   const lock = candado_();
-  if (!lock.tryLock(30000)) return;
+  if (!lock.tryLock(30000)) return true;
   try {
-    if (!necesita()) return;
+    if (!necesita(hoja.getDataRange().getValues())) return true;
     const valores = hoja.getDataRange().getValues();
     const iniciales = {};
     CONFIG_INICIAL.forEach(([k, v]) => { iniciales[k] = v; });
@@ -1003,6 +1011,7 @@ function migrarConfig_(hoja) {
       if (claves.indexOf(k) === -1) escribe_(hoja).appendRow([k, v]);
     });
     SpreadsheetApp.flush();
+    return true;
   } finally {
     lock.releaseLock();
   }
@@ -1822,19 +1831,24 @@ const AREA_COBRANZA = { que: 'cobranza', propCarpeta: 'COBRANZA_FOLDER_ID', prop
 
 /** Carpeta del área. Se crea sola en Mi unidad (restringida). Si se borró, error. */
 function carpetaArea_(area) {
+  // Rapidez: una vez por petición (buscarla y revisar que siga restringida cuesta dos viajes; varias funciones la piden)
+  const yaVista = (MEMO_.carpetasArea || {})[area.propCarpeta];
+  if (yaVista) return yaVista;
   const props = PropertiesService.getScriptProperties();
   const id = idGuardado_(area.propCarpeta);
-  if (!id) {
-    const carpeta = privado_(DriveApp.createFolder(area.carpeta));
-    props.setProperty(area.propCarpeta, carpeta.getId());
-    return carpeta;
-  }
   let carpeta = null;
-  try { carpeta = DriveApp.getFolderById(id); } catch (e) { carpeta = null; }
-  if (!carpeta || carpeta.isTrashed()) {
-    throw new Error('No se encontró la carpeta de ' + area.que + ' (' + area.propCarpeta + '). Revisa la Papelera de Drive.');
+  if (!id) {
+    carpeta = privado_(DriveApp.createFolder(area.carpeta));
+    props.setProperty(area.propCarpeta, carpeta.getId());
+  } else {
+    try { carpeta = DriveApp.getFolderById(id); } catch (e) { carpeta = null; }
+    if (!carpeta || carpeta.isTrashed()) {
+      throw new Error('No se encontró la carpeta de ' + area.que + ' (' + area.propCarpeta + '). Revisa la Papelera de Drive.');
+    }
+    privado_(carpeta);
   }
-  return privado_(carpeta);
+  (MEMO_.carpetasArea = MEMO_.carpetasArea || {})[area.propCarpeta] = carpeta;
+  return carpeta;
 }
 
 /** Libro del área; la primera vez lo crea dentro de su carpeta (bajo candado). */

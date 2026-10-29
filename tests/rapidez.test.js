@@ -8,6 +8,8 @@
 //     del código); una lectura después de escribir ve lo escrito; al tomar el candado se relee lo que otro cambió; al leer las
 //     versiones se olvida lo leído antes; quien recibe filas puede cambiarlas sin tocar las de los demás. (Además, el arnés
 //     falla cualquier prueba que escriba en una pestaña con sus filas guardadas.)
+//  4. Config y la carpeta del área una vez por petición: getConfig_ lee Config una vez (y relee si hubo que migrar);
+//     configLigera_ se reusa también en las escrituras y se olvida al escribir; carpetaArea_ busca y revisa la carpeta una vez.
 // Uso: node tests/rapidez.test.js .
 'use strict';
 const assert = require('assert');
@@ -160,6 +162,48 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   assert.equal(sy.requisicion.requisicion.estado, 'Pagada');
   assert.equal(sy.comRequisiciones.find(r => r.folio === folio).estado, 'Pagada');
   assert.equal(oc, sy.requisicion.orden.folio);
+}
+
+// ================= 4. Config y carpeta del área por petición =================
+{
+  const A = crear({ perfil: true });
+  const { ok, props, perfil, correr, como } = A;
+  const cfg = A.libros.DB.pest.Config.m;
+  cfg.push(['SITIOS', 'QRO | Querétaro']);
+  ok('ana', 'bootstrap'); // migra Config la primera vez (agrega las claves que faltan)
+  const leeConfig = () => perfil.ops.filter(o => (o.tipo === 'lee' || o.tipo === 'dataRange') && /\/Config$/.test(o.hoja)).length;
+  como('pedro@helgen.tech');
+  perfil.ops = [];
+  correr('getConfig_()');
+  assert.equal(leeConfig(), 2, 'una lectura (getDataRange + getValues), no dos');
+  // Si falta una clave, se migra y lo que regresa ya la trae (se relee después de migrar)
+  const i = cfg.findIndex(r => r[0] === 'VIGENCIA_DIAS');
+  const quitada = cfg.splice(i, 1)[0];
+  const c = correr('getConfig_()');
+  assert(cfg.some(r => r[0] === 'VIGENCIA_DIAS'), 'migró');
+  assert.equal(String(c.VIGENCIA_DIAS), String(cfg.find(r => r[0] === 'VIGENCIA_DIAS')[1]), 'devuelve lo migrado');
+  // En una escritura (sin caché) Config se lee una vez aunque se pida varias veces; escribir en Config la olvida
+  correr('MEMO_ = {}; SIN_CACHE_ = true;');
+  perfil.ops = [];
+  correr('sitios_(); sitiosDetalle_(); sitios_();');
+  assert.equal(leeConfig(), 2, 'una sola lectura de Config para tres usos');
+  const filaSitios = cfg.findIndex(r => r[0] === 'SITIOS') + 1;
+  correr(`escribe_(db_().getSheetByName('Config')).getRange(${filaSitios}, 2).setValue('VER | Veracruz (ICAVE)')`);
+  assert.deepEqual(A.plain(correr('sitios_()')), ['Veracruz (ICAVE)'], 'después de escribir en Config se relee');
+  correr('SIN_CACHE_ = false; MEMO_ = {};');
+  // La carpeta del área: buscarla y revisar sus permisos una vez por petición
+  ok('obrero', 'guardarRequisicion', { proyectoFolio: ok('ana', 'crearProyecto', { nombre: 'Uno', cliente: { nombre: 'Luis' }, idSolicitud: 'p1' }).folio,
+    sitio: 'Veracruz (ICAVE)', renglones: [{ descripcion: 'Cable', cantidad: 1 }], cotizacion: { nombre: 'c.pdf', datos: A.PDF }, idSolicitud: 'q1' });
+  como('pedro@helgen.tech');
+  perfil.ops = [];
+  correr('carpetaCompras_(); carpetaCompras_(); carpetaCompras_();');
+  assert.equal(perfil.ops.filter(o => o.tipo === 'drive' && o.que === 'getFolderById').length, 1);
+  assert.equal(perfil.ops.filter(o => o.tipo === 'urlfetch').length, 1, 'los permisos se revisan una vez');
+  correr('MEMO_ = {}');
+  perfil.ops = [];
+  correr('carpetaCompras_()');
+  assert.equal(perfil.ops.filter(o => o.tipo === 'urlfetch').length, 1, 'en otra petición se vuelven a revisar');
+  void quitada; void props;
 }
 
 console.log('rapidez: todo bien');
