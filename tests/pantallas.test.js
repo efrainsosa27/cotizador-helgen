@@ -147,10 +147,10 @@ ok('pedro', 'registrarPagoProveedor', { reqFolio: r1, fecha: HOY_ISO, monto: 116
   comprobante: { nombre: 'c.pdf', datos: PDF }, idSolicitud: 'pg1' });
 assert.deepEqual(tipos('pedro'), []);
 assert.deepEqual(tipos('obrero'), ['recibir:' + r1], 'sigue por recibir');
-correr('function proyectoLigado_(f) { return f === ' + JSON.stringify(p1) + '; }');
+correr('var proyectoLigadoReal_ = proyectoLigado_; proyectoLigado_ = function (f) { return f === ' + JSON.stringify(p1) + '; };');
 assert.deepEqual(pend('pedro').items.map(i => i.tipo + ':' + i.accion), ['encamino:Marcar En camino']);
 assert.equal(pend('rosa').items[0].accion, 'Recibir en el centro de mando');
-correr('proyectoLigado_ = undefined;');
+correr('proyectoLigado_ = proyectoLigadoReal_;'); // el real (módulo C): sin PORTAL_URL/PORTAL_SECRETO, ninguno ligado
 assert.deepEqual(tipos('pedro'), []);
 
 // ---- Carga inicial y sincronización ----

@@ -156,6 +156,8 @@
     .pend-item .btn { width:100%; }
     .pend-cabeza .acciones { margin-left:0; }
   }
+  /* Centro de mando (incremento 4): la columna de ítem solo en proyectos ligados */
+  .sin-item .col-item { display:none; }
 </style>
 </head>
 <body>
@@ -520,10 +522,13 @@
         <div><label id="reqLblSitio">Sitio donde se necesita (opcional)</label><select id="reqSitio"></select></div>
         <div><label>¿Para cuándo se necesita? (opcional)</label><input id="reqFecha" type="date"></div>
       </div>
+      <div id="reqCentro" class="nota oculto" style="margin-top:8px"></div>
       <datalist id="reqCatalogo"></datalist>
-      <table style="margin-top:14px">
+      <datalist id="centroItems"></datalist>
+      <table id="reqTabla" class="sin-item" style="margin-top:14px">
         <thead><tr>
           <th>Descripción del material *</th><th class="num" style="width:100px">Cantidad *</th><th style="width:90px">Unidad</th>
+          <th class="col-item" style="width:170px">Ítem del inventario</th>
           <th style="width:220px">Notas</th><th style="width:30px"></th>
         </tr></thead>
         <tbody id="reqFilas"></tbody>
@@ -623,6 +628,7 @@
               <option value="">Todas</option><option value="Solicitada">Solicitada (por revisar)</option>
               <option value="Aprobada">Aprobada (por cotizar)</option><option value="Cotizada">Cotizada (espera visto bueno)</option>
               <option value="Autorizada">Autorizada (por pagar)</option><option value="Pagada">Pagada (por recibir)</option>
+              <option value="En camino">En camino (por recibir)</option>
               <option value="Recibida">Recibida (por pagar)</option>
               <option value="Devuelta">Devuelta</option><option value="Cerrada">Cerrada</option>
               <option value="Rechazada">Rechazada</option><option value="Cancelada">Cancelada</option>
@@ -634,6 +640,7 @@
           <tbody id="rcLista"><tr><td colspan="7" class="nota">Cargando…</td></tr></tbody>
         </table>
         <div class="nota" style="margin-top:8px">Toda orden de compra sale de una requisición: ábrela para autorizarla, pagarla o cerrarla.</div>
+        <div id="comCentro" class="sat oculto" style="margin-top:10px"></div>
       </div>
       <div class="modulo" id="comModOrdenes">
         <h2>2 · Órdenes por proyecto</h2>
@@ -758,7 +765,7 @@
             </select></div>
         </div>
         <div style="overflow-x:auto">
-        <table>
+        <table id="ocTabla" class="sin-item">
           <thead id="ocEnc"></thead>
           <tbody id="ocFilas"></tbody>
         </table>
@@ -794,6 +801,8 @@
         <div id="rcOrden" class="tiles"></div>
         <!-- correos: enviar la orden al proveedor (mod-correos) -->
         <div id="rcEnviarOc" class="sat oculto"></div>
+        <!-- centro de mando: estado del aviso y "En camino" (mod-centro) -->
+        <div id="rcCentro" class="sat oculto"></div>
         <div id="rcRecepcion" class="sat oculto">
           <div class="sat-titulo">Recepción en sitio</div>
           <div id="rcAvance"></div>
@@ -854,8 +863,8 @@
           <tbody id="rcPagos"></tbody>
         </table>
         <div id="rcCierre" class="sat oculto">
-          <div class="sat-titulo">Cerrar en lugar de quien la pidió</div>
-          <div class="nota" style="margin-bottom:8px">Normalmente la cierra el solicitante con "Recibí el material". Hazlo tú solo si no puede (p. ej. ya no está en la obra).</div>
+          <div id="rcCierreTitulo" class="sat-titulo">Cerrar en lugar de quien la pidió</div>
+          <div id="rcCierreNota" class="nota" style="margin-bottom:8px">Normalmente la cierra el solicitante con "Recibí el material". Hazlo tú solo si no puede (p. ej. ya no está en la obra).</div>
           <div class="grid">
             <div><label>Motivo *</label><input id="rcMotivoCierre" maxlength="500" placeholder="Ej. El trabajador ya no está en la obra"></div>
             <div><label>Notas de la recepción (opcional)</label><input id="rcNotasCierre" maxlength="500" placeholder="Ej. Faltó 1 pieza"></div>
@@ -2174,8 +2183,18 @@
 
   // ---- Requisiciones (quien pide materiales: el servidor solo le manda las suyas, sin montos) ----
   let REQ_PROYECTOS = [], MIS_REQ = [], REQ_EDITANDO = null, ID_REQ = nuevoId();
+  // Centro de mando (incremento 4; los llena el módulo mod-centro): mis artículos (sugerencias), proyecto ligado y columna de ítem
+  let MIS_ARTICULOS = [], REQ_LIGADO = false, ITEMS_REQ = false, ITEMS_OC = false;
   const CHIP_REQ = { Solicitada: 'aceptada', Devuelta: 'aceptada', Aprobada: 'aceptada', Cotizada: 'aceptada', Autorizada: 'firmado',
-    Pagada: 'firmado', Recibida: 'firmado', Cerrada: 'firmado', Rechazada: 'cancelado', Cancelada: 'cancelado' };
+    Pagada: 'firmado', 'En camino': 'firmado', Recibida: 'firmado', Cerrada: 'firmado', Rechazada: 'cancelado', Cancelada: 'cancelado' };
+  /** "VER · Veracruz (ICAVE)" para un sitio guardado por nombre (Config → SITIOS con código). */
+  function etiquetaSitio(nombre) {
+    const n = String(nombre || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const d = SITIOS_DET.find(s => String(s.nombre || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '') === n);
+    return d && d.codigo ? d.codigo + ' · ' + d.nombre : String(nombre || '');
+  }
+  /** Nota "Guardado. El centro de mando se actualizará en unos minutos" que manda el servidor si un aviso quedó pendiente. */
+  const extraPortal = r => r && r.avisoPortal ? ' <span class="aviso-moneda">' + esc(r.avisoPortal) + '</span>' : '';
   const CHIP_DISP = { Exacto: 'firmado', Sustituto: 'aceptada', 'No disponible': 'cancelado', Adicional: '' };
   const chipDisp = d => '<span class="chip ' + (CHIP_DISP[d] || '') + '">' + esc(d) + '</span>';
   const chipPrio = p => p ? '<span class="chip ' + (p === 'Urgente' ? 'cancelado' : p === 'Normal' ? 'aceptada' : '') + '">' + esc(p) + '</span>' : '';
@@ -2196,10 +2215,14 @@
   const botonChico = (texto, accion, sec) => '<button type="button" class="btn' + (sec === false ? '' : ' btn-sec') +
     '" style="padding:4px 10px;font-size:12px" onclick="' + accion + '">' + texto + '</button>';
 
-  /** Sugerencias del catálogo para la descripción (sin precios). */
+  /** Sugerencias para la descripción: primero lo que la persona ya pidió (más pedido primero), luego el catálogo (sin precios). */
   function pintarCatalogoReq() {
-    $('reqCatalogo').innerHTML = CATALOGO.map(p =>
-      '<option value="' + esc(p.descripcion) + '" label="' + esc(p.clave + ' · ' + p.unidad) + '">').join('');
+    const mias = {};
+    MIS_ARTICULOS.forEach(a => { mias[sinAcentos(a.descripcion)] = true; });
+    $('reqCatalogo').innerHTML = MIS_ARTICULOS.map(a => '<option value="' + esc(a.descripcion) + '" label="' +
+        esc('Ya lo pediste' + (a.veces > 1 ? ' ' + a.veces + ' veces' : '') + (a.unidad ? ' · ' + a.unidad : '')) + '">').join('') +
+      CATALOGO.filter(p => !mias[sinAcentos(p.descripcion)]).map(p =>
+        '<option value="' + esc(p.descripcion) + '" label="' + esc(p.clave + ' · ' + p.unidad) + '">').join('');
   }
 
   // Proyectos Activos y Cerrados (con o sin contrato); la opción es "PRY-2026-0002-DRO — Nombre"
@@ -2226,34 +2249,45 @@
       '<td><input class="desc" list="reqCatalogo" maxlength="500" placeholder="Ej. Cable THW calibre 10"></td>' +
       '<td><input class="cant" type="number" min="0" step="any" style="text-align:right"></td>' +
       '<td><input class="uni" maxlength="20"></td>' +
+      '<td class="col-item"><input class="item" list="centroItems" maxlength="40" placeholder="Opcional"></td>' +
       '<td><input class="notas" maxlength="300" placeholder="Opcional"></td>' +
       '<td><button class="quitar" title="Quitar">×</button></td>';
     tr.querySelector('.desc').value = d.descripcion || '';
     tr.querySelector('.cant').value = d.cantidad == null ? '1' : d.cantidad;
     tr.querySelector('.uni').value = d.unidad || 'PZA';
     tr.querySelector('.notas').value = d.notas || '';
-    // Del catálogo solo se toma la unidad
+    tr.querySelector('.item').value = d.item || '';
+    // De lo que ya pidió: unidad y (proyecto ligado) su ítem del inventario; del catálogo solo la unidad
     tr.querySelector('.desc').addEventListener('change', e => {
+      const a = MIS_ARTICULOS.find(x => sinAcentos(x.descripcion) === sinAcentos(e.target.value));
       const p = CATALOGO.find(x => x.descripcion === e.target.value);
-      if (p) tr.querySelector('.uni').value = p.unidad;
+      if (a && a.unidad) tr.querySelector('.uni').value = a.unidad;
+      else if (p) tr.querySelector('.uni').value = p.unidad;
+      if (a && a.item && ITEMS_REQ && !tr.querySelector('.item').value) tr.querySelector('.item').value = a.item;
     });
     tr.querySelector('.quitar').onclick = () => tr.remove();
     $('reqFilas').appendChild(tr);
   }
   function leerRenglonesReq() {
-    return [...$('reqFilas').querySelectorAll('tr')].map(tr => ({
-      descripcion: tr.querySelector('.desc').value, cantidad: tr.querySelector('.cant').value,
-      unidad: tr.querySelector('.uni').value, notas: tr.querySelector('.notas').value,
-    })).filter(r => r.descripcion.trim());
+    return [...$('reqFilas').querySelectorAll('tr')].map(tr => {
+      const r = { descripcion: tr.querySelector('.desc').value, cantidad: tr.querySelector('.cant').value,
+        unidad: tr.querySelector('.uni').value, notas: tr.querySelector('.notas').value };
+      const item = ITEMS_REQ ? String(tr.querySelector('.item').value || '').trim() : ''; // solo en proyectos ligados
+      if (item) r.item = item;
+      return r;
+    }).filter(r => r.descripcion.trim());
   }
 
-  /** Lista de sitios y textos del formulario según el flujo (con operaciones el sitio es obligatorio y la cotización opcional). */
+  /**
+   * Lista de sitios ("VER · Veracruz (ICAVE)"; se guarda el nombre) y textos del formulario según el flujo (con operaciones el
+   * sitio es obligatorio y la cotización opcional) y el proyecto (ligado al centro de mando: sitio obligatorio).
+   */
   function pintarSitios() {
-    const actual = $('reqSitio').value;
-    $('reqSitio').innerHTML = '<option value="">' + (flujoOps() ? 'Elige el sitio' : 'Sin sitio') + '</option>' +
-      SITIOS.map(x => '<option value="' + esc(x) + '">' + esc(x) + '</option>').join('');
+    const actual = $('reqSitio').value, obligatorio = flujoOps() || REQ_LIGADO;
+    $('reqSitio').innerHTML = '<option value="">' + (obligatorio ? 'Elige el sitio' : 'Sin sitio') + '</option>' +
+      SITIOS.map(x => '<option value="' + esc(x) + '">' + esc(etiquetaSitio(x)) + '</option>').join('');
     $('reqSitio').value = actual;
-    $('reqLblSitio').textContent = 'Sitio donde se necesita' + (flujoOps() ? ' *' : ' (opcional)');
+    $('reqLblSitio').textContent = 'Sitio donde se necesita' + (obligatorio ? ' *' : ' (opcional)');
     if (!REQ_EDITANDO) $('reqLblArchivo').textContent = 'Cotización del proveedor (PDF o foto, máx. 10 MB)' + (flujoOps() ? ' (opcional)' : ' *');
     $('reqNotaEnvio').textContent = flujoOps() ? 'No lleva precios. Operaciones la revisa y compras la cotiza.' : 'No lleva precios: compras los toma de la cotización.';
   }
@@ -2269,6 +2303,7 @@
     $('btnReq').disabled = false; $('btnReq').textContent = 'Enviar requisición';
     $('btnReqCancelarEdicion').classList.add('oculto');
     pintarSitios();
+    avisarModulos('alFormReq'); // el centro de mando revisa si el proyecto está ligado
   }
 
   function enviarRequisicion() {
@@ -2279,7 +2314,7 @@
     const renglones = leerRenglonesReq();
     if (!renglones.length) { mostrarError('Agrega al menos un renglón con descripción y cantidad.'); return; }
     if (!REQ_EDITANDO && !archivo && !flujoOps()) { mostrarError('Adjunta la cotización del proveedor (PDF o imagen).'); return; }
-    if (flujoOps() && !$('reqSitio').value) { mostrarError('Elige el sitio donde se necesita el material.'); return; }
+    if ((flujoOps() || REQ_LIGADO) && !$('reqSitio').value) { mostrarError('Elige el sitio donde se necesita el material.'); return; }
     if (archivo && archivo.size > 10 * 1024 * 1024) { mostrarError('La cotización pesa más de 10 MB. Reduce la imagen o el PDF.'); return; }
     const texto = $('btnReq').textContent;
     $('btnReq').disabled = true; $('btnReq').textContent = 'Enviando…';
@@ -2289,6 +2324,7 @@
       limpiarReq(); pintarMisReq(r.requisiciones);
       aviso('ok', 'Requisición <b>' + esc(r.folio) + '</b> ' + (corregida ? 'corregida y reenviada' : 'enviada') + '. ' +
         (flujoOps() ? 'Operaciones la revisará.' : 'Compras la revisará.'));
+      avisarModulos('alReqEnviada', r); // p. ej. actualizar "lo que ya pediste"
     }).withFailureHandler(err => { listo(); mostrarError(err); }).guardarRequisicion({
       folio: REQ_EDITANDO || '', proyectoFolio: proyecto ? proyecto.folio : '', renglones: renglones,
       sitio: $('reqSitio').value, fechaRequerida: $('reqFecha').value,
@@ -2308,7 +2344,7 @@
       '<div class="sat-titulo">' + esc(r.folio) + ' · ' + chipReq(r.estado) + (r.prioridad ? ' ' + chipPrio(r.prioridad) : '') + ' · ' +
         esc(r.proyectoVisible || r.proyectoFolio) + ' — ' + esc(r.proyectoNombre) + '</div>' +
       ((r.sitio || r.fechaRequerida || r.esReceptor || (r.recibe && r.recibe !== correoActual())) ? '<div class="nota">' + [
-        r.sitio ? 'Sitio: <b>' + esc(r.sitio) + '</b>' : '', r.fechaRequerida ? 'Para el ' + esc(fechaMx(r.fechaRequerida)) : '',
+        r.sitio ? 'Sitio: <b>' + esc(etiquetaSitio(r.sitio)) + '</b>' : '', r.fechaRequerida ? 'Para el ' + esc(fechaMx(r.fechaRequerida)) : '',
         r.esReceptor ? '<b>Te toca recibirla</b> (la pidió ' + esc(r.solicitante) + ')' : (r.compra && r.recibe && r.recibe !== correoActual() ? 'Recibe: ' + esc(r.recibe) : '')
       ].filter(Boolean).join(' · ') + '</div>' : '') +
       (r.motivo ? '<div class="nota"><b>Motivo:</b> ' + esc(r.motivo) + '</div>' : '') +
@@ -2326,8 +2362,9 @@
       (r.puedeCerrar ? botonChico('Recibí el material', "recibiMaterial('" + esc(r.folio) + "')", false) : '') +
       (r.puedeEditar ? botonChico('Corregir y reenviar', "editarReq('" + esc(r.folio) + "')") : '') +
       (r.puedeCancelar ? botonChico('Cancelar requisición', "cancelarReq('" + esc(r.folio) + "')") : '') +
-      '</div><div id="rcpCaja-' + esc(r.folio) + '"></div></div>').join('');
+      '</div><div id="cmCaja-' + esc(r.folio) + '"></div><div id="rcpCaja-' + esc(r.folio) + '"></div></div>').join('');
     pintarConteos();
+    avisarModulos('alMisReq', MIS_REQ); // centro de mando: dónde se recibe, En camino y "Lo recogí"
   }
 
   // ---- Recepción renglón por renglón (con operaciones): quien pidió o quien recibe; compras en su lugar ----
@@ -2358,7 +2395,7 @@
         l.renglon + '" type="number" min="0" step="any" value="' + esc(l.pendiente) + '" style="text-align:right"></td></tr>').join('') +
       '</tbody></table><div class="grid" style="margin-top:8px">' +
       '<div><label>Sitio donde se recibió *</label><select id="' + p + 'Sitio">' + SITIOS.map(x => '<option value="' + esc(x) + '"' +
-        (x === sitio ? ' selected' : '') + '>' + esc(x) + '</option>').join('') + '</select></div>' +
+        (x === sitio ? ' selected' : '') + '>' + esc(etiquetaSitio(x)) + '</option>').join('') + '</select></div>' +
       '<div><label>Foto de la remisión (opcional)</label><input id="' + p + 'Foto" type="file" accept="image/*,application/pdf" capture="environment"></div>' +
       '<div style="grid-column:1/-1"><label>Notas' + (enSuLugar ? ' *' : '') + '</label><input id="' + p + 'Notas" maxlength="500" placeholder="Ej. Llegó una caja golpeada"></div></div>' +
       '<label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input id="' + p + 'Final" type="checkbox" style="width:auto"> ' +
@@ -2394,7 +2431,7 @@
       if (p.indexOf('rcp-') === 0) REC_ABIERTA = null;
       f.alExito(r);
       aviso('ok', 'Recepción <b>' + esc(r.folio) + '</b> registrada' + (!r.completo ? ' (parcial: falta material).' :
-        r.estado === 'Cerrada' ? ': requisición cerrada.' : ': todo recibido; falta el pago al proveedor.'));
+        r.estado === 'Cerrada' ? ': requisición cerrada.' : ': todo recibido; falta el pago al proveedor.') + extraPortal(r));
     }).withFailureHandler(err => { listo(); mostrarError(err); })
       .registrarRecepcion(Object.assign(datos, { evidencia: foto ? { nombre: archivo.name, datos: foto } : null }));
     if (archivo) leerArchivo(archivo).then(enviar, err => { listo(); mostrarError(err); });
@@ -2449,6 +2486,7 @@
     $('reqLblArchivo').textContent = 'Cotización nueva (opcional: si no adjuntas otra, se queda la anterior)';
     $('btnReq').textContent = 'Reenviar requisición';
     $('btnReqCancelarEdicion').classList.remove('oculto');
+    avisarModulos('alFormReq', r);
     window.scrollTo(0, 0);
   }
   function cancelarReq(folio) {
@@ -2564,6 +2602,7 @@
         tile('Recibe', esc(rq.recibe));
       $('opsAvance').innerHTML = htmlAvance(v.avance, v.recepciones, false);
     }
+    avisarModulos('alVistaOps', v); // centro de mando: En camino
   }
   function pintarPropuestaOps(v) {
     const pr = v.propuesta, dec = {};
@@ -2642,7 +2681,7 @@
     if (!window.confirm('¿Visto bueno a la propuesta de ' + pr.proveedor.razonSocial + ' por ' + dinero(pr.total, pr.moneda).replace(/&amp;/g, '&') +
       '? Se emite la orden de compra.')) return;
     accionConExcepcion('btnOpsVisto', 'autorizarPropuesta', [v.requisicion.folio, pr.version, ID_VOBO, pr.huella], r => {
-      pintarOps(r.vista); aviso('ok', 'Visto bueno: se emitió la orden <b>' + esc(r.ocFolio) + '</b> de ' + esc(r.folio) + '.');
+      pintarOps(r.vista); aviso('ok', 'Visto bueno: se emitió la orden <b>' + esc(r.ocFolio) + '</b> de ' + esc(r.folio) + '.' + extraPortal(r));
     });
   }
   function regresarOps() {
@@ -2712,7 +2751,7 @@
       esc(v.proyecto.cliente) + ' · ' + esc(v.proyecto.nombre) + (v.proyecto.estado && v.proyecto.estado !== 'Activo' ? ' · ' + esc(v.proyecto.estado) : '') +
       (v.moneda ? ' · Moneda del proyecto: <b>' + esc(v.moneda) + '</b> · ' + (v.sinContrato ? 'sin contrato' : esc(MARCA_TXT[v.marca] || '')) : '') +
       '<br>Pidió: ' + esc(rq.solicitante) + ' (' + esc(rq.solicitanteEmail) + ') el ' + esc(fechaMx(rq.fecha)) +
-      (rq.sitio ? ' · Sitio: <b>' + esc(rq.sitio) + '</b>' : '') + (rq.fechaRequerida ? ' · Para el ' + esc(fechaMx(rq.fechaRequerida)) : '') +
+      (rq.sitio ? ' · Sitio: <b>' + esc(etiquetaSitio(rq.sitio)) + '</b>' : '') + (rq.fechaRequerida ? ' · Para el ' + esc(fechaMx(rq.fechaRequerida)) : '') +
       (rq.origenFolio ? ' · Separada de ' + esc(rq.origenFolio) : '') +
       (rq.aprobacion && rq.aprobacion.nota ? '<br><b>Nota de operaciones:</b> ' + esc(rq.aprobacion.nota) : '') +
       (rq.estado === 'Aprobada' && rq.motivo ? '<br><span class="aviso-moneda">Operaciones regresó la propuesta: ' + esc(rq.motivo) + '</span>' : '') +
@@ -2784,6 +2823,7 @@
     $('rcCierre').classList.toggle('oculto', !v.puedeCerrar);
     if (v.puedeCerrar && cambio) { $('rcMotivoCierre').value = ''; $('rcNotasCierre').value = ''; }
     pintarFacturas(v, cambio);
+    avisarModulos('alVistaReqCom', v, cambio); // centro de mando: envío, proyecto ligado y respaldo
   }
 
   function revisarReqCom(funcion) {
@@ -2837,12 +2877,14 @@
       '<td><input class="desc" list="ocCatalogo" placeholder="Escribe o elige del catálogo">' +
         (PROP_MODO ? '<input class="nota-r" maxlength="300" placeholder="Nota (la ve quien pidió: sin precios ni proveedor)" style="margin-top:4px">' : '') + '</td>' +
       '<td><input class="uni" value="PZA"></td>' +
+      '<td class="col-item"><input class="item" list="centroItems" maxlength="40" placeholder="Ítem"></td>' +
       '<td><input class="cant" type="number" min="0" step="any" value="1" style="text-align:right"></td>' +
       '<td><input class="costo" type="number" min="0" step="0.01" placeholder="Costo" style="text-align:right"></td>' +
       '<td class="num imp">$0.00</td>' +
       '<td>' + (ren ? '' : '<button class="quitar" title="Quitar">×</button>') + '</td>';
     if (d.descripcion) tr.querySelector('.desc').value = d.descripcion;
     if (d.unidad) tr.querySelector('.uni').value = d.unidad;
+    tr.querySelector('.item').value = d.item || ''; // ítem del centro de mando (solo se ve en proyectos ligados)
     if (d.cantidad != null) tr.querySelector('.cant').value = d.cantidad;
     if (d.clave) tr.querySelector('.clave').value = d.clave;
     if (d.costo != null && d.costo !== '' && d.disponibilidad !== 'No disponible') tr.querySelector('.costo').value = d.costo;
@@ -2871,7 +2913,7 @@
   /** No disponible: sin descripción, cantidad ni costo (no va a la orden). */
   function pintarDisp(tr) {
     const no = tr.querySelector('.disp').value === 'No disponible';
-    ['.clave', '.desc', '.uni', '.cant', '.costo'].forEach(c => { tr.querySelector(c).disabled = no; });
+    ['.clave', '.desc', '.uni', '.item', '.cant', '.costo'].forEach(c => { tr.querySelector(c).disabled = no; });
     if (no) tr.querySelector('.costo').value = '';
   }
 
@@ -2885,6 +2927,8 @@
         costo: tr.querySelector('.costo').value, // vacío = sin capturar (el servidor lo rechaza)
         _tr: tr,
       };
+      // Ítem del centro de mando: solo si la columna se ve (proyecto ligado); si no, el servidor conserva el de quien pidió
+      if (ITEMS_OC) r.item = String(tr.querySelector('.item').value || '').trim();
       if (PROP_MODO) {
         r.renglon = tr._renglon || 0;
         r.disponibilidad = r.renglon ? tr.querySelector('.disp').value || 'Exacto' : 'Adicional';
@@ -2930,7 +2974,8 @@
     COND_A_MANO = false;
     $('ocTitulo').textContent = PROP_MODO ? '2 · Propuesta de compra (para el visto bueno de operaciones)' : '2 · Orden de compra';
     $('ocEnc').innerHTML = '<tr>' + (PROP_MODO ? '<th>Propuesta</th>' : '') + '<th style="width:100px">Clave</th><th>Descripción</th>' +
-      '<th style="width:80px">Unidad</th><th class="num" style="width:90px">Cant.</th><th class="num" style="width:130px">Costo unitario</th>' +
+      '<th style="width:80px">Unidad</th><th class="col-item" style="width:140px">Ítem del inventario</th>' +
+      '<th class="num" style="width:90px">Cant.</th><th class="num" style="width:130px">Costo unitario</th>' +
       '<th class="num" style="width:130px">Importe</th><th style="width:30px"></th></tr>';
     $('btnAgregarOc').textContent = PROP_MODO ? '+ Agregar adicional (p. ej. flete o accesorio)' : '+ Agregar renglón';
     $('ocNotaRenglones').textContent = PROP_MODO
@@ -2945,7 +2990,7 @@
       ((prev && prev.renglones) || []).forEach(r => { if (r.renglon) porRen[r.renglon] = r; });
       v.aprobados.forEach(a => agregarRenglonOc(Object.assign(porRen[a.renglon] ? Object.assign({}, porRen[a.renglon]) :
         { renglon: a.renglon, disponibilidad: 'Exacto', descripcion: a.descripcion + (a.notas ? ' — ' + a.notas : ''), unidad: a.unidad,
-          cantidad: a.cantidad }, { pedido: a })));
+          cantidad: a.cantidad, item: a.item || '' }, { pedido: a })));
       ((prev && prev.renglones) || []).filter(r => !r.renglon).forEach(r => agregarRenglonOc(Object.assign({}, r)));
       const receptores = v.receptores || [], recibe = (prev && prev.recibe) || v.requisicion.solicitanteEmail;
       $('propRecibe').innerHTML = receptores.map(c => '<option value="' + esc(c) + '">' + esc(c) +
@@ -2953,7 +2998,8 @@
       $('propRecibe').value = receptores.indexOf(recibe) !== -1 ? recibe : v.requisicion.solicitanteEmail;
       $('propArchivo').value = '';
     } else {
-      v.renglones.forEach(r => agregarRenglonOc({ descripcion: r.descripcion + (r.notas ? ' — ' + r.notas : ''), unidad: r.unidad, cantidad: r.cantidad }));
+      v.renglones.forEach(r => agregarRenglonOc({ descripcion: r.descripcion + (r.notas ? ' — ' + r.notas : ''), unidad: r.unidad, cantidad: r.cantidad,
+        item: r.item || '' }));
       if (!v.renglones.length) agregarRenglonOc();
     }
     $('ocMoneda').value = (prev && prev.moneda) || v.moneda || 'MXN';
@@ -3001,7 +3047,7 @@
       .withSuccessHandler(r => {
         pintarReqCom(r.vista);
         aviso('ok', 'Requisición <b>' + esc(r.folio) + '</b> autorizada · Orden de compra <b>' + esc(r.ocFolio) + '</b> · Total ' +
-              dinero(r.total, r.moneda) + ' · <a href="' + esc(r.url) + '" target="_blank">Abrir PDF</a>');
+              dinero(r.total, r.moneda) + ' · <a href="' + esc(r.url) + '" target="_blank">Abrir PDF</a>' + extraPortal(r));
       })
       .withFailureHandler(err => { listo(); mostrarError(err); })
       .autorizarRequisicion(folio, payload);
@@ -3055,7 +3101,7 @@
     leerArchivo(archivo).then(datos => {
       google.script.run.withSuccessHandler(r => {
         listo(); pintarReqCom(r.vista);
-        aviso('ok', 'Pago <b>' + esc(r.folio) + '</b> registrado · <a href="' + esc(r.url) + '" target="_blank">Ver comprobante</a>');
+        aviso('ok', 'Pago <b>' + esc(r.folio) + '</b> registrado · <a href="' + esc(r.url) + '" target="_blank">Ver comprobante</a>' + extraPortal(r));
       }).withFailureHandler(err => { listo(); mostrarError(err); }).registrarPagoProveedor({
         reqFolio: folio, fecha: $('ppFecha').value, monto: $('ppMonto').value, monedaPago: $('ppMoneda').value,
         tipoCambio: $('ppTc').value, metodo: $('ppMetodo').value, referencia: $('ppRef').value,
@@ -3073,7 +3119,7 @@
     const folio = REQC.requisicion.folio;
     if (!$('rcMotivoCierre').value.trim()) { mostrarError('Escribe por qué cierras la requisición en lugar de quien la pidió.'); return; }
     accionCob('btnCerrarCom', 'cerrarRequisicionCompras', [folio, $('rcMotivoCierre').value, $('rcNotasCierre').value],
-      v => { pintarReqCom(v); aviso('ok', 'Requisición <b>' + esc(folio) + '</b> cerrada · orden recibida.'); });
+      v => { pintarReqCom(v); aviso('ok', 'Requisición <b>' + esc(folio) + '</b> cerrada · orden recibida.' + extraPortal(v)); });
   }
   /** Compras separa renglones aprobados en otra requisición (p. ej. otro proveedor); conservan la aprobación de operaciones. */
   function separarReqCom() {
@@ -3105,7 +3151,12 @@
     if (motivo == null) return;
     if (!motivo.trim()) { mostrarError('Escribe el motivo de la cancelación.'); return; }
     const folio = REQC.requisicion.folio;
-    accionCob(null, 'cancelarOrdenCompra', [folioOc, motivo], () => { abrirReqCom(folio); aviso('ok', 'Orden <b>' + esc(folioOc) + '</b> cancelada.'); });
+    const listo = x => { abrirReqCom(folio); aviso('ok', 'Orden <b>' + esc(folioOc) + '</b> cancelada.' + extraPortal(x)); };
+    // Si el material ya va en camino, el servidor pide confirmar (y un motivo que lo explique)
+    accionCob(null, 'cancelarOrdenCompra', [folioOc, motivo], x => {
+      if (x && x.confirmar) { if (window.confirm(x.mensaje)) accionCob(null, 'cancelarOrdenCompra', [folioOc, motivo, true], listo); return; }
+      listo(x);
+    });
   }
 
   // ---- Facturas del proveedor (por orden): CFDI con su XML o factura extranjera con su PDF ----
@@ -3408,7 +3459,12 @@
     const motivo = window.prompt('Motivo para cancelar la orden ' + folio + ' (no se borra; su requisición vuelve a Solicitada):');
     if (motivo == null) return;
     if (!motivo.trim()) { mostrarError('Escribe el motivo de la cancelación.'); return; }
-    accionCob(null, 'cancelarOrdenCompra', [folio, motivo], v => { pintarCompras(v); aviso('ok', 'Orden <b>' + esc(folio) + '</b> cancelada.'); });
+    const listo = v => { pintarCompras(v); aviso('ok', 'Orden <b>' + esc(folio) + '</b> cancelada.' + extraPortal(v)); };
+    // Si el material ya va en camino, el servidor pide confirmar (y un motivo que lo explique)
+    accionCob(null, 'cancelarOrdenCompra', [folio, motivo], v => {
+      if (v && v.confirmar) { if (window.confirm(v.mensaje)) accionCob(null, 'cancelarOrdenCompra', [folio, motivo, true], listo); return; }
+      listo(v);
+    });
   }
 
   // ---- UI ----
@@ -3997,6 +4053,262 @@
 
 <script id="mod-centro">
   // Centro de mando: ítems del inventario por renglón, En camino / Lo recogí, recepción en el centro de mando
+  // (drogheda.helgen.online) para los proyectos ligados, "lo que ya pediste" y el estado del enlace en Compras.
+  // El servidor decide todo (permisos, estados, proyectos ligados); aquí solo se muestra y se manda lo capturado.
+  (function () {
+    const CM = { activo: false, ligados: [], items: null, pidiendoItems: false, articulosPedidos: false, formas: {} };
+    const ligado = folio => CM.activo && CM.ligados.indexOf(String(folio || '').toUpperCase().slice(0, 13)) !== -1;
+    const hoyLocal = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+    const dmy = iso => { const m = String(iso || '').match(/^(\d{4})-(\d\d)-(\d\d)$/); return m ? m[3] + '/' + m[2] + '/' + m[1] : String(iso || ''); };
+    /** "Enviado por DHL · guía 123 · llega aprox. el 02/11/2026" (sin montos ni proveedor). */
+    function textoEnvio(e) {
+      if (!e || !e.paqueteria) return '';
+      if (/^Recogido por /i.test(e.paqueteria)) return e.paqueteria + (e.fechaEstimada ? ' el ' + dmy(e.fechaEstimada) : '') + '; va al sitio';
+      return (e.paqueteria === 'Lo trae el proveedor' ? e.paqueteria : 'Enviado por ' + e.paqueteria) + (e.guia ? ' · guía ' + e.guia : '') +
+        (e.fechaEstimada ? ' · llega aprox. el ' + dmy(e.fechaEstimada) : '');
+    }
+
+    // ---- Lo que manda el servidor: función encendida, proyectos ligados, ítems (si están en caché) y mis artículos ----
+    function recibirCentro(c) {
+      if (!c) return;
+      const antes = JSON.stringify([CM.activo, CM.ligados]);
+      CM.activo = !!c.activo; CM.ligados = c.ligados || [];
+      if (c.items && c.items.length) pintarItems(c.items);
+      if (c.misArticulos) { MIS_ARTICULOS = c.misArticulos; CM.articulosPedidos = true; pintarCatalogoReq(); }
+      if (antes !== JSON.stringify([CM.activo, CM.ligados])) revisarFormReq();
+    }
+    function pintarItems(items) {
+      CM.items = items || [];
+      $('centroItems').innerHTML = CM.items.map(x => '<option value="' + esc(x.codigo) + '" label="' +
+        esc(x.descripcion + (x.unidad ? ' · ' + x.unidad : '')) + '">').join('');
+    }
+    function pedirItems() {
+      if (CM.items || CM.pidiendoItems || !CM.activo) return;
+      CM.pidiendoItems = true;
+      google.script.run.withSuccessHandler(r => {
+        CM.pidiendoItems = false;
+        if (r && r.items && r.items.length) pintarItems(r.items);
+        if (r && r.error) console.warn(r.error);
+      }).withFailureHandler(e => { CM.pidiendoItems = false; console.warn('Ítems del centro de mando: ' + (e && e.message)); }).itemsInventario();
+    }
+    function pedirArticulos() {
+      if (!PERMISOS.requisicion) return;
+      CM.articulosPedidos = true;
+      google.script.run.withSuccessHandler(l => { MIS_ARTICULOS = l || []; pintarCatalogoReq(); })
+        .withFailureHandler(() => { CM.articulosPedidos = false; }).misArticulos();
+    }
+
+    // ---- Formulario de requisición: proyecto ligado → sitio obligatorio, columna de ítem y dónde se recibe ----
+    function revisarFormReq() {
+      let folio = '';
+      if (REQ_EDITANDO) { const r = MIS_REQ.find(x => x.folio === REQ_EDITANDO); folio = r ? r.proyectoFolio : ''; }
+      else { const p = proyectoReqElegido(); folio = p ? p.folio : ''; }
+      const era = REQ_LIGADO;
+      REQ_LIGADO = ITEMS_REQ = ligado(folio);
+      $('reqTabla').classList.toggle('sin-item', !ITEMS_REQ);
+      $('reqCentro').classList.toggle('oculto', !REQ_LIGADO);
+      if (REQ_LIGADO) {
+        $('reqCentro').innerHTML = 'Este proyecto está ligado al <b>centro de mando</b>: el material se recibe en el sitio, desde el centro de mando. ' +
+          'El sitio es obligatorio y cada renglón puede llevar su ítem del inventario (opcional: sin ítem queda "por ligar" allá).';
+        pedirItems();
+      }
+      if (era !== REQ_LIGADO) pintarSitios();
+    }
+    $('reqProyecto').addEventListener('change', revisarFormReq);
+    $('reqProyecto').addEventListener('input', revisarFormReq);
+    // Al elegir un ítem en un renglón nuevo se llenan la descripción y la unidad
+    function alElegirItem(e) {
+      const t = e.target;
+      if (!t || !t.classList || !t.classList.contains('item') || !CM.items) return;
+      const x = CM.items.find(i => i.codigo === String(t.value || '').trim());
+      const tr = t.closest && t.closest('tr');
+      if (!x || !tr || tr.querySelector('.desc').value.trim()) return;
+      tr.querySelector('.desc').value = x.descripcion;
+      if (x.unidad) tr.querySelector('.uni').value = x.unidad;
+    }
+    $('reqFilas').addEventListener('change', alElegirItem);
+    $('ocFilas').addEventListener('change', alElegirItem);
+
+    // ---- En camino: registrar el envío (compras o quien pidió) y "Lo recogí" (quien recibe o quien pidió) ----
+    const claveForma = (folio, desde) => 'cmf' + desde + String(folio).replace(/[^A-Za-z0-9]/g, '');
+    function htmlFormEnvio(p) {
+      return '<div class="sat" style="margin-top:8px;background:#fff"><div class="sat-titulo">Registrar el envío (queda en camino)</div><div class="grid">' +
+        '<div><label>Paquetería *</label><input id="' + p + 'Paq" maxlength="60" placeholder="Ej. DHL, Estafeta, Paquetexpress"></div>' +
+        '<div><label>Número de guía *</label><input id="' + p + 'Guia" maxlength="60"></div>' +
+        '<div><label>¿Cuándo llega? (aproximado) *</label><input id="' + p + 'Fecha" type="date"></div></div>' +
+        '<label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input id="' + p + 'Trae" type="checkbox" style="width:auto"> ' +
+        'Lo trae el proveedor (sin paquetería ni guía)</label>' +
+        '<div class="acciones"><button type="button" id="' + p + 'Btn" class="btn" onclick="centroEnviar(\'' + p + '\')">Guardar envío</button>' +
+        '<button type="button" class="btn btn-sec" onclick="centroCerrarForm(\'' + p + '\')">Cancelar</button></div></div>';
+    }
+    /** Pinta (o vuelve a pintar tras una sincronización) el formulario abierto, con lo que ya se había capturado. */
+    function reabrir(p) {
+      const f = CM.formas[p], caja = f && $('cmForm-' + f.desde + '-' + f.folio);
+      if (!caja) return;
+      caja.innerHTML = htmlFormEnvio(p);
+      $(p + 'Fecha').min = hoyLocal();
+      const trae = () => { $(p + 'Paq').disabled = $(p + 'Guia').disabled = !!$(p + 'Trae').checked; };
+      ['Paq', 'Guia', 'Fecha', 'Trae'].forEach(k => {
+        const el = $(p + k);
+        if (k in f.valores) { if (k === 'Trae') el.checked = !!f.valores[k]; else el.value = f.valores[k]; }
+        const guardar = () => { f.valores[k] = k === 'Trae' ? el.checked : el.value; if (k === 'Trae') trae(); };
+        el.addEventListener('input', guardar); el.addEventListener('change', guardar);
+      });
+      trae();
+    }
+    window.centroAbrirEnvio = function (folio, desde) {
+      const p = claveForma(folio, desde);
+      CM.formas[p] = CM.formas[p] || { folio: folio, desde: desde, id: nuevoId(), valores: {} };
+      reabrir(p);
+    };
+    window.centroCerrarForm = function (p) {
+      const f = CM.formas[p];
+      if (!f) return;
+      delete CM.formas[p];
+      const caja = $('cmForm-' + f.desde + '-' + f.folio);
+      if (caja) caja.innerHTML = '';
+    };
+    function trasEnCamino(r, desde, texto) {
+      if (desde === 'com' && r.vista) pintarReqCom(r.vista);
+      if (r.requisiciones) { if (REC_ABIERTA) MISREQ_PENDIENTE = r.requisiciones; else pintarMisReq(r.requisiciones); }
+      aviso('ok', 'Requisición <b>' + esc(r.folio) + '</b>: ' + texto + '.' + extraPortal(r));
+    }
+    window.centroEnviar = function (p) {
+      const f = CM.formas[p], b = $(p + 'Btn');
+      if (!f || b.disabled) return;
+      const trae = !!$(p + 'Trae').checked;
+      const d = { paqueteria: trae ? '' : $(p + 'Paq').value, guia: trae ? '' : $(p + 'Guia').value, fechaEstimada: $(p + 'Fecha').value,
+        traeProveedor: trae, idSolicitud: f.id };
+      if (!trae && !d.paqueteria.trim()) { mostrarError('Escribe la paquetería (o marca "Lo trae el proveedor").'); return; }
+      if (!trae && !d.guia.trim()) { mostrarError('Escribe el número de guía.'); return; }
+      if (!d.fechaEstimada) { mostrarError('Escribe cuándo llega (aproximado).'); return; }
+      b.disabled = true; b.textContent = 'Guardando…';
+      google.script.run.withSuccessHandler(r => { delete CM.formas[p]; trasEnCamino(r, f.desde, 'va en camino'); })
+        .withFailureHandler(err => { b.disabled = false; b.textContent = 'Guardar envío'; mostrarError(err); }).marcarEnCamino(f.folio, d);
+    };
+    window.centroRecogi = function (folio) {
+      const r = MIS_REQ.find(x => x.folio === folio);
+      if (!window.confirm('¿Ya recogiste el material de ' + folio + '? Queda en camino' +
+        (r && r.centroMando ? ' a ' + r.centroMando.sitio + '; allá lo registras al llegar en el centro de mando.' : ' al sitio.'))) return;
+      accionCob(null, 'marcarEnCamino', [folio, { recogido: true, idSolicitud: nuevoId() }], x => trasEnCamino(x, 'req', 'la recogiste; va en camino al sitio'));
+    };
+
+    // ---- Mis requisiciones: dónde se recibe, el envío y los botones ----
+    function htmlCentroReq(r) {
+      const partes = [];
+      if (r.centroMando && ['Autorizada', 'Pagada', 'En camino'].indexOf(r.estado) !== -1) {
+        partes.push('<div class="nota">Se recibe en el <b>centro de mando</b> (' + esc(r.centroMando.sitio) +
+          '): quien recibe en el sitio lo registra allá desde su teléfono.</div>');
+      }
+      if (r.enCamino && r.estado === 'En camino') partes.push('<div class="nota"><b>En camino:</b> ' + esc(textoEnvio(r.enCamino)) + '</div>');
+      const b = [];
+      // Para quien solo recibe, "Lo recogí" es el botón principal
+      if (r.puedeRecoger) b.push(botonChico('Lo recogí', "centroRecogi('" + esc(r.folio) + "')", !!r.puedeEnCamino));
+      if (r.puedeEnCamino) b.push(botonChico(r.estado === 'En camino' ? 'Corregir el envío' : 'Registrar envío (en camino)',
+        "centroAbrirEnvio('" + esc(r.folio) + "','req')"));
+      if (b.length) partes.push('<div class="acciones" style="margin-top:6px">' + b.join('') + '</div>');
+      partes.push('<div id="cmForm-req-' + esc(r.folio) + '"></div>');
+      return partes.join('');
+    }
+    function pintarCentroReq(lista) {
+      (lista || []).forEach(r => {
+        const caja = $('cmCaja-' + r.folio);
+        if (!caja) return;
+        caja.innerHTML = htmlCentroReq(r);
+        const abierto = Object.keys(CM.formas).find(k => CM.formas[k].folio === r.folio && CM.formas[k].desde === 'req');
+        if (abierto) { if (r.puedeEnCamino) reabrir(abierto); else delete CM.formas[abierto]; }
+      });
+    }
+
+    // ---- Compras: proyecto ligado, envío, respaldo y columna de ítem en la orden o propuesta ----
+    function pintarCentroCom(v) {
+      const rq = v.requisicion, o = v.orden, c = v.centroMando;
+      ITEMS_OC = !!c;
+      $('ocTabla').classList.toggle('sin-item', !ITEMS_OC);
+      if (c) pedirItems();
+      const partes = [];
+      if (c) {
+        partes.push('<div class="nota">Proyecto ligado al <b>centro de mando</b> (' + esc(c.proyecto) + '): el material se recibe en <b>' + esc(c.sitio) +
+          '</b> desde el centro de mando y CAPRI cierra la requisición sola cuando allá reportan que llegó todo.</div>');
+      }
+      if (o && o.enCaminoEn && o.estado !== 'Cancelada') {
+        partes.push('<div class="nota"><b>Envío:</b> ' + esc(textoEnvio(o)) + ' · lo registró ' + esc(o.enCaminoPor) + ' el ' + esc(fechaMx(o.enCaminoEn)) + '</div>');
+      }
+      if (c && (v.puedeRecibir || v.puedeCerrar)) {
+        partes.push('<div class="nota aviso-moneda">Recibir o cerrar aquí es solo el respaldo para cuando el centro de mando no funciona: escribe el ' +
+          'motivo. Lo que registres aquí no llega al inventario del sitio (allá se registra a mano).</div>');
+      }
+      if (v.puedeEnCamino) {
+        partes.push('<div class="acciones" style="margin-top:6px">' + botonChico(rq.estado === 'En camino' ? 'Corregir el envío' : 'Registrar envío (en camino)',
+          "centroAbrirEnvio('" + esc(rq.folio) + "','com')") + '</div>');
+      }
+      partes.push('<div id="cmForm-com-' + esc(rq.folio) + '"></div>');
+      const hay = !!(c || (o && o.enCaminoEn) || v.puedeEnCamino);
+      $('rcCentro').classList.toggle('oculto', !hay);
+      $('rcCentro').innerHTML = hay ? partes.join('') : '';
+      const abierto = Object.keys(CM.formas).find(k => CM.formas[k].folio === rq.folio && CM.formas[k].desde === 'com');
+      if (abierto) { if (v.puedeEnCamino) reabrir(abierto); else delete CM.formas[abierto]; }
+      $('rcCierreTitulo').textContent = c ? 'Respaldo: cerrar aquí (el centro de mando no funciona)' : 'Cerrar en lugar de quien la pidió';
+      $('rcCierreNota').textContent = c ? 'Normalmente CAPRI la cierra sola cuando el centro de mando reporta que llegó todo. Ciérrala aquí solo si el ' +
+        'centro de mando no funciona: no llega al inventario del sitio.'
+        : 'Normalmente la cierra el solicitante con "Recibí el material". Hazlo tú solo si no puede (p. ej. ya no está en la obra).';
+      if (c && /Registrar recepción en su lugar/.test($('rcAvance').innerHTML)) {
+        $('rcAvance').innerHTML = $('rcAvance').innerHTML.replace('Registrar recepción en su lugar', 'Respaldo: registrar la recepción aquí');
+      }
+    }
+    function pintarCentroOps(v) {
+      const o = v.orden;
+      if (!o || !o.enCaminoEn || o.estado === 'Cancelada' || !$('opsOrden').insertAdjacentHTML) return;
+      $('opsOrden').insertAdjacentHTML('beforeend', '<div class="tile"><span>En camino</span><b style="font-size:13px">' + esc(textoEnvio(o)) + '</b></div>');
+    }
+
+    // ---- Estado del enlace (Compras): avisos pendientes y última consulta de recepciones ----
+    function cargarEstado() {
+      if (!PERMISOS.compras && !PERMISOS.superadmin) return;
+      google.script.run.withSuccessHandler(pintarEstado).withFailureHandler(() => {}).estadoCentroMando();
+    }
+    function pintarEstado(e) {
+      const caja = $('comCentro');
+      if (!e || (!e.activo && !(e.ligados || []).length)) { caja.classList.add('oculto'); return; }
+      caja.classList.remove('oculto');
+      caja.innerHTML = '<div class="sat-titulo">Centro de mando' + (e.servidor ? ' · ' + esc(e.servidor) : '') + (e.prueba ? ' · avisos de PRUEBA' : '') + '</div>' +
+        (!e.activo ? '<div class="nota aviso-moneda">Apagado: falta PORTAL_URL o PORTAL_SECRETO en Script Properties.</div>'
+        : '<div class="nota">Proyectos ligados: ' + (e.ligados || []).map(x => esc(x.folio) + ' (' + esc(x.proyecto) + ')').join(', ') + '<br>' +
+          (e.pendientes ? '<span class="aviso-moneda">' + esc(e.pendientes) + ' aviso(s) pendiente(s) desde ' + esc(e.masAntiguo) +
+            (e.ultimoError ? ' · ' + esc(e.ultimoError) : '') + '</span>' : 'Sin avisos pendientes') +
+          ' · Última consulta de recepciones: ' + esc(e.ultimoOk || 'nunca') +
+          (e.errorConsulta ? '<br><span class="aviso-moneda">Falló la última consulta: ' + esc(e.errorConsulta) + '</span>' : '') +
+          (e.activador === false ? '<br><span class="aviso-moneda">Falta el activador de 15 minutos: corre prepararCapri() desde el editor.</span>' : '') +
+          '</div><div class="acciones" style="margin-top:6px">' + botonChico('Consultar ahora', 'centroConsultar()') + '</div>');
+    }
+    window.centroConsultar = function () {
+      accionCob(null, 'consultarCentroMando', [], r => {
+        pintarEstado(r.estado);
+        const rc = r.recepciones || {};
+        aviso('ok', 'Centro de mando consultado' + (rc.cerradas ? ': ' + rc.cerradas.length + ' requisición(es) cerrada(s) y ' +
+          (rc.parciales || []).length + ' con recepción parcial.' : '.') +
+          (r.avisos && r.avisos.fallidos ? ' <span class="aviso-moneda">' + esc(r.avisos.fallidos) + ' aviso(s) siguen pendientes.</span>' : ''));
+      });
+    };
+
+    registrarModulo({
+      nombre: 'Centro de mando',
+      // SITIOS_DET llega después de pintar los sitios: se vuelven a pintar con su código ("ZLO · Manzanillo (TIMSA)")
+      alBootstrap(d) { CM.boot = true; recibirCentro(d.centro); if (d.sitiosDetalle) pintarSitios(); },
+      alSincronizar(r) { if (r.centro) recibirCentro(r.centro); if (r.sitiosDetalle) pintarSitios(); },
+      alPermisos() { revisarFormReq(); },
+      // Solo después de recibir la carga inicial (si ya traía los artículos, no se piden otra vez)
+      alVerTab(t) {
+        if (t === 'req' && CM.boot) { if (!CM.articulosPedidos) pedirArticulos(); revisarFormReq(); }
+        if (t === 'com' && CM.boot) cargarEstado();
+      },
+      alFormReq() { revisarFormReq(); },
+      alReqEnviada() { pedirArticulos(); },
+      alMisReq(lista) { pintarCentroReq(lista); },
+      alVistaReqCom(v) { pintarCentroCom(v); },
+      alVistaOps(v) { pintarCentroOps(v); },
+    });
+  })();
 </script>
 
 <script id="mod-pantallas">
