@@ -27,7 +27,7 @@ autorrelleno, y claves SAT internas por producto para contabilidad (con sugerenc
 Aprobaciones · Pagos · Requisiciones · Inventario). Agrega: **permisos por persona** en un libro privado de Administración
 (super admin raíz = leo@, página de Permisos, **delegación** de aprobaciones o compras por fechas); cuentas **`@helgen.services`**
 que entran con un **código por correo** y solo ven Requisiciones; **sesión de 30 días**; **avisos por correo** en cada relevo
-(desde efrain@, sin montos); **solicitud de cotización en PDF** y envío de la orden al proveedor; pantalla de **Pendientes**;
+(desde facilities@, sin montos); **solicitud de cotización en PDF** y envío de la orden al proveedor; pantalla de **Pendientes**;
 **anular** cualquier registro (super admin, con motivo y cascada); "lo que ya pediste" como sugerencias; y el **enlace con el
 centro de mando de Drogheda** (`drogheda.helgen.online`): CAPRI le avisa las órdenes de proyectos ligados (firmado HMAC, sin
 montos), quien recibe marca "En camino"/"Lo recogí", el material se recibe allá (entra al inventario del sitio) y CAPRI trae esas
@@ -57,7 +57,7 @@ recepciones cada 15 min para cerrar la requisición. Detalle en §4.8, §5 (Admi
 | Respaldos antes de Facturas y Operaciones (28/10/2026) | Base de datos: carpeta "Respaldos 2026-10-28 (antes de Facturas y Operaciones)" `1mC6VneuSGboLkYn0AYkDJ2uzaqdrnQP8` (en la carpeta maestra), copia `1hVYVdwwm1U5HttdJdQfpYwr-oKOVCHXuSctNEWZkDXc`. Libro de compras: carpeta "Respaldo 2026-10-28 (antes de Facturas y Operaciones)" `1MxtnxM4VX2bkmF5tlJ_9aNXCtpd0hrl5` **dentro de la carpeta de compras**, copia `1tRrVF44Z2JHEXTP2IRg3A-fV8A7q_BCaQ7Kjmn5zgqU` (solo encabezados). Verificadas pestaña por pestaña. Nacieron con "helgen.tech: lector" (§6.11): **pendiente que el usuario deje en Restringido la carpeta y la copia de compras** |
 | **Manual del Cotizador Helgen** (para personas) | Documento de Claude Docs `https://claude.ai/artifact/AN8w8T2SKmDXSTa1zpFt2C` (id `AN8w8T2SKmDXSTa1zpFt2C`; pestaña `1cdc8401-1062`, cuerpo `86e49b65-80a1`). Se actualiza **junto con este archivo** (regla 14 y §8) |
 | Worker de Cloudflare | `cotizador-helgen`, cuenta de efrain@helgen.tech `badd8bca60b008822a73ca24e983ff43` |
-| Dueño de todo / cuenta de clasp | `efrain@helgen.tech` (la API se ejecuta como esta cuenta) |
+| Dueño de todo / cuenta de clasp | `efrain@helgen.tech` (dueño de los archivos). **Desde CAPRI (29/10/2026, decisión de Leo) la cuenta que publica y corre la API es `facilities@helgen.tech`** (editor de todos los libros y carpetas; la API se ejecuta como quien publica: `USER_DEPLOYING`). Publicar con otra cuenta cambia quién manda los correos y quién lee los libros |
 | Proyecto de prueba "PRUEBAS — Cotizador Helgen (no usar)" | `1wp8_SQofXXUuMkUjmDyyUxYLxx-LdFv-20JaXE7q9entLfEvDKgYtnt0`; deployment `AKfycbwVu2q5…` retirado el 20/10/2026 (404). Para Cobranza (20/10/2026): deployment `AKfycbz9naWOw4Jj0qlta0RjCNifgZLvvJqXpqRnrrsALewSnmn7ydnEIw_zYriIHZjbQ5ugQw`, **retirado** al publicar (404); su `Pruebas.js` crea "PRUEBAS — Cobranza" y tiene `pruebasRondaSinRol()` / `pruebasRondaConRol()`. Para Compras (20/10/2026): deployment `AKfycbxK3ldf…`, **retirado** al terminar (404); `Pruebas.js` con `configurarCompras()` y rondas C1–C3 (§10.7). Para Requisiciones (23/10/2026): deployment `AKfycbybSSE0…`, **retirado** al publicar (404); `Pruebas.js` con `configurarRequisiciones()` y rondas R1–R3 (§10.8). Para carga rápida y claves (23/10/2026): deployment `AKfycbxnFS1f…`, **retirado** al publicar (404); quedó con el código de la API @11 y en la ronda R2 (§10.9). Está en la carpeta `1w-T05ql…` (lo movió el usuario). Solo datos inventados (§10.5). **No es la API.** |
 | **Proyecto anterior (EN DESUSO)** | `1X-qSKgvqKwuDj4iPZBhXlakR5udau9ibVMevhwvlLXgtSkjV4IoQxqwU`; deployment `AKfycbxahS3…` en @10 = aviso "El cotizador se mudó". Código en `anterior/` (§11) |
 
@@ -766,7 +766,7 @@ Spec: "CAPRI — increment 4 spec" (Claude Docs `https://claude.ai/artifact/2kb6
 - Super admin: aprueba y autoriza lo suyo **solo con motivo** (queda en la Bitacora de Administración); anula "todo" (ventas,
   cobranza y compras), con motivo, vista previa de la cascada y **una página central** (Administración → Anular), no un botón en
   cada pantalla. Lo anulado se esconde de listas, totales y pendientes y queda en la página de anulados; restaurar no existe.
-- Correos desde efrain@ (la cuenta que corre la API), nombre "CAPRI Helgen", Reply-To = quien hizo el cambio; nadie recibe aviso de
+- Correos desde la cuenta que corre la API (`facilities@helgen.tech` desde el 29/10/2026; antes efrain@), nombre "CAPRI Helgen", Reply-To = quien hizo el cambio; nadie recibe aviso de
   lo que él mismo hizo; un correo por grupo de destinatarios. El super admin **no** recibe los avisos de aprobaciones y compras
   solo por serlo (integración: si no, le llegaría todo).
 - Delegación por rango de fechas (≤ 90 días), solo aprobaciones y compras.
@@ -925,12 +925,15 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
   1. Revisar y hacer merge del PR a `main`. Respaldar la base de datos, el libro de compras y el de cobranza (como siempre, §2).
   2. Recomendado: probar antes en PRUEBAS (anular toca todos los libros; el enlace con el centro de mando con `PORTAL_PRUEBA=1`).
   3. `npx clasp push --force` y comparar el editor con `clasp clone`.
-  4. **Desde el editor, `prepararCapri()` ANTES del deploy**: pide los permisos nuevos (mandar correo, activadores); crea el
-     libro de Administración, migra los roles de Script Properties a Permisos, `SUPER_ADMIN` = leo@, `SESION_SECRETO`, convierte
-     `SITIOS` a códigos, crea `PortalPendientes`, instala `cadaQuinceMinutos` y manda "[CAPRI] Correo de prueba" a efrain@. Si el
-     registro dice que no se pudo mandar la prueba, **no publicar** (con un permiso sin autorizar fallan todas las llamadas, §6.8).
-     Dejar el libro y la carpeta de Administración en Restringido (efrain@ y leo@) y comprobarlo.
-  5. `npx clasp deploy --deploymentId AKfycbwBjF7…` (API primero) y luego `npx --yes wrangler@4 deploy`.
+  4. **Como `facilities@helgen.tech`** (cuenta de la API desde el 29/10/2026; Leo compartió con ella el proyecto de Apps Script
+     como Editor): en el editor, `prepararCapri()` **antes** del deploy. Pide los permisos nuevos (mandar correo, activadores);
+     crea el libro de Administración (en el Drive de facilities@), migra los roles de Script Properties a Permisos, `SUPER_ADMIN` =
+     leo@, `SESION_SECRETO`, convierte `SITIOS` a códigos, crea `PortalPendientes`, instala `cadaQuinceMinutos` (corre como
+     facilities@) y manda "[CAPRI] Correo de prueba" a facilities@. Si el registro dice que no se pudo mandar la prueba, **no
+     publicar** (§6.8). Compartir el libro de Administración con leo@ y comprobar que no lo lee el dominio.
+  5. Como facilities@: Implementar → Administrar implementaciones → la existente (`AKfycbwBjF7…`) → Nueva versión, con "Ejecutar
+     como: yo (facilities@helgen.tech)" (API primero). Si no deja editar esa implementación, crear una nueva y cambiar `API_URL` en
+     `web/cotizador/index.html`. Luego `npx --yes wrangler@4 deploy`.
   6. Leo, en Administración → Permisos: revisar los roles migrados, ponerles nombre, dar el rol **Aprobaciones** (antes
      `ROL_OPERACIONES`), dar de alta las cuentas @helgen.services con su sitio (Alán en VER en lugar de Paola) y probar la entrada
      con código. Revisar los códigos en Config `SITIOS` (VER, ZLO, ESE, LZC, QRO).
