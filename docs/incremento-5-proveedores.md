@@ -28,9 +28,15 @@ Manual (Compras, Tareas frecuentes, Reglas de oro, Historial, Pendientes).
 5. **Avisos** (no bloquean): falta algún documento; comprobante de domicilio con más de 3 meses; CSF con más de 12 meses. Al emitir
    una orden o mandar una propuesta la respuesta trae `avisoProveedor` y la interfaz lo muestra; al elegir el proveedor en el
    formulario también se avisa.
-6. **Bloqueo del pago**: sin CSF y carátula, `registrarPagoProveedor` responde `PERMISO` "Falta … de <proveedor>: no se registra el
-   pago hasta subirlas…" + `textoExcepcion_()`. Un super admin lo registra escribiendo el motivo (≥ 10, `excepcionSuperAdmin_` →
-   Bitacora de Administración). La interfaz usa `accionConExcepcion` en "Registrar pago".
+6. **Bloqueo del pago** (solo **transferencia**, decisión de integración; avisos corregidos en la revisión del 29/10/2026):
+   `documentosParaPagar(rfc, metodo)` dice qué exige cada método (transferencia: carátula y, si el RFC es nacional, CSF; los demás,
+   nada). `registrarPagoProveedor` responde `PERMISO` "Falta … de <proveedor>: no se registra un pago por transferencia hasta
+   subirla(s)…" + `textoExcepcion_()`. Un super admin lo registra escribiendo el motivo (≥ 10, `excepcionSuperAdmin_` → Bitacora de
+   Administración). La interfaz usa `accionConExcepcion` en "Registrar pago". Los avisos salen del mismo dato:
+   `avisosProveedor(p).faltanPorMetodo` ({método: documentos que exige y no tiene}; también en `proveedorPago` y en los proveedores
+   del formulario de la orden): el texto de bloqueo solo con Transferencia, con los demás métodos un aviso suave ("sí se registra el
+   pago"), y a un proveedor extranjero nunca se le pide la CSF (antes la interfaz decía "no se registra el pago" con cualquier
+   método y pedía la CSF también al extranjero).
 7. **Pago con transferencia**: la vista del pago muestra banco, CLABE (con "Copiar CLABE"), titular y la liga a la carátula.
 8. **Cambio de banco/CLABE/cuenta**: exige subir la carátula nueva en el mismo guardado; queda en la Bitácora de compras (solo
    terminaciones) y manda el correo `proveedor.banco` a compras (sin quien lo hizo): banco y últimos 4 dígitos (antes y después),

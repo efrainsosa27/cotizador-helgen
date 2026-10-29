@@ -9,6 +9,8 @@
 //     Luhn; una CLABE válida no es tarjeta; 20 dígitos o más sí se permiten); fecha y folio no se juntan.
 //  4. Material devuelto sin reponer antes de pagar (crédito del proveedor): el pago esperado es la orden menos lo devuelto,
 //     calculado igual que el total de la orden (importe por renglón redondeado, IVA sobre el subtotal, centavos).
+//  5. Avisos de documentos con documentosParaPagar: faltanPorMetodo (solo la transferencia exige; a un extranjero solo la carátula),
+//     el mismo dato que usa el bloqueo del servidor.
 // Uso: node tests/revision5.test.js .
 'use strict';
 const assert = require('assert');
@@ -282,6 +284,23 @@ aprobaciones(false);
   assert.deepEqual(plain(P.devueltoSinReponer([{ renglon: 1, cantidad: -10, tipo: 'Devolución sin reponer', estado: 'Vigente' },
     { renglon: 1, cantidad: -5, tipo: 'Devolución', estado: 'Vigente' }, { renglon: 2, cantidad: 3, tipo: 'Faltante aceptado', estado: 'Vigente' },
     { renglon: 2, cantidad: -4, tipo: 'Devolución sin reponer', estado: 'Anulada' }])), { 1: 10, 2: 3 }, 'Reponer no descuenta; lo anulado no cuenta');
+}
+
+// ================= 5. Documentos que exige cada método =================
+{
+  const nac = plain(P.avisosProveedor({ rfc: 'EDC200101AB1' }, HOY_ISO).faltanPorMetodo);
+  const ext = plain(P.avisosProveedor({ rfc: '', caratulaId: '' }, HOY_ISO).faltanPorMetodo);
+  assert.deepEqual(nac, { Transferencia: ['csf', 'caratula'], 'Tarjeta de crédito': [], 'Tarjeta de débito': [], Efectivo: [], Cheque: [] });
+  assert.deepEqual(ext.Transferencia, ['caratula'], 'extranjero: nunca la CSF');
+  assert.deepEqual(plain(P.avisosProveedor({ rfc: 'XEXX010101000', caratulaId: 'c' }, HOY_ISO).faltanPorMetodo.Transferencia), [], 'RFC genérico con carátula');
+  // Por el servidor, con el bloqueo real: proveedor extranjero (sin RFC) sin documentos
+  P.exigirDocumentosParaPagar_ = exigirDocsOriginal;
+  const s = siempre(false, { proveedor: { razonSocial: 'GNSS Store Ltd' } });
+  const v = ok('pedro', 'getRequisicion', s.req);
+  assert.deepEqual(plain(v.proveedorPago.faltanPorMetodo).Transferencia, ['caratula'], JSON.stringify(v.proveedorPago));
+  falla('efrain', 'registrarPagoProveedor', [pago(s.req)], /Falta la carátula bancaria de GNSS Store Ltd: no se registra un pago por transferencia hasta subirla/, 'PERMISO');
+  assert.equal(pagar(s.req, { metodo: 'Tarjeta de crédito', referencia: 'AUT 482913' }).vista.requisicion.estado, 'Pagada', 'con tarjeta sí se registra');
+  P.exigirDocumentosParaPagar_ = function () {};
 }
 
 console.log('revision5: ok');

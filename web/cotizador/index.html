@@ -709,8 +709,9 @@
             <tbody id="provLista"><tr><td colspan="5" class="nota">Cargando…</td></tr></tbody>
           </table>
         </div>
-        <div class="nota" style="margin-top:8px">Sin constancia de situación fiscal y carátula bancaria no se registra un pago al proveedor
-          (se le paga a la CLABE de la carátula). Avisos: comprobante de domicilio con más de 3 meses y constancia con más de 12.</div>
+        <div class="nota" style="margin-top:8px">Sin constancia de situación fiscal y carátula bancaria no se registra un pago por transferencia
+          (se le paga a la CLABE de la carátula); a un proveedor extranjero solo se le pide la carátula, y con tarjeta, efectivo o cheque
+          solo se avisa. Avisos: comprobante de domicilio con más de 3 meses y constancia con más de 12.</div>
       </div>
       <div id="provFicha" class="modulo oculto"></div>
     </div>
@@ -4905,8 +4906,22 @@
       const avisos = p ? (p.avisos || []) : [];
       caja.classList.toggle('oculto', !avisos.length);
       caja.innerHTML = avisos.length ? 'Proveedor ' + esc(p.razonSocial) + ': ' + avisos.map(esc).join(' ') +
-        ((p.faltan || []).some(k => k === 'csf' || k === 'caratula') ? ' Sin constancia de situación fiscal y carátula no se le podrá pagar.' : '') +
+        textoSinDocsTransferencia(p) +
         ' ' + botonChico('Ver proveedor', 'PROVEEDORES_F.abrir(' + jsArg(p.id) + ')') : '';
+    }
+
+    // Revisión (incremento 5): solo la transferencia exige documentos (documentosParaPagar en el servidor: carátula y, si el RFC es
+    // nacional, CSF). faltanPorMetodo = {método: documentos que exige y no tiene}; sin él (servidor de antes), faltanPago es de la
+    // transferencia
+    const NOMBRES_DOC = { csf: 'la constancia de situación fiscal', caratula: 'la carátula bancaria' };
+    const docsTexto = l => l.map(k => NOMBRES_DOC[k] || k).join(' y ');
+    function faltanParaPagar(pp, metodo) {
+      if (pp && pp.faltanPorMetodo) return pp.faltanPorMetodo[metodo] || [];
+      return metodo === 'Transferencia' ? ((pp && (pp.faltanPago || pp.faltan)) || []).filter(k => k === 'csf' || k === 'caratula') : [];
+    }
+    function textoSinDocsTransferencia(p) {
+      const l = faltanParaPagar(p, 'Transferencia');
+      return l.length ? ' Sin ' + docsTexto(l).replace(/\b(la|el) /g, '') + ' no se le podrá pagar por transferencia (con tarjeta, efectivo o cheque sí).' : '';
     }
 
     // ---- Pago: banco y CLABE de la carátula, métodos del servidor, documentos que faltan ----
@@ -4919,11 +4934,17 @@
       const pp = v && v.puedePagar ? v.proveedorPago : null;
       if (!pp) { caja.classList.add('oculto'); caja.innerHTML = ''; return; }
       const metodo = $('ppMetodo').value, partes = [];
-      const nombres = { csf: 'la constancia de situación fiscal', caratula: 'la carátula bancaria' };
       partes.push('<b>' + esc(pp.razonSocial) + '</b>' + (pp.registrado && pp.id ? ' · ' + botonChico('Ver proveedor', 'PROVEEDORES_F.abrir(' + jsArg(pp.id) + ')') : ''));
-      if ((pp.faltanPago || []).length) {
-        partes.push('<span class="aviso-moneda">Falta ' + pp.faltanPago.map(k => nombres[k] || k).join(' y ') + ': no se registra el pago hasta ' +
-          'subirlas en Proveedores' + (PERMISOS.superadmin ? ' (como super admin puedes registrarlo escribiendo el motivo; queda en la bitácora).' : '.') + '</span>');
+      const exigidos = faltanParaPagar(pp, metodo), paraTransferir = faltanParaPagar(pp, 'Transferencia');
+      if (exigidos.length) {
+        // Bloquea (el servidor lo niega): solo la transferencia
+        partes.push('<span class="aviso-moneda">Falta ' + docsTexto(exigidos) + ': no se registra el pago por transferencia hasta ' +
+          (exigidos.length > 1 ? 'subirlas' : 'subirla') + ' en Proveedores' +
+          (PERMISOS.superadmin ? ' (como super admin puedes registrarlo escribiendo el motivo; queda en la bitácora).' : '.') + '</span>');
+      } else if (paraTransferir.length) {
+        // Otro método: solo un aviso (sí se registra)
+        partes.push('<span class="nota">Aviso: al proveedor le falta ' + docsTexto(paraTransferir) + '. Con ' + esc(metodo.toLowerCase()) +
+          ' sí se registra el pago; solo la transferencia lo exige.</span>');
       }
       if (metodo === 'Transferencia') {
         partes.push(pp.clabe ? 'Transfiere a la CLABE de la carátula: <b>' + esc(pp.banco) + '</b> · CLABE <b style="letter-spacing:1px">' + esc(pp.clabe) + '</b> ' +

@@ -10046,7 +10046,7 @@ function proveedorParaOrden_(p) {
   const a = avisosProveedor(p, hoyIso_());
   return { id: p.id, razonSocial: p.razonSocial, rfc: p.rfc, contacto: p.contacto, correo: p.correo, telefono: p.telefono,
     actualizado: p.actualizado, diasCredito: p.diasCredito, formaPagoHabitual: formaPagoHabitualDe(p), etiqueta: p.etiqueta,
-    activo: p.activo, faltan: a.faltan, avisos: a.avisos };
+    activo: p.activo, faltan: a.faltan, faltanPorMetodo: a.faltanPorMetodo, avisos: a.avisos };
 }
 
 /**
@@ -10056,12 +10056,16 @@ function proveedorParaOrden_(p) {
 function proveedorDePago_(libro, orden) {
   const p = proveedorDeOrden_(libro, orden);
   if (!p) {
-    return { id: orden.proveedorId, razonSocial: orden.proveedor, registrado: false, faltanPago: DOCS_PARA_PAGAR.slice(),
+    const faltanPorMetodo = {};
+    METODOS_PAGO.forEach(m => { faltanPorMetodo[m] = documentosParaPagar(orden.rfc, m); }); // sin ficha: no tiene ninguno
+    return { id: orden.proveedorId, razonSocial: orden.proveedor, rfc: orden.rfc, registrado: false, faltanPago: DOCS_PARA_PAGAR.slice(),
+      faltanPorMetodo: faltanPorMetodo,
       avisos: ['El proveedor no está en la lista de proveedores.'], banco: '', clabe: '', cuenta: '', titular: '' };
   }
-  const a = avisosProveedor(p, hoyIso_());
+  const a = avisosProveedor(Object.assign({}, p, { rfc: p.rfc || orden.rfc }), hoyIso_()); // el RFC de la orden si la ficha no lo trae
   return { id: p.id, razonSocial: p.razonSocial, rfc: p.rfc, registrado: true, banco: p.banco, clabe: p.clabe, cuenta: p.cuenta,
     titular: p.titular, caratulaUrl: p.caratulaUrl, caratulaFecha: p.caratulaFecha, csfUrl: p.csfUrl, faltanPago: a.faltanPago,
+    faltanPorMetodo: a.faltanPorMetodo,
     avisos: a.avisos };
 }
 
@@ -10071,7 +10075,8 @@ function proveedorDePago_(libro, orden) {
  */
 function avisoDeProveedor_(libro, id, razonSocial) {
   try {
-    const p = proveedorPorId_(libro, id) || { razonSocial: razonSocial || String(id || '') };
+    const p = proveedorPorId_(libro, id) || { razonSocial: razonSocial || String(id || ''),
+      rfc: /^SIN-RFC:/.test(String(id || '')) ? '' : String(id || '') }; // nuevo: el id es su RFC (si lo trae)
     return textoAvisoProveedor(p, avisosProveedor(p, hoyIso_()));
   } catch (e) {
     return '';
@@ -10086,13 +10091,14 @@ function exigirDocumentosParaPagar_(libro, orden, motivoExcepcion, metodo) {
   const p = proveedorDePago_(libro, orden);
   // Integración (29/10/2026): el bloqueo es para lo que se transfiere a una CLABE; con tarjeta (compra en tienda), efectivo o
   // cheque solo queda el aviso. Proveedor extranjero (sin RFC o RFC genérico): sin CSF, pero la transferencia sí pide carátula.
-  const exigidos = documentosParaPagar(p.rfc || orden.rfc || '', metodo);
-  const faltan = exigidos.filter(k => p.faltanPago.indexOf(k) !== -1 || !p.registrado);
+  // Lo mismo que ve la interfaz (proveedorDePago_.faltanPorMetodo, con documentosParaPagar)
+  const faltan = (p.faltanPorMetodo || {})[metodo] || [];
   if (!faltan.length) return;
   const falta = listaConY(faltan.map(k => DOCS_PROVEEDOR[k].nombre));
   if (!excepcionPosible_(motivoExcepcion)) {
-    throw errorPermiso_('Falta ' + falta + ' de ' + (orden.proveedor || 'el proveedor') + ': no se registra el pago hasta subirlas en ' +
-      'Compras → Proveedores (se le paga a la CLABE de la carátula).' + textoExcepcion_());
+    throw errorPermiso_('Falta ' + falta + ' de ' + (orden.proveedor || 'el proveedor') + ': no se registra un pago por transferencia hasta ' +
+      (faltan.length > 1 ? 'subirlas' : 'subirla') + ' en Compras → Proveedores (se le paga a la CLABE de la carátula; con tarjeta, ' +
+      'efectivo o cheque sí se registra).' + textoExcepcion_());
   }
   excepcionSuperAdmin_('pagar a un proveedor sin documentos (falta ' + falta + ')', orden.folio, motivoExcepcion);
 }
@@ -10496,8 +10502,11 @@ function camposCambiados(antes, nuevo) {
 }
 
 /**
- * Avisos de un proveedor (no bloquean nada salvo el pago): {faltan (tipos de documento que no tiene), faltanPago (los que exige el
- * pago: CSF y carátula), vencidos (domicilio > 3 meses, CSF > 12 meses), avisos (textos)}. hoy = "AAAA-MM-DD".
+ * Avisos de un proveedor (no bloquean nada salvo el pago): {faltan (tipos de documento que no tiene), faltanPago (CSF y carátula
+ * que no tiene: lo de siempre, para listas y filtros), faltanPorMetodo ({método del pago: documentos que ese método exige y no
+ * tiene}, con documentosParaPagar: solo Transferencia exige algo y a un proveedor extranjero no se le pide la CSF; revisión del
+ * 29/10/2026: la interfaz decide el aviso con esto), vencidos (domicilio > 3 meses, CSF > 12 meses), avisos (textos)}.
+ * hoy = "AAAA-MM-DD".
  */
 function avisosProveedor(p, hoy) {
   const x = p || {};
@@ -10512,15 +10521,20 @@ function avisosProveedor(p, hoy) {
   };
   viejo('domicilio', MESES_AVISO_DOMICILIO, 'El comprobante de domicilio tiene más de ' + MESES_AVISO_DOMICILIO + ' meses');
   viejo('csf', MESES_AVISO_CSF, 'La constancia de situación fiscal tiene más de ' + MESES_AVISO_CSF + ' meses');
-  return { faltan: faltan, faltanPago: DOCS_PARA_PAGAR.filter(k => !x[k + 'Id']), vencidos: vencidos, avisos: avisos };
+  const faltanPorMetodo = {};
+  METODOS_PAGO.forEach(m => { faltanPorMetodo[m] = documentosParaPagar(x.rfc, m).filter(k => !x[k + 'Id']); });
+  return { faltan: faltan, faltanPago: DOCS_PARA_PAGAR.filter(k => !x[k + 'Id']), faltanPorMetodo: faltanPorMetodo, vencidos: vencidos,
+    avisos: avisos };
 }
 
 /** Texto de avisoProveedor (orden o propuesta); '' si no hay nada que avisar. */
 function textoAvisoProveedor(p, a) {
   if (!a || !a.avisos.length) return '';
-  return 'Proveedor ' + p.razonSocial + ': ' + a.avisos.join(' ') + (a.faltanPago.length ? ' Sin ' +
-    listaConY(a.faltanPago.map(k => DOCS_PROVEEDOR[k].nombre.replace(/^(la|el) /, ''))) + ' no se le podrá registrar un pago por transferencia: ' +
-    'súbelas en Compras → Proveedores.' : '');
+  // Revisión: lo que exige la transferencia (a un proveedor extranjero solo la carátula); los demás métodos no exigen nada
+  const exigidos = a.faltanPorMetodo ? a.faltanPorMetodo.Transferencia || [] : a.faltanPago;
+  return 'Proveedor ' + p.razonSocial + ': ' + a.avisos.join(' ') + (exigidos.length ? ' Sin ' +
+    listaConY(exigidos.map(k => DOCS_PROVEEDOR[k].nombre.replace(/^(la|el) /, ''))) + ' no se le podrá registrar un pago por transferencia: ' +
+    (exigidos.length > 1 ? 'súbelas' : 'súbela') + ' en Compras → Proveedores.' : '');
 }
 
 /** Lo que va en la lista de proveedores: sin la CLABE completa ni la cuenta (solo sus últimos 4), con documentos y avisos. */
@@ -10533,7 +10547,7 @@ function resumenProveedor(p, hoy) {
   return { id: p.id, razonSocial: p.razonSocial, rfc: p.rfc, contacto: p.contacto, correo: p.correo, telefono: p.telefono,
     banco: p.banco, clabe4: ultimos4(p.clabe), cuenta4: ultimos4(p.cuenta), formaPagoHabitual: formaPagoHabitualDe(p),
     diasCredito: p.diasCredito, activo: p.activo !== false, actualizado: p.actualizado, etiqueta: p.etiqueta || p.razonSocial,
-    documentos: docs, faltan: a.faltan, faltanPago: a.faltanPago, avisos: a.avisos };
+    documentos: docs, faltan: a.faltan, faltanPago: a.faltanPago, faltanPorMetodo: a.faltanPorMetodo, avisos: a.avisos };
 }
 
 /** Ficha completa para la vista (getProveedor / guardarProveedor): todo lo de la hoja + documentos y avisos (sin la fila). */

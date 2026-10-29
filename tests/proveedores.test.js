@@ -122,7 +122,10 @@ assert.deepEqual(plain(av.faltan), []); assert.deepEqual(plain(av.faltanPago), [
 assert(/comprobante de domicilio tiene más de 3 meses/.test(av.avisos.join(' ')) && /constancia de situación fiscal tiene más de 12 meses/.test(av.avisos.join(' ')));
 av = P.avisosProveedor({ csfId: 'a', csfFecha: meses(-11), caratulaId: 'b', domicilioId: 'c', domicilioFecha: masDias(-60) }, HOY_ISO);
 assert.deepEqual(plain(av.avisos), [], 'documentos al día');
-assert(/Sin constancia de situación fiscal y carátula bancaria no se le podrá registrar un pago por transferencia/.test(P.textoAvisoProveedor({ razonSocial: 'X' }, P.avisosProveedor({}, HOY_ISO))));
+// Revisión (29/10/2026): solo la transferencia exige documentos; a un proveedor sin RFC nacional (extranjero) solo la carátula
+assert(/Sin constancia de situación fiscal y carátula bancaria no se le podrá registrar un pago por transferencia: súbelas/.test(
+  P.textoAvisoProveedor({ razonSocial: 'X' }, P.avisosProveedor({ rfc: 'EDC200101AB1' }, HOY_ISO))));
+assert(/Sin carátula bancaria no se le podrá registrar un pago por transferencia: súbela/.test(P.textoAvisoProveedor({ razonSocial: 'X' }, P.avisosProveedor({}, HOY_ISO))));
 assert.equal(P.textoAvisoProveedor({ razonSocial: 'X' }, P.avisosProveedor({ csfId: 1, caratulaId: 2, domicilioId: 3 }, HOY_ISO)), '');
 assert.equal(P.nombreCarpetaProveedor('', 'Tubos: "SA"'), 'SIN-RFC — Tubos SA');
 assert.equal(P.nombreDocProveedor('EDC200101AB1', 'caratula', 'pdf', 2), 'EDC200101AB1 — Carátula bancaria (2).pdf');
@@ -487,8 +490,27 @@ setImmediate(() => {
   $('ppMetodo').value = 'Tarjeta de débito';
   $('ppMetodo').oyentes.change.forEach(f => { vm.runInContext('REQC = ' + JSON.stringify(vPago), ui); f(); });
   assert(/Nunca<\/b> escribas el número de la tarjeta/.test($('ppProveedor').innerHTML));
-  ui.MODS[0].alVistaReqCom(Object.assign({}, vPago, { proveedorPago: Object.assign({}, vPago.proveedorPago, { faltanPago: ['csf'] }) }), false);
-  assert(/Falta la constancia de situación fiscal: no se registra el pago/.test($('ppProveedor').innerHTML));
+  // Revisión (29/10/2026): con tarjeta solo un aviso; con transferencia, el bloqueo (lo que dice faltanPorMetodo del servidor)
+  const sinCsf = Object.assign({}, vPago, { proveedorPago: Object.assign({}, vPago.proveedorPago, { faltanPago: ['csf'],
+    faltanPorMetodo: { Transferencia: ['csf'], 'Tarjeta de crédito': [], 'Tarjeta de débito': [], Efectivo: [], Cheque: [] } }) });
+  ui.MODS[0].alVistaReqCom(sinCsf, false);
+  assert(!/no se registra el pago/.test($('ppProveedor').innerHTML) &&
+    /Aviso: al proveedor le falta la constancia de situación fiscal\. Con tarjeta de débito sí se registra el pago/.test($('ppProveedor').innerHTML),
+    $('ppProveedor').innerHTML);
+  $('ppMetodo').value = 'Transferencia';
+  ui.MODS[0].alVistaReqCom(sinCsf, false);
+  assert(/Falta la constancia de situación fiscal: no se registra el pago por transferencia hasta subirla/.test($('ppProveedor').innerHTML));
+  // Extranjero sin carátula: nunca se le pide la CSF
+  ui.MODS[0].alVistaReqCom(Object.assign({}, vPago, { proveedorPago: Object.assign({}, vPago.proveedorPago, { rfc: '', faltanPago: ['csf', 'caratula'],
+    faltanPorMetodo: { Transferencia: ['caratula'], 'Tarjeta de crédito': [], 'Tarjeta de débito': [], Efectivo: [], Cheque: [] } }) }), false);
+  assert(/Falta la carátula bancaria: no se registra/.test($('ppProveedor').innerHTML) && !/constancia/.test($('ppProveedor').innerHTML));
+  // Formulario de la orden: el aviso dice "por transferencia" (y nunca pide la CSF a un extranjero)
+  vm.runInContext('REQC = ' + JSON.stringify({ proveedores: [{ id: 'GNSS', razonSocial: 'GNSS Store', etiqueta: 'GNSS Store', avisos: ['Falta la carátula bancaria.'],
+    faltan: ['csf', 'caratula', 'domicilio'], faltanPorMetodo: { Transferencia: ['caratula'] } }] }), ui);
+  $('prvRazon').value = 'GNSS Store'; $('prvRazon').oyentes.input.forEach(f => f());
+  assert(/Sin carátula bancaria no se le podrá pagar por transferencia \(con tarjeta, efectivo o cheque sí\)\./.test($('prvAviso').innerHTML) &&
+    !/constancia/.test($('prvAviso').innerHTML.replace('Falta la carátula bancaria.', '')), $('prvAviso').innerHTML);
+  vm.runInContext('REQC = ' + JSON.stringify(vPago), ui);
   // Crédito: el cierre de compras dice "Registrar que llegó"
   ui.MODS[0].alVistaReqCom(Object.assign({}, vPago, { recibeAntesDePagar: true, centroMando: null }), false);
   assert(/Registrar que llegó/.test($('btnCerrarCom').textContent));
