@@ -119,6 +119,17 @@ abierta o una resuelta con movimiento; la de otro renglón de una retenida sí s
 quedaba Autorizada con la orden Pagada y ya no había forma de pagarla ni cerrarla; revisión del 29/10, `tests/revision5.test.js`).
 Con la requisición retenida, compras no puede cancelar el pago hasta resolver.
 
+**Anular y devoluciones (revisión del 29/10/2026, `tests/revision5.test.js` §2).** Anular una orden o una requisición (módulo E)
+arrastra sus devoluciones: salen en la vista previa como "Devolución DEV-…", quedan con estado `Anulada` en la hoja (y sus
+movimientos `Devolución…`/`Faltante aceptado` también), tienen su fila en `Anulaciones` y salen de listas y Pendientes. Antes una
+devolución Abierta se quedaba huérfana: no se podía resolver (su orden estaba anulada) y retenía para siempre a la requisición
+reautorizada con otra orden. Además `devolucionAbiertaDe_(libro, req)` solo cuenta las devoluciones de la **orden vigente** de la
+requisición (una de una orden anterior ya no retiene), y las listas y Pendientes esconden las de una orden anulada. Anular **sola**
+una recepción con una devolución abierta o resuelta con movimiento en sus renglones se rechaza (misma regla que `cancelarRecepcion`,
+`devolucionQueImpideCancelar`): "anula la orden si toda la compra fue un error". El efecto "la orden espera el material otra vez" de
+anular una recepción solo aplica a entradas por compra: anular un "Lo recogí" no reabre la requisición. Las fotos no se renombran
+"ANULADO —" (decisión de la revisión: no hace falta).
+
 ## 5. Centro de mando (contrato §5, lado de CAPRI)
 
 - `aplicarRecepcionPortal_` (dentro del candado): copia la diferencia como siempre, pero (a) el tope es lo pedido menos el
@@ -257,6 +268,7 @@ Devoluciones existe; centro: los movimientos de "Lo recogí"). `bash tests/todas
   DOM simulado.
 - No hay foto de evidencia de la devolución física (guía) más allá del texto `guia_devolucion`.
 - Reportar un problema no avisa al centro de mando (el contrato solo tiene `oc.devolucion` al resolver).
-- Anular una requisición esconde sus devoluciones (por `esAnulado_` de la requisición), pero no les cambia el estado en la hoja.
+- ~~Anular una requisición esconde sus devoluciones pero no les cambia el estado~~ (resuelto en la revisión del 29/10, ver
+  "Anular y devoluciones" abajo).
 - `recepcionesAntesDeCancelar_` (cancelar una orden ligada) puede tardar más si hay fotos por bajar en ese momento.
 - Pasar a `CLAUDE.md` y al Manual al integrar.

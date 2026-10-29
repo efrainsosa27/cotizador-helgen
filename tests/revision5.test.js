@@ -2,6 +2,9 @@
 // reproduce el escenario de la revisión (fallaba antes del arreglo) y comprueba el comportamiento corregido:
 //  1. Cancelar (o anular) una recepción de una requisición retenida por una devolución (Recibida con la orden Pagada) la regresa
 //     a Pagada (o En camino), no a Autorizada con la orden pagada (se quedaba atorada para siempre).
+//  2. Anular × devoluciones: anular una orden o una requisición anula sus devoluciones (vista previa, Anulaciones, estado Anulada,
+//     fuera de Pendientes); una devolución de una orden anterior no retiene a la orden nueva; anular sola una recepción con
+//     devoluciones se rechaza (como cancelarRecepcion); anular "Lo recogí" no reabre la requisición.
 // Uso: node tests/revision5.test.js .
 'use strict';
 const assert = require('assert');
@@ -105,5 +108,90 @@ aprobaciones(true);
   assert.equal(P.transicionReq('Recibida', 'cancelarRecepcionPagada'), 'Pagada');
 }
 aprobaciones(false);
+
+// ================= 2. Anular × devoluciones =================
+{
+  const hojaDev = () => H('Devoluciones');
+  const estadoDev = folio => (devs().find(r => r[0] === folio) || [])[14];
+  const anuladas = () => A.libros[props.ADMIN_DB_ID].pest.Anulaciones.m.slice(1).map(r => r[2] + ' ' + r[3]);
+  const pendDev = () => ok('pedro', 'pendientes', false).items.filter(x => x.tipo === 'devolucion').map(x => x.folio);
+  // (a) Orden anulada con una devolución abierta: la devolución se anula con ella
+  const s = siempre(true);
+  ok('obrero', 'cerrarRequisicion', s.req, '', { renglones: [{ renglon: 1, foto: F, problema: { tipo: 'Dañado', cantidad: 5, comentario: 'Rollo mojado', foto: F } },
+    { renglon: 2, foto: F }] });
+  const dv = ultimaDev();
+  assert.deepEqual([estadoDev(dv), pendDev().indexOf(dv) !== -1], ['Abierta', true]);
+  const pv = ok('leo', 'previsualizarAnulacion', s.oc);
+  assert(pv.registros.some(r => r.tipo === 'Devolución' && r.folio === dv), 'vista previa con la devolución: ' + JSON.stringify(pv.registros));
+  assert(!pv.registros.some(r => r.tipo === 'Recepción' && /^DEV-/.test(r.folio)), 'los movimientos de una devolución no salen como "Recepción"');
+  ok('leo', 'anular', s.oc, 'Orden emitida al proveedor equivocado', id('an'));
+  assert.equal(estadoDev(dv), 'Anulada', 'la devolución queda Anulada en la hoja');
+  assert(anuladas().indexOf('Devolución ' + dv) !== -1, 'fila en Anulaciones: ' + JSON.stringify(anuladas()));
+  assert.equal(pendDev().indexOf(dv), -1, 'sale de Pendientes');
+  assert.equal(ok('pedro', 'listarDevoluciones', { estado: 'Abierta' }).filter(x => x.folio === dv).length, 0);
+  // La requisición regresa a Solicitada; con otra orden, pagada y recibida, se cierra (ya no la retiene la devolución vieja)
+  assert.equal(ok('pedro', 'getRequisicion', s.req).requisicion.estado, 'Solicitada');
+  ok('efrain', 'autorizarRequisicion', s.req, OCD());
+  pagar(s.req);
+  let mias = ok('obrero', 'cerrarRequisicion', s.req, '', { renglones: [{ renglon: 1, foto: F }, { renglon: 2, foto: F }] });
+  assert.equal(mias.find(x => x.folio === s.req).estado, 'Cerrada', 'con la orden nueva se cierra');
+
+  // Devolución "huérfana" de una orden anulada antes de este arreglo (Abierta en la hoja): no retiene a la orden nueva ni sale
+  // en listas ni en Pendientes
+  const s2 = siempre(true);
+  ok('obrero', 'cerrarRequisicion', s2.req, '', { renglones: [{ renglon: 1, foto: F, problema: { tipo: 'Dañado', cantidad: 5, comentario: 'Rollo mojado', foto: F } },
+    { renglon: 2, foto: F }] });
+  const dv2 = ultimaDev();
+  ok('leo', 'anular', s2.oc, 'Orden emitida al proveedor equivocado', id('an'));
+  hojaDev().find(r => r[0] === dv2)[14] = 'Abierta'; // como la dejaba el código anterior
+  for (const k of Object.keys(A.cache)) delete A.cache[k];
+  assert.equal(pendDev().indexOf(dv2), -1, 'huérfana: fuera de Pendientes');
+  assert.equal(ok('pedro', 'listarDevoluciones', '').filter(x => x.folio === dv2).length, 0, 'huérfana: fuera de la lista');
+  ok('efrain', 'autorizarRequisicion', s2.req, OCD());
+  pagar(s2.req);
+  mias = ok('obrero', 'cerrarRequisicion', s2.req, '', { renglones: [{ renglon: 1, foto: F }, { renglon: 2, foto: F }] });
+  assert.equal(mias.find(x => x.folio === s2.req).estado, 'Cerrada', 'la devolución de la orden anterior no la retiene');
+  ok('pedro', 'cerrarRequisicionCompras', siempre(true).req, 'El trabajador ya no está en la obra', ''); // sin devoluciones: igual que antes
+
+  // Requisición anulada con devoluciones (una resuelta con movimiento y una abierta): todas se anulan
+  const s3 = siempre(true);
+  ok('obrero', 'cerrarRequisicion', s3.req, '', { renglones: [{ renglon: 1, foto: F }, { renglon: 2, foto: F }] });
+  ok('obrero', 'reportarProblema', s3.req, { renglon: 1, cantidad: 10, tipo: 'Dañado', comentario: 'Rollo aplastado', foto: F, idSolicitud: id('d') });
+  const dvR = ultimaDev();
+  ok('pedro', 'resolverDevolucion', dvR, { resolucion: 'Reponer' });
+  ok('obrero', 'reportarProblema', s3.req, { renglon: 2, cantidad: 1, tipo: 'Dañado', comentario: 'Tubo doblado', foto: F, idSolicitud: id('d') });
+  const dvA = ultimaDev();
+  const pv3 = ok('leo', 'previsualizarAnulacion', s3.req);
+  assert.deepEqual(pv3.registros.filter(r => r.tipo === 'Devolución').map(r => r.folio).sort(), [dvA, dvR].sort());
+  ok('leo', 'anular', s3.req, 'Requisición duplicada por error', id('an'));
+  assert.deepEqual([estadoDev(dvR), estadoDev(dvA)], ['Anulada', 'Anulada']);
+  assert(movsDe(s3.oc).filter(r => r[0] === dvR).every(r => r[18] === 'Anulada'), 'el movimiento de la devolución también');
+
+  // (b) Anular sola una recepción con una devolución resuelta (Reponer) se rechaza, como cancelarRecepcion
+  const s4 = siempre(true);
+  ok('obrero', 'cerrarRequisicion', s4.req, '', { renglones: [{ renglon: 1, foto: F }, { renglon: 2, foto: F }] });
+  const rec4 = movsDe(s4.oc)[0][0];
+  ok('obrero', 'reportarProblema', s4.req, { renglon: 1, cantidad: 10, tipo: 'Dañado', comentario: 'Rollo aplastado', foto: F, idSolicitud: id('d') });
+  const dv4 = ultimaDev();
+  ok('pedro', 'resolverDevolucion', dv4, { resolucion: 'Reponer' });
+  falla('pedro', 'cancelarRecepcion', [rec4, 'Se registró mal'], new RegExp('tiene la devolución ' + dv4 + ' \\(resuelta\\)'));
+  const re = new RegExp('recepción ' + rec4 + ' tiene la devolución ' + dv4 + ' \\(resuelta\\): no se puede anular la recepción sola.*anula la orden ' + s4.oc);
+  falla('leo', 'previsualizarAnulacion', [rec4], re);
+  falla('leo', 'anular', [rec4, 'Recepción registrada por error', id('an')], re);
+  const v4 = ok('pedro', 'getRequisicion', s4.req);
+  assert(v4.avance.every(l => l.recibido >= 0 && l.pendiente <= l.pedido), 'nada negativo: ' + JSON.stringify(v4.avance));
+
+  // (c) Anular "Lo recogí" no reabre la requisición (no cuenta como recepción)
+  const s5 = siempre(true);
+  ok('obrero', 'marcarEnCamino', s5.req, { recogido: true, renglones: [{ renglon: 1, foto: F }, { renglon: 2, foto: F }], idSolicitud: id('e') });
+  ok('obrero', 'cerrarRequisicion', s5.req, '', { renglones: [{ renglon: 1, foto: F }, { renglon: 2, foto: F }] });
+  assert.equal(ok('pedro', 'getRequisicion', s5.req).requisicion.estado, 'Cerrada');
+  const recogi = movsDe(s5.oc).find(r => r[3] === 'Recogido en tienda')[0];
+  const pv5 = ok('leo', 'previsualizarAnulacion', recogi);
+  assert.deepEqual(pv5.efectos, [], 'sin efectos: ' + JSON.stringify(pv5.efectos));
+  ok('leo', 'anular', recogi, 'Foto de recogida equivocada', id('an'));
+  const v5 = ok('pedro', 'getRequisicion', s5.req);
+  assert.deepEqual([v5.requisicion.estado, v5.orden.estado], ['Cerrada', 'Recibida'], 'sigue Cerrada');
+}
 
 console.log('revision5: ok');

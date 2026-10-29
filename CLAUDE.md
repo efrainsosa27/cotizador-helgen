@@ -420,7 +420,8 @@ Contrato entre módulos y con el centro de mando: `docs/incremento-5.md`; detall
   `resolverDevolucion` (Reponer · Devolver al proveedor · Cancelar renglón · Conservar); transiciones `recibirRetenida`,
   `pagarRetenida`, `cerrarRetenida`, `devolucion*`: con una devolución abierta la requisición se queda Recibida. Cancelar o anular
   una recepción de una Recibida la regresa con `accionCancelarRecepcion(orden)` (En camino · Pagada si la orden ya está pagada,
-  `cancelarRecepcionPagada` · Autorizada). Centro de mando:
+  `cancelarRecepcionPagada` · Autorizada). Anular una orden o requisición anula también sus devoluciones (tipo "Devolución" en
+  Anulaciones); `devolucionAbiertaDe_(libro, req)` solo mira la orden vigente; una recepción con devoluciones no se anula sola. Centro de mando:
   `traerRecepcionesPortal` baja las fotos (fuera del candado), las guarda en Drive y avisa `foto-archivada`; un problema del sitio crea
   una DEV (`origen_clave`); al resolver, aviso `oc.devolucion`. Correos `dev.reportada`, `dev.resuelta`, `req.pagada`.
 

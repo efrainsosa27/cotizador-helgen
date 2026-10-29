@@ -3469,7 +3469,7 @@ function registrarPagoProveedor(p, motivoExcepcion) {
     // Con todo ya recibido (Recibida), el pago la cierra y la orden queda Recibida; En camino sigue En camino (pagada)
     const yaRecibida = req.estado === REQ_RECIBIDA, enCamino = req.estado === REQ_EN_CAMINO;
     // H (incremento 5): con una devolución abierta el pago no la cierra (sigue Recibida, la orden Pagada) hasta resolverla
-    const retenida = yaRecibida ? devolucionAbiertaDe_(libro, req.folio) : '';
+    const retenida = yaRecibida ? devolucionAbiertaDe_(libro, req) : '';
     const nuevo = transicionReq(req.estado, retenida ? 'pagarRetenida' : yaRecibida ? 'pagarRecibida' : enCamino ? 'pagarEnCamino' : 'pagar');
     const { hoja: hO, orden } = buscarOrden_(libro, req.ocFolio);
     if (d0.ocFolio && String(d0.ocFolio).trim().toUpperCase() !== orden.folio.toUpperCase()) {
@@ -3971,7 +3971,7 @@ function registrarRecepcion(p) {
     if (rec.completo) {
       // H: con una devolución abierta no se cierra: queda Recibida (la orden sigue Pagada) hasta que compras la resuelva
       retenida = (req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && orden.estado === OC_PAGADA)) ?
-        devolucionAbiertaDe_(libro, req.folio) : '';
+        devolucionAbiertaDe_(libro, req) : '';
       if (retenida) {
         nuevo = transicionReq(req.estado, 'recibirRetenida');
         hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(yo)]]);
@@ -8629,7 +8629,7 @@ function aplicarRecepcionPortal_(libro, x, det, res) {
   if (x.completa === true && req.estado !== REQ_RECIBIDA && !completaVieja) {
     const pagada = orden.estado === OC_PAGADA;
     // H: con una devolución abierta (p. ej. el sitio reportó un problema en esta misma recepción) no se cierra: queda Recibida
-    const retenida = pagada ? devolucionAbiertaDe_(libro, req.folio) : '';
+    const retenida = pagada ? devolucionAbiertaDe_(libro, req) : '';
     const nuevo = transicionReq(req.estado, retenida ? 'recibirRetenida' : pagada ? 'recibirPagada' : 'recibir');
     const nota = 'Recibido en ' + lugar;
     if (pagada && !retenida) hO.getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(fecha), t(recibio + ' (centro de mando)')]]);
@@ -9216,7 +9216,8 @@ const ESTADO_ANULADA = 'Anulada';
 const PREFIJO_ARCHIVO_ANULADO = 'ANULADA — ', PREFIJO_CARPETA_ANULADA = 'ANULADO — ';
 const MOTIVO_ANULAR_MIN = 10, MOTIVO_ANULAR_MAX = 500;
 const TIPOS_ANULAR = { cotizacion: 'Cotización', proyecto: 'Proyecto', contrato: 'Contrato', pago: 'Pago de cliente',
-  req: 'Requisición', oc: 'Orden de compra', pgp: 'Pago a proveedor', fpr: 'Factura de proveedor', rec: 'Recepción' };
+  req: 'Requisición', oc: 'Orden de compra', pgp: 'Pago a proveedor', fpr: 'Factura de proveedor', rec: 'Recepción',
+  dev: 'Devolución' }; // incremento 5: solo en cascada (de su orden o su requisición)
 const PREFIJOS_ANULAR = { PRY: 'proyecto', PAG: 'pago', REQ: 'req', OC: 'oc', PGP: 'pgp', FPR: 'fpr', REC: 'rec' };
 
 /**
@@ -9326,7 +9327,7 @@ function datosAnular_() {
   const may = s => String(s || '').trim().toUpperCase();
   const lc = libroCobranzaSiExiste_(), lo = libroComprasSiExiste_();
   const d = { libroCob: lc, libroCom: lo, anulados: anuladosDeHoja_(), cot: [], pry: [], contratos: [], esquemas: [], pagos: [],
-    ordenes: [], reqs: [], pgp: [], fpr: [], movs: [] };
+    ordenes: [], reqs: [], pgp: [], fpr: [], movs: [], devs: [] };
   db_().getSheetByName('Cotizaciones').getDataRange().getValues().slice(1).forEach((r, i) => {
     if (!String(r[0] || '').trim()) return;
     d.cot.push({ folio: String(r[0]).trim(), fila: i + 2, valores: r, proyectoFolio: may(r[19]), cliente: String(r[2] || ''),
@@ -9367,6 +9368,10 @@ function datosAnular_() {
   });
   filasSiHay_(lo, HOJAS_COMPRAS, 'MovimientosInventario').forEach((r, i) => {
     if (String(r[0] || '').trim()) d.movs.push(Object.assign(movDesdeFila_(r, i + 2), { valores: r }));
+  });
+  // Incremento 5 (revisión): devoluciones DEV-… (se anulan con su orden o su requisición)
+  filasSiHay_(lo, HOJAS_COMPRAS, 'Devoluciones').forEach((r, i) => {
+    if (String(r[0] || '').trim()) d.devs.push(Object.assign(devDesdeFila_(r, i + 2), { valores: r }));
   });
   return d;
 }
@@ -9411,6 +9416,7 @@ function planAnulacion_(d, objetivo) {
   const recepciones = () => {
     const g = {}, orden = [];
     d.movs.forEach(m => {
+      if (esMovimientoDeDevolucion(m.tipo)) return; // van con su devolución (devolucion()), no como una recepción
       const k = may(m.folio);
       if (!g[k]) { g[k] = { folio: m.folio, ocFolio: m.ocFolio, reqFolio: m.reqFolio, proyectoFolio: m.proyectoFolio, sitio: m.sitio, filas: [] }; orden.push(g[k]); }
       g[k].filas.push(m);
@@ -9464,6 +9470,7 @@ function planAnulacion_(d, objetivo) {
     archivo(r.cotizacionId);
     ((r.propuesta && r.propuesta.archivos) || []).forEach(a => archivo(a && a.id));
     d.ordenes.filter(o => may(o.reqFolio) === may(r.folio) && vivo(o)).forEach(orden);
+    d.devs.filter(x => may(x.reqFolio) === may(r.folio) && vivo(x)).forEach(devolucion); // también las de órdenes anteriores
   }
   function orden(o) {
     if (!agregar({ clave: 'oc', folio: o.folio, x: o, proyectoFolio: o.proyectoFolio, estado: o.estado,
@@ -9477,6 +9484,7 @@ function planAnulacion_(d, objetivo) {
     d.pgp.filter(x => may(x.ocFolio) === f && vivo(x)).forEach(pagoProveedor);
     d.fpr.filter(x => may(x.ocFolio) === f && vivo(x)).forEach(factura);
     recs.filter(g => may(g.ocFolio) === f && g.filas.some(vivo)).forEach(recepcion);
+    d.devs.filter(x => may(x.ocFolio) === f && vivo(x)).forEach(devolucion); // incremento 5: sus devoluciones (abiertas o no)
   }
   function pagoProveedor(x) {
     if (!agregar({ clave: 'pgp', folio: x.folio, x: x, proyectoFolio: x.proyectoFolio, estado: x.estado,
@@ -9495,6 +9503,16 @@ function planAnulacion_(d, objetivo) {
     archivo(x.pdfId);
   }
   function recepcion(g) {
+    if (!enPlan('oc', g.ocFolio)) {
+      // Sola (sin su orden): como cancelarRecepcion, no si sus renglones tienen una devolución abierta o resuelta con movimiento
+      const dv = devolucionQueImpideCancelar(d.devs.filter(vivo), g.ocFolio,
+        g.filas.filter(m => vivo(m) && m.tipo === TIPO_ENTRADA_COMPRA).map(m => m.renglon));
+      if (dv) {
+        throw new Error('El material de la recepción ' + g.folio + ' tiene la devolución ' + dv.folio + ' (' + String(dv.estado).toLowerCase() +
+          '): no se puede anular la recepción sola (lo recibido del renglón quedaría negativo). Si toda la compra fue un error, anula la orden ' +
+          g.ocFolio + ' (se anulan juntas).');
+      }
+    }
     const vivas = g.filas.filter(vivo);
     if (!agregar({ clave: 'rec', folio: g.folio, x: g, proyectoFolio: g.proyectoFolio,
       estado: vivas.some(m => m.estado === 'Vigente') ? 'Vigente' : (vivas[0] || g.filas[0]).estado,
@@ -9502,6 +9520,14 @@ function planAnulacion_(d, objetivo) {
     g.filas.forEach(m => { correo(m.correo); archivo(m.evidenciaId); });
     const r = reqDe(g.reqFolio);
     if (r) correo(r.solicitanteEmail, r.recibeEmail);
+  }
+
+  function devolucion(x) {
+    // Incremento 5 (revisión): la devolución y sus movimientos (folio DEV-…); no cambia nada más (su orden o su requisición se anulan)
+    if (!agregar({ clave: 'dev', folio: x.folio, x: Object.assign({}, x, { movs: d.movs.filter(m => may(m.folio) === may(x.folio) && vivo(m)) }),
+      proyectoFolio: x.proyectoFolio, estado: x.estado, descripcion: [x.folio, x.tipo, x.cantidad + ' de ' + String(x.descripcion || '').slice(0, 60),
+        x.resolucion, x.reqFolio, x.ocFolio].filter(Boolean).join(' · ') })) return;
+    correo(x.reportoEmail);
   }
 
   // ---- Raíz ----
@@ -9554,7 +9580,8 @@ function planAnulacion_(d, objetivo) {
         texto: [o ? o.folio + (oc ? ' pasa de ' + o.estado + ' a ' + oc : ' sigue ' + o.estado) : '',
           q ? q.folio + (rq ? ' pasa de ' + q.estado + ' a ' + rq : ' sigue ' + q.estado) : ''].filter(Boolean).join('; ') +
           ': la orden queda por pagar otra vez.' });
-    } else if (r.clave === 'rec' && r.x.filas.some(m => m.estado === 'Vigente') && !enPlan('oc', r.x.ocFolio)) {
+    } else if (r.clave === 'rec' && r.x.filas.some(m => m.estado === 'Vigente' && m.tipo === TIPO_ENTRADA_COMPRA) && !enPlan('oc', r.x.ocFolio)) {
+      // (Solo entradas por compra: "Lo recogí" no cuenta como recepción y anularlo no regresa la requisición)
       // La orden espera el material otra vez (como cancelarRecepcion: una Recibida vuelve a En camino, Pagada o Autorizada según
       // su orden; una Cerrada vuelve a Pagada)
       const o = ordenDe(r.x.ocFolio), q = reqDe(r.x.reqFolio);
@@ -9717,8 +9744,14 @@ function aplicarAnulacion_(d, plan, m) {
     } else if (r.clave === 'rec') {
       const h = hojaCom('MovimientosInventario');
       x.filas.filter(f => f.estado !== ESTADO_ANULADA).forEach(f => marcar(h, f.fila, 19, 20, !!f.canceladoPor));
+    } else if (r.clave === 'dev') {
+      // Incremento 5 (revisión): la devolución queda Anulada (sale de listas y Pendientes) y sus movimientos también
+      hojaCom('Devoluciones').getRange(x.fila, 15).setValue(ESTADO_ANULADA);
+      const h = hojaCom('MovimientosInventario');
+      (x.movs || []).forEach(f => marcar(h, f.fila, 19, 20, !!f.canceladoPor));
+      MEMO_.devs = null;
     }
-    if (['req', 'oc', 'pgp', 'fpr', 'rec'].indexOf(r.clave) !== -1) {
+    if (['req', 'oc', 'pgp', 'fpr', 'rec', 'dev'].indexOf(r.clave) !== -1) {
       bitacora_(d.libroCom, 'Anular ' + r.tipo.toLowerCase(), r.proyectoFolio, r.descripcion + nota(r), m, HOJAS_COMPRAS);
     }
   });
@@ -9789,6 +9822,8 @@ function registrarAnulacion_(libroAdmin, plan, m) {
     } : { de: raiz.folio, tipoRaiz: raiz.tipo };
     const x = r.x;
     const antes = r.clave === 'rec' ? { hoja: 'MovimientosInventario', filas: x.filas.map(f => ({ fila: f.fila, valores: f.valores })) }
+      : r.clave === 'dev' ? { hoja: 'Devoluciones', fila: x.fila, valores: x.valores,
+        movimientos: (x.movs || []).map(f => ({ fila: f.fila, valores: f.valores })) }
       : { hoja: { proyecto: 'Proyectos', cotizacion: 'Cotizaciones', contrato: 'Contratos', pago: 'Pagos', req: 'Requisiciones',
         oc: 'OrdenesCompra', pgp: 'PagosProveedores', fpr: 'FacturasProveedor' }[r.clave], fila: x.fila, valores: x.valores };
     if (r.clave === 'contrato') antes.esquema = (r.esquema || []).map(e => e.valores);
@@ -10659,7 +10694,7 @@ function recibirTodoConFotos_(libro, hoja, req, fotos, nota, exigirFotos) {
       '', '', 'Vigente', '', '', ''], guardadas[x.renglon])));
     crearDevolucionesDeRecepcion_(libro, req, orden, problemas);
   }
-  const abierta = exigirFotos && orden.estado === OC_PAGADA ? devolucionAbiertaDe_(libro, req.folio) : '';
+  const abierta = exigirFotos && orden.estado === OC_PAGADA ? devolucionAbiertaDe_(libro, req) : '';
   if (!abierta) return false;
   const nuevo = transicionReq(req.estado, 'recibirRetenida');
   hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(VENDEDOR_.email)]]);
@@ -10727,10 +10762,16 @@ function devolucionesDelLibro_(libro) {
   return MEMO_.devs;
 }
 
-/** Folio de la primera devolución Abierta de la requisición ('' si no hay). */
-function devolucionAbiertaDe_(libro, reqFolio) {
-  const f = String(reqFolio || '').toUpperCase();
-  const d = devolucionesDelLibro_(libro).find(x => x.reqFolio.toUpperCase() === f && x.estado === DEV_ABIERTA && !esAnulado_(x.folio));
+/**
+ * Folio de la primera devolución Abierta de la requisición con su orden de ahora ('' si no hay). req = {folio, ocFolio}. Una
+ * devolución de una orden anterior de la misma requisición (cancelada o anulada) no cuenta: ya no se puede resolver y no debe
+ * retener a la orden nueva (revisión del 29/10/2026).
+ */
+function devolucionAbiertaDe_(libro, req) {
+  const f = String((req && req.folio) || '').toUpperCase(), oc = String((req && req.ocFolio) || '').toUpperCase();
+  if (!f || !oc) return '';
+  const d = devolucionesDelLibro_(libro).find(x => x.reqFolio.toUpperCase() === f && x.ocFolio.toUpperCase() === oc &&
+    x.estado === DEV_ABIERTA && !esAnulado_(x.folio));
   return d ? d.folio : '';
 }
 
@@ -10745,15 +10786,15 @@ function ocupadoEnDevoluciones_(libro, ocFolio) {
 
 /** Ningún cierre con una devolución abierta (compras y su respaldo). */
 function exigirSinDevolucionAbierta_(libro, req) {
-  const abierta = devolucionAbiertaDe_(libro, req.folio);
+  const abierta = devolucionAbiertaDe_(libro, req);
   if (abierta) throw new Error('La devolución ' + abierta + ' de ' + req.folio + ' está abierta: resuélvela antes de cerrar la requisición.');
 }
 
 /** Cancelar una recepción: no si sus renglones tienen una devolución abierta o una resuelta con movimiento (quedaría negativo). */
 function exigirSinDevoluciones_(libro, req, filas) {
-  const renglones = (filas || []).map(x => x.renglon);
-  const d = devolucionesDelLibro_(libro).find(x => x.reqFolio.toUpperCase() === req.folio.toUpperCase() &&
-    renglones.indexOf(x.renglon) !== -1 && (x.estado === DEV_ABIERTA || (x.estado === DEV_RESUELTA && x.resolucion !== RES_CONSERVAR)));
+  const f = filas || [];
+  const d = devolucionQueImpideCancelar(devolucionesDelLibro_(libro).filter(x => !esAnulado_(x.folio)), (f[0] || {}).ocFolio || req.ocFolio,
+    f.map(x => x.renglon));
   if (d) throw new Error('El material de esa recepción tiene la devolución ' + d.folio + ' (' + d.estado.toLowerCase() + '): no se puede cancelar la recepción.');
 }
 
@@ -10887,7 +10928,7 @@ function listarDevoluciones(filtro) {
     });
   }
   const proyectos = mapaProyectos_(), ordenes = ordenesPorFolio_(libro);
-  return devolucionesDelLibro_(libro).filter(dv => !esAnulado_(dv.folio) && !esAnulado_(dv.reqFolio) &&
+  return devolucionesDelLibro_(libro).filter(dv => !esAnulado_(dv.folio) && !esAnulado_(dv.reqFolio) && !esAnulado_(dv.ocFolio) &&
     (compras || mias[dv.reqFolio.toUpperCase()]) && (!estado || dv.estado === estado) && (!reqF || dv.reqFolio.toUpperCase() === reqF))
     .map(dv => devolucionParaVista_(dv, proyectos, ordenes, compras))
     .filter(dv => !q || textoNormal([dv.folio, dv.reqFolio, dv.proyectoVisible, dv.proyectoNombre, dv.descripcion, dv.tipo, dv.reporto,
@@ -10991,7 +11032,7 @@ function resolverDevolucion(folioDev, d) {
  */
 function completarTrasDevolucion_(libro, hoja, req, hO, orden, folioDev) {
   if ([REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO].indexOf(req.estado) === -1 || orden.estado === OC_CANCELADA) return '';
-  if (devolucionAbiertaDe_(libro, req.folio)) return '';
+  if (devolucionAbiertaDe_(libro, req)) return '';
   const avance = avanceDeReq_(libro, req, orden);
   if (!avance.completo || !avance.algo) return '';
   const pagada = orden.estado === OC_PAGADA, t = textoCelda;
@@ -11009,7 +11050,7 @@ function completarTrasDevolucion_(libro, hoja, req, hO, orden, folioDev) {
  * cierra (la orden queda Recibida). Devuelve el estado nuevo o ''.
  */
 function cerrarRetenida_(libro, hoja, req, hO, orden) {
-  if (req.estado !== REQ_RECIBIDA || orden.estado !== OC_PAGADA || devolucionAbiertaDe_(libro, req.folio)) return '';
+  if (req.estado !== REQ_RECIBIDA || orden.estado !== OC_PAGADA || devolucionAbiertaDe_(libro, req)) return '';
   if (!avanceDeReq_(libro, req, orden).completo) return '';
   const nuevo = transicionReq(req.estado, 'cerrarRetenida');
   hO.getRange(orden.fila, COL_ESTADO_OC).setValue(OC_RECIBIDA);
@@ -11093,7 +11134,8 @@ function devolucionesParaPendientes_() {
   return enCache_('devPend', ['requisiciones', 'oc', 'proyectos', 'anulaciones'], TTL_CACHE, () => {
     const libro = libroComprasSiExiste_();
     if (!libro) return [];
-    const abiertas = devolucionesDelLibro_(libro).filter(d => d.estado === DEV_ABIERTA && !esAnulado_(d.folio) && !esAnulado_(d.reqFolio));
+    const abiertas = devolucionesDelLibro_(libro).filter(d => d.estado === DEV_ABIERTA && !esAnulado_(d.folio) && !esAnulado_(d.reqFolio) &&
+      !esAnulado_(d.ocFolio)); // revisión: la de una orden anulada ya no se resuelve
     if (!abiertas.length) return [];
     const proyectos = mapaProyectos_(), ordenes = ordenesPorFolio_(libro);
     return abiertas.map(d => Object.assign(devolucionParaVista_(d, proyectos, ordenes, true), { desde: marcaOrdenable(d.fecha) }));
@@ -11326,6 +11368,22 @@ function efectoResolucion(resolucion, tipo, origen) {
   if (!reponer && resolucion !== RES_DEVOLVER && resolucion !== RES_CANCELAR) return nada;
   if (tipo === 'Faltante' && origen === ORIGEN_DEV_CENTRO) return reponer ? nada : { movimiento: TIPO_FALTANTE_ACEPTADO, signo: 1, reabre: false };
   return reponer ? { movimiento: TIPO_DEVOLUCION, signo: -1, reabre: true } : { movimiento: TIPO_DEVOLUCION_CIERRA, signo: -1, reabre: false };
+}
+
+/**
+ * La devolución que impide cancelar o anular una recepción (null si ninguna): de la misma orden, en alguno de los renglones de la
+ * recepción, Abierta o Resuelta con algo distinto de Conservar (sin esa recepción, lo recibido del renglón quedaría negativo o la
+ * devolución se quedaría sin material). devs = [{folio, ocFolio, renglon, estado, resolucion}]. La usan cancelarRecepcion y Anular.
+ */
+function devolucionQueImpideCancelar(devs, ocFolio, renglones) {
+  const f = String(ocFolio || '').toUpperCase(), rs = (renglones || []).map(Number);
+  return (devs || []).find(x => String(x.ocFolio || '').toUpperCase() === f && rs.indexOf(Number(x.renglon)) !== -1 &&
+    (x.estado === DEV_ABIERTA || (x.estado === DEV_RESUELTA && x.resolucion !== RES_CONSERVAR))) || null;
+}
+
+/** ¿El movimiento es de una devolución (folio DEV-…)? Anular lo trata con su devolución, no como una recepción. */
+function esMovimientoDeDevolucion(tipo) {
+  return tipo === TIPO_DEVOLUCION || tipo === TIPO_DEVOLUCION_CIERRA || tipo === TIPO_FALTANTE_ACEPTADO;
 }
 
 /** Texto de cada resolución (historial y correos). */
