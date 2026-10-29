@@ -10,6 +10,8 @@
 //  4. (Interfaz) Pagos en otra moneda: al precargar un monto la moneda del pago vuelve a la de la orden; "= $X aplicados" en vivo;
 //     un pago en otra moneda que no completa la orden pide confirmación.
 //  5. Cuentas por pagar mide toda orden por su saldo (con o sin pagos; sin lo devuelto): la misma cifra que Reportes → CxP.
+//  6. Saldo a favor (lo pagado de más, p. ej. tras devolver material ya pagado): en la vista, órdenes por proyecto, cuentas por
+//     pagar (aparte, por orden: nunca se resta de lo que se debe) y como pendiente de compras; quien pidió no lo ve.
 // Uso: node tests/pagos-revision.test.js .
 'use strict';
 const assert = require('assert');
@@ -277,6 +279,45 @@ const P3 = ok('ana', 'crearProyecto', { nombre: 'Planta Norte', ubicacion: 'Quer
   assert.equal(r.totales[0].total, 1160);
 }
 
+// ================= 6. Saldo a favor: lo pagado de más tras una devolución (r12 a) =================
+const guardado = {}; // lo que usa la sección de interfaz
+{
+  // Pagada (812 + 812), recibida con los 80 m del renglón 1 dañados y devueltos al proveedor: se debía 696 y se pagó 1,624
+  const k = siempre({}, P3);
+  pagar(k.req, 812); pagar(k.req, 812);
+  ok('obrero', 'cerrarRequisicion', k.req, '', { renglones: [{ renglon: 1, foto: F, problema: { tipo: 'Dañado', cantidad: 80, comentario: 'Todo mojado', foto: F } }, { renglon: 2, foto: F }] });
+  ok('pedro', 'resolverDevolucion', ultimaDev(), { resolucion: 'Devolver al proveedor', nota: 'Nos devuelven el dinero' });
+  const v = vista(k.req);
+  assert.deepEqual([v.requisicion.estado, v.orden.estado, v.saldo.esperado, v.saldo.pagado, v.saldo.saldo, v.saldo.completo, v.saldo.aFavor],
+    ['Cerrada', 'Recibida', 696, 1624, 0, true, 928]);
+  // Órdenes por proyecto
+  assert.equal(ok('pedro', 'getComprasProyecto', P3).ordenes.find(o => o.folio === k.oc).aFavor, 928);
+  // Cuentas por pagar: aparte, por orden; no se resta de lo que se debe a otra orden del mismo proveedor
+  const deuda = siempre(CREDITO, P3);
+  facturar(deuda.oc, 1400, 224);
+  const cxp = ok('pedro', 'cuentasPorPagar');
+  const af = cxp.aFavor.find(x => x.ocFolio === k.oc);
+  assert.deepEqual([af.aFavor, af.pagado, af.esperado, af.moneda, af.reqFolio, af.proveedor], [928, 1624, 696, 'MXN', k.req, 'Ferretera del Puerto']);
+  assert(!cxp.abiertas.some(a => a.ocFolio === k.oc), 'no debe nada');
+  assert.equal(enCxp(cxp, deuda.oc), 1624, 'la otra orden del mismo proveedor se debe completa');
+  const mxn = cxp.totales.find(t => t.moneda === 'MXN');
+  assert.equal(mxn.total, Math.round(cxp.abiertas.filter(a => a.moneda === 'MXN').reduce((t, a) => t + a.pendiente * 100, 0)) / 100, 'los totales no restan lo que está a favor');
+  assert(cxp.totalesAFavor.some(t => t.moneda === 'MXN' && t.total >= 928));
+  // Pendiente de compras (con lo que se debe y qué pedir); quien pidió no ve nada de esto
+  const it = ok('pedro', 'pendientes', false).items.find(x => x.tipo === 'aFavor' && x.folio === k.oc);
+  assert(it && it.seccion === 'compras' && it.req === k.req && /\$928\.00 MXN a favor/.test(it.detalle) && /nota de crédito o reembolso/.test(it.detalle), JSON.stringify(it));
+  assert(!ok('obrero', 'pendientes', false).items.some(x => x.tipo === 'aFavor'));
+  assert(!/aFavor|928/.test(JSON.stringify(mia(k.req))), 'quien pidió no ve montos');
+  // Pura: solo arriba de la tolerancia; una cancelada no; con facturas con retenciones, contra el total de las facturas
+  const o = { folio: 'OC-Y', moneda: 'MXN', total: 1624, estado: 'Pagada', fecha: HOY_ISO };
+  const pg = m => [{ folio: 'PGP-Y', ocFolio: 'OC-Y', estado: 'Vigente', montoAplicado: m }];
+  assert.deepEqual([P.saldoOrdenCompra(o, pg(1624.8), []).aFavor, P.saldoOrdenCompra(o, pg(1626), []).aFavor,
+    P.saldoOrdenCompra(Object.assign({}, o, { estado: 'Cancelada' }), pg(1700), []).aFavor], [0, 2, 0]);
+  const fr = [{ folio: 'FPR-Y', ocFolio: 'OC-Y', estado: 'Vigente', moneda: 'MXN', subtotal: 1400, descuento: 0, total: 1484, fechaVencimiento: HOY_ISO }];
+  assert.equal(P.saldoOrdenCompra(Object.assign({}, o, { subtotal: 1400, facturas: fr }), pg(1624), []).aFavor, 140, 'se pagó el total y la factura trae retenciones');
+  guardado.aFavor = k;
+}
+
 // ================= Interfaz (al final: es asíncrona; DOM simulado conectado al servidor simulado) =================
 const UI = require('./montar-interfaz')(A, dir);
 (async () => {
@@ -332,6 +373,19 @@ const UI = require('./montar-interfaz')(A, dir);
     $('ppRef').value = 'SPEI 3'; $('ppArchivo').files = [comprobante('3.pdf')];
     C.run('registrarPagoProv()'); await esperar();
     assert.deepEqual([C.dialogos.mensajes.length, pagosMandados()], [0, 3]);
+  }
+
+  // ---- 6. Saldo a favor en la requisición, en órdenes por proyecto y en cuentas por pagar ----
+  {
+    const k = guardado.aFavor;
+    C.run('abrirReqCom(' + JSON.stringify(k.req) + ')'); await esperar();
+    assert(/saldo a favor <b>\$928\.00 MXN<\/b>: pide al proveedor una nota de crédito o el reembolso/.test($('rcSaldoResumen').innerHTML), $('rcSaldoResumen').innerHTML);
+    C.run('pintarCompras(' + JSON.stringify(ok('pedro', 'getComprasProyecto', P3)) + ')');
+    assert(/Saldo a favor \$928\.00 MXN/.test($('ocLista').innerHTML), 'órdenes por proyecto');
+    C.run('cargarCxp()'); await esperar();
+    assert(!$('cxpAFavor').classList.contains('oculto'));
+    const h = $('cxpAFavor').innerHTML;
+    assert(/Saldo a favor \(nota de crédito o reembolso\)/.test(h) && /<b>\$928\.00 MXN<\/b>/.test(h) && new RegExp(k.oc).test(h) && /No se resta de lo que se debe/.test(h), h);
   }
 
   console.log('OK pagos-revision');

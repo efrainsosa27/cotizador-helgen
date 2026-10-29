@@ -756,6 +756,8 @@
           por su saldo: sin el material devuelto sin reponer, y sus pagos cubren primero la factura que vence antes; lo que todavía no tiene
           factura aparece como «Saldo» con el vencimiento de su plan de pagos. Los importes de monedas distintas nunca se suman. Haz clic en
           un renglón para abrir su requisición.</div>
+        <!-- Revisión del incremento 6: lo pagado de más por orden (no se resta de lo que se debe) -->
+        <div id="cxpAFavor" class="oculto" style="margin-top:14px"></div>
       </div>
       <div class="modulo">
         <h2>3 · Órdenes sin factura completa</h2>
@@ -2948,8 +2950,10 @@
     if (v.puedePagar) pintarAplicadoPago();
     const sr = v.saldo && v.saldo.vigentes && v.saldo.vigentes.length ? v.saldo : null;
     $('rcSaldoResumen').classList.toggle('oculto', !sr);
-    if (sr) $('rcSaldoResumen').innerHTML = 'Pagado <b>' + dinero(sr.pagado, o.moneda) + '</b> de ' + dinero(sr.esperado, o.moneda) +
-      (sr.completo ? ' · orden pagada por completo' : ' · saldo <b>' + dinero(sr.saldo, o.moneda) + '</b>');
+    if (sr) $('rcSaldoResumen').innerHTML = 'Pagado <b>' + dinero(sr.pagado, o.moneda) + '</b> de ' + dinero(sr.porFacturas || sr.esperado, o.moneda) +
+      (sr.completo ? ' · orden pagada por completo' : ' · saldo <b>' + dinero(sr.saldo, o.moneda) + '</b>') +
+      // Revisión del incremento 6: lo pagado de más es de esta orden (nunca se compensa con otra)
+      (sr.aFavor > 0 ? ' · <span class="aviso-moneda">saldo a favor <b>' + dinero(sr.aFavor, o.moneda) + '</b>: pide al proveedor una nota de crédito o el reembolso</span>' : '');
     $('rcPagos').innerHTML = v.pagos.length ? v.pagos.map(p => '<tr' + (p.estado === 'Cancelado' ? ' class="fila-cancelada" title="' +
       esc('Cancelado por ' + p.canceladoPor + ': ' + p.motivoCancelacion) + '"' : '') + '><td><b>' + esc(p.folio) + '</b></td><td>' +
       (p.tipo ? '<span class="chip ' + (p.tipo === 'Liquidación' ? 'firmado' : 'aceptada') + '">' + esc(p.tipo) + '</span>' : '') + '</td><td>' + esc(fechaMx(p.fecha)) +
@@ -3663,6 +3667,18 @@
       (a.tipo !== 'Saldo' && Math.abs(porPagarCxp(a) - a.total) > 0.004 ? '<div class="nota">de ' + dinero(a.total, a.moneda) +
         (a.pagado > 0 ? ' · pagado ' + dinero(a.pagado, a.moneda) : '') + '</div>' : a.pagoParcial ? '<div class="nota">pagada en parte</div>' : '') + '</td></tr>').join('')
       : '<tr><td colspan="7" class="nota">' + (CXP.abiertas.length ? 'Ninguna factura coincide con los filtros.' : 'No hay facturas por pagar.') + '</td></tr>';
+    // Revisión del incremento 6: saldo a favor (lo pagado de más a una orden): aparte, por orden y moneda; nunca se resta de lo que se debe
+    const af = CXP.aFavor || [];
+    $('cxpAFavor').classList.toggle('oculto', !af.length);
+    $('cxpAFavor').innerHTML = af.length ? '<div class="sat-titulo">Saldo a favor (nota de crédito o reembolso)</div>' +
+      '<div class="nota">' + (CXP.totalesAFavor || []).map(t => dinero(t.total, t.moneda) + ' en ' + t.ordenes + (t.ordenes === 1 ? ' orden' : ' órdenes')).join(' · ') +
+      '. Se le pagó de más a cada orden (p. ej. se devolvió material ya pagado): pide al proveedor la nota de crédito o el reembolso. No se resta de lo que se debe.</div>' +
+      '<div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Orden</th><th>Proveedor</th><th>Proyecto</th><th class="num">Pagado</th>' +
+      '<th class="num">Debía</th><th class="num">A favor</th></tr></thead><tbody>' + af.map(x => '<tr class="fila-cat"' + (x.reqFolio ? ' data-req="' + esc(x.reqFolio) + '"' : '') + '>' +
+        '<td style="white-space:nowrap"><b>' + esc(x.ocFolio) + '</b>' + (x.reqFolio ? '<div class="nota">' + esc(x.reqFolio) + '</div>' : '') + '</td><td>' + esc(x.proveedor) + '</td>' +
+        '<td style="white-space:nowrap">' + esc(x.proyectoVisible || x.proyectoFolio || '') + '<div class="nota">' + esc(x.proyectoNombre || '') + '</div></td>' +
+        '<td class="num">' + dinero(x.pagado, x.moneda) + '</td><td class="num">' + dinero(x.esperado, x.moneda) + '</td>' +
+        '<td class="num"><b>' + dinero(x.aFavor, x.moneda) + '</b></td></tr>').join('') + '</tbody></table></div>' : '';
     $('cxpRep').innerHTML = CXP.repPendientes.n ? '<span class="aviso-moneda">Facturas PPD de órdenes ya pagadas sin complemento de pago (REP): ' +
       CXP.repPendientes.folios.map(esc).join(', ') + '. Pídeselo al proveedor.</span>' : '';
     $('cxpFaltantes').innerHTML = CXP.faltantes.length ? CXP.faltantes.map(x => '<tr class="fila-cat"' + (x.reqFolio ? ' data-req="' + esc(x.reqFolio) + '"' : '') + '>' +
@@ -3672,7 +3688,7 @@
       '<td class="num">' + dinero(x.subtotal, x.moneda) + '</td><td class="num">' + dinero(x.facturado, x.moneda) + '</td>' +
       '<td class="num"><b>' + dinero(x.faltante, x.moneda) + '</b></td></tr>').join('')
       : '<tr><td colspan="7" class="nota">Todas las órdenes vigentes tienen su factura.</td></tr>';
-    ['cxpLista', 'cxpFaltantes'].forEach(id => $(id).querySelectorAll('tr[data-req]').forEach(tr => tr.onclick = () => abrirReqCom(tr.dataset.req)));
+    ['cxpLista', 'cxpFaltantes', 'cxpAFavor'].forEach(id => $(id).querySelectorAll('tr[data-req]').forEach(tr => tr.onclick = () => abrirReqCom(tr.dataset.req)));
   }
 
   /** Lo que falta pagar de un renglón de cuentas por pagar (P, incremento 6: pendiente; con un servidor de antes, el total). */
@@ -3734,6 +3750,8 @@
       '</td><td>' + esc(o.proveedor) + '</td><td class="num">' + dinero(o.total, o.moneda) +
       (o.tipoCambio ? '<div class="nota">TC ' + esc(o.tipoCambio) + '</div>' : '') +
       (o.pagado > 0 && o.saldo > 0 ? '<div class="nota">Pagado ' + dinero(o.pagado, o.moneda) + ' · saldo ' + dinero(o.saldo, o.moneda) + '</div>' : '') + // P
+      // Revisión del incremento 6: lo pagado de más (nota de crédito o reembolso)
+      (o.aFavor > 0 ? '<div class="nota aviso-moneda">Saldo a favor ' + dinero(o.aFavor, o.moneda) + '</div>' : '') +
       '</td><td class="num">' + facturadoDeOrden(o) + '</td><td>' + esc(fechaMx(o.fechaEntrega)) +
       '<div class="nota">' + esc(o.lugarEntrega) + '</div></td><td><span class="chip ' + (CHIP_OC[o.estado] || '') + '"' +
       (o.estado === 'Recibida' ? ' title="' + esc('Recibida el ' + fechaMx(o.fechaRecepcion) + ' · ' + o.recibio) + '"' : '') + '>' + esc(o.estado) + '</span>' +

@@ -2785,6 +2785,7 @@ function vistaCompras_(libro, proyecto) {
         facturas: facturasDeOrden_(facturas, o.folio), puedeFacturar: o.estado !== OC_CANCELADA,
         totalFacturado: totalFacturadoDeOrden(facturas, o.folio),
         pagado: s.pagado, saldo: s.saldo, pagadaParcial: esPagoParcial_(o, s), siguiente: s.siguiente,
+        aFavor: s.aFavor, // revisión del incremento 6: lo pagado de más (nota de crédito o reembolso)
       });
     }).reverse(),
     hoy: hoyIso_(),
@@ -4707,6 +4708,7 @@ function cuentasPorPagar(soloCache) {
         xmlUrl: f.xmlUrl || '', pdfUrl: f.pdfUrl || '' });
     });
     r.faltantes.forEach(x => Object.assign(x, proyecto(x.proyectoFolio), { reqFolio: reqDeOrden[x.folio.toUpperCase()] || '' }));
+    r.aFavor.forEach(x => Object.assign(x, proyecto(x.proyectoFolio), { reqFolio: reqDeOrden[x.ocFolio.toUpperCase()] || '' }));
     return r;
   };
   const colecciones = ['facturasProveedor', 'oc', 'pagosProveedores', 'proyectos'];
@@ -6292,7 +6294,7 @@ function antiguedadCxp(d) {
   const porVencimiento = (a, b) => a.fechaVencimiento < b.fechaVencimiento ? -1 : a.fechaVencimiento > b.fechaVencimiento ? 1 :
     (a.folio < b.folio ? -1 : 1);
 
-  const abiertas = [], totales = {}, completas = {};
+  const abiertas = [], totales = {}, completas = {}, aFavor = [];
   const agregar = (x, factura) => {
     const dias = diasEntre(x.fechaVencimiento, hoy);
     const rango = RANGOS_CXP.find(r => dias <= r.hasta);
@@ -6314,6 +6316,11 @@ function antiguedadCxp(d) {
     // Revisión del incremento 6: toda orden se mide por su saldo (saldoOrdenCompra), con pagos o sin ellos (lo devuelto sin reponer
     // ya no se debe), así Cuentas por pagar y Reportes → CxP dan la misma cifra por orden
     const s = saldoOrdenCompra(Object.assign({}, o, { facturas: fs }), pagosPorOc[k] || [], ms);
+    // Revisión del incremento 6: lo pagado de más es un saldo a favor de esa orden (aparte: nunca se resta de lo que se debe)
+    if (s.aFavor > 0) {
+      aFavor.push({ ocFolio: o.folio, proyectoFolio: o.proyectoFolio, proveedor: o.proveedor || '', fecha: o.fecha || '', moneda: o.moneda,
+        aFavor: s.aFavor, pagado: s.pagado, esperado: s.porFacturas || s.esperado });
+    }
     if (s.completo) { completas[k] = true; return; }
     const parcial = aCentavos(s.pagado) > 0;
     let pagado = aCentavos(s.pagado), resto = aCentavos(s.saldo);
@@ -6359,7 +6366,15 @@ function antiguedadCxp(d) {
 
   const rep = vigentes.filter(f => f.tipo === FPR_CFDI && f.metodoPago === 'PPD' && pagadas[may(f.ocFolio)]).map(f => f.folio);
   return { hoy: hoy, rangos: RANGOS_CXP.map(r => ({ clave: r.clave, etiqueta: r.etiqueta })), totales: listaTotales,
-    abiertas: abiertas, faltantes: faltantes, repPendientes: { n: rep.length, folios: rep } };
+    abiertas: abiertas, faltantes: faltantes, repPendientes: { n: rep.length, folios: rep },
+    // Saldo a favor por orden (nota de crédito o reembolso), por moneda y del mayor al menor; con su total por moneda
+    aFavor: aFavor.sort((a, b) => a.moneda !== b.moneda ? (a.moneda === 'MXN' ? -1 : b.moneda === 'MXN' ? 1 : a.moneda < b.moneda ? -1 : 1)
+      : b.aFavor - a.aFavor),
+    totalesAFavor: aFavor.reduce((t, x) => {
+      const m = t.find(y => y.moneda === x.moneda) || (t.push({ moneda: x.moneda, total: 0, ordenes: 0 }), t[t.length - 1]);
+      m.total = redondear(m.total + x.aFavor); m.ordenes++;
+      return t;
+    }, []) };
 }
 /** Tipo de la fila de cuentas por pagar de un saldo sin factura (P, incremento 6; folio = la orden de compra). */
 const TIPO_CXP_SALDO = 'Saldo';
@@ -9487,13 +9502,17 @@ function pendientes(todos) {
   if (verTodos && !esSuperAdmin_()) throw errorPermiso_('Solo un super admin puede ver los pendientes de todos.');
   const hoy = hoyIso_(), avisos = [];
   const roles = { aprobaciones: esOperaciones_(), compras: esCompras_(), requisicion: esRequisicion_() };
-  let cxp = [];
+  let cxp = [], aFavor = [];
   if (roles.compras) {
-    try { cxp = (cuentasPorPagar() || {}).abiertas || []; } catch (e) { avisos.push('Facturas de proveedor: ' + e.message); }
+    try {
+      const c = cuentasPorPagar() || {};
+      cxp = c.abiertas || [];
+      aFavor = c.aFavor || []; // revisión del incremento 6: saldo a favor con el proveedor (pendiente de compras)
+    } catch (e) { avisos.push('Facturas de proveedor: ' + e.message); }
   }
   const usuarios = contextoRoles_().usuarios, nombres = {};
   Object.keys(usuarios).forEach(c => { if (usuarios[c].nombre) nombres[c] = usuarios[c].nombre; });
-  const o = { yo: yo_(), roles: roles, flujo: flujoOperaciones_(), hoy: hoy, cxp: cxp, nombres: nombres, ligado: proyectoLigadoPend_ };
+  const o = { yo: yo_(), roles: roles, flujo: flujoOperaciones_(), hoy: hoy, cxp: cxp, aFavor: aFavor, nombres: nombres, ligado: proyectoLigadoPend_ };
   // Incremento 5 (H): devoluciones abiertas, para compras (y para el super admin que ve los de todos)
   if (roles.compras || esSuperAdmin_()) {
     try { o.devoluciones = devolucionesParaPendientes_(); } catch (e) { avisos.push('Devoluciones: ' + e.message); }
@@ -9694,6 +9713,17 @@ function itemsPendientes(base, o) {
       tipo: 'devolucion', req: dv.reqFolio, titulo: 'Devolución por resolver', accion: 'Resolver', destino: 'com', urgente: false,
       detalle: [[dv.proyectoVisible, dv.proyectoNombre].filter(Boolean).join(' · '), dv.reqFolio, dv.tipo,
         dv.cantidad + ' ' + dv.unidad + ' ' + String(dv.descripcion || '').slice(0, 60)] }, 'Compras'));
+  }
+
+  // Revisión del incremento 6: saldo a favor con el proveedor (se le pagó de más a una orden, p. ej. tras devolver material): compras
+  // pide la nota de crédito o el reembolso. Uno por orden; nunca se compensa con otra orden
+  if (roles.compras || todos) {
+    (x.aFavor || []).forEach(af => items.push(Object.assign({ tipo: 'aFavor', seccion: 'compras', folio: af.ocFolio, req: af.reqFolio || '',
+      titulo: 'Saldo a favor con el proveedor', sitio: '', desde: String(af.fecha || '').slice(0, 10), dias: diasDesde(String(af.fecha || '').slice(0, 10)),
+      prioridad: '', urgente: false, accion: af.reqFolio ? 'Abrir' : 'Ver cuentas por pagar', destino: af.reqFolio ? 'com' : 'cxp',
+      detalle: [af.proveedor, af.ocFolio, dinero(af.aFavor, af.moneda) + ' a favor', 'pide nota de crédito o reembolso',
+        [af.proyectoVisible, af.proyectoNombre].filter(Boolean).join(' · ')].filter(Boolean).join(' · '),
+      orden: marcaOrdenable(af.fecha) }, todos ? { para: 'Compras' } : {})));
   }
 
   // Facturas que no se anotaron en una orden por pagar (órdenes de antes, sin requisición abierta)
@@ -12149,7 +12179,7 @@ function fechaMasDias_(fecha, dias) {
  * de PagosProveedores de ESA orden (pagoProvDesdeFila_, cualquier estado); movimientos = MovimientosInventario de la orden (lo
  * devuelto sin reponer, regla del incremento 5). Devuelve {esperado, pagado, saldo, completo, vigentes: [{folio, fecha,
  * montoAplicado, tipo}], siguiente: {concepto, monto, vence, etapa?, etapas?} | null} y además moneda, etapas (el plan con lo
- * cubierto de cada una), porFacturas y cancelada.
+ * cubierto de cada una), porFacturas, cancelada y aFavor (lo pagado de más sobre lo que la deja completa, si pasa la tolerancia).
  * - esperado = totalPorPagarOrden(orden, devueltoSinReponer(movimientos)) o el total; pagado = Σ monto_aplicado de los Vigentes
  *   (en la moneda de la orden); saldo = max(0, esperado − pagado) en centavos; completo = saldo ≤ TOLERANCIA_PAGO.
  * - Opcional orden.facturas (FacturasProveedor de la orden): si sus Vigentes ya cubren la orden y su total es menor (retenciones;
@@ -12216,7 +12246,10 @@ function saldoOrdenCompra(orden, pagos, movimientos) {
     }
   }
   return { moneda: String(o.moneda || 'MXN'), esperado: esperadoCts / 100, pagado: pagadoCts / 100, saldo: completo ? 0 : saldoCts / 100,
-    completo: completo, vigentes: vigentes, siguiente: siguiente, etapas: etapas, porFacturas: porFacturasCts / 100, cancelada: cancelada };
+    completo: completo, vigentes: vigentes, siguiente: siguiente, etapas: etapas, porFacturas: porFacturasCts / 100, cancelada: cancelada,
+    // Revisión del incremento 6: lo pagado de más (p. ej. se devolvió material de una orden ya pagada): el proveedor le debe a Helgen
+    // una nota de crédito o un reembolso. Solo arriba de la tolerancia (como el saldo); de esta orden, nunca contra otra
+    aFavor: !cancelada && pagadoCts - objetivoCts > tol ? (pagadoCts - objetivoCts) / 100 : 0 };
 }
 
 // -- Servidor --
