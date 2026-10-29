@@ -91,8 +91,9 @@ caso('cargar: zona usada con valores, fechas, fórmulas, texto visible y rangos 
   });
   auth.en('GET', /sheets\.googleapis\.com\/v4\/spreadsheets\/[^/]+\/values:batchGet$/, p => {
     assert.equal(p.params.valueRenderOption, 'FORMULA');
-    return { data: { valueRanges: [{ range: "'Cotizaciones'!A1:D3", values: [['Folio', 'Fecha', 'Total', 'Firmado'], ['x', 1, 2, true], ['0012', '', '=C2*2', '=1/0']] },
-      { range: "'Tipo de cambio'!A1:B4", values: [['Concepto'], [], [], ['Tipo de cambio en uso', '=IF(…)']] }] } };
+    // Como la API real: "range" es la cuadrícula completa; "values" llega recortado a lo que tiene datos
+    return { data: { valueRanges: [{ range: "'Cotizaciones'!A1:Z1000", values: [['Folio', 'Fecha', 'Total', 'Firmado'], ['x', 1, 2, true], ['0012', '', '=C2*2', '=1/0']] },
+      { range: "'Tipo de cambio'!A1:Z1000", values: [['Concepto'], [], [], ['Tipo de cambio en uso', '=IF(…)']] }] } };
   });
   auth.en('GET', /www\.googleapis\.com\/drive\/v3\/files\/[^/]+$/, p => ({ data: { version: '812', modifiedTime: '2026-10-29T21:30:00Z' } }));
   const g = crearConductorGoogle({}, { auth });

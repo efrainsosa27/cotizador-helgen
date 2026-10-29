@@ -142,6 +142,10 @@ function crearServicio(conf, piezas) {
       // Precarga de los libros conocidos (así el primer clic no espera a Google)
       const ids = Object.keys(COLECCIONES_POR_LIBRO).concat(conf.precargarExtra || []).map(k => props.leer(k)).filter(Boolean);
       if (conf.precargar !== false) await Promise.all(ids.map(id => espejo.abrir(id).catch(e => registro('aviso', 'no se precargó ' + id + ': ' + e.message))));
+      // Activadores de la configuración (el de 15 min de CAPRI): se crean si faltan, sin pasar por el editor de Apps Script
+      (conf.activadoresFijos || []).forEach(a => {
+        if (!activadores.listar().some(x => x.funcion === a.funcion)) activadores.crear({ funcion: a.funcion, cadaMinutos: a.cadaMinutos });
+      });
       activadores.iniciar();
       if (conf.sondeoSeg > 0) timers.push(setInterval(() => espejo.sondear().catch(e => registro('aviso', 'sondeo: ' + e.message)), conf.sondeoSeg * 1000));
       if (conf.reconciliarMin > 0) timers.push(setInterval(() => espejo.reconciliar().catch(e => registro('aviso', 'reconciliación: ' + e.message)), conf.reconciliarMin * 60000));
@@ -157,6 +161,12 @@ function crearServicio(conf, piezas) {
         return Promise.resolve({ texto: JSON.stringify({ ok: false, error: 'Servidor en modo solo lectura (corrida de sombra): ' + funcion + ' no se ejecuta.', codigo: 'SOLO_LECTURA' }), metricas: { msCola: 0 }, funcion });
       }
       return pool.ejecutar({ cuerpo, funcion, clase: escribe ? 'escritura' : 'lectura' }).then(r => Object.assign(r, { funcion }));
+    },
+    /** Como el botón "Ejecutar" del editor de Apps Script (solo desde el mismo servidor; ver http.js). */
+    correrFuncion(funcion, args) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]{0,80}$/.test(String(funcion || ''))) return Promise.resolve({ texto: JSON.stringify({ ok: false, error: 'Función no válida.' }) });
+      registro('aviso', 'función corrida a mano: ' + funcion);
+      return pool.ejecutar({ funcion, args: Array.isArray(args) ? args : [], clase: 'activador' });
     },
     salud() {
       return { ok: true, servicio: 'capri', backend: conductor.nombre, soloLectura, trabajadores: pool.estado(), candado: candado.estado(),

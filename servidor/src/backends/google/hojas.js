@@ -332,12 +332,12 @@ function crearHojasGoogle(api, o) {
     // (2) hasta dónde hay datos en cada pestaña
     const usados = await api.sheets.spreadsheets.values.batchGet({ spreadsheetId: id, ranges: pestanas.map(x => rangoHoja(x.properties.title)),
       valueRenderOption: 'FORMULA', majorDimension: 'ROWS', fields: 'valueRanges(range,values)' });
+    // Ojo: "range" de la respuesta repite la cuadrícula completa (A1:Z1000); lo que tiene datos es lo que trae "values"
     const rangos = (usados.data.valueRanges || []).map((vr, k) => {
       const t = pestanas[k].properties.title;
       const filas = (vr.values || []).length;
       const cols = (vr.values || []).reduce((m, f) => Math.max(m, f.length), 0);
-      const fin = finDeRango(vr.range);
-      return a1(t, 1, Math.max(filas, fin.r, 1) + 1, Math.max(cols, fin.c, 1));
+      return a1(t, 1, Math.max(filas, 1) + 1, Math.max(cols, 1));
     });
     // (3) la cuadrícula de esa zona (+1 fila: el formato con el que nacerá la siguiente fila agregada)
     const r = await api.sheets.spreadsheets.get({ spreadsheetId: id, ranges: rangos, includeGridData: true, fields: CAMPOS_LIBRO });

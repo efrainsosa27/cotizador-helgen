@@ -187,6 +187,9 @@ caso('HTTP: CORS solo para la interfaz, 404, 413 y /salud', async () => {
     const salud = JSON.parse((await pedir('GET', '/salud')).texto);
     assert(salud.ok && salud.trabajadores.trabajadores.length === 3 && salud.backend === 'memoria');
     assert.deepEqual(JSON.parse((await pedir('GET', '/salud', null, { 'X-Forwarded-For': '201.141.1.1' })).texto), { ok: true }, 'por nginx: sin detalle');
+    const corrida = JSON.parse((await pedir('POST', '/admin/correr', JSON.stringify({ funcion: 'cadaQuinceMinutos' }))).texto);
+    assert.equal(corrida.ok, true, 'una función del editor corre desde el servidor: ' + JSON.stringify(corrida).slice(0, 200));
+    assert.equal((await pedir('POST', '/admin/correr', JSON.stringify({ funcion: 'prepararCapri' }), { 'X-Forwarded-For': '201.141.1.1' })).estado, 404, 'por nginx no existe');
     const grande = await pedir('POST', '/api', Buffer.alloc(51 * 1024 * 1024, 'a'));
     assert.equal(grande.estado, 413);
     assert(/pesan demasiado/.test(JSON.parse(grande.texto).error));
@@ -196,7 +199,10 @@ caso('HTTP: CORS solo para la interfaz, 404, 413 y /salud', async () => {
 caso('activadores de Code.js (cadaQuinceMinutos) y caché/propiedades que sobreviven un reinicio', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'capri-'));
   try {
-    let B = await levantar({ props: PROPS, tokens: TOKENS, conf: { datos: dir } });
+    // Declarado en la configuración: se crea al arrancar
+    let B = await levantar({ props: PROPS, tokens: TOKENS, conf: { datos: dir, activadoresFijos: [{ funcion: 'cadaQuinceMinutos', cadaMinutos: 15 }] } });
+    assert.deepEqual(B.servicio.activadores.listar().map(a => [a.funcion, a.cadaMinutos]), [['cadaQuinceMinutos', 15]]);
+    // Y Code.js lo reconoce como suyo (instalarActivadorPortal no lo duplica)
     const r = await B.servicio.pool.ejecutar({ funcion: 'instalarActivadorPortal', args: [], clase: 'activador' });
     assert(JSON.parse(r.texto).ok);
     assert.deepEqual(B.servicio.activadores.listar().map(a => [a.funcion, a.cadaMinutos]), [['cadaQuinceMinutos', 15]]);

@@ -1,7 +1,7 @@
 // Verificación local del ID token de Google (inicio de sesión de @helgen.tech), sin llamar a tokeninfo en cada clic.
 // Code.js sigue llamando a https://oauth2.googleapis.com/tokeninfo?id_token=… con UrlFetchApp: el servidor intercepta
 // esa dirección y contesta lo mismo que tokeninfo (los claims como texto), después de revisar aquí firma RS256 con las
-// llaves públicas de Google (JWKS, guardadas en memoria según su Cache-Control), emisor, audiencia (el Client ID de
+// llaves públicas de Google (JWKS: en memoria hasta 6 h; una llave nueva se pide otra vez, máx. cada 30 s), emisor, audiencia (el Client ID de
 // CAPRI) y vencimiento. Code.js vuelve a revisar aud, iss, exp, hd y email_verified (validarClaimsToken) sin cambios.
 // Las sesiones de CAPRI (@helgen.services, "capri.…") no pasan por aquí: Code.js las verifica con SESION_SECRETO.
 'use strict';
