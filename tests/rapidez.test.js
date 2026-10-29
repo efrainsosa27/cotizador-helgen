@@ -17,6 +17,9 @@
 //  7. Encabezados de Cotizaciones y del catálogo (columnas SAT): revisados una vez en 6 h, y repuestos si faltan.
 //  8. Caché: un valor que cabe en un trozo va en la misma entrada (una lectura); uno grande, en trozos; lo guardado con el
 //     formato de antes (N:n + trozos) se sigue leyendo; null y valores con acentos regresan iguales.
+//  9. La sincronización revisa Permisos con lo que ya trajo para los roles (sin pedirlo otra vez al caché) y, cuando toca
+//     releer la hoja, un cambio a mano en Permisos sí se detecta (sube la versión; la siguiente consulta y cada función ya
+//     usan los permisos nuevos, como antes).
 // Uso: node tests/rapidez.test.js .
 'use strict';
 const assert = require('assert');
@@ -318,6 +321,30 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   assert.deepEqual(plain(correr(`leerCache_('K_viejo')`)), { viejo: true });
   cache.K_roto = 'N:2'; cache['K_roto#0'] = '{"a"';
   assert.equal(correr(`leerCache_('K_roto')`), undefined, 'falta un trozo: no está');
+}
+
+// ================= 9. Revisar Permisos en la sincronización =================
+{
+  const A = crear({ perfil: true });
+  const { ok, perfil, cache, props, P } = A;
+  P.prepararCapri(); // Permisos en el libro de Administración
+  let vers = ok('pedro', 'bootstrap').versiones;
+  ok('pedro', 'sincronizar', vers, {}); // deja las marcas R_ (ya se revisaron)
+  perfil.ops = [];
+  let r = ok('pedro', 'sincronizar', vers, {});
+  const gets = n => perfil.ops.filter(o => o.tipo === 'cache' && o.que === 'get' && String(o.clave).indexOf('F_' + n + '_') === 0).length;
+  assert.deepEqual([gets('usuarios'), gets('delegaciones')], [1, 1], 'un solo viaje por fuente');
+  assert.deepEqual(r.cambios, []);
+  // Alguien le quita compras a Pedro a mano en la hoja; vencida la marca, la siguiente consulta lo detecta
+  const per = A.libros[props.ADMIN_DB_ID].pest.Permisos.m;
+  const fila = per.find(x => x[0] === 'pedro@helgen.tech');
+  fila[3] = 'requisicion';
+  delete cache.R_usuarios;
+  r = ok('pedro', 'sincronizar', vers, {});
+  assert(r.cambios.indexOf('permisos') !== -1, 'sube la versión de permisos');
+  // Como en la versión publicada: los permisos de esa misma respuesta se calcularon antes de revisar; la siguiente ya los trae
+  assert.equal(ok('pedro', 'sincronizar', r.versiones, {}).permisos.compras, false, 'ya no tiene compras');
+  A.falla('pedro', 'getRequisicion', ['REQ-1'], /permiso de compras/, 'PERMISO');
 }
 
 console.log('rapidez: todo bien');

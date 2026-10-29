@@ -639,9 +639,15 @@ function fuenteConHuella_(nombre, coleccion, cadaSeg, leer, revisar) {
   if (memo && (!revisar || memo.revisado)) return memo.valor;
   const cache = CacheService.getScriptCache();
   const v = versiones_()[coleccion];
+  // Rapidez: ya está en la petición con esta versión (p. ej. Permisos, que se leen para los roles): para revisarla basta
+  // saber si ya toca releer la hoja (marca R_); no se vuelve a traer el valor del caché
+  if (memo && memo.version === v && cache.get('R_' + nombre)) {
+    memo.revisado = true;
+    return memo.valor;
+  }
   const previo = leerCache_('F_' + nombre + '_' + v);
   if (previo !== undefined && (!revisar || cache.get('R_' + nombre))) {
-    MEMO_['F_' + nombre] = { valor: previo, revisado: !!revisar };
+    MEMO_['F_' + nombre] = { valor: previo, revisado: !!revisar, version: v };
     return previo;
   }
   const valor = leer();
@@ -655,7 +661,7 @@ function fuenteConHuella_(nombre, coleccion, cadaSeg, leer, revisar) {
   guardarCache_('F_' + nombre + '_' + version, valor, TTL_CACHE);
   cache.put('H_' + nombre, version + '|' + huella, TTL_CACHE);
   cache.put('R_' + nombre, '1', cadaSeg);
-  MEMO_['F_' + nombre] = { valor: valor, revisado: true };
+  MEMO_['F_' + nombre] = { valor: valor, revisado: true, version: version };
   return valor;
 }
 
