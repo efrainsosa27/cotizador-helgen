@@ -127,7 +127,7 @@ const FPR = (folio, oc, total, vence, extra) => Object.assign({ folio, ocFolio: 
 const baseCxp = {
   hoy: HOY_ISO, proyectos: baseCxc.proyectos, prueba: ['PRY-9-0007'],
   ordenes: [
-    OC('OC-1', 1160),                                                      // sin factura: estimada (entrega + 0) → 45 días
+    OC('OC-1', 1160),                                                      // sin factura: entrega + 0 días → 45 días
     OC('OC-2', 2320, { diasCredito: 30, fechaEntrega: masDias(-10) }),     // facturas: 1160 (vencida) y 580 (por vencer) + 580 sin factura
     OC('OC-3', 580, { estado: 'Cancelada' }),                              // cancelada: fuera
     OC('OC-4', 580, { estado: 'Anulada' }),                                // anulada: fuera
@@ -157,17 +157,18 @@ assert.deepEqual(cxp.totales.map(t => [t.moneda, t.total, t.vencido, t.porVencer
 assert.deepEqual(cxp.grupos.map(g => g.proveedor + ' ' + g.moneda), ['Eléctrica MXN', 'Ardusimple USD']);
 assert.deepEqual(cxp.grupos[0].detalle.map(x => x.ocFolio), ['OC-1', 'OC-2', 'OC-6', 'OC-9']);
 assert.deepEqual([cxp.grupos[0].detalle[1].d1a30, cxp.grupos[0].detalle[1].porVencer], [560, 1160], 'una orden en dos rangos');
-// Plan de pagos del módulo P (simulado con la firma del contrato): el "siguiente" con fecha manda; el resto, no antes de él
+// Plan de pagos del módulo P (simulado con la firma del contrato): lo que no cubre ninguna factura, completo en la fecha del
+// "siguiente" de P (como Cuentas por pagar y la vista de la orden; revisión 6b)
 const conPlan = (orden, pagos) => ({ esperado: orden.total, pagado: 0, saldo: orden.total, completo: false, vigentes: [],
   siguiente: orden.folio === 'OC-1' ? { concepto: 'Anticipo 50%', monto: 580, vence: masDias(-3) } : null });
-const ppPlan = plain(P.porPagarProveedores(Object.assign({}, baseCxp, { ordenes: [baseCxp.ordenes[0]] }), conPlan));
-assert.deepEqual(ppPlan.map(x => [x.monto, x.fecha, x.fuente, x.referencia].join(' ')),
-  ['580 ' + masDias(-3) + ' plan Anticipo 50%', '580 ' + masDias(-3) + ' plan Resto del plan de pagos']);
-// Sin plan, "siguiente" es el saldo completo: aunque P le ponga fecha, mandan las facturas y lo estimado
+const ocPlan = Object.assign({}, baseCxp.ordenes[0], { planPago: [{ concepto: 'Anticipo 50%', porcentaje: 50 }, { concepto: 'Resto', porcentaje: 50 }] });
+const ppPlan = plain(P.porPagarProveedores(Object.assign({}, baseCxp, { ordenes: [ocPlan] }), conPlan));
+assert.deepEqual(ppPlan.map(x => [x.monto, x.fecha, x.fuente, x.referencia].join(' ')), ['1160 ' + masDias(-3) + ' plan Anticipo 50%']);
+// Sin plan: primero las facturas; lo que no cubren, en la fecha del "siguiente" de P sin facturas
 const sinPlan = (orden, pagos) => ({ esperado: orden.total, pagado: 600, saldo: orden.total - 600, completo: false, vigentes: [],
-  siguiente: { concepto: 'Saldo', monto: orden.total - 600, vence: masDias(-1) } });
-assert.deepEqual(plain(P.porPagarProveedores(Object.assign({}, baseCxp, { ordenes: [baseCxp.ordenes[1]] }), sinPlan)).map(x => x.fuente + ' ' + x.monto),
-  ['factura 560', 'factura 580', 'estimada 580']);
+  siguiente: { concepto: 'Saldo', monto: orden.total - 600, vence: orden.facturas && orden.facturas.length ? masDias(-20) : masDias(-1) } });
+assert.deepEqual(plain(P.porPagarProveedores(Object.assign({}, baseCxp, { ordenes: [baseCxp.ordenes[1]] }), sinPlan)).map(x => x.fuente + ' ' + x.monto + ' ' + x.fecha),
+  ['factura 560 ' + masDias(-20), 'factura 580 ' + masDias(5), 'estimada 580 ' + masDias(-1)]);
 // Pagos parciales del módulo P (simulado): saldoFn manda; completo = fuera
 const parcial = () => ({ esperado: 1160, pagado: 400, saldo: 760, completo: false, vigentes: [{ folio: 'PGP-1', fecha: HOY_ISO, montoAplicado: 400, tipo: 'Anticipo' }], siguiente: null });
 assert.deepEqual(plain(P.porPagarProveedores(Object.assign({}, baseCxp, { ordenes: [baseCxp.ordenes[0]] }), parcial)).map(x => x.monto), [760]);
@@ -559,7 +560,7 @@ const esperar = async (k = 30) => { for (let i = 0; i < k; i++) await new Promis
   assert.deepEqual(plain(C.run('REPORTES.permitidos()')), ['cxp']);
   C.run("verTab('rep')"); await esperar();
   h = C.$('vistaRep').innerHTML;
-  assert(/Antigüedad de cuentas por pagar/.test(h) && /Eléctrica del Centro/.test(h) && /Ardusimple SL/.test(h) && /Factura/.test(h) && /Estimada/.test(h), 'CxP pintado');
+  assert(/Antigüedad de cuentas por pagar/.test(h) && /Eléctrica del Centro/.test(h) && /Ardusimple SL/.test(h) && /Factura/.test(h) && /Sin factura: /.test(h), 'CxP pintado');
   assert(!/Cliente Uno|Contratado|Margen/.test(h), 'sin datos de contrato');
   assert(/"Proveedor","Orden de compra","Requisición","Proyecto","Moneda"/.test(C.run("REPORTES.csv('cxp')")));
 

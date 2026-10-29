@@ -5605,7 +5605,7 @@
       { tipo: 'flujo', titulo: 'Flujo de efectivo · 13 semanas', boton: 'Flujo 13 semanas', funcion: 'reporteFlujo', porDia: true },
       { tipo: 'margen', titulo: 'Margen por proyecto', boton: 'Margen', funcion: 'reporteMargen', porDia: false },
     ];
-    const FUENTES = { plan: 'Plan de pagos', factura: 'Factura', estimada: 'Estimada (entrega + crédito)', '': 'Sin fecha' };
+    const FUENTES = { plan: 'Plan de pagos', factura: 'Factura', estimada: 'Sin factura', '': 'Sin fecha' };
     const est = { tipo: '', datos: {}, dia: {}, cargando: {}, error: {} };
     let FECHAS_V = null; // vista de cobranza con la que se pintaron las fechas esperadas
     const hoyLocal = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); };
@@ -5715,9 +5715,10 @@
           (x.estadoProyecto && x.estadoProyecto !== 'Activo' ? ' · ' + esc(x.estadoProyecto) : '') + '</div>',
         partida: p => (FUENTES[p.fuente] || p.fuente) + (p.referencia && p.fuente !== 'estimada' && p.fuente !== '' ? ' ' + p.referencia : '') + ': ' +
           dineroTexto(p.monto, p.moneda) + (p.fecha ? ' · ' + fechaMx(p.fecha) + ' (' + textoDias(p.dias) + ')' : ''),
-        nota: 'Saldo de cada orden de compra vigente (lo esperado menos lo pagado, en la moneda de la orden). Fecha: la del plan de pagos; si no, ' +
-          'el vencimiento de sus facturas (emisión + días de crédito; lo pagado cubre primero la que vence antes); lo que no tiene factura, ' +
-          'estimada con la fecha de entrega + días de crédito. Fuera: órdenes canceladas o anuladas y registros de prueba.' });
+        nota: 'Saldo de cada orden de compra vigente (lo esperado menos lo pagado, en la moneda de la orden), con las fechas de Cuentas por pagar: ' +
+          'el vencimiento de sus facturas (emisión + días de crédito; lo pagado cubre primero la que vence antes); lo que no tiene factura, en la ' +
+          'fecha de su siguiente pago (el del plan de pagos o la recepción —o entrega— + días de crédito). Fuera: órdenes canceladas o anuladas y ' +
+          'registros de prueba.' });
     }
     function htmlFlujo(d) {
       if (!d.monedas.length) return '<p class="nota">No hay cobros ni pagos esperados.</p>';
@@ -5738,7 +5739,7 @@
           '<details style="margin-top:8px"><summary class="nota">Partidas (' + partidas.length + ')</summary>' +
           tabla('<th>Tipo</th><th>Folio</th><th>Detalle</th><th>Fecha</th><th>Semana</th><th class="num">Monto</th>', partidas.map(p =>
             '<tr><td>' + (p.tipo === 'cobro' ? 'Cobro' : 'Pago') + '</td><td style="white-space:nowrap">' + esc(p.folio) + '</td><td>' + esc(p.detalle) +
-            (p.fuente === 'estimada' ? ' <span class="nota">(fecha estimada)</span>' : '') + '</td><td style="white-space:nowrap">' + (p.fecha ? esc(fechaMx(p.fecha)) : 'Sin fecha') +
+            (p.fuente === 'estimada' ? ' <span class="nota">(sin factura)</span>' : '') + '</td><td style="white-space:nowrap">' + (p.fecha ? esc(fechaMx(p.fecha)) : 'Sin fecha') +
             (p.vencido ? ' <span class="chip cancelado">Vencido</span>' : '') + '</td><td>' + (p.semana || (p.donde === 'despues' ? 'Después' : '—')) + '</td>' +
             '<td class="num">' + dinero(p.monto, p.moneda) + '</td></tr>').join('')) + '</details>';
       }).join('') + '<div class="nota" style="margin-top:8px">Semana 1 = de lunes a domingo de esta semana; lo vencido cae en la semana 1 y se marca. ' +

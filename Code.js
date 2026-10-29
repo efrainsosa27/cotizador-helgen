@@ -12066,6 +12066,16 @@ function fechaMasDias_(fecha, dias) {
 }
 
 /**
+ * Vencimiento de lo que una orden debe sin factura: recepción (o entrega, o la fecha de la orden) + sus días de crédito; '' si no
+ * hay fecha. UNA sola regla para el "siguiente" de saldoOrdenCompra (vista de la orden y fila "Saldo" de Cuentas por pagar) y para
+ * los reportes (R: antigüedad de CxP y flujo), así el mismo saldo cae en el mismo rango y la misma semana en todas las pantallas.
+ */
+function venceSinFactura(o) {
+  const x = o || {};
+  return fechaMasDias_(x.fechaRecepcion || x.fechaEntrega || x.fecha, x.diasCredito);
+}
+
+/**
  * Saldo de una orden de compra (contrato docs/incremento-6.md §1; lo usa R para el flujo de efectivo). orden = {folio, moneda,
  * total, estado, renglones, ivaTasa, fecha, fechaEntrega, fechaRecepcion, diasCredito, planPago} (ordenDesdeFila_); pagos = filas
  * de PagosProveedores de ESA orden (pagoProvDesdeFila_, cualquier estado); movimientos = MovimientosInventario de la orden (lo
@@ -12124,17 +12134,16 @@ function saldoOrdenCompra(orden, pagos, movimientos) {
         acumulado: previo / 100, completa: montoCts - cubiertoCts <= tol };
     });
   }
-  const base = o.fechaRecepcion || o.fechaEntrega || o.fecha;
   let siguiente = null;
   if (!completo) {
     if (etapas) {
       const k = Math.max(0, etapas.findIndex(e => aCentavos(e.acumulado) - pagadoCts > tol));
       const e = etapas[k] || etapas[etapas.length - 1];
       siguiente = { concepto: e.concepto, monto: Math.min(saldoCts, Math.max(0, aCentavos(e.acumulado) - pagadoCts)) / 100,
-        vence: venceFactura || (k === 0 && etapas.length > 1 ? String(o.fecha || '') : fechaMasDias_(base, o.diasCredito)),
+        vence: venceFactura || (k === 0 && etapas.length > 1 ? String(o.fecha || '') : venceSinFactura(o)),
         etapa: e.etapa, etapas: etapas.length };
     } else {
-      siguiente = { concepto: 'Saldo', monto: saldoCts / 100, vence: venceFactura || fechaMasDias_(base, o.diasCredito) };
+      siguiente = { concepto: 'Saldo', monto: saldoCts / 100, vence: venceFactura || venceSinFactura(o) };
     }
   }
   return { moneda: String(o.moneda || 'MXN'), esperado: esperadoCts / 100, pagado: pagadoCts / 100, saldo: completo ? 0 : saldoCts / 100,
@@ -12230,6 +12239,7 @@ function completarPagoTrasDevolucion_(libro, hoja, req, hO, orden, folioDev) {
 // flujo → super admin (que tiene todos los roles). Compras nunca recibe montos de contrato ni margen. MXN y USD nunca se suman
 // ni se comparan: todo va por moneda. Fuera: lo cancelado y lo anulado (ocVigente, esAnulado_, estado Anulada), los proyectos
 // Cancelados (CxC, flujo y margen; ver porPagarProveedores para CxP) y los registros de prueba (foliosPrueba_, CLAUDE.md §5).
+// Las fechas de lo que se debe a proveedores siguen las reglas de Cuentas por pagar (venceSinFactura, compartida con P).
 // En caché por versión de sus colecciones (enCache_) y, los que dependen del día, por día.
 // Punto de integración con el módulo P (pagos parciales): saldoOrdenCompra_() usa saldoOrdenCompra (P, contrato §1) en cuanto
 // exista; mientras tanto, saldoOrdenCompraProvisional (misma firma y forma, reglas de hoy).
@@ -12421,7 +12431,7 @@ const RANGOS_REPORTE = [
 ];
 const RANGO_SIN_FECHA = { clave: 'sinFecha', etiqueta: 'Sin fecha' };
 /** De dónde sale la fecha de un pago esperado a proveedor (porPagarProveedores). */
-const FUENTES_VENCE = { plan: 'Plan de pagos', factura: 'Factura', estimada: 'Estimada (entrega + crédito)', '': 'Sin fecha' };
+const FUENTES_VENCE = { plan: 'Plan de pagos', factura: 'Factura', estimada: 'Sin factura (recepción o entrega + crédito)', '': 'Sin fecha' };
 
 /** ¿"AAAA-MM-DD" es una fecha real? */
 function fechaIsoValida(s) {
@@ -12508,12 +12518,13 @@ function etapasPorCobrar(d) {
  * (Lógica pura) Lo que falta pagar a proveedores, como partidas con fecha: una o más por orden vigente con saldo. d = {ordenes
  * (ordenDesdeFila_), pagosProv (PagosProveedores, cualquier estado), movimientos ({OC: [MovimientosInventario]}), facturas
  * (FacturasProveedor), proyectos, prueba}; saldoFn = saldoOrdenCompra (módulo P) o saldoOrdenCompraProvisional. Cuánto: el saldo
- * de saldoFn (en la moneda de la orden; nada si está completo). Cuándo (fuente):
- *  1. 'plan': el "siguiente" de P cuando es un pago del plan (trae fecha en vence y es MENOR que el saldo; el contrato dice que
- *     sin plan "siguiente" es el saldo completo); el resto del saldo, en la fecha estimada pero nunca antes que ese pago.
- *  2. 'factura': si no, las facturas Vigentes de la orden en su moneda (vencimiento = emisión + días de crédito), de la que vence
- *     primero a la última; lo ya pagado cubre primero las que vencen antes.
- *  3. 'estimada': lo que ninguna factura cubre, en la fecha de entrega (o de la orden) + días de crédito de la orden.
+ * de saldoFn (en la moneda de la orden; nada si está completo). Cuándo: las mismas reglas que Cuentas por pagar (antiguedadCxp)
+ * y que el "siguiente pago" de la orden, para que el mismo saldo caiga en el mismo rango y la misma semana (revisión 6b):
+ *  1. 'factura': las facturas Vigentes de la orden en su moneda (vencimiento = emisión + días de crédito), de la que vence primero
+ *     a la última; lo ya pagado cubre primero las que vencen antes.
+ *  2. Lo que ninguna factura cubre (más de TOLERANCIA_PAGO), completo en una fecha: la del "siguiente" de P sin facturas (el pago
+ *     del plan que sigue: el anticipo vence en la fecha de la orden; o recepción/entrega + días de crédito, venceSinFactura). Es
+ *     'plan' si la orden tiene plan de pagos y 'estimada' si no.
  * Las órdenes de proyectos de prueba no cuentan. Las de un proyecto Cancelado sí: se le sigue debiendo al proveedor mientras la
  * orden no se cancele (estadoProyecto lo dice). Partida = {ocFolio, reqFolio, proyectoFolio, proyectoVisible, proyectoNombre,
  * estadoProyecto, proveedorId, proveedor, moneda, esperado, pagado, saldoOrden, monto, fecha, fuente, referencia}.
@@ -12530,42 +12541,27 @@ function porPagarProveedores(d, saldoFn) {
   (d.ordenes || []).forEach(o => {
     if (!ocVigente(o) || esFolioPrueba(o.proyectoFolio, prueba)) return;
     // Con las facturas de la orden (P): con retenciones el saldo se mide contra lo facturado, igual que Cuentas por pagar
-    const k = may(o.folio), s = fn(Object.assign({}, o, { facturas: facturas[k] || [] }), pagos[k] || [], movs[k] || []);
+    const k = may(o.folio), fs = facturas[k] || [], s = fn(Object.assign({}, o, { facturas: fs }), pagos[k] || [], movs[k] || []);
     if (!s || s.completo || aCentavos(s.saldo) <= 0) return;
+    // La fecha de lo que no cubre ninguna factura sale del "siguiente" de P SIN facturas (como la fila "Saldo" de Cuentas por pagar)
+    const sigResto = (fs.length ? fn(Object.assign({}, o, { facturas: null }), pagos[k] || [], movs[k] || []) || {} : s).siguiente;
     const p = proyectos[may(o.proyectoFolio)] || {};
     const base = { ocFolio: o.folio, reqFolio: o.reqFolio || '', proyectoFolio: o.proyectoFolio, proyectoVisible: p.folioVisible || o.proyectoFolio,
       proyectoNombre: p.nombre || '', estadoProyecto: p.estado || '', proveedorId: o.proveedorId || '', proveedor: o.proveedor || '',
       moneda: o.moneda, esperado: redondear(s.esperado), pagado: redondear(s.pagado), saldoOrden: redondear(s.saldo) };
-    tramosPorPagar(o, s, facturas[k] || []).forEach(t => partidas.push(Object.assign({}, base,
+    tramosPorPagar(o, s, fs, sigResto).forEach(t => partidas.push(Object.assign({}, base,
       { monto: t.cts / 100, fecha: t.fecha, fuente: t.fuente, referencia: t.referencia })));
   });
   return partidas;
 }
 
-/** Fecha estimada de pago de una orden: entrega (o la fecha de la orden) + sus días de crédito; '' si no tiene fecha válida. */
-function fechaEstimadaOrden(o) {
-  const base = fechaIsoValida(o.fechaEntrega) ? o.fechaEntrega : fechaIsoValida(o.fecha) ? o.fecha : '';
-  return base ? sumarDias(base, diasCreditoGuardados(o.diasCredito)) : '';
-}
-
-/** (Lógica pura) Tramos {cts, fecha, fuente, referencia} del saldo de una orden (reglas en porPagarProveedores). */
-function tramosPorPagar(o, s, facturas) {
-  let restante = aCentavos(s.saldo);
-  const tramos = [], estimada = fechaEstimadaOrden(o);
-  const sig = s.siguiente;
-  // Un pago del plan (P): menor que el saldo y con fecha. Sin plan, "siguiente" es el saldo completo y mandan las facturas, aunque
-  // P le ponga fecha (así lo que se factura sale con la fecha de su factura)
-  if (sig && fechaIsoValida(sig.vence) && aCentavos(sig.monto) > 0 && aCentavos(sig.monto) < restante) {
-    const c = Math.min(aCentavos(sig.monto), restante);
-    tramos.push({ cts: c, fecha: sig.vence, fuente: 'plan', referencia: String(sig.concepto || 'Siguiente pago') });
-    restante -= c;
-    if (restante > 0) {
-      const f = estimada && estimada > sig.vence ? estimada : sig.vence;
-      tramos.push({ cts: restante, fecha: f, fuente: 'plan', referencia: 'Resto del plan de pagos' });
-    }
-    return tramos;
-  }
-  let pagado = aCentavos(s.pagado);
+/**
+ * (Lógica pura) Tramos {cts, fecha, fuente, referencia} del saldo s de una orden (reglas en porPagarProveedores). sigResto = el
+ * "siguiente" de P sin facturas (fecha de lo que ninguna factura cubre); sin él (o sin fecha), venceSinFactura(o).
+ */
+function tramosPorPagar(o, s, facturas, sigResto) {
+  let restante = aCentavos(s.saldo), pagado = aCentavos(s.pagado);
+  const tramos = [];
   facturas.filter(f => f.moneda === o.moneda && fechaIsoValida(f.fechaVencimiento))
     .sort((a, b) => a.fechaVencimiento < b.fechaVencimiento ? -1 : a.fechaVencimiento > b.fechaVencimiento ? 1 : (a.folio < b.folio ? -1 : 1))
     .forEach(f => {
@@ -12576,7 +12572,14 @@ function tramosPorPagar(o, s, facturas) {
       tramos.push({ cts: abierto, fecha: f.fechaVencimiento, fuente: 'factura', referencia: f.folio });
       restante -= abierto;
     });
-  if (restante > 0) tramos.push({ cts: restante, fecha: estimada, fuente: estimada ? 'estimada' : '', referencia: 'Sin factura' });
+  // Lo que no cubre ninguna factura, completo en una fecha (Cuentas por pagar tampoco lista un resto dentro de la tolerancia)
+  if (restante > aCentavos(TOLERANCIA_PAGO) || (!tramos.length && restante > 0)) {
+    const sig = sigResto || s.siguiente || {};
+    const fecha = fechaIsoValida(sig.vence) ? sig.vence : venceSinFactura(o);
+    const plan = Array.isArray(o.planPago) && o.planPago.length > 0;
+    tramos.push({ cts: restante, fecha: fecha, fuente: !fecha ? '' : plan ? 'plan' : 'estimada',
+      referencia: plan ? String(sig.concepto || 'Plan de pagos') : 'Sin factura' });
+  }
   return tramos;
 }
 

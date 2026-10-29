@@ -17,9 +17,11 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
 2. **Las órdenes de un proyecto Cancelado siguen en CxP y en el flujo** (marcadas con el estado del proyecto). Se le sigue debiendo
    al proveedor mientras la orden no se cancele; esconderlas haría ver menos deuda de la real. Cuentas por pagar ya hace lo mismo.
    En CxC, flujo (cobros) y margen los proyectos cancelados sí quedan fuera (igual que el resumen de cobranza).
-3. **Fecha "estimada" de lo que no tiene factura:** fecha de entrega de la orden (o su fecha, en órdenes viejas sin entrega) + sus
-   días de crédito. Se marca "Estimada (entrega + crédito)" en pantalla y en el CSV. Sin eso el flujo no tendría pagos de las
-   órdenes de contado sin factura (la mayoría).
+3. **Fecha de lo que no tiene factura = la de Cuentas por pagar** (revisión 6b): **recepción** (o entrega, o la fecha de la orden) +
+   días de crédito, con **una sola función** compartida con P: `venceSinFactura(o)` (la usan el "siguiente pago" de
+   `saldoOrdenCompra` —vista de la orden y fila "Saldo" de Cuentas por pagar— y los reportes). Antes R usaba la entrega aunque la
+   orden ya se hubiera recibido, y una orden a crédito recibida antes caía en otro rango y otra semana. Se marca "Sin factura" en
+   pantalla y en el CSV. Sin esta fecha el flujo no tendría pagos de las órdenes de contado sin factura (la mayoría).
 4. **Registros de prueba:** los resúmenes de hoy no los excluyen por folio (solo por proyecto cancelado). CLAUDE.md §5 pide sacarlos
    de los reportes por folio, así que R tiene la lista fija `FOLIOS_PRUEBA_REPORTES` (`HLG-2026-0005`, `HLG-2026-0006`,
    `PRY-2026-0001`) más la Script Property opcional **`FOLIOS_PRUEBA`** (folios separados por coma; se aplica sin publicar). Fuera:
@@ -37,8 +39,13 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
 9. **Pestaña:** "Reportes" es un grupo propio en la barra (entre Cobranza y Administración). La interfaz decide si se ve con
    `PERMISOS` (cobranza → CxC y margen; compras → CxP; super admin → flujo y todos), con la misma regla que `permisosReportes_`;
    el servidor revisa en cada llamada.
-10. **El "siguiente" de P** se usa como pago con fecha solo si es **menor que el saldo** (un pago del plan). Según el contrato, sin
-    plan "siguiente" es el saldo completo: entonces mandan las facturas y lo estimado aunque P le ponga fecha (ver §5).
+10. **Fechas de CxP con las reglas de Cuentas por pagar** (revisión 6b; antes: el pago del plan con su fecha y el resto aparte): primero
+    las facturas (lo pagado cubre primero la que vence antes); lo que ninguna factura cubre va **completo en una sola fecha**: la del
+    "siguiente" de P **sin facturas** (el pago del plan que sigue —el anticipo vence en la fecha de la orden— o recepción/entrega +
+    crédito), igual que la fila "Saldo" de Cuentas por pagar y el "Siguiente pago" de la orden. Así el mismo saldo cae en el mismo
+    rango y la misma semana en todas las pantallas. Con un plan cuyo anticipo no se ha pagado, todo el saldo queda en la fecha del
+    anticipo (conservador para el flujo: el dinero sale antes, no después); en cuanto se paga, el resto pasa a recepción + crédito.
+    Un resto dentro de la tolerancia (≤ 1.00) no se lista, como en Cuentas por pagar.
 
 ## 1. Qué hace
 
@@ -52,7 +59,7 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
    - **Antigüedad de cuentas por cobrar** (cobranza, super admin): por cliente y proyecto, en No vencido · 1–30 · 31–60 · 61–90 ·
      Más de 90 días · Sin fecha, con el total vencido. Cada proyecto lista sus etapas por cobrar con su fecha.
    - **Antigüedad de cuentas por pagar** (compras, super admin): por proveedor y orden, mismos rangos; cada orden dice de dónde sale
-     la fecha (plan de pagos, factura o estimada). Sin datos de contrato ni margen.
+     la fecha (factura, plan de pagos o sin factura). Sin datos de contrato ni margen.
    - **Flujo de efectivo · 13 semanas** (solo super admin): cobros esperados contra pagos esperados por semana, neto y acumulado; la
      semana 1 dice cuánto de lo suyo está vencido; aparte sin fecha y después de la semana 13; lista de partidas.
    - **Margen por proyecto** (cobranza, super admin): contratado sin IVA − órdenes de compra no canceladas, una columna por concepto
@@ -88,7 +95,7 @@ Nada en la Base de datos ni en el libro de compras. Caché (CacheService): `K_RE
 | `foliosPrueba_()` | `FOLIOS_PRUEBA_REPORTES` + Script Property `FOLIOS_PRUEBA` |
 | `datosReportes_(que)` | Lee contratos, esquemas (con fecha), pagos de clientes; órdenes, pagos a proveedores, movimientos y facturas; proyectos visibles. Sin lo anulado (estado `Anulada` o `esAnulado_`). No crea nada |
 | `guardarFechasEsperadas(proyecto, fechas)` *(API)* | Ver §1.1. `fechas = [{orden, etapa, fecha}]`; si la etapa en ese número ya no se llama igual (el esquema cambió), error y no escribe nada. Con candado; escribe solo la celda de cada etapa que cambió; devuelve `vistaCobranza_` |
-| Puras | `fechaIsoValida`, `esFolioPrueba`, `normalizarFechasEsperadas`, `rangoAntiguedad`, `ordenMonedas`, `etapasPorCobrar`, `porPagarProveedores`, `fechaEstimadaOrden`, `tramosPorPagar`, `saldoOrdenCompraProvisional`, `antiguedadEnGrupos`, `antiguedadCxc`, `antiguedadPorPagar`, `lunesDe`, `flujoSemanal`, `margenPorProyecto`; constantes `FOLIOS_PRUEBA_REPORTES`, `SEMANAS_FLUJO`, `RANGOS_REPORTE`, `RANGO_SIN_FECHA`, `FUENTES_VENCE` |
+| Puras | `fechaIsoValida`, `esFolioPrueba`, `normalizarFechasEsperadas`, `rangoAntiguedad`, `ordenMonedas`, `etapasPorCobrar`, `porPagarProveedores`, `tramosPorPagar`, `saldoOrdenCompraProvisional`, `antiguedadEnGrupos`, `antiguedadCxc`, `antiguedadPorPagar`, `lunesDe`, `flujoSemanal`, `margenPorProyecto`; constantes `FOLIOS_PRUEBA_REPORTES`, `SEMANAS_FLUJO`, `RANGOS_REPORTE`, `RANGO_SIN_FECHA`, `FUENTES_VENCE` |
 
 ### Cambios fuera de §6.R (marcados "R (incremento 6)")
 - `MODULOS_` (+ `modReportes_()`).
@@ -96,6 +103,8 @@ Nada en la Base de datos ni en el libro de compras. Caché (CacheService): `K_RE
 - `datosCobranza_`: cada etapa trae `fechaEsperada`.
 - `escribirEsquema_`: conserva la fecha por nombre de etapa (lo usan `marcarAceptada`, `guardarEsquema` y `firmarContrato`).
 - `vistaCobranza_`: `fechasEditables` (con aceptada o firmado, con etapas, proyecto no Cancelado); `esquema[i].fechaEsperada`.
+- §6.P (revisión 6b): `venceSinFactura(o)` = recepción, o entrega, o la orden + días de crédito; `saldoOrdenCompra` la usa para el
+  "siguiente" (antes tenía la regla escrita ahí; mismo resultado).
 
 ### Interfaz (`web/cotizador/index.html`)
 - Botón `#tabRep` en `#navGrupos`, `<section id="vistaRep">`, `<div id="cobFechas">` dentro de `#cobModEsquema`.
@@ -115,10 +124,11 @@ Nada en la Base de datos ni en el libro de compras. Caché (CacheService): `K_RE
 - **Rangos (`rangoAntiguedad`):** días de atraso = hoy − fecha. ≤ 0 No vencido (hoy incluido), 1–30, 31–60, 61–90, > 90; sin fecha
   aparte. Vencido = todo menos No vencido y Sin fecha.
 - **CxP (`porPagarProveedores` / `tramosPorPagar`):** órdenes vigentes (`ocVigente`: ni Cancelada ni Anulada; tampoco `esAnulado_`),
-  no de proyectos de prueba. Saldo con `saldoOrdenCompra` (P) o la provisional; nada si `completo`. Fecha: (1) plan de pagos de P:
-  el "siguiente" si es menor que el saldo y trae fecha; el resto, en la estimada pero no antes; (2) si no, facturas Vigentes de la
-  orden en su moneda, de la que vence antes a la última, y lo pagado cubre primero las que vencen antes; (3) lo que ninguna factura
-  cubre: estimada (entrega + días de crédito). Una orden puede quedar en varios rangos.
+  no de proyectos de prueba. Saldo con `saldoOrdenCompra` (P, con las facturas de la orden: retenciones); nada si `completo`.
+  Fecha (decisión 10): (1) facturas Vigentes de la orden en su moneda, de la que vence antes a la última, y lo pagado cubre primero
+  las que vencen antes; (2) lo que ninguna factura cubre (más de 1.00), completo en la fecha del "siguiente" de P sin facturas o, si
+  no la da, `venceSinFactura` ('plan' si la orden tiene plan; si no, 'estimada' = "Sin factura"). Una orden puede quedar en varios
+  rangos.
 - **Agrupar (`antiguedadEnGrupos`):** cliente (por `cliente_id`) → proyecto; proveedor (por id) → orden. Un grupo es de una moneda:
   un cliente con proyectos en MXN y USD sale dos veces. Grupos del más vencido al menos; totales por moneda (MXN primero).
 - **Flujo (`flujoSemanal`):** ver decisión 7. Cobros = partidas de CxC; pagos = partidas de CxP. Neto = cobros − pagos de la semana;
@@ -179,6 +189,7 @@ Nada en la Base de datos ni en el libro de compras. Caché (CacheService): `K_RE
   por eso API primero).
 - Después de publicar: abrir Reportes como leo@ (super admin) y revisar contra el resumen de cobranza y Cuentas por pagar (las
   diferencias esperadas están en §0.1). Capturar las fechas esperadas de los contratos firmados (sin ellas todo cae en "Sin fecha").
-- Avisar a cobranza: dónde se capturan las fechas; a compras: el reporte de CxP incluye lo que falta facturar con fecha estimada.
+- Avisar a cobranza: dónde se capturan las fechas; a compras: el reporte de CxP incluye lo que falta facturar, en la fecha de su
+  siguiente pago (recepción o entrega + días de crédito, o el plan).
 - Al integrar: pasar a `CLAUDE.md` §4.5.2 (fecha esperada), §4.6 (puras), §4.7 (pestaña Reportes), §4.8 (módulo R), §5 (columna y
   `FOLIOS_PRUEBA`), §6 (decisiones de §0), §7 (regla: reportes solo lectura, monedas aparte) y §9; y el Manual (regla 14).
