@@ -165,11 +165,11 @@ const carpP1=carpetas[db.pest.Proyectos.m.find(r=>r[0]===p1)[7]];
 assert.deepEqual(carpP1.hijos.map(h=>h.nombre),['Cotizaciones']);
 
 // --- Sin rol de compras: no ve la pestaña ni recibe datos; el servidor rechaza todo con PERMISO ---
-assert.deepEqual({...ok('ana','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:false,requisicion:false,operaciones:false,flujoOperaciones:false});
-assert.deepEqual({...ok('tania','getDatosIniciales').permisos},{cobranza:true,desbloqueo:false,compras:false,requisicion:false,operaciones:false,flujoOperaciones:false});
-assert.deepEqual({...ok('pedro','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:true,requisicion:false,operaciones:false,flujoOperaciones:false});
-assert.deepEqual({...ok('efrain','getDatosIniciales').permisos},{cobranza:true,desbloqueo:true,compras:true,requisicion:false,operaciones:false,flujoOperaciones:false});
-assert.deepEqual({...ok('obrero','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:false,requisicion:true,operaciones:false,flujoOperaciones:false});
+assert.deepEqual({...ok('ana','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:false,requisicion:false,operaciones:false,flujoOperaciones:false,ventas:true,superadmin:false});
+assert.deepEqual({...ok('tania','getDatosIniciales').permisos},{cobranza:true,desbloqueo:false,compras:false,requisicion:false,operaciones:false,flujoOperaciones:false,ventas:true,superadmin:false});
+assert.deepEqual({...ok('pedro','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:true,requisicion:false,operaciones:false,flujoOperaciones:false,ventas:true,superadmin:false});
+assert.deepEqual({...ok('efrain','getDatosIniciales').permisos},{cobranza:true,desbloqueo:true,compras:true,requisicion:false,operaciones:false,flujoOperaciones:false,ventas:true,superadmin:false});
+assert.deepEqual({...ok('obrero','getDatosIniciales').permisos},{cobranza:false,desbloqueo:false,compras:false,requisicion:true,operaciones:false,flujoOperaciones:false,ventas:true,superadmin:false});
 const OC=f=>'OC-'+ANIO+'-'+f, REQ=f=>'REQ-'+ANIO+'-'+f;
 const COMPRAS=[['listarProyectosCompras',['']],['getComprasProyecto',[p1]],['cancelarOrdenCompra',[OC('0001'),'motivo largo']],
   ['listarRequisiciones',['']],['getRequisicion',[REQ('0001')]],['autorizarRequisicion',[REQ('0001'),{}]],

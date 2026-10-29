@@ -82,10 +82,24 @@ function verificarTokenGoogle_(idToken) {
 }
 
 /**
+ * Incremento 4 (CAPRI): cada módulo declara en su función mod*_ lo que agrega a la API, sin tocar las listas de aquí:
+ *   { nombre, api: {función: función}, cambios: {función: [colecciones]} (CAMBIOS_API), solo: [funciones que puede usar
+ *     una cuenta de solo requisiciones], publicas: [funciones sin sesión], bootstrap(permisos, errores) → {campos extra},
+ *     sincronizar(permisos, ctx, algo, r, errores) (agrega campos a r), preparar() (lo corre prepararCapri desde el editor) }
+ * Las mod*_ son declaraciones de función: se pueden llamar aquí aunque estén más abajo. Dentro de `api` solo van
+ * declaraciones de función (una const de más abajo todavía no existe al cargar el archivo).
+ */
+const MODULOS_ = [modIdentidad_(), modAnular_(), modCorreos_(), modCentroMando_(), modPantallas_()];
+/** Une un campo de todos los módulos: objetos con Object.assign, listas con concat. */
+function deModulos_(campo, inicial) {
+  return MODULOS_.reduce((acc, m) => Array.isArray(inicial) ? acc.concat(m[campo] || []) : Object.assign(acc, m[campo] || {}), inicial);
+}
+
+/**
  * Funciones que la interfaz externa (Cloudflare) puede llamar por doPost.
  * Son las mismas que usa google.script.run; nada más (ni setup ni funciones internas con _).
  */
-const API_FUNCIONES = {
+const API_FUNCIONES = Object.assign({
   bootstrap: bootstrap,
   sincronizar: sincronizar,
   getDatosIniciales: getDatosIniciales,
@@ -142,7 +156,20 @@ const API_FUNCIONES = {
   cotizarRequisicion: cotizarRequisicion,
   separarRequisicion: separarRequisicion,
   cancelarRecepcion: cancelarRecepcion,
-};
+}, deModulos_('api', {}));
+
+/**
+ * Funciones que se pueden llamar sin sesión (pedir y comprobar el código de acceso de @helgen.services). Cada una se
+ * cuida sola (límites por correo); nunca devuelven datos de CAPRI.
+ */
+const FUNCIONES_PUBLICAS = deModulos_('publicas', []);
+
+/**
+ * Funciones de Ventas (cotizar, historial, catálogo, clientes y proyectos): solo con el rol ventas. Cualquier @helgen.tech que
+ * no está en Permisos lo tiene, como antes (PERMISOS_SOLO_LISTADOS = '1' lo quita).
+ */
+const FUNCIONES_VENTAS = ['getClientes', 'listarCotizaciones', 'getCatalogo', 'guardarProducto', 'guardarCotizacion',
+  'sugerirClavesSat', 'listarProyectos', 'crearProyecto'];
 
 /**
  * API para la interfaz fuera de Apps Script. Cuerpo (text/plain para evitar la consulta CORS previa):
@@ -161,14 +188,25 @@ function doPost(e) {
       throw new Error('Solicitud inválida: el cuerpo debe ser JSON.');
     }
     if (!cuerpo || typeof cuerpo !== 'object') throw new Error('Solicitud inválida: el cuerpo debe ser JSON.');
-    VENDEDOR_ = verificarTokenGoogle_(cuerpo.token);
     const nombre = String(cuerpo.funcion || '');
+    // Las públicas (código de acceso) no llevan sesión; todas las demás exigen una sesión válida y una cuenta activa,
+    // antes de buscar la función
+    const publica = FUNCIONES_PUBLICAS.indexOf(nombre) !== -1;
+    if (!publica) {
+      VENDEDOR_ = verificarSesion_(cuerpo.token);
+      exigirAcceso_();
+    }
     if (!Object.prototype.hasOwnProperty.call(API_FUNCIONES, nombre)) {
       throw new Error('Función no permitida: ' + (nombre || '(vacía)') + '.');
     }
-    // Cuentas de SOLO_REQUISICION: solo su pestaña (nada de cotizaciones, historial, catálogo, clientes ni proyectos)
-    if (FUNCIONES_SOLO_REQUISICION.indexOf(nombre) === -1 && esSoloRequisicion_()) {
-      throw errorPermiso_('Tu cuenta solo tiene acceso a Requisiciones.');
+    if (!publica) {
+      // Cuentas de SOLO_REQUISICION: solo su pestaña (nada de cotizaciones, historial, catálogo, clientes ni proyectos)
+      if (FUNCIONES_SOLO_REQUISICION.indexOf(nombre) === -1 && esSoloRequisicion_()) {
+        throw errorPermiso_('Tu cuenta solo tiene acceso a Requisiciones.');
+      }
+      if (FUNCIONES_VENTAS.indexOf(nombre) !== -1 && !tieneRol_('ventas')) {
+        throw errorPermiso_('Tu cuenta no tiene acceso a cotizaciones.');
+      }
     }
     const args = Array.isArray(cuerpo.args) ? cuerpo.args : [];
     const cambia = CAMBIOS_API[nombre];
@@ -176,14 +214,197 @@ function doPost(e) {
     respuesta = { ok: true, datos: API_FUNCIONES[nombre].apply(null, args) };
     // Sube la versión de lo que cambió: invalida su caché y los demás navegadores lo ven en su siguiente consulta
     if (cambia && !(respuesta.datos && respuesta.datos.confirmar)) subirVersiones_(cambia);
+    // Los correos se mandan al final, ya guardado el cambio (si uno falla, el cambio sigue en pie: queda en Correos)
+    if (MEMO_.correos && MEMO_.correos.length) {
+      try { enviarCorreosPendientes_(); } catch (e) { console.warn('Correos sin mandar: ' + e.message); }
+    }
   } catch (err) {
     respuesta = { ok: false, error: err && err.message ? err.message : String(err) };
     if (err && err.sesion) respuesta.codigo = 'SESION';
-    else if (err && err.codigo) respuesta.codigo = err.codigo; // 'PROYECTO' (errorProyecto_), 'PERMISO' (errorPermiso_)
+    // 'PROYECTO' (errorProyecto_), 'PERMISO' (errorPermiso_), 'ACCESO' (cuenta dada de baja o sin alta en Permisos)
+    else if (err && err.codigo) respuesta.codigo = err.codigo;
   } finally {
     VENDEDOR_ = null; VERSIONES_ = null; SIN_CACHE_ = false; MEMO_ = {};
   }
   return ContentService.createTextOutput(JSON.stringify(respuesta)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ====== 1.2 USUARIOS, ROLES Y DELEGACIONES (CAPRI, incremento 4) ======
+// Quién entra y qué puede hacer sale de la pestaña Permisos del libro "CAPRI — Administración" (privado, como compras).
+// Mientras ese libro no exista (antes de correr prepararCapri), los roles salen de Script Properties como siempre
+// (ROL_*, SOLO_REQUISICION, ADMIN_DESBLOQUEO): usuariosDesdePropiedades da exactamente los mismos permisos.
+// SUPER_ADMIN (Script Properties) = super admin raíz: no se puede quitar desde la página y nunca queda fuera.
+// Cada función sigue revisando su rol en el servidor; todo pasa por tieneRol_ (con super admin y delegaciones).
+
+const DOMINIO_SERVICIOS = 'helgen.services';
+const DOMINIOS_CAPRI = [DOMINIO_HELGEN, DOMINIO_SERVICIOS];
+/** Prefijo de las sesiones propias de CAPRI (cuentas @helgen.services que entran con código por correo). */
+const PREFIJO_SESION_CAPRI = 'capri.';
+
+const NOMBRE_CARPETA_ADMIN = 'CAPRI — Administración';
+const NOMBRE_LIBRO_ADMIN = 'CAPRI — Administración (datos)';
+/** Libro de Administración: Permisos, Delegaciones, Correos (bitácora de avisos), Anulaciones y Bitacora. */
+const HOJAS_ADMIN = {
+  // roles = lista separada por coma (ROLES_CAPRI); metodo = google (@helgen.tech) o codigo (@helgen.services);
+  // sitio = código del sitio de la persona (VER, ZLO…; opcional); activo = Sí / No
+  Permisos: { enc: ['correo', 'nombre', 'metodo', 'roles', 'sitio', 'activo', 'notas', 'actualizo', 'actualizado'], numeros: [] },
+  // de entrega a "a" sus roles delegables (Aprobaciones, Compras) del día desde al día hasta (AAAA-MM-DD); estado Activa / Cancelada
+  Delegaciones: { enc: ['id', 'de', 'a', 'desde', 'hasta', 'roles', 'estado', 'creo', 'creado', 'cancelo', 'motivo_cancelacion'],
+    numeros: [] },
+  Correos: { enc: ['fecha', 'para', 'asunto', 'tipo', 'folio', 'estado', 'error', 'actor'], numeros: [] },
+  Anulaciones: { enc: ['fecha', 'correo', 'tipo', 'folio', 'motivo', 'cascada (JSON)', 'antes (JSON)'], numeros: [] },
+  Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
+};
+const AREA_ADMIN = { que: 'administración', propCarpeta: 'ADMIN_FOLDER_ID', propLibro: 'ADMIN_DB_ID',
+  carpeta: NOMBRE_CARPETA_ADMIN, libro: NOMBRE_LIBRO_ADMIN, hojas: HOJAS_ADMIN };
+
+function libroAdmin_() { return libroArea_(AREA_ADMIN); }
+/** Libro de Administración si ya existe; null si todavía no (los roles salen entonces de Script Properties). */
+function libroAdminSiExiste_() { return libroAreaSiExiste_(AREA_ADMIN); }
+function hojaAdmin_(libro, nombre) { return hojaDeArea_(libro, HOJAS_ADMIN, nombre); }
+/** Renglón en la Bitacora del libro de Administración. */
+function bitacoraAdmin_(accion, folio, detalle, motivo) { bitacora_(libroAdmin_(), accion, folio, detalle, motivo, HOJAS_ADMIN); }
+
+/** {correo: usuario} de Permisos (o de Script Properties si todavía no hay libro). Por petición y en caché por versión. */
+function usuariosCapri_(revisar) {
+  if (!propiedades_()[AREA_ADMIN.propLibro]) return usuariosDesdePropiedades(propiedades_());
+  return fuenteConHuella_('usuarios', 'permisos', 300, () => {
+    const libro = libroAdminSiExiste_();
+    return usuariosDesdeFilas(filasDeArea_(hojaAdmin_(libro, 'Permisos'), HOJAS_ADMIN, 'Permisos'));
+  }, revisar);
+}
+
+/** Delegaciones (todas; rolesEfectivos usa las activas de hoy). Sin libro de Administración: ninguna. */
+function delegacionesCapri_(revisar) {
+  if (!propiedades_()[AREA_ADMIN.propLibro]) return [];
+  return fuenteConHuella_('delegaciones', 'permisos', 300, () => {
+    const libro = libroAdminSiExiste_();
+    return delegacionesDesdeFilas(filasDeArea_(hojaAdmin_(libro, 'Delegaciones'), HOJAS_ADMIN, 'Delegaciones'));
+  }, revisar);
+}
+
+/** Todo lo que rolesEfectivos necesita, leído una vez por petición. */
+function contextoRoles_() {
+  if (!MEMO_.ctxRoles) {
+    const p = propiedades_();
+    MEMO_.ctxRoles = { usuarios: usuariosCapri_(), delegaciones: delegacionesCapri_(), hoy: hoyIso_(),
+      superAdmins: correosCapri(p.SUPER_ADMIN), soloListados: String(p.PERMISOS_SOLO_LISTADOS || '') === '1' };
+  }
+  return MEMO_.ctxRoles;
+}
+
+/** {activo, listado, roles, superadmin, delegaciones} del usuario de la sesión (sin sesión: nada). */
+function rolesYo_() {
+  if (!VENDEDOR_) return { activo: false, listado: false, roles: [], superadmin: false, delegaciones: [] };
+  if (!MEMO_.rolesYo || MEMO_.rolesYoDe !== VENDEDOR_.email) {
+    MEMO_.rolesYo = rolesEfectivos(VENDEDOR_.email, contextoRoles_());
+    MEMO_.rolesYoDe = VENDEDOR_.email;
+  }
+  return MEMO_.rolesYo;
+}
+
+/** ¿El usuario de la sesión tiene el rol hoy (propio, por ser super admin o por una delegación vigente)? */
+function tieneRol_(rol) {
+  return rolesYo_().roles.indexOf(rol) !== -1;
+}
+
+function esSuperAdmin_() { return tieneRol_('superadmin'); }
+
+function exigirSuperAdmin_() {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión para continuar.');
+  if (!esSuperAdmin_()) throw errorPermiso_('Solo un super admin puede hacer esto.');
+}
+
+/** Error de acceso: la cuenta no está dada de alta o está desactivada (codigo 'ACCESO'; la interfaz no reintenta). */
+function errorAcceso_(mensaje) {
+  const e = new Error(mensaje);
+  e.codigo = 'ACCESO';
+  return e;
+}
+
+/** Corta toda llamada de una cuenta sin acceso: desactivarla en Permisos surte efecto en su siguiente clic. */
+function exigirAcceso_() {
+  const r = rolesYo_();
+  if (r.activo) return;
+  throw errorAcceso_(r.listado ? 'Tu acceso a CAPRI está desactivado. Pide ayuda a un administrador.'
+    : 'Tu cuenta no tiene acceso a CAPRI. Pide a un administrador que te dé de alta.');
+}
+
+/**
+ * Sesión de la petición: un ID token de Google (@helgen.tech) o una sesión propia de CAPRI (@helgen.services, empieza con
+ * PREFIJO_SESION_CAPRI; la verifica el módulo de identidad). Devuelve {email, nombre, apellido} o lanza errorSesion_.
+ */
+function verificarSesion_(token) {
+  const t = String(token || '');
+  if (t.indexOf(PREFIJO_SESION_CAPRI) === 0) return verificarSesionCapri_(t);
+  return verificarTokenGoogle_(t);
+}
+
+/** Correos activos que hoy tienen el rol (con super admin y delegaciones): a quién avisar o quién puede recibir. */
+function correosConRol_(rol) {
+  const ctx = contextoRoles_();
+  const candidatos = Object.keys(ctx.usuarios).concat(ctx.superAdmins, ctx.delegaciones.map(d => d.a));
+  return candidatos.filter((c, i) => candidatos.indexOf(c) === i)
+    .filter(c => rolesEfectivos(c, ctx).roles.indexOf(rol) !== -1).sort();
+}
+
+/** Usuario de Permisos por correo (null si no está). */
+function usuarioCapri_(correo) {
+  return contextoRoles_().usuarios[String(correo || '').trim().toLowerCase()] || null;
+}
+
+/** Nombre para mostrar de un correo (el de Permisos; si no, el correo). */
+function nombreDeCorreo_(correo) {
+  const u = usuarioCapri_(correo);
+  return (u && u.nombre) || String(correo || '');
+}
+
+/**
+ * Pasa por alto una regla de separación de funciones (aprobar lo propio, dar el visto bueno a lo que uno preparó) solo si
+ * quien lo hace es super admin y escribe el motivo (≥ 10 caracteres); queda en la Bitacora de Administración. Devuelve true
+ * si se permitió; false si no aplica (no es super admin o no dio motivo) y la función lanza su error de siempre.
+ */
+function excepcionSuperAdmin_(regla, folio, motivo) {
+  const m = String(motivo == null ? '' : motivo).trim();
+  if (!esSuperAdmin_() || m.length < 10) return false;
+  if (libroAdminSiExiste_()) bitacoraAdmin_('Excepción de super admin: ' + regla, folio, '', m);
+  return true;
+}
+
+/**
+ * Correr una vez desde el editor (Efrain) antes de publicar el incremento 4: crea el libro de Administración (privado),
+ * copia los roles de Script Properties a Permisos (si está vacía), pone SUPER_ADMIN = leo@helgen.tech si no hay y corre
+ * lo que cada módulo necesita (autorizar el permiso de correo, activador de 15 minutos…). No comparte nada.
+ */
+function prepararCapri() {
+  const props = PropertiesService.getScriptProperties();
+  if (!props.getProperty('SUPER_ADMIN')) props.setProperty('SUPER_ADMIN', 'leo@helgen.tech');
+  const libro = libroAdmin_();
+  privado_(carpetaArea_(AREA_ADMIN));
+  privado_(DriveApp.getFileById(libro.getId()));
+  Object.keys(HOJAS_ADMIN).forEach(n => hojaAdmin_(libro, n));
+  const migrados = migrarPermisos_(libro);
+  console.log('Libro de Administración: ' + libro.getUrl());
+  console.log('Usuarios copiados a Permisos: ' + migrados + ' · SUPER_ADMIN = ' + props.getProperty('SUPER_ADMIN'));
+  MEMO_ = {};
+  MODULOS_.forEach(m => { if (m.preparar) { console.log('— ' + (m.nombre || 'módulo')); m.preparar(); } });
+  subirVersiones_(['permisos']);
+}
+
+/** Copia los roles de Script Properties a Permisos solo si la pestaña está vacía (no pisa lo que ya se editó). */
+function migrarPermisos_(libro) {
+  const hoja = hojaAdmin_(libro, 'Permisos');
+  if (hoja.getLastRow() > 1) return 0;
+  const usuarios = usuariosDesdePropiedades(PropertiesService.getScriptProperties().getProperties());
+  const ahora = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
+  const filas = Object.keys(usuarios).sort().map(c => filaDeUsuario(usuarios[c], 'migración', ahora).map(textoCelda));
+  if (filas.length) hoja.getRange(2, 1, filas.length, HOJAS_ADMIN.Permisos.enc.length).setValues(filas);
+  return filas.length;
+}
+
+/** Sitios con código, nombre y dirección (Config → SITIOS). */
+function sitiosDetalle_() {
+  return sitiosDetalleDeTexto(configLigera_().sitios);
 }
 
 // ====== 1.1 CARGA INICIAL, CACHÉ Y SINCRONIZACIÓN ======
@@ -192,11 +413,12 @@ function doPost(e) {
 // sincronizar() recibe las versiones del navegador y devuelve solo lo que cambió, respetando los roles: la interfaz lo
 // consulta cada 20 s con la pestaña visible, sin recargar. Los permisos se siguen revisando en cada función.
 
+// permisos: Permisos y Delegaciones (incremento 4); anulaciones: lo que un super admin anuló (se esconde de listas y totales)
 const COLECCIONES = ['proyectos', 'contratos', 'cotizaciones', 'catalogo', 'requisiciones', 'oc', 'pagosCobranza',
-  'pagosProveedores', 'facturasProveedor'];
+  'pagosProveedores', 'facturasProveedor', 'permisos', 'anulaciones'];
 
 /** Colecciones que cambia cada función de la API: doPost sube su versión cuando termina bien. */
-const CAMBIOS_API = {
+const CAMBIOS_API = Object.assign({
   guardarCotizacion: ['cotizaciones'], guardarProducto: ['catalogo'], crearProyecto: ['proyectos'],
   marcarAceptada: ['contratos'], guardarEsquema: ['contratos'], firmarContrato: ['contratos'],
   desbloquearContrato: ['contratos'], registrarPago: ['pagosCobranza'], cancelarPago: ['pagosCobranza'],
@@ -210,7 +432,7 @@ const CAMBIOS_API = {
   aprobarRequisicion: ['requisiciones'], cotizarRequisicion: ['requisiciones'], autorizarPropuesta: ['requisiciones', 'oc'],
   regresarACompras: ['requisiciones'], separarRequisicion: ['requisiciones'], registrarRecepcion: ['requisiciones', 'oc'],
   cancelarRecepcion: ['requisiciones', 'oc'],
-};
+}, deModulos_('cambios', {}));
 
 let VERSIONES_ = null;   // versiones leídas en esta petición (doPost las limpia)
 let SIN_CACHE_ = false;  // durante una escritura las listas se leen de la hoja (su versión todavía no sube)
@@ -394,12 +616,16 @@ function configLigera_() {
   });
 }
 
-/** Permisos del usuario del token (solo para mostrar pestañas: cada función los vuelve a revisar). */
+/**
+ * Permisos del usuario de la sesión (solo para mostrar pestañas: cada función los vuelve a revisar). Salen de rolesYo_()
+ * (Permisos + super admin + delegaciones). operaciones = Aprobaciones (también con SOLO_REQUISICION); flujoOperaciones: qué
+ * flujo de requisiciones ve la interfaz; ventas: Nueva cotización, Historial y Catálogo; superadmin: Administración.
+ */
 function permisosUsuario_() {
-  // operaciones: pestaña Operaciones (también con SOLO_REQUISICION); flujoOperaciones: qué flujo de requisiciones ve la interfaz
   const op = { operaciones: esOperaciones_(), flujoOperaciones: flujoOperaciones_() };
-  if (esSoloRequisicion_()) return Object.assign({ cobranza: false, desbloqueo: false, compras: false, requisicion: true }, op);
-  return Object.assign({ cobranza: esCobranza_(), desbloqueo: esAdminDesbloqueo_(), compras: esCompras_(), requisicion: esRequisicion_() }, op);
+  const extra = { ventas: tieneRol_('ventas'), superadmin: esSuperAdmin_() };
+  if (esSoloRequisicion_()) return Object.assign({ cobranza: false, desbloqueo: false, compras: false, requisicion: true }, op, extra);
+  return Object.assign({ cobranza: esCobranza_(), desbloqueo: esAdminDesbloqueo_(), compras: esCompras_(), requisicion: esRequisicion_() }, op, extra);
 }
 
 /** Catálogo sin precios (para sugerir descripción y unidad en requisiciones). */
@@ -425,13 +651,15 @@ function bootstrap() {
   if (!VENDEDOR_) throw errorSesion_('Inicia sesión con tu cuenta @' + DOMINIO_HELGEN + '.');
   const permisos = permisosUsuario_(), solo = esSoloRequisicion_(), errores = [];
   const cfg = configLigera_(), cat = catalogoCache_();
+  const conPrecios = !solo && (permisos.ventas || permisos.compras || permisos.cobranza);
   const d = {
     versiones: versiones_(), permisos: permisos, soloRequisicion: solo, usuario: usuarioActual_(), vendedor: VENDEDOR_,
     ivaTasa: cfg.ivaTasa, vigenciaDias: cfg.vigenciaDias, marcas: MARCAS, sitios: sitiosDeTexto(cfg.sitios),
-    catalogo: solo ? catalogoSinPrecios_(cat.productos) : cat.productos, tipoCambio: solo ? null : cat.tipoCambio,
+    sitiosDetalle: sitiosDetalleDeTexto(cfg.sitios),
+    catalogo: conPrecios ? cat.productos : catalogoSinPrecios_(cat.productos), tipoCambio: conPrecios ? cat.tipoCambio : null,
     clientes: [], proyectos: [], errores: errores,
   };
-  if (!solo) {
+  if (!solo && permisos.ventas) {
     d.clientes = intentar_(errores, 'Clientes', clientesCache_) || [];
     d.proyectos = intentar_(errores, 'Proyectos', () => listarProyectos('', false)) || [];
   }
@@ -453,6 +681,10 @@ function bootstrap() {
     d.cob = { proyectos: intentar_(errores, 'Proyectos de cobranza', () => listarProyectosCobranza('')),
       resumen: intentar_(errores, 'Resumen de cobranza', () => resumenCobranzaGeneral(true)) };
   }
+  // Incremento 4: lo que agrega cada módulo (pendientes, ítems del centro de mando…); si uno falla, la carga sigue
+  MODULOS_.forEach(m => {
+    if (m.bootstrap) Object.assign(d, intentar_(errores, m.nombre || 'módulo', () => m.bootstrap(permisos, errores)) || {});
+  });
   return d;
 }
 
@@ -472,24 +704,29 @@ function sincronizar(vc, ctx) {
   const permisos = permisosUsuario_(), solo = esSoloRequisicion_(), errores = [];
   // Hojas que se editan a mano: cada pocos minutos (para todos) se releen y, si cambiaron, sube su versión
   intentar_(errores, 'Proyectos', () => proyectosCache_(true));
+  intentar_(errores, 'Permisos', () => { usuariosCapri_(true); delegacionesCapri_(true); });
   if (permisos.cobranza || permisos.compras) intentar_(errores, 'Contratos', () => contratosCache_(true));
   intentar_(errores, 'Catálogo', () => catalogoCache_(true));
   if (!solo) intentar_(errores, 'Clientes', () => clientesCache_(true));
   const v = versiones_(true);
   const cambio = c => String(vc[c] == null ? '' : vc[c]) !== String(v[c]);
   const r = { versiones: v, permisos: permisos, soloRequisicion: solo, cambios: COLECCIONES.filter(cambio), errores: errores };
-  if (permisos.requisicion || permisos.compras || permisos.operaciones) r.sitios = intentar_(errores, 'Sitios', sitios_) || undefined;
+  if (permisos.requisicion || permisos.compras || permisos.operaciones) {
+    r.sitios = intentar_(errores, 'Sitios', sitios_) || undefined;
+    r.sitiosDetalle = intentar_(errores, 'Sitios', sitiosDetalle_) || undefined;
+  }
   // Cuentas por pagar dependen también del día (días vencidos y rangos): se vuelven a mandar al cambiar la fecha
   const otroDiaCxp = !!(permisos.compras && ctx.cxp && ctx.cxpHoy && ctx.cxpHoy !== hoyIso_());
   if (!r.cambios.length && !otroDiaCxp) return r;
   const algo = (...cs) => cs.some(cambio);
 
+  const conPrecios = !solo && (permisos.ventas || permisos.compras || permisos.cobranza);
   if (algo('catalogo')) {
     const cat = catalogoCache_();
-    r.catalogo = solo ? catalogoSinPrecios_(cat.productos) : cat.productos;
-    if (!solo) r.tipoCambio = cat.tipoCambio;
+    r.catalogo = conPrecios ? cat.productos : catalogoSinPrecios_(cat.productos);
+    if (conPrecios) r.tipoCambio = cat.tipoCambio;
   }
-  if (!solo) {
+  if (!solo && permisos.ventas) {
     if (algo('cotizaciones')) r.clientes = intentar_(errores, 'Clientes', clientesCache_);
     if (algo('proyectos', 'contratos')) r.proyectos = intentar_(errores, 'Proyectos', () => listarProyectos('', false));
   }
@@ -527,6 +764,10 @@ function sincronizar(vc, ctx) {
       r.resumen = intentar_(errores, 'Resumen de cobranza', () => resumenCobranzaGeneral());
     }
   }
+  // Incremento 4: cada módulo agrega a r lo suyo que cambió (respetando los mismos roles que sus funciones)
+  MODULOS_.forEach(m => {
+    if (m.sincronizar) intentar_(errores, m.nombre || 'módulo', () => m.sincronizar(permisos, ctx, algo, r, errores));
+  });
   return r;
 }
 
@@ -542,7 +783,8 @@ const TERMINOS_OC_INICIALES =
   'Entregar en el lugar y fecha indicados.';
 
 /** Sitios donde se recibe material al empezar (Config → SITIOS; se editan en la hoja, uno por renglón). */
-const SITIOS_INICIALES = 'Querétaro\nManzanillo (TIMSA)\nEnsenada (EIT)\nLázaro Cárdenas (LCT)\nVeracruz (ICAVE)';
+// Un sitio por renglón: código de 3 letras (el del centro de mando) | nombre | dirección opcional (para la solicitud de cotización)
+const SITIOS_INICIALES = 'QRO | Querétaro\nZLO | Manzanillo (TIMSA)\nESE | Ensenada (EIT)\nLZC | Lázaro Cárdenas (LCT)\nVER | Veracruz (ICAVE)';
 
 /** Líneas de negocio: Helgen (general) y Helgen Energy (submarca de paneles solares). */
 const MARCAS = { helgen: 'Helgen', energy: 'Helgen Energy' };
@@ -1456,21 +1698,14 @@ function errorPermiso_(mensaje) {
   return e;
 }
 
-/** ¿El usuario del token está en la lista de correos de la propiedad (rol)? Sin token (editor) o sin la propiedad: no. */
-function enRol_(propiedad) {
-  if (!VENDEDOR_) return false;
-  const lista = correosDeLista(propiedades_()[propiedad], DOMINIO_HELGEN);
-  return lista.indexOf(String(VENDEDOR_.email).toLowerCase()) !== -1;
-}
-
-/** ¿El usuario del token está en ROL_COBRANZA? */
+/** ¿Tiene el rol cobranza? (Permisos; antes ROL_COBRANZA) */
 function esCobranza_() {
-  return enRol_('ROL_COBRANZA');
+  return tieneRol_('cobranza');
 }
 
-/** ¿Puede desbloquear contratos firmados? (ADMIN_DESBLOQUEO; sin la propiedad, nadie). */
+/** ¿Puede desbloquear contratos firmados? (rol desbloqueo; antes ADMIN_DESBLOQUEO; sin nadie en la lista, nadie). */
 function esAdminDesbloqueo_() {
-  return enRol_('ADMIN_DESBLOQUEO');
+  return tieneRol_('desbloqueo');
 }
 
 function exigirCobranza_() {
@@ -2140,10 +2375,9 @@ function libroCompras_() { return libroArea_(AREA_COMPRAS); }
 function libroComprasSiExiste_() { return libroAreaSiExiste_(AREA_COMPRAS); }
 function hojaCompras_(libro, nombre) { return hojaDeArea_(libro, HOJAS_COMPRAS, nombre); }
 
-/** ¿El usuario del token está en ROL_COMPRAS? */
+/** ¿Tiene el rol compras? (propio o delegado; SOLO_REQUISICION manda sobre él: rolesEfectivos ya se lo quita) */
 function esCompras_() {
-  // SOLO_REQUISICION manda sobre cualquier otro rol (algunas funciones de requisiciones las pueden llamar también)
-  return enRol_('ROL_COMPRAS') && !esSoloRequisicion_();
+  return tieneRol_('compras') && !esSoloRequisicion_();
 }
 
 function exigirCompras_() {
@@ -2402,18 +2636,18 @@ const SUBCARPETA_REQUISICIONES = 'Requisiciones';
 const FUNCIONES_SOLO_REQUISICION = ['bootstrap', 'sincronizar', 'getDatosIniciales', 'listarProyectosRequisicion', 'misRequisiciones',
   'guardarRequisicion', 'cancelarRequisicion', 'cerrarRequisicion', 'registrarRecepcion', 'archivoRequisicion',
   'listarOperaciones', 'getRequisicionOperaciones', 'aprobarRequisicion', 'rechazarRequisicion', 'devolverRequisicion',
-  'autorizarPropuesta', 'regresarACompras'];
+  'autorizarPropuesta', 'regresarACompras'].concat(deModulos_('solo', []));
 
 const PREFIJO_REC = 'REC', TIPO_ENTRADA_COMPRA = 'Entrada por compra';
 
-/** ¿Solo puede usar requisiciones? (SOLO_REQUISICION; manda sobre cualquier otro rol). */
+/** ¿Solo puede usar requisiciones? (rol solo_requisicion; manda sobre cualquier otro rol salvo super admin). */
 function esSoloRequisicion_() {
-  return enRol_('SOLO_REQUISICION');
+  return tieneRol_('solo_requisicion');
 }
 
-/** ¿Aprueba requisiciones y da el visto bueno a las propuestas de compras? (ROL_OPERACIONES) */
+/** ¿Aprueba requisiciones y da el visto bueno a las propuestas de compras? (rol aprobaciones; antes ROL_OPERACIONES) */
 function esOperaciones_() {
-  return enRol_('ROL_OPERACIONES');
+  return tieneRol_('aprobaciones');
 }
 
 function exigirOperaciones_() {
@@ -2427,7 +2661,9 @@ function exigirOperaciones_() {
  * la propiedad vacía todo sigue como antes (se puede publicar el código sin cambiar el proceso).
  */
 function flujoOperaciones_() {
-  return correosDeLista(propiedades_().ROL_OPERACIONES, DOMINIO_HELGEN).length > 0;
+  // Alguien activo con el rol aprobaciones propio (un super admin solo no lo enciende)
+  const u = contextoRoles_().usuarios;
+  return Object.keys(u).some(c => u[c].activo && u[c].roles.indexOf('aprobaciones') !== -1);
 }
 
 /** Sitios donde se recibe material (Config → SITIOS). */
@@ -2435,10 +2671,11 @@ function sitios_() {
   return sitiosDeTexto(configLigera_().sitios);
 }
 
-/** Correos que pueden recibir material (tienen la pestaña Requisiciones). */
+/** Correos que pueden recibir material (tienen la pestaña Requisiciones; también @helgen.services). */
 function receptores_() {
-  const p = propiedades_();
-  return correosDeLista([p.ROL_REQUISICION, p.SOLO_REQUISICION].join(','), DOMINIO_HELGEN);
+  const u = contextoRoles_().usuarios;
+  return Object.keys(u).filter(c => u[c].activo &&
+    (u[c].roles.indexOf('requisicion') !== -1 || u[c].roles.indexOf('solo_requisicion') !== -1)).sort();
 }
 
 /** La propuesta de compras vigente (null si no hay o si se retiró al separar renglones o al reenviar la requisición). */
@@ -2457,7 +2694,7 @@ const jsonCelda_ = v => { try { return v ? JSON.parse(String(v)) : null; } catch
 
 /** ¿Puede pedir materiales? (ROL_REQUISICION, o SOLO_REQUISICION, que lo incluye). */
 function esRequisicion_() {
-  return enRol_('ROL_REQUISICION') || esSoloRequisicion_();
+  return tieneRol_('requisicion') || esSoloRequisicion_();
 }
 
 function exigirRequisicion_() {
@@ -4579,6 +4816,8 @@ const REQ_SOLICITADA = 'Solicitada', REQ_AUTORIZADA = 'Autorizada', REQ_PAGADA =
 // Flujo con operaciones (incremento 3): Aprobada (por operaciones), Cotizada (propuesta de compras, espera el visto bueno) y
 // Recibida (todo recibido, sin pagar)
 const REQ_APROBADA = 'Aprobada', REQ_COTIZADA = 'Cotizada', REQ_RECIBIDA = 'Recibida';
+/** Incremento 4: el proveedor ya lo mandó (o el receptor lo recogió); lo usa el centro de mando (módulo C). */
+const REQ_EN_CAMINO = 'En camino';
 const MAX_RENGLONES_REQ = 100;
 
 /**
@@ -4700,6 +4939,7 @@ const DISPONIBILIDADES = [DISP_EXACTO, DISP_SUSTITUTO, DISP_NO, DISP_ADICIONAL];
 
 /** Sitios de la celda SITIOS de Config (uno por renglón; también separados por coma o punto y coma), sin repetir. */
 function sitiosDeTexto(texto) {
+  if (String(texto == null ? '' : texto).indexOf('|') !== -1) return sitiosDetalleDeTexto(texto).map(s => s.nombre);
   const vistos = {};
   return String(texto == null ? '' : texto).split(/[\n,;]+/).map(s => s.trim().replace(/\s+/g, ' ')).filter(s => {
     const k = textoNormal(s);
@@ -5826,4 +6066,299 @@ function construirHtmlOrdenCompra(d, cfg, logoUrl) {
     ' &nbsp;·&nbsp; ' + e(cfg.EMPRESA_EMAIL) + ' &nbsp;·&nbsp; ' + e(cfg.EMPRESA_TELEFONO) +
     '</div>' +
     '</body></html>';
+}
+
+// ---- Usuarios, roles y sitios (CAPRI, incremento 4; lógica pura) ----
+
+/** Roles de CAPRI. superadmin = todos los demás (menos solo_requisicion) + Administración. */
+const ROLES_CAPRI = ['ventas', 'requisicion', 'solo_requisicion', 'aprobaciones', 'compras', 'cobranza', 'desbloqueo', 'superadmin'];
+const NOMBRES_ROLES = { ventas: 'Ventas', requisicion: 'Requisiciones', solo_requisicion: 'Solo requisiciones',
+  aprobaciones: 'Aprobaciones', compras: 'Compras', cobranza: 'Cobranza', desbloqueo: 'Desbloqueo', superadmin: 'Super admin' };
+/** Lo que un usuario puede entregar a otro por unas fechas (decisión de Leo, 28/10/2026). */
+const ROLES_DELEGABLES = ['aprobaciones', 'compras'];
+/** Roles de una cuenta @helgen.services (decisión de Leo, 28/10/2026: solo requisiciones por ahora). */
+const ROLES_SERVICIOS = ['solo_requisicion'];
+/** Con solo_requisicion solo quedan estos (Aprobaciones sí: quien aprueba puede ser una cuenta de solo requisiciones). */
+const ROLES_CON_SOLO = ['solo_requisicion', 'requisicion', 'aprobaciones'];
+/** Script Properties de antes → rol de CAPRI (mientras no exista el libro de Administración, y para migrar). */
+const ROLES_DE_PROPIEDADES = { ROL_REQUISICION: 'requisicion', SOLO_REQUISICION: 'solo_requisicion', ROL_OPERACIONES: 'aprobaciones',
+  ROL_COMPRAS: 'compras', ROL_COBRANZA: 'cobranza', ADMIN_DESBLOQUEO: 'desbloqueo' };
+
+/** Correo de CAPRI en minúsculas (@helgen.tech o @helgen.services); '' si no lo es. */
+function correoCapri(texto) {
+  const c = String(texto == null ? '' : texto).trim().toLowerCase();
+  const m = c.match(/^[a-z0-9._%+-]+@([a-z0-9.-]+)$/);
+  return m && DOMINIOS_CAPRI.indexOf(m[1]) !== -1 ? c : '';
+}
+
+/** Correos de CAPRI de una lista ("a@helgen.tech, b@helgen.services"), sin repetir. */
+function correosCapri(texto) {
+  return String(texto || '').split(/[\s,;]+/).map(correoCapri).filter((c, i, a) => c && a.indexOf(c) === i);
+}
+
+const dominioDe = correo => String(correo || '').split('@')[1] || '';
+
+const ordenarRoles_ = roles => ROLES_CAPRI.filter(r => roles.indexOf(r) !== -1);
+
+/** Roles válidos de un texto o lista ("Compras, aprobaciones", ["compras"]); acepta la clave o el nombre, sin acentos. */
+function rolesDeTexto(texto) {
+  const partes = (Array.isArray(texto) ? texto : String(texto == null ? '' : texto).split(/[,;\n]+/)).map(s => textoNormal(s));
+  return ordenarRoles_(ROLES_CAPRI.filter(r => partes.indexOf(textoNormal(r)) !== -1 ||
+    partes.indexOf(textoNormal(r.replace('_', ' '))) !== -1 || partes.indexOf(textoNormal(NOMBRES_ROLES[r])) !== -1));
+}
+
+/**
+ * Usuario para Permisos: correo de CAPRI, nombre, roles (≥ 1), sitio (código, opcional), activo, notas. @helgen.services:
+ * solo Solo requisiciones y entra con código; Solo requisiciones solo se combina con Aprobaciones.
+ */
+function normalizarUsuario(p) {
+  const x = p || {};
+  const limpio = s => String(s == null ? '' : s).trim().replace(/\s+/g, ' ');
+  const correo = correoCapri(x.correo);
+  if (!correo) throw new Error('Escribe un correo @' + DOMINIO_HELGEN + ' o @' + DOMINIO_SERVICIOS + '.');
+  const nombre = limpio(x.nombre).slice(0, 80);
+  if (!nombre) throw new Error('Escribe el nombre de la persona.');
+  const servicios = dominioDe(correo) === DOMINIO_SERVICIOS;
+  let roles = rolesDeTexto(x.roles);
+  if (servicios) {
+    if (roles.some(r => ROLES_SERVICIOS.indexOf(r) === -1)) {
+      throw new Error('Las cuentas @' + DOMINIO_SERVICIOS + ' por ahora solo pueden tener "Solo requisiciones".');
+    }
+    if (!roles.length) roles = ROLES_SERVICIOS.slice();
+  }
+  if (roles.indexOf('solo_requisicion') !== -1) {
+    const fuera = roles.filter(r => ROLES_CON_SOLO.indexOf(r) === -1);
+    if (fuera.length) throw new Error('"Solo requisiciones" no se combina con ' + fuera.map(r => NOMBRES_ROLES[r]).join(', ') + '.');
+    roles = roles.filter(r => r !== 'requisicion'); // ya lo incluye
+  }
+  if (!roles.length) throw new Error('Elige al menos un rol.');
+  const sitio = limpio(x.sitio).toUpperCase();
+  if (sitio && !/^[A-Z]{3}$/.test(sitio)) throw new Error('El sitio es el código de 3 letras (VER, ZLO, ESE, LZC, QRO…).');
+  const activo = !(x.activo === false || /^(no|false|0)$/i.test(String(x.activo == null ? '' : x.activo).trim()));
+  return { correo: correo, nombre: nombre, metodo: servicios ? 'codigo' : 'google', roles: roles, sitio: sitio,
+    activo: activo, notas: limpio(x.notas).slice(0, 200) };
+}
+
+/** Fila de Permisos (mismas columnas que HOJAS_ADMIN.Permisos). */
+function filaDeUsuario(u, quien, cuando) {
+  return [u.correo, u.nombre || '', u.metodo || (dominioDe(u.correo) === DOMINIO_SERVICIOS ? 'codigo' : 'google'),
+    (u.roles || []).join(', '), u.sitio || '', u.activo === false ? 'No' : 'Sí', u.notas || '', quien || '', cuando || ''];
+}
+
+/** {correo: {correo, nombre, metodo, roles, sitio, activo, notas}} de las filas de Permisos (una vacía o inválida se ignora). */
+function usuariosDesdeFilas(filas) {
+  const m = {};
+  (filas || []).forEach(r => {
+    const correo = correoCapri(r[0]);
+    if (!correo) return;
+    m[correo] = { correo: correo, nombre: String(r[1] == null ? '' : r[1]).trim(),
+      metodo: dominioDe(correo) === DOMINIO_SERVICIOS ? 'codigo' : 'google', roles: rolesDeTexto(r[3]),
+      sitio: String(r[4] == null ? '' : r[4]).trim().toUpperCase(),
+      activo: !/^(no|false|0|inactivo|baja)$/i.test(String(r[5] == null ? '' : r[5]).trim()),
+      notas: String(r[6] == null ? '' : r[6]) };
+  });
+  return m;
+}
+
+/** Usuarios como los daban las Script Properties de antes (ROL_*): los mismos permisos que antes del incremento 4. */
+function usuariosDesdePropiedades(props) {
+  const m = {}, p = props || {};
+  Object.keys(ROLES_DE_PROPIEDADES).forEach(prop => correosCapri(p[prop]).forEach(c => {
+    m[c] = m[c] || { correo: c, nombre: '', metodo: dominioDe(c) === DOMINIO_SERVICIOS ? 'codigo' : 'google', roles: [],
+      sitio: '', activo: true, notas: '' };
+    m[c].roles.push(ROLES_DE_PROPIEDADES[prop]);
+  }));
+  Object.keys(m).forEach(c => {
+    const u = m[c];
+    if (u.roles.indexOf('solo_requisicion') !== -1) {
+      u.roles = u.roles.filter(r => ROLES_CON_SOLO.indexOf(r) !== -1 && r !== 'requisicion');
+    } else if (dominioDe(c) === DOMINIO_HELGEN) {
+      u.roles.push('ventas'); // antes toda cuenta @helgen.tech cotizaba
+    }
+    u.roles = ordenarRoles_(u.roles);
+  });
+  return m;
+}
+
+/** Fecha AAAA-MM-DD de una celda (texto o Date de Sheets, con la fecha local). */
+function fechaDeCelda(v) {
+  if (v instanceof Date) {
+    const p = n => String(n).padStart(2, '0');
+    return v.getFullYear() + '-' + p(v.getMonth() + 1) + '-' + p(v.getDate());
+  }
+  return String(v == null ? '' : v).trim().replace(/^'/, '').slice(0, 10);
+}
+
+/** Delegaciones de las filas: [{id, de, a, desde, hasta, roles, estado, creo, creado, cancelo, motivo}]. */
+function delegacionesDesdeFilas(filas) {
+  return (filas || []).filter(r => r[0] && correoCapri(r[1]) && correoCapri(r[2])).map((r, i) => ({
+    id: String(r[0]), de: correoCapri(r[1]), a: correoCapri(r[2]), desde: fechaDeCelda(r[3]), hasta: fechaDeCelda(r[4]),
+    roles: rolesDeTexto(r[5]).filter(x => ROLES_DELEGABLES.indexOf(x) !== -1), estado: String(r[6] || '').trim() || 'Activa',
+    creo: String(r[7] || ''), creado: String(r[8] || ''), cancelo: String(r[9] || ''), motivo: String(r[10] || ''), fila: i + 2,
+  }));
+}
+
+/** Roles propios de un correo (sin delegaciones): {activo, listado, roles}. ctx como en rolesEfectivos. */
+function rolesPropios_(correo, ctx) {
+  const c = correoCapri(correo);
+  if (!c) return { activo: false, listado: false, roles: [] };
+  const todos = ROLES_CAPRI.filter(r => r !== 'solo_requisicion');
+  if ((ctx.superAdmins || []).indexOf(c) !== -1) return { activo: true, listado: true, roles: todos };
+  const u = (ctx.usuarios || {})[c];
+  if (u) {
+    if (!u.activo) return { activo: false, listado: true, roles: [] };
+    return { activo: true, listado: true, roles: u.roles.indexOf('superadmin') !== -1 ? todos : u.roles.slice() };
+  }
+  if (dominioDe(c) === DOMINIO_HELGEN && !ctx.soloListados) return { activo: true, listado: false, roles: ['ventas'] };
+  return { activo: false, listado: false, roles: [] };
+}
+
+/**
+ * Roles que tiene hoy un correo. ctx = {usuarios (usuariosDesdeFilas o usuariosDesdePropiedades), delegaciones, hoy
+ * (AAAA-MM-DD), superAdmins (correos raíz), soloListados}. Reglas: un @helgen.tech que no está en Permisos cotiza (ventas),
+ * como antes, salvo soloListados; un @helgen.services que no está, no entra; desactivado = sin acceso (salvo super admin
+ * raíz); super admin = todo menos solo_requisicion; se suman los roles delegables de las delegaciones activas de hoy (si quien
+ * delega los tiene); solo_requisicion deja solo requisiciones y aprobaciones; @helgen.services solo sus roles permitidos.
+ * Devuelve {activo, listado, roles, superadmin, delegaciones: [{de, roles, hasta}]}.
+ */
+function rolesEfectivos(correo, ctx) {
+  const c = correoCapri(correo);
+  const propios = rolesPropios_(c, ctx);
+  if (!propios.activo) return { activo: false, listado: propios.listado, roles: [], superadmin: false, delegaciones: [] };
+  let roles = propios.roles.slice();
+  const recibidas = [];
+  if (roles.indexOf('superadmin') === -1) {
+    (ctx.delegaciones || []).forEach(d => {
+      if (d.a !== c || d.estado !== 'Activa' || !(d.desde <= ctx.hoy && ctx.hoy <= d.hasta)) return;
+      const suyos = rolesPropios_(d.de, ctx);
+      if (!suyos.activo) return;
+      const dados = d.roles.filter(r => ROLES_DELEGABLES.indexOf(r) !== -1 && suyos.roles.indexOf(r) !== -1);
+      if (!dados.length) return;
+      recibidas.push({ de: d.de, roles: dados, hasta: d.hasta });
+      roles = roles.concat(dados);
+    });
+  }
+  if (roles.indexOf('superadmin') !== -1) {
+    roles = ROLES_CAPRI.filter(r => r !== 'solo_requisicion');
+  } else {
+    if (roles.indexOf('solo_requisicion') !== -1) roles = roles.filter(r => ROLES_CON_SOLO.indexOf(r) !== -1).concat(['requisicion']);
+    if (dominioDe(c) === DOMINIO_SERVICIOS) {
+      roles = roles.filter(r => ROLES_SERVICIOS.indexOf(r) !== -1 || (r === 'requisicion' && roles.indexOf('solo_requisicion') !== -1));
+    }
+  }
+  roles = ordenarRoles_(roles.filter((r, i) => roles.indexOf(r) === i));
+  return { activo: true, listado: propios.listado, roles: roles, superadmin: roles.indexOf('superadmin') !== -1,
+    delegaciones: recibidas };
+}
+
+/** Códigos de 3 letras de los sitios conocidos (los del centro de mando, D-27-3) por palabras de su nombre. */
+const CODIGOS_SITIO_CONOCIDOS = [['VER', ['veracruz', 'icave']], ['ZLO', ['manzanillo', 'timsa']], ['ESE', ['ensenada', 'eit']],
+  ['LZC', ['lazaro cardenas', 'lct']], ['QRO', ['queretaro']]];
+
+/** Código de un sitio por su nombre ("Manzanillo (TIMSA)" → ZLO); '' si no se conoce. */
+function codigoSitioConocido(nombre) {
+  const t = ' ' + textoNormal(nombre).replace(/[^a-z0-9]+/g, ' ') + ' ';
+  const x = CODIGOS_SITIO_CONOCIDOS.find(([, palabras]) => palabras.some(p => t.indexOf(' ' + p + ' ') !== -1));
+  return x ? x[0] : '';
+}
+
+/**
+ * Sitios de la celda SITIOS con código, nombre y dirección. Formato nuevo: un sitio por renglón "VER | Veracruz (ICAVE) |
+ * Dirección opcional". Formato de antes (solo nombres, por renglón, coma o punto y coma): el código se deduce del nombre.
+ */
+function sitiosDetalleDeTexto(texto) {
+  const t = String(texto == null ? '' : texto);
+  const vistos = {};
+  const lista = t.indexOf('|') === -1
+    ? sitiosDeTexto(t).map(n => ({ codigo: codigoSitioConocido(n), nombre: n, direccion: '' }))
+    : t.split(/\n+/).map(l => l.trim()).filter(Boolean).map(l => {
+      const partes = l.split('|').map(s => s.trim().replace(/\s+/g, ' '));
+      if (partes.length === 1) return { codigo: codigoSitioConocido(partes[0]), nombre: partes[0], direccion: '' };
+      const codigo = textoNormal(partes[0]).toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
+      return { codigo: codigo, nombre: partes[1] || codigo, direccion: partes.slice(2).join(' | ') };
+    });
+  return lista.filter(s => {
+    const k = textoNormal(s.nombre);
+    if (!s.nombre || vistos[k]) return false;
+    vistos[k] = true;
+    return true;
+  });
+}
+
+/** Código de un sitio (por código o por nombre) en la lista de sitios con detalle; '' si no está. */
+function codigoDeSitio(sitio, detalle) {
+  const s = String(sitio == null ? '' : sitio).trim();
+  if (!s) return '';
+  const x = (detalle || []).find(d => d.codigo === s.toUpperCase() || textoNormal(d.nombre) === textoNormal(s));
+  return x ? x.codigo : codigoSitioConocido(s);
+}
+
+// ====== 6. INCREMENTO 4 (CAPRI): MÓDULOS ======
+// Cada módulo vive en su sección y se conecta a la API solo con su función mod*_ (ver MODULOS_ arriba de API_FUNCIONES).
+// Lo compartido ya está en la base: roles (tieneRol_, esSuperAdmin_, correosConRol_, excepcionSuperAdmin_, rolesEfectivos),
+// libro de Administración (libroAdmin_, hojaAdmin_, HOJAS_ADMIN), avisos (notificar_ → cola; los manda el módulo de correos),
+// sitios con código (sitiosDetalle_, codigoDeSitio) y el estado REQ_EN_CAMINO.
+
+// ---- 6.A Identidad: Permisos, delegaciones, entrar con código (@helgen.services) y sesiones de CAPRI ----
+
+function modIdentidad_() {
+  return { nombre: 'Identidad', api: {}, cambios: {}, solo: [], publicas: [] };
+}
+
+/** Sesión propia de CAPRI (token que empieza con PREFIJO_SESION_CAPRI). La implementa el módulo de identidad. */
+function verificarSesionCapri_(token) {
+  throw errorSesion_('Inicia sesión para continuar.');
+}
+
+// ---- 6.B Correos y proveedores: avisos en cada relevo, solicitud de cotización en PDF y botones de correo ----
+
+function modCorreos_() {
+  return { nombre: 'Correos', api: {}, cambios: {}, solo: [], publicas: [] };
+}
+
+/** Eventos de aviso (tipo de notificar_). Quién recibe cada uno lo decide el módulo de correos (tabla del spec, sección 5). */
+const EVENTOS_CORREO = ['req.solicitada', 'req.aprobada', 'req.devuelta', 'req.rechazada', 'req.cotizada', 'req.regresada',
+  'req.autorizada', 'req.encamino', 'req.recibida', 'req.cancelada', 'oc.cancelada', 'delegacion', 'usuario.alta', 'anulado'];
+
+/**
+ * Pide un aviso por correo. Solo lo forma en la cola de la petición (MEMO_.correos): doPost llama enviarCorreosPendientes_
+ * cuando la función ya terminó bien (fuera del candado). Nunca lanza error. datos: {folio, req, oc, nota, para: [correos
+ * extra], ...}; nunca montos ni proveedores para quien pide o recibe.
+ */
+function notificar_(tipo, datos) {
+  try {
+    (MEMO_.correos = MEMO_.correos || []).push({ tipo: tipo, datos: datos || {}, actor: VENDEDOR_ ? VENDEDOR_.email : '' });
+  } catch (e) {
+    console.warn('Aviso no formado: ' + e.message);
+  }
+}
+
+/** Manda los avisos de la cola (módulo de correos). Sin implementar: se descartan. */
+function enviarCorreosPendientes_() {
+  MEMO_.correos = [];
+}
+
+// ---- 6.C Centro de mando (drogheda.helgen.online): sitios con código, ítems, En camino, avisos firmados, recepciones ----
+
+function modCentroMando_() {
+  return { nombre: 'Centro de mando', api: {}, cambios: {}, solo: [], publicas: [] };
+}
+
+/**
+ * Avisa al centro de mando un cambio de una orden de compra (tipo del contrato: oc.autorizada, oc.pagada, oc.en_camino,
+ * oc.cancelada, req.cerrada). Solo si el proyecto está ligado; sin montos; si no contesta, queda en PortalPendientes y se
+ * reintenta. Nunca lanza error. La implementa el módulo del centro de mando; aquí no hace nada.
+ */
+function avisarPortal_(tipo, folioOc) {}
+
+// ---- 6.D Pantallas: Pendientes (inicio), conteos y navegación por grupos ----
+
+function modPantallas_() {
+  return { nombre: 'Pantallas', api: {}, cambios: {}, solo: [], publicas: [] };
+}
+
+// ---- 6.E Anular: un super admin anula cualquier registro con folio (con lo que depende de él) ----
+
+function modAnular_() {
+  return { nombre: 'Anular', api: {}, cambios: {}, solo: [], publicas: [] };
 }

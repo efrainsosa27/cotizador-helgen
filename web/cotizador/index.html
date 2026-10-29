@@ -113,6 +113,8 @@
     <button id="tabOps" class="oculto" onclick="verTab('ops')">Operaciones</button>
     <button id="tabCob" class="oculto" onclick="verTab('cob')">Cobranza</button>
     <button id="tabCom" class="oculto" onclick="verTab('com')">Compras</button>
+    <button id="tabPend" class="oculto" onclick="verTab('pend')">Pendientes</button>
+    <button id="tabAdmin" class="oculto" onclick="verTab('admin')">Administración</button>
   </nav>
   <div id="usuario" class="usuario oculto">
     <span id="usuarioNombre"></span>
@@ -135,6 +137,23 @@
 
 <main>
   <div id="aviso" class="aviso"></div>
+
+  <!-- ===== PENDIENTES (incremento 4 · pantallas) ===== -->
+  <section id="vistaPend" class="oculto">
+  </section>
+
+  <!-- ===== ADMINISTRACIÓN (incremento 4): cada módulo llena su bloque ===== -->
+  <section id="vistaAdmin" class="oculto">
+    <!-- identidad: Permisos -->
+    <div id="adminPermisos"></div>
+    <!-- identidad: Delegaciones -->
+    <div id="adminDelegaciones"></div>
+    <!-- correos: bitácora de avisos -->
+    <div id="adminCorreos"></div>
+    <!-- anular: registros anulados -->
+    <div id="adminAnulados"></div>
+    <!-- fin de Administración -->
+  </section>
 
   <!-- ===== NUEVA COTIZACIÓN ===== -->
   <section id="vistaNueva">
@@ -928,6 +947,22 @@
     try { if (correo) localStorage.setItem(CLAVE_ROLES + correo, JSON.stringify({ permisos: permisos, soloRequisicion: !!solo })); } catch (e) {}
   }
 
+  // ---- Incremento 4: módulos (sus bloques de script están al final de la página) ----
+  // Cada módulo se registra con registrarModulo({nombre, alBootstrap(d), alSincronizar(r), contexto() → {campos del ctx de
+  // sincronizar}, alPermisos(permisos, solo), alVerTab(t)}). Así ninguno edita las funciones de los demás.
+  const MODULOS = [];
+  let ULTIMO_BOOT = null;
+  function registrarModulo(m) {
+    MODULOS.push(m);
+    if (ULTIMO_BOOT && m.alBootstrap) m.alBootstrap(ULTIMO_BOOT); // si el bootstrap llegó antes de cargar el módulo
+  }
+  function avisarModulos(evento, ...args) {
+    MODULOS.forEach(m => { try { if (m[evento]) m[evento](...args); } catch (e) { console.error((m.nombre || 'módulo') + ': ' + e.message); } });
+  }
+  // Con una interfaz nueva y un servidor viejo (o datos guardados de antes) puede faltar permisos.ventas: entonces, como antes
+  const puedeVender = () => PERMISOS.ventas !== undefined ? !!PERMISOS.ventas : !SOLO_REQ;
+  let SITIOS_DET = []; // [{codigo, nombre, direccion}] (Config → SITIOS)
+
   /** Muestra u oculta las pestañas según los permisos; si la visible ya no corresponde, va a la primera permitida. */
   function aplicarPermisos(permisos, solo) {
     PERMISOS = permisos || {}; SOLO_REQ = !!solo;
@@ -936,8 +971,11 @@
     $('tabOps').classList.toggle('oculto', !PERMISOS.operaciones); // también con SOLO_REQUISICION
     $('tabCob').classList.toggle('oculto', SOLO_REQ || !PERMISOS.cobranza);
     $('tabCom').classList.toggle('oculto', SOLO_REQ || !PERMISOS.compras);
+    $('tabAdmin').classList.toggle('oculto', !PERMISOS.superadmin);
     pintarSitios();
-    const boton = { nueva: 'tabNueva', hist: 'tabHist', cat: 'tabCat', req: 'tabReq', ops: 'tabOps', cob: 'tabCob', com: 'tabCom' }[TAB];
+    avisarModulos('alPermisos', PERMISOS, SOLO_REQ);
+    const boton = { nueva: 'tabNueva', hist: 'tabHist', cat: 'tabCat', req: 'tabReq', ops: 'tabOps', cob: 'tabCob', com: 'tabCom',
+      pend: 'tabPend', admin: 'tabAdmin' }[TAB];
     if ($(boton).classList.contains('oculto')) verTab(SOLO_REQ ? 'req' : 'nueva');
   }
   function rolesDeUltimaSesion(correo) {
@@ -972,6 +1010,9 @@
       if (d.cob.proyectos) recibirProyectosCob(d.cob.proyectos);
       if (d.cob.resumen) { RESUMEN = d.cob.resumen; pintarResumenCob(); }
     }
+    if (d.sitiosDetalle) SITIOS_DET = d.sitiosDetalle;
+    ULTIMO_BOOT = d;
+    avisarModulos('alBootstrap', d);
     if ((d.errores || []).length) console.warn('Carga inicial incompleta: ' + d.errores.join(' · '));
     if (!d.soloRequisicion) {
       recibirClientes(d.clientes);
@@ -994,7 +1035,8 @@
     return { cobResumen: !!RESUMEN, cobProyecto: COB ? COB.proyecto.folio : '', comProyecto: COM ? COM.proyecto.folio : '',
       req: REQC ? REQC.requisicion.folio : '', rcBuscar: COM_FILTRO.buscar, rcEstado: COM_FILTRO.estado,
       cxp: !!CXP, cxpHoy: CXP ? CXP.hoy : '', // otro día: el servidor recalcula días vencidos y rangos
-      opsReq: OPSV ? OPSV.requisicion.folio : '' };
+      opsReq: OPSV ? OPSV.requisicion.folio : '',
+      ...MODULOS.reduce((acc, m) => { try { return Object.assign(acc, m.contexto ? m.contexto() : {}); } catch (e) { return acc; } }, {}) };
   }
   function sincronizarAhora() {
     if (!BOOT || !(window.sesionVigente && sesionVigente())) return; // sin sesión no se forman consultas en cola
@@ -1050,6 +1092,8 @@
       sinInterrumpir('cobVistaProyecto', () => pintarCobranza(r.cobranzaProyecto));
     }
     if (r.resumen) { RESUMEN = r.resumen; pintarResumenCob(); }
+    if (r.sitiosDetalle) SITIOS_DET = r.sitiosDetalle;
+    avisarModulos('alSincronizar', r);
     if (cambioRol) {
       // Pestaña recién permitida: se pide lo que la sincronización no trajo
       if (PERMISOS.requisicion && !CARGADO.reqProy) cargarProyectosReq();
@@ -2997,6 +3041,10 @@
     $('vistaCom').classList.toggle('oculto', t !== 'com');
     $('vistaReq').classList.toggle('oculto', t !== 'req');
     $('vistaOps').classList.toggle('oculto', t !== 'ops');
+    $('vistaPend').classList.toggle('oculto', t !== 'pend');
+    $('vistaAdmin').classList.toggle('oculto', t !== 'admin');
+    $('tabPend').classList.toggle('activo', t === 'pend');
+    $('tabAdmin').classList.toggle('activo', t === 'admin');
     $('tabReq').classList.toggle('activo', t === 'req');
     $('tabOps').classList.toggle('activo', t === 'ops');
     $('tabCom').classList.toggle('activo', t === 'com');
@@ -3010,6 +3058,7 @@
     if (t === 'com') verListaCom();
     if (t === 'ops' && !OPSV) verListaOps();
     if (t === 'req' && !$('reqFilas').querySelectorAll('tr').length) limpiarReq();
+    avisarModulos('alVerTab', t);
     // Lo que trajo el bootstrap ya está; si una lista no llegó, se pide. Lo demás lo pone al día la sincronización
     if (BOOT) {
       if (t === 'req') { if (!CARGADO.reqProy) cargarProyectosReq(); if (!CARGADO.misReq) cargarMisReq(); }
@@ -3024,6 +3073,27 @@
     aviso('error', esc(err && err.message ? err.message : err));
     $('btnGuardar').disabled = false; $('btnGuardar').textContent = 'Guardar y generar PDF';
   }
+</script>
+
+<!-- ===== Incremento 4 (CAPRI): un bloque de script por módulo; cada uno se registra con registrarModulo ===== -->
+<script id="mod-identidad">
+  // Identidad: Permisos, delegaciones, entrar con código (@helgen.services) y sesión que se mantiene
+</script>
+
+<script id="mod-correos">
+  // Correos y proveedores: solicitud de cotización en PDF, botones Gmail / correo, bitácora de avisos
+</script>
+
+<script id="mod-centro">
+  // Centro de mando: ítems del inventario por renglón, En camino / Lo recogí, recepción en el centro de mando
+</script>
+
+<script id="mod-pantallas">
+  // Pantallas: CAPRI, navegación por grupos, Pendientes (inicio) y conteos
+</script>
+
+<script id="mod-anular">
+  // Anular: buscar un folio, ver lo que arrastra, anular con motivo; registros anulados
 </script>
 </body>
 </html>
