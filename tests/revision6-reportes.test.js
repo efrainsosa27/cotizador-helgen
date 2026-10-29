@@ -6,6 +6,7 @@
 //  4. Contratos desbloqueados (se firmaron, se desbloquearon y tienen pagos Vigentes): siguen en la antigüedad de CxC y en el flujo,
 //     marcados "Desbloqueado"; uno aceptado sin firmar y sin pagos sigue fuera.
 //  5. Flujo un domingo: la semana 1 es "Semana en curso" (parcial: un domingo solo queda hoy) en pantalla y en el CSV; siguen 13.
+//  6. CSV de reportes: un texto que empieza con tabulador o retorno de carro (solo editando la hoja a mano) también va con apóstrofo.
 //  2. Fecha base de lo que se debe sin factura: UNA regla para P (vista de la orden), Cuentas por pagar y R (venceSinFactura:
 //     recepción, o entrega, o la orden + días de crédito); el mismo saldo cae en el mismo rango y la misma semana que en Cuentas
 //     por pagar (facturas primero; el resto completo en la fecha del "siguiente" de P sin facturas, también con plan de pagos).
@@ -272,5 +273,16 @@ const esperar = async (k = 30) => { for (let i = 0; i < k; i++) await new Promis
   // La Emitida anterior sí se puede cancelar (sale del bloque); la Recibida no (se queda, aparte)
   ok('pedro', 'cancelarOrdenCompra', L2, 'Orden anterior que nunca se surtió', true);
   assert.deepEqual(ok('pedro', 'reporteCxp').anteriores.ordenes.map(o => o.ocFolio), [L1]);
+
+  // 6. Cliente y nombre de proyecto editados a mano en la hoja Proyectos con tabulador / CR al inicio: en el CSV van con apóstrofo
+  const PRYS = B.libros.DB.pest.Proyectos.m, colCli = PRYS[0].indexOf('Cliente'), colNom = PRYS[0].indexOf('Nombre');
+  PRYS.filter(r => r[colNom] === 'Planta Norte' || r[colNom] === 'Terminal Sur').forEach(r => { r[colCli] = '\t=1+1 Uno'; });
+  PRYS.find(r => r[colNom] === 'Terminal Sur')[colNom] = '\r=1+1 Sur';
+  B.P.subirVersiones_(['proyectos']);
+  T.run('REPORTES.actualizar()'); await esperar();
+  const csv6 = T.run("REPORTES.csv('cxc')");
+  assert(csv6.includes('"\'\t=1+1 Uno"') && csv6.includes('"\'\r=1+1 Sur"'), 'tabulador y CR al inicio con apóstrofo');
+  const celdas = csv6.slice(1).match(/"((?:[^"]|"")*)"/g);
+  assert(celdas.length > 10 && !celdas.some(c => /^"[=+\-@\t\r]/.test(c)), 'ninguna celda empieza con = + - @, tabulador o CR');
   console.log('OK revisión 6b de reportes');
 })().catch(e => { console.error(e); process.exit(1); });

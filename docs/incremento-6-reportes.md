@@ -72,7 +72,9 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
    pagos" → bloque "Fechas esperadas de cobro" (etapa, saldo, fecha, estado: vencida hace N días · vence hoy · en N días · sin
    fecha · cobrada). La interfaz manda solo las etapas que cambiaron.
 2. **Pestaña Reportes** con cuatro reportes, cada uno con "Actualizar" y "Descargar CSV" (UTF-8 con BOM; texto que empieza con
-   `= + - @` con apóstrofo; números con 2 decimales), MXN y USD siempre aparte:
+   `= + - @`, tabulador o retorno de carro con apóstrofo —revisión 6b; los dos últimos solo llegan editando una hoja a mano, la app
+   recorta lo que se captura—; números con 2 decimales), MXN y USD siempre aparte. Los CSV de fuera de R (resumen de cobranza y
+   Cuentas por pagar) siguen con `= + - @`: no se tocaron en esta revisión.
    - **Antigüedad de cuentas por cobrar** (cobranza, super admin): por cliente y proyecto, en No vencido · 1–30 · 31–60 · 61–90 ·
      Más de 90 días · Sin fecha, con el total vencido. Cada proyecto lista sus etapas por cobrar con su fecha; un contrato
      desbloqueado con pagos va marcado "Desbloqueado" (decisión 5).
@@ -202,7 +204,8 @@ Nada en la Base de datos ni en el libro de compras. Caché (CacheService): `K_RE
 fecha de lo que no tiene factura igual a Cuentas por pagar (sección 2), órdenes anteriores sin pago registrado (sección 1: pura,
 sembradas por la API como las de la fase 3, interfaz y CSV), contratos desbloqueados con pagos (sección 4: pura, firmado → pago →
 desbloqueo por la API, CxC, flujo, chip y CSV; por firmar sin pagos sigue fuera), semana en curso del flujo (sección 5: domingo,
-lunes y jueves; pantalla y CSV)—.
+lunes y jueves; pantalla y CSV), apóstrofo con tabulador y CR al inicio (sección 6: cliente y proyecto editados a mano en la
+hoja)—.
 
 `bash tests/todas.sh`: 25 archivos + sintaxis de la interfaz, todo en verde.
 

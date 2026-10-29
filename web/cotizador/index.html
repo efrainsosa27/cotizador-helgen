@@ -5802,8 +5802,9 @@
     const dineroTexto = (n, m) => (Math.round((Number(n) + Number.EPSILON) * 100) / 100).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
       .replace(/^(-?)/, '$1$') + ' ' + (m || 'MXN');
 
-    // ---- CSV (mismas reglas que el del resumen de cobranza: UTF-8 con BOM, texto que empiece con = + - @ con apóstrofo) ----
-    const texto = s => { const v = String(s ?? ''); return '"' + (/^[=+\-@]/.test(v) ? "'" + v : v).replace(/"/g, '""') + '"'; };
+    // ---- CSV (UTF-8 con BOM; texto que empiece con = + - @, tabulador o retorno de carro va con apóstrofo: Excel y Sheets también
+    //      toman como fórmula un valor que empieza con tabulador o CR; revisión 6b, solo se llega editando hojas a mano) ----
+    const texto = s => { const v = String(s ?? ''); return '"' + (/^[=+\-@\t\r]/.test(v) ? "'" + v : v).replace(/"/g, '""') + '"'; };
     const num = n => n == null || n === '' ? '' : (Math.round((Number(n) + Number.EPSILON) * 100) / 100).toFixed(2);
     const armarCsv = (enc, filas) => '﻿' + [enc.map(texto).join(',')].concat(filas.map(f => f.join(','))).join('\r\n');
     function csv(tipo) {
