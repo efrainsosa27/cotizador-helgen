@@ -8551,7 +8551,7 @@ function aplicarRecepcionPortal_(libro, x, det, res) {
       t(recibio + ' (centro de mando)'), t('Recibido en ' + lugar), '', '', 'Vigente', '', '', ''],
       n.foto && !n.foto.archivada ? { id: MARCA_FOTO_CENTRO + n.foto.id, url: '' } : n.foto && n.foto.url ? { id: '', url: n.foto.url } : null)));
   }
-  fotosYProblemasPortal_(libro, x, orden, req, res, folioRec); // H: fotos por archivar y problemas reportados en el sitio
+  fotosYProblemasPortal_(libro, x, orden, req, res, folioRec, movsOc); // H: fotos por archivar y problemas reportados en el sitio
   const lista = nuevos.map(n => n.cantidad + ' ' + n.unidad + ' ' + String(n.descripcion).slice(0, 40)).join('; ');
   const completaVieja = (Array.isArray(x.renglones) ? x.renglones : []).some(l => anterior(Number(l && l.n)));
   if (x.completa === true && req.estado !== REQ_RECIBIDA && !completaVieja) {
@@ -10345,15 +10345,20 @@ function devolucionesParaPendientes_() {
  * Fotos por archivar y problemas de una recepción del centro de mando (dentro del candado; no llama al centro de mando):
  * cada foto no archivada se anota en res.fotos para bajarla después; cada problema crea su DEV una sola vez (origen_clave).
  */
-function fotosYProblemasPortal_(libro, x, orden, req, res, folioRec) {
+function fotosYProblemasPortal_(libro, x, orden, req, res, folioRec, movs) {
   const recibio = String(x.recibio == null ? '' : x.recibio).trim().replace(/\s+/g, ' ').slice(0, 60) || CORREO_CENTRO_MANDO;
   res.fotos = res.fotos || [];
+  // Folio REC del movimiento que ya espera esa foto ("centro:<id>"): el archivo se llama como su recepción
+  const marcados = {};
+  (movs || movimientosPorOc_(libro)[orden.folio.toUpperCase()] || []).forEach(m => {
+    if (m.fotoId.indexOf(MARCA_FOTO_CENTRO) === 0) marcados[m.fotoId.slice(MARCA_FOTO_CENTRO.length)] = m.folio;
+  });
   (Array.isArray(x.renglones) ? x.renglones : []).forEach(l => {
     const n = Number(l && l.n);
     if (!(n > 0)) return;
     const base = { oc: orden.folio, req: req.folio, proyecto: req.proyectoFolio, renglon: n };
     const f = fotoPortal(l.foto);
-    if (f && !f.archivada) res.fotos.push(Object.assign({ id: f.id, destino: 'mov', folio: folioRec || req.folio }, base));
+    if (f && !f.archivada) res.fotos.push(Object.assign({ id: f.id, destino: 'mov', folio: marcados[f.id] || folioRec || req.folio }, base));
     const p = l.problema && typeof l.problema === 'object' ? l.problema : null;
     if (!p) return;
     const pf = fotoPortal(p.foto);
@@ -10403,7 +10408,7 @@ function archivarFotosPortal_(cfg, libro, res) {
         const archivo = privado_(carpetaRecepciones_(tarea.proyecto).createFile(Utilities.newBlob(g.bytes, tipo.mime,
           nombreArchivoFoto(tarea.folio, tarea.renglon, tipo.ext))));
         url = archivo.getUrl();
-        conCandado_(() => anotarFotoPortal_(libro, tarea, archivo.getId(), url));
+        comoCentroMando_(() => conCandado_(() => anotarFotoPortal_(libro, tarea, archivo.getId(), url)));
         cache.put('FOTOCM_' + tarea.id, url, 21600);
       }
       const a = llamarPortal_(cfg, 'post', cfg.url + RUTA_PORTAL_FOTO_ARCHIVADA, jsonAscii({ id: tarea.id, url: url }));
