@@ -560,6 +560,13 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   C.dialogos.prompt=['45','El proveedor amplió el crédito']; C.run("cambiarDiasFactura('FPR-2026-0001',30)"); await esperar();
   assert.deepEqual(C.llamadas.find(c=>c.funcion==='cambiarDiasCreditoFactura').args,['FPR-2026-0001','45','El proveedor amplió el crédito','requisicion']);
   assert(/15\/11\/2026/.test(C.$('aviso').innerHTML)&&/45 días de crédito/.test(C.$('rcFacturas').innerHTML));
+  // Revisión (incremento 5): con material devuelto sin reponer, el pago se precarga con el total por pagar y la nota lo explica
+  C.run('pintarReqCom('+JSON.stringify(vFac({porPagar:{total:1508,subtotal:1300,iva:208,descontado:812,totalOrden:2320,renglones:[]}}))+')');
+  assert.equal(C.$('ppMonto').value,1508,'total por pagar');
+  assert(/total por pagar: \$1,508\.00 MXN \(la orden de \$2,320\.00 MXN menos \$812\.00 MXN de material devuelto sin reponer\), ±1\.00/
+    .test(C.$('ppNota').textContent),C.$('ppNota').textContent);
+  C.run('pintarReqCom('+JSON.stringify(vFac({porPagar:null}))+')');
+  assert.equal(C.$('ppMonto').value,2320,'sin devoluciones: el total de la orden');
   // Regresar: a cuentas por pagar (de donde se abrió)
   C.run('volverCom()');
   assert(!C.$('comVistaCxp').classList.contains('oculto')&&C.$('comVistaReq').classList.contains('oculto'));

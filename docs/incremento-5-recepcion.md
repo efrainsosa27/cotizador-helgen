@@ -100,7 +100,7 @@ contó como recibido no se descuenta):
 | Resolución | Movimiento | Renglón | Requisición |
 |---|---|---|---|
 | Reponer | `Devolución` −cantidad | vuelve a "por recibir" | de Recibida/Cerrada se reabre (tabla de arriba); abierta: sigue igual y se recibe la reposición |
-| Devolver al proveedor (nota obligatoria; guía opcional) | `Devolución sin reponer` −cantidad | cerrado con faltante aceptado | no cambia (una retenida se cierra si ya no hay otra abierta) |
+| Devolver al proveedor (nota obligatoria; guía opcional) | `Devolución sin reponer` −cantidad | cerrado con faltante aceptado | no cambia (una retenida se cierra si ya no hay otra abierta). Si la orden todavía no se paga, el pago esperado baja (revisión: `totalPorPagarOrden`, ver docs/incremento-5-proveedores.md decisión 12) |
 | Cancelar renglón (nota obligatoria) | igual que devolver | igual | igual |
 | Conservar | ninguno | igual | no cambia (una retenida se cierra) |
 | **Sobrante** (cualquier resolución) | ninguno (no se recibe más de lo pedido: nunca se contó) | igual | igual que Conservar |

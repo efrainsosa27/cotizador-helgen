@@ -415,7 +415,8 @@ Contrato entre módulos y con el centro de mando: `docs/incremento-5.md`; detall
   `listarProveedores`, `getProveedor`, `guardarProveedor` (CLABE con dígito verificador; cambio bancario exige carátula nueva, va a
   la bitácora y manda `proveedor.banco` a compras), `subirDocumentoProveedor`; `avisoProveedor` al emitir orden o propuesta;
   `exigirDocumentosParaPagar_` + `documentosParaPagar(rfc, metodo)` (pura): solo **Transferencia** exige carátula y, si el RFC es
-  nacional, CSF; super admin con motivo.
+  nacional, CSF; super admin con motivo. Pago de una orden con material devuelto sin reponer: `totalPorPagarOrden` (la orden
+  recalculada como `normalizarOrdenCompra` sin lo devuelto; `porPagar` en la vista).
 - **H · Recepción con fotos y devoluciones.** Foto obligatoria por renglón en `registrarRecepcion`, `cerrarRequisicion(folio, notas,
   d)`, `marcarEnCamino` (Lo recogí); compras sin foto obligatoria en su respaldo. `reportarProblema`, `listarDevoluciones`,
   `resolverDevolucion` (Reponer · Devolver al proveedor · Cancelar renglón · Conservar); transiciones `recibirRetenida`,

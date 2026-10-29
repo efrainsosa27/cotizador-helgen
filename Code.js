@@ -3331,6 +3331,8 @@ function vistaRequisicion_(libro, folioReq) {
     // Facturas de la orden (4.5): se registran desde que la orden existe hasta que se cancela
     facturas: orden ? facturasDeOrden_(todas, orden.folio) : [],
     totalFacturado: orden ? totalFacturadoDeOrden(todas, orden.folio) : 0,
+    // Revisión (incremento 5): total por pagar con material devuelto sin reponer (null = el total de la orden)
+    porPagar: orden ? totalPorPagarOrden(orden, devueltoSinReponer(movs)) : null,
     facturaCompleta: !!orden && facturacionDeOrden(todas, orden).completa,
     puedeFacturar: !!orden && orden.estado !== OC_CANCELADA,
     // F (incremento 5): para la orden, sin datos bancarios (con forma de pago habitual y documentos que faltan); para el pago,
@@ -3478,8 +3480,11 @@ function registrarPagoProveedor(p, motivoExcepcion) {
     if (orden.estado !== OC_EMITIDA) throw new Error('La orden ' + orden.folio + ' está ' + orden.estado.toLowerCase() + ': no se puede pagar.');
     if (pagosDeOrden_(libro, orden.folio).some(x => x.estado === 'Vigente')) throw new Error('La orden ' + orden.folio + ' ya tiene un pago.');
     const fac = facturacionDeOrden(facturasDelLibro_(libro), orden);
-    const pago = normalizarPagoProveedor(d0, { moneda: orden.moneda, total: orden.total, fechaOrden: orden.fecha, hoy: hoyIso_(),
-      totalFacturado: fac.completa ? fac.total : 0, facturadoParcial: fac.completa ? 0 : fac.total });
+    // Revisión (incremento 5): lo devuelto sin reponer no se paga (p. ej. crédito del proveedor: se recibió y se devolvió antes de pagar)
+    const porPagar = totalPorPagarOrden(orden, devueltoSinReponer(movimientosPorOc_(libro)[orden.folio.toUpperCase()] || []));
+    const pago = normalizarPagoProveedor(d0, { moneda: orden.moneda, total: porPagar ? porPagar.total : orden.total, fechaOrden: orden.fecha,
+      hoy: hoyIso_(), totalFacturado: fac.completa ? fac.total : 0, facturadoParcial: fac.completa ? 0 : fac.total,
+      totalOrden: orden.total, descontado: porPagar ? porPagar.descontado : 0 });
     // F (incremento 5): documentos del proveedor (CSF y carátula) o excepción de super admin con motivo (antes de escribir)
     exigirDocumentosParaPagar_(libro, orden, motivoExcepcion, pago.metodo);
 
@@ -3499,7 +3504,9 @@ function registrarPagoProveedor(p, motivoExcepcion) {
       yaRecibida ? 'Pagada; el material ya estaba recibido.' : enCamino ? 'Pagada; el material va en camino.' : '');
     bitacora_(libro, 'Registrar pago a proveedor', req.proyectoFolio, folio + ' · ' + orden.folio + ' · ' + req.folio + ' · ' +
       formatoMoneda(pago.monto) + ' ' + pago.monedaPago + (pago.tipoCambio ? ' · TC ' + pago.tipoCambio + ' = ' +
-      formatoMoneda(pago.montoAplicado) + ' ' + orden.moneda : '') + ' · ' + pago.metodo, '', HOJAS_COMPRAS);
+      formatoMoneda(pago.montoAplicado) + ' ' + orden.moneda : '') + ' · ' + pago.metodo + (porPagar ? ' · total por pagar ' +
+      formatoMoneda(porPagar.total) + ' (orden ' + formatoMoneda(orden.total) + ' − ' + formatoMoneda(porPagar.descontado) + ' devuelto sin reponer)' : ''),
+      '', HOJAS_COMPRAS);
     avisarPortal_('oc.pagada', orden.folio);
     // Flujo de siempre: el pago abre la confirmación de quien recibe (con aprobaciones ya se le avisó al autorizar; en un
     // proyecto ligado se recibe en el centro de mando)
@@ -5205,13 +5212,63 @@ function normalizarPagoProveedor(p, orden) {
   const tope = aCentavos(orden.total) + aCentavos(TOLERANCIA_PAGO);
   const facturado = Number(orden.totalFacturado) > 0 && aCentavos(orden.totalFacturado) <= tope ? Number(orden.totalFacturado) : 0;
   if (!cuadra(orden.total) && !(facturado > 0 && cuadra(facturado))) {
-    throw new Error('El pago (' + formatoMoneda(pago.montoAplicado) + ' ' + orden.moneda + ') debe ser igual al total de la orden (' +
-      formatoMoneda(orden.total) + ' ' + orden.moneda + ')' + (facturado > 0 ? ' o al total de sus facturas (' +
+    // Revisión (incremento 5): con material devuelto sin reponer, orden.total es el total por pagar (totalPorPagarOrden)
+    const neto = Number(orden.descontado) > 0;
+    throw new Error('El pago (' + formatoMoneda(pago.montoAplicado) + ' ' + orden.moneda + ') debe ser igual al ' + (neto
+      ? 'total por pagar (' + formatoMoneda(orden.total) + ' ' + orden.moneda + ': la orden de ' + formatoMoneda(orden.totalOrden) + ' menos ' +
+        formatoMoneda(orden.descontado) + ' de material devuelto sin reponer)'
+      : 'total de la orden (' + formatoMoneda(orden.total) + ' ' + orden.moneda + ')') + (facturado > 0 ? ' o al total de sus facturas (' +
       formatoMoneda(facturado) + ' ' + orden.moneda + ')' : '') + '.' + (Number(orden.facturadoParcial) > 0 ? ' Sus facturas vigentes (' +
       formatoMoneda(orden.facturadoParcial) + ' ' + orden.moneda + ') todavía no cubren la orden.' : ''));
   }
   return { fecha: pago.fecha, monto: pago.monto, monedaPago: pago.monedaPago, tipoCambio: pago.tipoCambio,
     montoAplicado: pago.montoAplicado, metodo: pago.metodo, referencia: pago.referencia };
+}
+
+/**
+ * (Lógica pura) Lo que ya no se le paga al proveedor, por renglón de la orden ({renglon: cantidad}): lo devuelto sin reponer
+ * ("Devolver al proveedor" o "Cancelar renglón": movimientos Devolución sin reponer, cantidad negativa) y el faltante del centro de
+ * mando que compras ya no espera (Faltante aceptado, cantidad positiva; misma resolución). Solo movimientos Vigentes.
+ */
+function devueltoSinReponer(movimientos) {
+  const r4 = n => Math.round(n * 10000) / 10000, x = {};
+  (movimientos || []).forEach(m => {
+    if (m.estado !== 'Vigente') return;
+    const c = Number(m.cantidad) || 0;
+    if (m.tipo === TIPO_DEVOLUCION_CIERRA) x[m.renglon] = r4((x[m.renglon] || 0) - c);
+    else if (m.tipo === TIPO_FALTANTE_ACEPTADO) x[m.renglon] = r4((x[m.renglon] || 0) + c);
+  });
+  Object.keys(x).forEach(k => { if (!(x[k] > 1e-9)) delete x[k]; });
+  return x;
+}
+
+/**
+ * (Lógica pura) Total por pagar de una orden a la que se le devolvió material sin reponer (revisión del 29/10/2026: con crédito
+ * del proveedor se recibe y se devuelve antes de pagar). Se calcula exactamente como normalizarOrdenCompra calcula el total
+ * (importe = redondear(cantidad × costo) por renglón, subtotal = redondear(suma), IVA = redondear(subtotal × tasa), total =
+ * redondear(subtotal + IVA)) con la cantidad de cada renglón menos lo devuelto (devueltoSinReponer). orden = {renglones [{cantidad,
+ * costo}], ivaTasa, total}. Devuelve null (se paga el total de siempre) si no hay nada que descontar o si el total guardado no se
+ * reproduce con sus renglones (orden editada a mano o de otro cálculo: no se adivina); si no, {total, subtotal, iva, descontado
+ * (total de la orden − total por pagar), totalOrden, renglones: [{renglon, cantidad, devuelto}]}.
+ */
+function totalPorPagarOrden(orden, devuelto) {
+  const o = orden || {}, dv = devuelto || {};
+  if (!Object.keys(dv).length) return null;
+  const tasa = Number(o.ivaTasa) || 0, rs = Array.isArray(o.renglones) ? o.renglones : [];
+  if (!rs.length) return null;
+  const calcular = cantidades => {
+    const subtotal = redondear(rs.reduce((suma, r, i) => suma + redondear(cantidades[i] * redondear(Number(r.costo) || 0)), 0));
+    const iva = redondear(subtotal * tasa);
+    return { subtotal: subtotal, iva: iva, total: redondear(subtotal + iva) };
+  };
+  const completo = calcular(rs.map(r => Number(r.cantidad) || 0));
+  if (Math.abs(completo.total - (Number(o.total) || 0)) > 0.005) return null; // no se reproduce: no se adivina
+  const cantidades = rs.map((r, i) => Math.max(0, Math.round(((Number(r.cantidad) || 0) - (Number(dv[i + 1]) || 0)) * 10000) / 10000));
+  const neto = calcular(cantidades);
+  if (Math.abs(neto.total - completo.total) < 0.005) return null;
+  return { total: neto.total, subtotal: neto.subtotal, iva: neto.iva, totalOrden: completo.total,
+    descontado: redondear(completo.total - neto.total),
+    renglones: rs.map((r, i) => ({ renglon: i + 1, cantidad: cantidades[i], devuelto: Number(dv[i + 1]) || 0 })).filter(x => x.devuelto > 0) };
 }
 
 /** "REQ-2026-0001 — Cotización.pdf"; el archivo n (n > 1) lleva " (n)": el anterior no se borra. */

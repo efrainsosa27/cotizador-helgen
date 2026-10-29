@@ -2815,7 +2815,8 @@
     const rq = v.requisicion;
     if (FORMS_REC.rcpCom && FORMS_REC.rcpCom.folio !== rq.folio) cerrarFormRecepcion('rcpCom'); // era de otra requisición
     const cambio = !REQC || REQC.requisicion.folio !== rq.folio || REQC.requisicion.estado !== rq.estado;
-    const cambioFacturas = cambio || REQC.totalFacturado !== v.totalFacturado || REQC.facturaCompleta !== v.facturaCompleta;
+    const cambioFacturas = cambio || REQC.totalFacturado !== v.totalFacturado || REQC.facturaCompleta !== v.facturaCompleta ||
+      (REQC.porPagar && REQC.porPagar.total) !== (v.porPagar && v.porPagar.total); // revisión: total por pagar con devoluciones
     REQC = v;
     listoVista('comVistaReq');
     $('comVistaLista').classList.add('oculto'); $('comVistaCxp').classList.add('oculto'); $('comVistaReq').classList.remove('oculto');
@@ -2882,8 +2883,9 @@
       ID_PGP = nuevoId();
       pintarTcPago();
     }
-    // Monto por omisión: el total de sus facturas si ya cubren la orden (con retenciones es menor); si no, el de la orden
-    if (v.puedePagar && cambioFacturas) $('ppMonto').value = v.facturaCompleta ? v.totalFacturado : o.total;
+    // Monto por omisión: con material devuelto sin reponer, el total por pagar (revisión, incremento 5); si no, el total de sus
+    // facturas si ya cubren la orden (con retenciones es menor); si no, el de la orden
+    if (v.puedePagar && cambioFacturas) $('ppMonto').value = v.porPagar ? v.porPagar.total : v.facturaCompleta ? v.totalFacturado : o.total;
     $('rcPagos').innerHTML = v.pagos.length ? v.pagos.map(p => '<tr' + (p.estado === 'Cancelado' ? ' class="fila-cancelada" title="' +
       esc('Cancelado por ' + p.canceladoPor + ': ' + p.motivoCancelacion) + '"' : '') + '><td><b>' + esc(p.folio) + '</b></td><td>' + esc(fechaMx(p.fecha)) +
       '</td><td class="num">' + dinero(p.monto, p.monedaPago) + (p.tipoCambio ? '<div class="nota">TC ' + esc(p.tipoCambio) + ' = ' + dinero(p.montoAplicado, p.monedaOc) + '</div>' : '') +
@@ -2891,7 +2893,10 @@
       (p.comprobanteUrl ? '<a href="' + esc(p.comprobanteUrl) + '" target="_blank">Ver</a>' : '') + '</td><td>' +
       (p.estado === 'Vigente' && v.puedeCancelarPago ? '<button type="button" class="quitar" title="Cancelar pago" onclick="cancelarPagoProv(\'' + esc(p.folio) + '\')">×</button>' : '') +
       '</td></tr>').join('') : '<tr><td colspan="7" class="nota">Sin pagos.</td></tr>';
-    if (o) $('ppNota').textContent = 'El monto debe ser el total de la orden (' + dinero(o.total, o.moneda) + ')' +
+    if (o && v.porPagar) {
+      $('ppNota').textContent = 'El monto debe ser el total por pagar: ' + dinero(v.porPagar.total, o.moneda) + ' (la orden de ' +
+        dinero(o.total, o.moneda) + ' menos ' + dinero(v.porPagar.descontado, o.moneda) + ' de material devuelto sin reponer), ±1.00.';
+    } else if (o) $('ppNota').textContent = 'El monto debe ser el total de la orden (' + dinero(o.total, o.moneda) + ')' +
       (v.facturaCompleta && Math.abs(v.totalFacturado - o.total) > 0.004 ? ' o el total de sus facturas (' + dinero(v.totalFacturado, o.moneda) + ')' : '') +
       ', ±1.00.' + (v.totalFacturado > 0 && !v.facturaCompleta ? ' Sus facturas todavía no cubren la orden.' : '');
     $('rcCierre').classList.toggle('oculto', !v.puedeCerrar);

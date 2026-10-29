@@ -7,6 +7,8 @@
 //     devoluciones se rechaza (como cancelarRecepcion); anular "Lo recogí" no reabre la requisición.
 //  3. pareceNumeroTarjeta: una regla para todo método (corrida sin cortes o agrupada como tarjeta; 13–19 dígitos, empieza con 3–6,
 //     Luhn; una CLABE válida no es tarjeta; 20 dígitos o más sí se permiten); fecha y folio no se juntan.
+//  4. Material devuelto sin reponer antes de pagar (crédito del proveedor): el pago esperado es la orden menos lo devuelto,
+//     calculado igual que el total de la orden (importe por renglón redondeado, IVA sobre el subtotal, centavos).
 // Uso: node tests/revision5.test.js .
 'use strict';
 const assert = require('assert');
@@ -15,7 +17,7 @@ const A = require('./arnes')(dir, { props: {
   ROL_COMPRAS: 'efrain@helgen.tech, pedro@helgen.tech', ROL_COBRANZA: 'efrain@helgen.tech',
   ROL_REQUISICION: 'obrero@helgen.tech, efrain@helgen.tech, pedro@helgen.tech', SOLO_REQUISICION: 'rosa@helgen.tech, adri@helgen.tech',
   ROL_OPERACIONES: '' } });
-const { P, ok, falla, post, props, HOY_ISO, masDias, correr, FOTO, ANIO } = A;
+const { P, ok, falla, post, props, HOY_ISO, masDias, correr, FOTO, ANIO, plain } = A;
 const MANANA = masDias(1);
 A.libros.DB.pest.Config.m.push(['SITIOS', 'QRO | Querétaro\nZLO | Manzanillo (TIMSA)\nVER | Veracruz (ICAVE)']);
 // Los documentos del proveedor (F) no son tema de estas pruebas, salvo donde se diga
@@ -237,6 +239,49 @@ aprobaciones(false);
   falla('efrain', 'registrarPagoProveedor', [pago(s2.req, { metodo: 'Tarjeta de crédito', referencia: '4111 1111 1111 1111' })],
     /parece un número de tarjeta: nunca lo captures\. Escribe el número de autorización o solo los últimos 4 dígitos de la tarjeta\./);
   ok('efrain', 'registrarPagoProveedor', pago(s2.req, { metodo: 'Tarjeta de débito', referencia: 'Ticket TC# 7319 0482 3561 8820 4417' }));
+}
+
+// ================= 4. Pago neto de lo devuelto sin reponer =================
+{
+  const CRED = { formaPago: 'Crédito del proveedor', diasCredito: 30, condicionesPago: 'Crédito 30 días' };
+  // Se recibe sin pagar, se devuelve todo el renglón 1 (80 m × $10) y se paga solo lo que se quedó: 12 × $50 = $600 + IVA = $696
+  const s = siempre(false, CRED);
+  ok('obrero', 'cerrarRequisicion', s.req, '', { renglones: [{ renglon: 1, foto: F }, { renglon: 2, foto: F }] });
+  ok('obrero', 'reportarProblema', s.req, { renglon: 1, cantidad: 80, tipo: 'Incorrecto', comentario: 'No es el calibre', foto: F, idSolicitud: id('d') });
+  let rs = ok('pedro', 'resolverDevolucion', ultimaDev(), { resolucion: 'Devolver al proveedor', nota: 'Nos dan nota de crédito' });
+  assert.equal(rs.estado, 'Recibida');
+  let v = ok('pedro', 'getRequisicion', s.req);
+  assert.deepEqual([v.puedePagar, v.porPagar.total, v.porPagar.descontado, v.porPagar.totalOrden], [true, 696, 928, 1624], JSON.stringify(v.porPagar));
+  falla('efrain', 'registrarPagoProveedor', [pago(s.req, { monto: 1624 })],
+    /debe ser igual al total por pagar \(\$696\.00 MXN: la orden de \$1,624\.00 menos \$928\.00 de material devuelto sin reponer\)/);
+  let pg = pagar(s.req, { monto: 696 });
+  assert.deepEqual([pg.vista.requisicion.estado, pg.vista.orden.estado], ['Cerrada', 'Recibida'], 'pagada por lo que se quedó: se cierra');
+  // Devolución parcial: 10 de 80 → 70 × $10 + 12 × $50 = $1,300 + IVA $208 = $1,508 (±1.00 como siempre)
+  const s2 = siempre(false, CRED);
+  ok('obrero', 'cerrarRequisicion', s2.req, '', { renglones: [{ renglon: 1, foto: F }, { renglon: 2, foto: F }] });
+  ok('obrero', 'reportarProblema', s2.req, { renglon: 1, cantidad: 10, tipo: 'Dañado', comentario: 'Rollo aplastado', foto: F, idSolicitud: id('d') });
+  ok('pedro', 'resolverDevolucion', ultimaDev(), { resolucion: 'Cancelar renglón', nota: 'Ya no se ocupan' });
+  assert.equal(ok('pedro', 'getRequisicion', s2.req).porPagar.total, 1508);
+  assert.equal(pagar(s2.req, { monto: 1508.5 }).vista.requisicion.estado, 'Cerrada', 'tolerancia de siempre');
+  // Sin devoluciones (o con Reponer / Conservar) nada cambia: porPagar null y se paga el total
+  const s3 = siempre(false, CRED);
+  assert.equal(ok('pedro', 'getRequisicion', s3.req).porPagar, null);
+  // Mismo cálculo que el total de la orden, también con centavos que redondean (contra normalizarOrdenCompra con la cantidad menor)
+  const PRO = { moneda: 'MXN', ubicacion: 'Qro', hoy: HOY_ISO, ivaTasa: 0.16 };
+  const ORD = (r1, r2, tasa) => P.normalizarOrdenCompra({ proveedor: { razonSocial: 'X' }, fechaEntrega: MANANA, condicionesPago: 'Contado', diasCredito: 30,
+    formaPago: 'Crédito del proveedor', ivaTasa: tasa, renglones: [{ descripcion: 'A', cantidad: r1, costo: 33.333 }, { descripcion: 'B', cantidad: r2, costo: 12.345 }] }, PRO);
+  for (const [c1, c2, d1, d2, tasa] of [[7, 3, 2, 0, 0.16], [7.5, 3, 0, 1.25, 0.08], [13, 11, 5, 4, 0.16], [3, 9, 1, 8, 0.16]]) {
+    const n = P.totalPorPagarOrden(ORD(c1, c2, tasa), Object.assign({}, d1 ? { 1: d1 } : {}, d2 ? { 2: d2 } : {}));
+    const ref = ORD(c1 - d1, c2 - d2, tasa); // la orden como si se hubiera pedido lo que se quedó
+    assert.deepEqual([n.subtotal, n.iva, n.total], [ref.subtotal, ref.iva, ref.total], [c1, c2, d1, d2, tasa].join(','));
+  }
+  const o1 = ORD(1, 1, 0);
+  assert.deepEqual(plain(P.totalPorPagarOrden(o1, { 1: 1 })).total, 12.35, 'un renglón completo devuelto: solo queda el otro');
+  assert.equal(P.totalPorPagarOrden(Object.assign({}, o1, { total: o1.total + 5 }), { 1: 1 }), null, 'total que no se reproduce: no se adivina');
+  assert.equal(P.totalPorPagarOrden(o1, {}), null);
+  assert.deepEqual(plain(P.devueltoSinReponer([{ renglon: 1, cantidad: -10, tipo: 'Devolución sin reponer', estado: 'Vigente' },
+    { renglon: 1, cantidad: -5, tipo: 'Devolución', estado: 'Vigente' }, { renglon: 2, cantidad: 3, tipo: 'Faltante aceptado', estado: 'Vigente' },
+    { renglon: 2, cantidad: -4, tipo: 'Devolución sin reponer', estado: 'Anulada' }])), { 1: 10, 2: 3 }, 'Reponer no descuenta; lo anulado no cuenta');
 }
 
 console.log('revision5: ok');

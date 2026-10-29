@@ -145,6 +145,17 @@ Manual (Compras, Tareas frecuentes, Reglas de oro, Historial, Pendientes).
 10. **Propuesta**: `formaPago` va dentro del JSON de la propuesta (`propuesta (JSON)`), no en otra columna; `vistaOperaciones_` y
     `ordenDePropuesta` aplican la regla de lectura a las propuestas de antes (una propuesta Cotizada al publicar no se rompe).
 11. **`avisoProveedor` de un proveedor nuevo** (propuesta: el proveedor se agrega al emitir la orden) dice que le falta todo.
+12. **Pago neto de lo devuelto sin reponer** (revisión del 29/10/2026; `tests/revision5.test.js` §4). Con crédito del proveedor se
+    recibe, se reporta y se devuelve antes de pagar; antes el pago exigía el total completo de la orden y la requisición se quedaba
+    "Recibida, falta pagar" para siempre (o se registraba un pago que no ocurrió). Ahora `registrarPagoProveedor` espera
+    `totalPorPagarOrden(orden, devueltoSinReponer(movimientos))`: el total recalculado **igual que `normalizarOrdenCompra`** (importe
+    por renglón = redondear(cantidad × costo), subtotal redondeado, IVA = redondear(subtotal × tasa de la orden), total redondeado)
+    con la cantidad de cada renglón menos lo devuelto sin reponer (movimientos `Devolución sin reponer` de "Devolver al proveedor" o
+    "Cancelar renglón" y `Faltante aceptado`, el faltante del centro de mando resuelto igual), ±1.00 como siempre. Solo en órdenes
+    con esos movimientos; si el total guardado no se reproduce con sus renglones (orden editada a mano) no se descuenta nada. La
+    vista trae `porPagar` ({total, subtotal, iva, descontado, totalOrden, renglones}) y el formulario del pago lo precarga y lo
+    explica; la Bitácora del pago anota el total por pagar. Facturas: una factura completa por la orden entera ya no cuadra con el
+    total por pagar (se paga lo neto; la nota de crédito del proveedor cubre la diferencia).
 
 ## 5. Pruebas
 
