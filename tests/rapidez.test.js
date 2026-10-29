@@ -20,6 +20,8 @@
 //  9. La sincronización revisa Permisos con lo que ya trajo para los roles (sin pedirlo otra vez al caché) y, cuando toca
 //     releer la hoja, un cambio a mano en Permisos sí se detecta (sube la versión; la siguiente consulta y cada función ya
 //     usan los permisos nuevos, como antes).
+// 10. Una fuente ya leída en la petición (proyectos) no se reusa si la versión cambió a media petición: una lista que se guarda
+//     en caché con la versión nueva no lleva el dato de antes (antes quedaba así hasta 6 h).
 // Uso: node tests/rapidez.test.js .
 'use strict';
 const assert = require('assert');
@@ -345,6 +347,26 @@ const crear = extra => require('./arnes')(dir, Object.assign({ props: {
   // Como en la versión publicada: los permisos de esa misma respuesta se calcularon antes de revisar; la siguiente ya los trae
   assert.equal(ok('pedro', 'sincronizar', r.versiones, {}).permisos.compras, false, 'ya no tiene compras');
   A.falla('pedro', 'getRequisicion', ['REQ-1'], /permiso de compras/, 'PERMISO');
+}
+
+// ================= 10. Fuente con la versión de la petición =================
+{
+  const A = crear();
+  const { ok, correr, como, props } = A;
+  const P1 = ok('ana', 'crearProyecto', { nombre: 'Nombre viejo', cliente: { nombre: 'Luis' }, idSolicitud: 'p1' }).folio;
+  ok('obrero', 'guardarRequisicion', { proyectoFolio: P1, sitio: 'Querétaro', renglones: [{ descripcion: 'Cable', cantidad: 1 }],
+    cotizacion: { nombre: 'c.pdf', datos: A.PDF }, idSolicitud: 'q1' });
+  ok('pedro', 'bootstrap');
+  // Una consulta de compras ya trae proyectos; mientras, otra petición cambia el nombre del proyecto y sube la versión; la
+  // consulta vuelve a leer las versiones (como sincronizar) y arma la lista de requisiciones (que se guarda con la versión nueva)
+  como('pedro@helgen.tech');
+  correr('VERSIONES_ = null; SIN_CACHE_ = false;');
+  correr('proyectosCache_()');
+  A.libros.DB.pest.Proyectos.m[1][2] = 'Nombre nuevo';
+  props.VER_proyectos = String(Number(props.VER_proyectos || 0) + 1);
+  correr('versiones_(true)');
+  assert.equal(correr("listarRequisiciones('', '')")[0].proyectoNombre, 'Nombre nuevo', 'en la misma petición');
+  assert.equal(ok('pedro', 'listarRequisiciones', '', '')[0].proyectoNombre, 'Nombre nuevo', 'lo que quedó en caché');
 }
 
 console.log('rapidez: todo bien');

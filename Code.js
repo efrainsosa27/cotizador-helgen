@@ -636,9 +636,11 @@ const TTL_CACHE = 21600; // 6 h (lo máximo de CacheService): cada escritura sub
 function fuenteConHuella_(nombre, coleccion, cadaSeg, leer, revisar) {
   if (SIN_CACHE_) return leer();
   const memo = MEMO_['F_' + nombre];
-  if (memo && (!revisar || memo.revisado)) return memo.valor;
-  const cache = CacheService.getScriptCache();
   const v = versiones_()[coleccion];
+  // Lo ya leído en la petición sirve solo con la misma versión (30/10/2026): si la versión cambió (otra petición escribió y
+  // esta volvió a leer las versiones), una lista que se guarda con la versión nueva no se arma con el valor de antes
+  if (memo && memo.version === v && (!revisar || memo.revisado)) return memo.valor;
+  const cache = CacheService.getScriptCache();
   // Rapidez: ya está en la petición con esta versión (p. ej. Permisos, que se leen para los roles): para revisarla basta
   // saber si ya toca releer la hoja (marca R_); no se vuelve a traer el valor del caché
   if (memo && memo.version === v && cache.get('R_' + nombre)) {
