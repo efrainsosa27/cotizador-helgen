@@ -33,6 +33,13 @@ centro de mando de Drogheda** (`drogheda.helgen.online`): CAPRI le avisa las ór
 montos), quien recibe marca "En camino"/"Lo recogí", el material se recibe allá (entra al inventario del sitio) y CAPRI trae esas
 recepciones cada 15 min para cerrar la requisición. Detalle en §4.8, §5 (Administración), §6.15 y `docs/incremento-4*.md`.
 
+**CAPRI — incremento 5 (pedido de los usuarios el 29/10/2026; construido el mismo día, §9).** **Forma de pago por orden**
+(Transferencia · Crédito del proveedor · Tarjeta de crédito · Tarjeta de débito en sitio · Efectivo · Cheque; con crédito del
+proveedor el material se recibe antes de pagar); **base de proveedores** con datos bancarios y documentos (CSF, carátula bancaria,
+comprobante de domicilio) que bloquea el pago **por transferencia** sin ellos; **una foto por renglón** al recibir (en CAPRI y en el
+centro de mando; se guarda en Drive) y **devoluciones** `DEV-AAAA-NNNN` cuando llega material equivocado o dañado. Detalle en §4.9,
+§5, §6.16 y `docs/incremento-5*.md`.
+
 ## 2. Datos clave (IDs y URLs)
 
 | Qué | Valor |
@@ -398,6 +405,23 @@ Detalle completo, por módulo, en `docs/incremento-4.md` (contrato entre módulo
   `esAnulado_` / `foliosAnulados_` / `ocVigente`: listas, totales y pendientes saltan lo anulado; `buscarReq_` y `buscarOrden_`
   lo rechazan (tercer parámetro `conAnuladas` solo para avisar la cancelación). Contratos: `CONTRATO PRY-AAAA-NNNN`.
 
+### 4.9 CAPRI — incremento 5 (`Code.js` §6.F y §6.H; interfaz `mod-proveedores`, `mod-recepcion`)
+Contrato entre módulos y con el centro de mando: `docs/incremento-5.md`; detalle: `docs/incremento-5-proveedores.md` y
+`docs/incremento-5-recepcion.md`.
+- **F · Proveedores y forma de pago.** `FORMAS_PAGO_OC`, columna `forma_pago` de la orden (obligatoria; las viejas se leen con
+  `formaPagoDeOrden`), `recibeAntesDePagar_(orden)` (crédito del proveedor: se recibe con la orden sin pagar → Recibida; el pago la
+  cierra), `METODOS_PAGO` (5; cobranza usa `METODOS_COBRO`), referencias con forma de número de tarjeta rechazadas (Luhn).
+  `listarProveedores`, `getProveedor`, `guardarProveedor` (CLABE con dígito verificador; cambio bancario exige carátula nueva, va a
+  la bitácora y manda `proveedor.banco` a compras), `subirDocumentoProveedor`; `avisoProveedor` al emitir orden o propuesta;
+  `exigirDocumentosParaPagar_` + `documentosParaPagar(rfc, metodo)` (pura): solo **Transferencia** exige carátula y, si el RFC es
+  nacional, CSF; super admin con motivo.
+- **H · Recepción con fotos y devoluciones.** Foto obligatoria por renglón en `registrarRecepcion`, `cerrarRequisicion(folio, notas,
+  d)`, `marcarEnCamino` (Lo recogí); compras sin foto obligatoria en su respaldo. `reportarProblema`, `listarDevoluciones`,
+  `resolverDevolucion` (Reponer · Devolver al proveedor · Cancelar renglón · Conservar); transiciones `recibirRetenida`,
+  `pagarRetenida`, `cerrarRetenida`, `devolucion*`: con una devolución abierta la requisición se queda Recibida. Centro de mando:
+  `traerRecepcionesPortal` baja las fotos (fuera del candado), las guarda en Drive y avisa `foto-archivada`; un problema del sitio crea
+  una DEV (`origen_clave`); al resolver, aviso `oc.devolucion`. Correos `dev.reportada`, `dev.resuelta`, `req.pagada`.
+
 ## 5. Dónde se guardan los datos
 
 **Todo en la carpeta maestra "Cotizador Helgen"** de Mi unidad:
@@ -525,6 +549,14 @@ código ni en el chat), `PORTAL_PROYECTOS` (`{"PRY-2026-0002": "drogheda"}`), `P
 escribe CAPRI (`PORTAL_ULTIMA_CONSULTA`, `PORTAL_ULTIMO_OK`, `PORTAL_ERROR_CONSULTA`, `PORTAL_ALERTA` (material que llegó a una
 orden cancelada o anulada), `VER_permisos`, `VER_anulaciones`, `SESION_DESDE_<huella>` (sesiones de CAPRI cerradas)).
 Sin `PORTAL_SECRETO` el enlace está apagado y todo funciona como antes.
+
+**Incremento 5 (libro de compras; columnas y pestañas se crean solas, por nombre).** `OrdenesCompra.forma_pago` (AP);
+`Proveedores` I:Z (`direccion`, `banco`, `clabe` y `cuenta` con apóstrofo, `titular`, `forma_pago_habitual`, `csf_*`,
+`caratula_*`, `domicilio_*` (id, url, fecha), `notas`, `activo`, `actualizo`; `dias_credito` H sigue siendo los días habituales);
+`MovimientosInventario.foto_id`/`foto_url` (W:X) y tipos nuevos (`Devolución`, `Devolución sin reponer`, `Faltante aceptado`,
+`Recogido en tienda`; "Recibí el material" y el cierre de compras ahora dejan `Entrada por compra`); pestaña **`Devoluciones`**
+(`DEV-AAAA-NNNN`, `CONSECUTIVO_DEV_AAAA`, con `origen_clave`). Drive: `Compras/Proveedores/<RFC> — <razón social>/` y
+`Compras/AAAA/<proyecto>/Recepciones/` (fotos `REC-… — r<n>.jpg`, `DEV-… — r<n>.jpg`), todo con `privado_`.
 
 ## 6. Decisiones tomadas (y por qué)
 
@@ -791,6 +823,15 @@ Spec: "CAPRI — increment 4 spec" (Claude Docs `https://claude.ai/artifact/2kb6
   etapas (servidor propio con Sheets/Drive, luego PostgreSQL con Drive para archivos): documento "CAPRI — server deployment plan"
   (`https://claude.ai/artifact/RQt4VfJF4Q1xqozM81sAA2`).
 
+### 6.16 CAPRI — incremento 5 (29/10/2026)
+- Decisiones de Leo: "Crédito" = **crédito del proveedor** (recibir antes de pagar) y además tarjeta de crédito, tarjeta de débito en
+  sitio y transferencia; fotos **en la nube** (Drive), también en el centro de mando "hoy"; proceso de devolución completo; documentos
+  faltantes: aviso en la orden y bloqueo del pago.
+- Integración: el bloqueo del pago es **solo para transferencias** (lo que se manda a la CLABE de la carátula; con tarjeta en tienda,
+  efectivo o cheque solo avisa) y un proveedor extranjero (sin RFC o `XEXX010101000`) solo necesita la carátula.
+- Nunca se guarda ni se pide un número de tarjeta; la referencia con tarjeta es la autorización o el ticket.
+- El centro de mando guarda la foto solo hasta que CAPRI la baja (cada 15 min) y la borra al recibir `foto-archivada`.
+
 ## 7. Reglas del proyecto (no romper)
 1. Los totales SIEMPRE se recalculan en el servidor (`normalizarCotizacion`). El navegador solo muestra una vista previa.
 2. Redondeo a 2 decimales por renglón (`redondear`). IVA = subtotal × tasa.
@@ -918,6 +959,12 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
   rechaza el cambio, decirlo y anotarlo en §9 como pendiente.
 
 ## 9. Pendientes e ideas
+- **CAPRI — incremento 5: construido e integrado el 29/10/2026 (rama `incremento-5`), SIN PUBLICAR.** Módulos F (proveedores y
+  forma de pago) y H (fotos y devoluciones) + centro de mando (repo `hbox-docs`, rama `fotos-devoluciones`). Publicar: respaldo del
+  libro de compras; `clasp push`; como facilities@: `prepararCapri()` y nueva versión del deployment; `CLOUDFLARE_ACCOUNT_ID=… wrangler
+  deploy`; centro de mando: parches + `./scripts/deploy.sh` + `sudo systemctl restart actas-hbox` (antes o junto con CAPRI); nginx debe
+  dejar pasar `/api/integracion/` sin sesión (pendiente de revisar con `curl`). Avisar a compras: transferencias bloqueadas sin CSF y
+  carátula; órdenes con días de crédito se reciben antes de pagar; recibir pide foto por renglón.
 - **CAPRI — incremento 4: PUBLICADO el 29/10/2026 ~11:55** (API **@13** publicada por `facilities@helgen.tech` sobre el mismo
   deployment `AKfycbwBjF7…`, "Ejecutar como: facilities@"; interfaz con `CLOUDFLARE_ACCOUNT_ID=badd8bca… npx wrangler@4 deploy`,
   versión `5f66244c`). Hechos: Leo compartió el proyecto con facilities@ (Editor); facilities@ corrió `prepararCapri()` (libro de
