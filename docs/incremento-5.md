@@ -58,7 +58,8 @@ Base común: rama `incremento-5-base` = `99ab8e4` (lo publicado como API @13) + 
   correo `proveedor.banco` a compras (sin la CLABE completa: últimos 4).
 - Avisos (no bloquean): comprobante de domicilio con más de 3 meses; CSF con más de 12 meses; falta algún documento.
 - Orden de compra / propuesta: si al proveedor le falta un documento, la respuesta trae `avisoProveedor` y la interfaz lo muestra.
-- `registrarPagoProveedor`: sin CSF **y** carátula → error `PERMISO` "Falta …" + `textoExcepcion_()`; super admin con
+- `registrarPagoProveedor` (**solo con Transferencia**, decisión de integración del 29/10/2026: carátula y, si el RFC es nacional,
+  CSF; con tarjeta, efectivo o cheque solo aviso): sin ellos → error `PERMISO` "Falta …" + `textoExcepcion_()`; super admin con
   `motivoExcepcion` (último parámetro) → `excepcionSuperAdmin_('pagar a un proveedor sin documentos', …)`. Con transferencia, la
   vista del pago muestra banco y CLABE de la carátula para copiarla.
 

@@ -143,9 +143,11 @@ Manual (Compras, Tareas frecuentes, Reglas de oro, Historial, Pendientes).
    `guardarProveedor_`); un RFC o una razón social sin RFC repetidos se rechazan ("ábrelo y edítalo").
 7. **Colección**: guardar un proveedor sube `oc` (los proveedores viven en el libro de compras y la vista de una requisición abierta
    lleva sus documentos y CLABE); no se agregó una colección nueva a `COLECCIONES`.
-8. **Bloqueo del pago para todo método** (también tarjeta o efectivo), como dice el contrato. Proveedores extranjeros (sin CSF ni
-   CLABE: JLCPCB, Ardusimple…) necesitan la excepción de super admin en cada pago (o que compras suba algún documento equivalente
-   como "CSF"): ver pendientes.
+8. **Bloqueo del pago solo con transferencia** (decisión de integración del 29/10/2026; corregido aquí en la revisión 5b: antes
+   decía "para todo método"). Se le paga a la CLABE de la carátula: con **Transferencia** se exige la carátula y, si el RFC es
+   nacional, la CSF (`documentosParaPagar`); con tarjeta (compra en tienda), efectivo o cheque solo queda el aviso. Un proveedor
+   extranjero (sin RFC o `XEXX010101000`: JLCPCB, Ardusimple…) solo necesita la carátula para una transferencia; sin ella, la
+   excepción de super admin.
 9. **Crédito en el flujo de siempre**: la confirmación la hace quien pidió (`cerrarRequisicion`, como hoy: no hay "quien recibe" sin
    aprobaciones) o compras en su lugar con motivo (`cerrarRequisicionCompras`). Con el flujo de aprobaciones `recibirSinPagar_` no
    aplica (allá se recibe renglón por renglón). Una orden de antes con días de crédito > 0 se trata como crédito desde que se publique.
@@ -185,9 +187,9 @@ Manual (Compras, Tareas frecuentes, Reglas de oro, Historial, Pendientes).
 - Sin servicios de Google nuevos (Drive, Sheets, UrlFetch y MailApp ya están autorizados): `clasp push` + `clasp deploy` + `wrangler deploy`.
 - Respaldar antes el libro de compras (las pestañas `OrdenesCompra` y `Proveedores` ganan columnas al primer uso; nada se mueve).
 - Opcional: correr `prepararCompras()` desde el editor para escribir los encabezados nuevos de una vez.
-- **Avisar a compras el día que se publique**: desde ese momento **ningún pago a proveedor se registra sin CSF y carátula** (los
-  proveedores de hoy no tienen documentos): suban primero los de los proveedores con órdenes por pagar (Compras → Proveedores), o
-  el super admin registra el pago con motivo. Y las órdenes Emitidas con días de crédito > 0 ya se pueden recibir antes de pagar.
+- **Avisar a compras el día que se publique**: desde ese momento **ningún pago por transferencia se registra sin la carátula y,
+  si el proveedor es nacional, la CSF** (los proveedores de hoy no tienen documentos; con tarjeta, efectivo o cheque solo se avisa):
+  suban primero los de los proveedores con órdenes por pagar (Compras → Proveedores), o el super admin registra el pago con motivo. Y las órdenes Emitidas con días de crédito > 0 ya se pueden recibir antes de pagar.
 - Interfaz y API van juntas: la interfaz nueva manda `formaPago` (la API vieja la ignora) pero la API nueva la exige (una interfaz en
   caché sin el campo verá "Elige la forma de pago": recargar).
 - Cachés: "mis requisiciones" y la base de Pendientes se guardan por versión; hasta el primer cambio en compras después de publicar
@@ -216,8 +218,8 @@ Manual (Compras, Tareas frecuentes, Reglas de oro, Historial, Pendientes).
 
 ## 8. Pendiente / ideas
 
-- Proveedores extranjeros: marca "extranjero" que pida factura/W-8 en lugar de CSF y cuenta/IBAN en lugar de CLABE (hoy necesitan la
-  excepción de super admin para cada pago).
+- Proveedores extranjeros: marca "extranjero" que pida factura/W-8 en lugar de CSF y cuenta/IBAN en lugar de CLABE (hoy se
+  reconocen por no tener RFC nacional: para transferir solo se les pide la carátula).
 - Deshacer "Recibí el material" de una orden a crédito (en el flujo de siempre no hay movimientos de inventario que cancelar).
 - La lista "Órdenes por proyecto" no muestra la forma de pago (sí la trae en los datos).
 - Documentar en `CLAUDE.md` y en el Manual (regla 14) al integrar; probar en PRUEBAS o en el real con Claude in Chrome (regla 13).

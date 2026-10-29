@@ -18,6 +18,7 @@
 //  E. (Revisión 5b) listarDevoluciones no da a quien pide la liga de la foto sin acceso a la carpeta de compras (accesoFotos_).
 //  F. (Revisión 5b) mod-recepcion: los folios dentro de onclick van con jsArg (JSON + escape del atributo), nunca con esc entre
 //     comillas simples.
+//  G. (Revisión 5b) Las notas del módulo F y el contrato dicen lo que hace el código: el bloqueo del pago es solo con transferencia.
 // Uso: node tests/revision5.test.js .
 'use strict';
 const assert = require('assert');
@@ -397,6 +398,18 @@ aprobaciones(false);
   let recibido = null;
   new Function('RECEPCION', decodificado)({ abrirReq: f => { recibido = f; } });
   assert.equal(recibido, "REQ-1');alert(1);('", 'el folio llega como texto');
+}
+
+// ================= G. Documentación del bloqueo del pago =================
+{
+  const leer = f => require('fs').readFileSync(require('path').join(dir, 'docs', f), 'utf8');
+  const notas = leer('incremento-5-proveedores.md'), contrato = leer('incremento-5.md');
+  assert(!/Bloqueo del pago para todo método/.test(notas), 'ya no dice "para todo método"');
+  assert(/Bloqueo del pago solo con transferencia/.test(notas) && /\*\*solo con Transferencia\*\*/.test(contrato));
+  assert(!/ningún pago a proveedor se registra sin CSF y carátula/.test(notas));
+  // Y el código hace eso: solo Transferencia exige documentos
+  assert.deepEqual(['Transferencia', 'Tarjeta de crédito', 'Tarjeta de débito', 'Efectivo', 'Cheque'].map(m => P.documentosParaPagar('EDC200101AB1', m).length),
+    [2, 0, 0, 0, 0]);
 }
 
 console.log('revision5: ok');
