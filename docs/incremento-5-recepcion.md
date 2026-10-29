@@ -130,6 +130,12 @@ una recepción con una devolución abierta o resuelta con movimiento en sus reng
 anular una recepción solo aplica a entradas por compra: anular un "Lo recogí" no reabre la requisición. Las fotos no se renombran
 "ANULADO —" (decisión de la revisión: no hace falta).
 
+**Menores (revisión del 29/10/2026, §6 de `tests/revision5.test.js`).** La vista de compras no ofrece "Cerrar" (`puedeCerrar`)
+con una devolución abierta (el servidor lo rechaza). `validarCierreConFotos_` revisa exactamente lo que `cerrarReq_` hará (el
+crédito del proveedor solo en el flujo de siempre, `recibirSinPagarPosible_`), así `cerrarRequisicionCompras` ya no escribe las
+entradas de lo pendiente para luego fallar (pasaba con aprobaciones y una orden a crédito). La tabla de devoluciones de la
+requisición en Compras (`#rcDevoluciones`) va dentro de `.tabla-desliza` (teléfono).
+
 ## 5. Centro de mando (contrato §5, lado de CAPRI)
 
 - `aplicarRecepcionPortal_` (dentro del candado): copia la diferencia como siempre, pero (a) el tope es lo pedido menos el

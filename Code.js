@@ -3352,7 +3352,8 @@ function vistaRequisicion_(libro, folioReq) {
     puedePagar: (req.estado === REQ_AUTORIZADA || req.estado === REQ_RECIBIDA || req.estado === REQ_EN_CAMINO) && !!orden &&
       orden.estado === OC_EMITIDA,
     puedeCancelarPago: req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && ocPagada),
-    puedeCerrar: req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && ocPagada) || antesDePagar,
+    // Revisión: con una devolución abierta compras no cierra (cerrarRequisicionCompras lo rechaza): no se ofrece el botón
+    puedeCerrar: (req.estado === REQ_PAGADA || (req.estado === REQ_EN_CAMINO && ocPagada) || antesDePagar) && !devolucionAbiertaDe_(libro, req),
     recibeAntesDePagar: antesDePagar, // F: "Registrar que llegó" en vez de "Cerrar" (la requisición queda Recibida)
     puedeRecibir: flujo && !!avance && !avance.completo && conOrden,
     puedeCancelarRecepcion: req.estado !== REQ_CERRADA && !!orden && orden.estado !== OC_CANCELADA,
@@ -3562,7 +3563,8 @@ function cerrarRequisicionCompras(folioReq, motivo, notas) {
   return conAvisoPortal_(conCandado_(() => {
     const { hoja, req } = buscarReq_(libro, folioReq);
     const ligado = proyectoLigado_(req.proyectoFolio);
-    // H (incremento 5): con una devolución abierta no se cierra; lo pendiente queda como entrada por compra (sin foto obligatoria)
+    // H (incremento 5): con una devolución abierta no se cierra; lo pendiente queda como entrada por compra (sin foto obligatoria).
+    // Todo se revisa antes de escribir (recibirTodoConFotos_ → validarCierreConFotos_, lo mismo que cerrarReq_)
     exigirSinDevolucionAbierta_(libro, req);
     recibirTodoConFotos_(libro, hoja, req, {}, nota, false);
     cerrarReq_(libro, hoja, req, nota, m + (ligado ? ' (respaldo: no llega al inventario del sitio)' : ''));
@@ -10791,10 +10793,13 @@ function recibirTodoConFotos_(libro, hoja, req, fotos, nota, exigirFotos) {
   return true;
 }
 
-/** Lo mismo que revisa cerrarReq_ (estado y orden pagada), antes de escribir. Con crédito del proveedor (módulo F) se recibe sin pagar. */
+/**
+ * Lo mismo que revisa cerrarReq_ (estado y orden pagada), antes de escribir. Con crédito del proveedor (módulo F) se recibe sin
+ * pagar exactamente cuando recibirSinPagar_ lo haría (flujo de siempre y recibirSinPagarPosible_); si no, el cierre de siempre.
+ * Revisión: antes aceptaba el crédito también con aprobaciones y cerrarRequisicionCompras escribía las entradas y luego fallaba.
+ */
 function validarCierreConFotos_(req, orden) {
-  const credito = typeof recibeAntesDePagar_ === 'function' && !!recibeAntesDePagar_(orden); // F (incremento 5), si ya está
-  if (credito && orden.estado === OC_EMITIDA) { transicionReq(req.estado, 'recibir'); return; }
+  if (!flujoOperaciones_() && recibirSinPagarPosible_(req, orden)) { transicionReq(req.estado, 'recibir'); return; }
   transicionReq(req.estado, req.estado === REQ_EN_CAMINO ? 'cerrarEnCamino' : 'cerrar');
   if (orden.estado !== OC_PAGADA) throw new Error('La orden ' + orden.folio + ' no está pagada.');
 }

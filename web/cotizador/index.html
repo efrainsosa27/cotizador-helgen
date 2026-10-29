@@ -5330,13 +5330,13 @@
       if (RD.resolver && RD.resolver.desde === 'com' && !abiertoRes) RD.resolver = null;
       caja.innerHTML = '<div class="sat-titulo">Fotos y devoluciones</div>' +
         (fotos.length ? '<div class="nota"><b>Fotos de lo que llegó:</b> ' + fotos.join(' · ') + '</div>' : '') +
-        (devs.length ? '<table style="font-size:12px;margin-top:6px"><thead><tr><th>Folio</th><th>Material</th><th>Problema</th><th>Reportó</th><th>Estado</th><th></th></tr></thead><tbody>' +
+        (devs.length ? '<div class="tabla-desliza"><table style="font-size:12px;margin-top:6px"><thead><tr><th>Folio</th><th>Material</th><th>Problema</th><th>Reportó</th><th>Estado</th><th></th></tr></thead><tbody>' +
           devs.map(d => '<tr><td><b>' + esc(d.folio) + '</b><div class="nota">' + esc(fechaMx(d.fecha)) + '</div></td><td>' + textoMaterial(d) + '</td><td>' + esc(d.tipo) +
             (d.comentario ? '<div class="nota">' + esc(d.comentario) + '</div>' : '') + (d.fotoUrl ? '<div>' + ligaFoto(d.fotoUrl) + '</div>' : '') + '</td><td>' + esc(d.reporto) +
             (d.origen === 'Centro de mando' ? '<div class="nota">centro de mando</div>' : '') + '</td><td>' + (d.estado === 'Abierta' ? '<span class="chip aceptada">Abierta</span>'
             : '<span class="chip firmado">' + esc(d.resolucion) + '</span>' + (d.notaResolucion ? '<div class="nota">' + esc(d.notaResolucion) + '</div>' : '') +
               (d.guia ? '<div class="nota">Guía ' + esc(d.guia) + '</div>' : '')) + '</td><td>' +
-            (d.puedeResolver ? botonChico('Resolver', "RECEPCION.abrirResolver('" + esc(d.folio) + "','com')", false) : '') + '</td></tr>').join('') + '</tbody></table>' : '') +
+            (d.puedeResolver ? botonChico('Resolver', "RECEPCION.abrirResolver('" + esc(d.folio) + "','com')", false) : '') + '</td></tr>').join('') + '</tbody></table></div>' : '') +
         '<div id="rcDevResolver"></div>' +
         ((v.reportables || []).length && !(RD.reporte && RD.reporte.desde === 'com') ? '<div class="acciones" style="margin-top:6px">' +
           botonChico('Reportar problema', "RECEPCION.abrirReporte('" + esc(v.requisicion.folio) + "','com')") + '</div>' : '') +

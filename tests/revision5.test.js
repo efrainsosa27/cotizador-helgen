@@ -11,6 +11,8 @@
 //     calculado igual que el total de la orden (importe por renglón redondeado, IVA sobre el subtotal, centavos).
 //  5. Avisos de documentos con documentosParaPagar: faltanPorMetodo (solo la transferencia exige; a un extranjero solo la carátula),
 //     el mismo dato que usa el bloqueo del servidor.
+//  6. Menores: compras no ve "Cerrar" con una devolución abierta; cerrarRequisicionCompras revisa todo antes de escribir (crédito con
+//     aprobaciones); la tabla de devoluciones de Compras se desliza en el teléfono.
 // Uso: node tests/revision5.test.js .
 'use strict';
 const assert = require('assert');
@@ -52,15 +54,15 @@ function siempre(pagada, ocExtra) {
   if (pagada) pagar(folio);
   return { req: folio, oc: oc };
 }
-const PROP = () => ({ proveedor: { razonSocial: 'Ferretera del Puerto' }, fechaEntrega: MANANA, condicionesPago: 'Contado', diasCredito: 0,
+const PROP = extra => Object.assign({ proveedor: { razonSocial: 'Ferretera del Puerto' }, fechaEntrega: MANANA, condicionesPago: 'Contado', diasCredito: 0,
   formaPago: 'Transferencia', recibe: 'rosa@helgen.tech', idSolicitud: id('p'),
-  renglones: [{ renglon: 1, disponibilidad: 'Exacto', costo: 10 }, { renglon: 2, disponibilidad: 'Exacto', costo: 50 }] });
+  renglones: [{ renglon: 1, disponibilidad: 'Exacto', costo: 10 }, { renglon: 2, disponibilidad: 'Exacto', costo: 50 }] }, extra || {});
 /** Con aprobaciones: tania aprueba, pedro propone, tania da el visto bueno (emite la orden; recibe rosa). */
-function conOps() {
+function conOps(propExtra) {
   const folio = ok('obrero', 'guardarRequisicion', { proyectoFolio: P2, sitio: 'Querétaro', renglones: RENGLONES, idSolicitud: id('q') }).folio;
   const v = ok('tania', 'getRequisicionOperaciones', folio);
   ok('tania', 'aprobarRequisicion', folio, { version: v.version, prioridad: 'Normal', renglones: v.renglones.map(r => ({ renglon: r.renglon, aprobado: true })) });
-  ok('pedro', 'cotizarRequisicion', folio, PROP());
+  ok('pedro', 'cotizarRequisicion', folio, PROP(propExtra));
   const w = ok('tania', 'getRequisicionOperaciones', folio);
   return { req: folio, oc: ok('tania', 'autorizarPropuesta', folio, w.propuesta.version, id('vb'), w.propuesta.huella).ocFolio };
 }
@@ -301,6 +303,34 @@ aprobaciones(false);
   falla('efrain', 'registrarPagoProveedor', [pago(s.req)], /Falta la carátula bancaria de GNSS Store Ltd: no se registra un pago por transferencia hasta subirla/, 'PERMISO');
   assert.equal(pagar(s.req, { metodo: 'Tarjeta de crédito', referencia: 'AUT 482913' }).vista.requisicion.estado, 'Pagada', 'con tarjeta sí se registra');
   P.exigirDocumentosParaPagar_ = function () {};
+}
+
+// ================= 6. Menores =================
+{
+  // Compras: con una devolución abierta (requisición Pagada otra vez tras "Reponer") no se ofrece "Cerrar"
+  const s = siempre(true);
+  ok('obrero', 'cerrarRequisicion', s.req, '', { renglones: [{ renglon: 1, foto: F }, { renglon: 2, foto: F }] });
+  ok('obrero', 'reportarProblema', s.req, { renglon: 1, cantidad: 10, tipo: 'Dañado', comentario: 'Rollo aplastado', foto: F, idSolicitud: id('d') });
+  ok('pedro', 'resolverDevolucion', ultimaDev(), { resolucion: 'Reponer' });
+  assert.equal(ok('pedro', 'getRequisicion', s.req).puedeCerrar, true, 'Pagada sin devoluciones abiertas: sí');
+  ok('obrero', 'reportarProblema', s.req, { renglon: 2, cantidad: 1, tipo: 'Dañado', comentario: 'Tubo doblado', foto: F, idSolicitud: id('d') });
+  const v = ok('pedro', 'getRequisicion', s.req);
+  assert.deepEqual([v.requisicion.estado, v.puedeCerrar], ['Pagada', false], 'con una abierta no se ofrece (el servidor lo rechazaría)');
+  falla('pedro', 'cerrarRequisicionCompras', [s.req, 'El trabajador ya no está', ''], /está abierta: resuélvela antes de cerrar/);
+
+  // Con aprobaciones y crédito del proveedor (orden sin pagar): compras no puede "cerrar" y no se escribe ninguna entrada
+  aprobaciones(true);
+  const o = conOps({ formaPago: 'Crédito del proveedor', diasCredito: 30, condicionesPago: 'Crédito 30 días' });
+  const antes = movsDe(o.oc).length;
+  falla('pedro', 'cerrarRequisicionCompras', [o.req, 'El trabajador ya no está', ''], /está autorizada: no se puede cerrar/);
+  assert.equal(movsDe(o.oc).length, antes, 'nada a medias: antes quedaban las entradas de todo lo pendiente');
+  assert.equal(ok('pedro', 'getRequisicion', o.req).recepcionCompleta, false);
+  aprobaciones(false);
+
+  // Teléfono: la tabla de devoluciones de la requisición en Compras va dentro de .tabla-desliza
+  const html = require('fs').readFileSync(require('path').join(dir, 'web/cotizador/index.html'), 'utf8');
+  assert(/'<div class="tabla-desliza"><table style="font-size:12px;margin-top:6px"><thead><tr><th>Folio<\/th><th>Material/.test(html) &&
+    /'<\/tbody><\/table><\/div>' : ''\) \+\s*'<div id="rcDevResolver">/.test(html), 'tabla de devoluciones deslizable');
 }
 
 console.log('revision5: ok');
