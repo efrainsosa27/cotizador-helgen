@@ -92,6 +92,7 @@ parámetro), `cerrarRequisicionCompras` (bloqueo + entradas de lo pendiente), `r
 | `pagarRetenida` | Recibida | Recibida | se paga una Recibida con una devolución abierta: la orden queda Pagada (no Recibida) |
 | `cerrarRetenida` | Recibida | Cerrada | al resolver la última devolución abierta de una Recibida con la orden pagada y todo recibido (la orden queda Recibida) |
 | `devolucionAutorizada` / `devolucionPagada` / `devolucionEnCamino` | Recibida, Cerrada | Autorizada / Pagada / En camino | "Reponer": el renglón vuelve a por recibir. **En camino** si la orden ya había ido en camino (`en_camino_en`), si no **Pagada** si la orden está pagada (una Recibida regresa a Pagada), si no **Autorizada**. Se borran la fecha y quién recibió de la orden |
+| `cancelarRecepcionPagada` (revisión, 29/10) | Recibida | Pagada | se cancela (o se anula) una recepción de una retenida (la orden ya está Pagada): vuelve a Pagada, no a Autorizada. La regla completa es `accionCancelarRecepcion(orden)`: En camino si la orden ya iba en camino, si no Pagada si está pagada, si no Autorizada; la usan `cancelarRecepcion` y el efecto "recepción" de Anular |
 
 Efecto de cada resolución (`efectoResolucion(resolucion, tipo, origen)`, la misma regla que el centro de mando: lo que nunca se
 contó como recibido no se descuenta):
@@ -114,7 +115,9 @@ registra y queda por recibir (o "Ya no llegará lo que falta"); la interfaz no o
 Cierres bloqueados con una devolución Abierta: "Recibí el material" (queda Recibida), `cerrarRequisicionCompras` (error),
 `registrarRecepcion` completa y pagada (queda Recibida), el pago de una Recibida (sigue Recibida), el centro de mando
 (`traerRecepcionesPortal` con `completa`: queda Recibida). `cancelarRecepcion` no procede si el renglón tiene una devolución
-abierta o una resuelta con movimiento. Con la requisición retenida, compras no puede cancelar el pago hasta resolver.
+abierta o una resuelta con movimiento; la de otro renglón de una retenida sí se cancela y la requisición vuelve a **Pagada** (antes
+quedaba Autorizada con la orden Pagada y ya no había forma de pagarla ni cerrarla; revisión del 29/10, `tests/revision5.test.js`).
+Con la requisición retenida, compras no puede cancelar el pago hasta resolver.
 
 ## 5. Centro de mando (contrato §5, lado de CAPRI)
 

@@ -4011,7 +4011,8 @@ function registrarRecepcion(p) {
 
 /**
  * Compras cancela una recepción equivocada (sus movimientos quedan Cancelados, no se borran), con motivo. Si la requisición ya
- * estaba Recibida vuelve a Autorizada; una Cerrada (pagada y recibida) ya no se toca.
+ * estaba Recibida vuelve a En camino, Pagada o Autorizada según su orden (accionCancelarRecepcion); una Cerrada (pagada y
+ * recibida) ya no se toca.
  */
 function cancelarRecepcion(folioRec, motivo) {
   exigirCompras_();
@@ -4039,8 +4040,9 @@ function cancelarRecepcion(folioRec, motivo) {
     filas.forEach(x => hM.getRange(x.fila, 19, 1, 4).setValues([['Cancelado', t(yo_()), ahora, t(m)]]));
     let nuevo = req.estado;
     if (req.estado === REQ_RECIBIDA) {
-      // Si ya iba en camino (centro de mando), vuelve a En camino; si no, a Autorizada
-      nuevo = transicionReq(req.estado, orden.enCaminoEn ? 'cancelarRecepcionEnCamino' : 'cancelarRecepcion');
+      // Si ya iba en camino (centro de mando), vuelve a En camino; si no, a Pagada (orden pagada: estaba retenida por una
+      // devolución) o a Autorizada (accionCancelarRecepcion)
+      nuevo = transicionReq(req.estado, accionCancelarRecepcion(orden));
       cambiarReq_(hoja, req, nuevo, { notasRecepcion: '' });
       hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([['', '']]);
     } else {
@@ -5110,6 +5112,8 @@ const TRANSICIONES_REQ = {
   pagarEnCamino: { de: [REQ_EN_CAMINO], a: REQ_EN_CAMINO },
   cancelarPagoEnCamino: { de: [REQ_EN_CAMINO], a: REQ_EN_CAMINO },
   cancelarRecepcionEnCamino: { de: [REQ_RECIBIDA], a: REQ_EN_CAMINO },
+  // Incremento 5 (revisión): una Recibida con la orden ya pagada (retenida por una devolución) vuelve a Pagada, no a Autorizada
+  cancelarRecepcionPagada: { de: [REQ_RECIBIDA], a: REQ_PAGADA },
   // Devoluciones (incremento 5, módulo H). Con una devolución Abierta la requisición no se cierra: lo que la cerraría (recibir
   // todo con la orden pagada, o pagar la ya recibida) la deja Recibida hasta que compras la resuelva (cerrarRetenida la cierra).
   // "Reponer" regresa el renglón a por recibir: la requisición vuelve a Autorizada, Pagada o En camino según su orden.
@@ -5125,9 +5129,19 @@ const VERBOS_REQ = { autorizar: 'autorizar', rechazar: 'rechazar', devolver: 'de
   cotizar: 'mandar la propuesta de', regresarACompras: 'regresar a compras', visto: 'dar el visto bueno a', recibir: 'recibir',
   recibirPagada: 'recibir', pagarRecibida: 'pagar', cancelarOcAprobada: 'regresar a Aprobada',
   cancelarRecepcion: 'cancelar la recepción de', enCamino: 'marcar en camino', pagarEnCamino: 'pagar',
-  cancelarPagoEnCamino: 'cancelar el pago de', cancelarRecepcionEnCamino: 'cancelar la recepción de', cerrarEnCamino: 'cerrar',
+  cancelarPagoEnCamino: 'cancelar el pago de', cancelarRecepcionEnCamino: 'cancelar la recepción de', cancelarRecepcionPagada: 'cancelar la recepción de', cerrarEnCamino: 'cerrar',
   recibirRetenida: 'recibir', pagarRetenida: 'pagar', cerrarRetenida: 'cerrar', devolucionAutorizada: 'reabrir por una devolución',
   devolucionPagada: 'reabrir por una devolución', devolucionEnCamino: 'reabrir por una devolución' };
+
+/**
+ * Acción para regresar una requisición Recibida cuando se cancela o se anula una de sus recepciones (la orden espera material
+ * otra vez): En camino si la orden ya había ido en camino; si no, Pagada si la orden está pagada (retenida por una devolución,
+ * incremento 5) o Autorizada (sin pagar). La usan cancelarRecepcion y Anular.
+ */
+function accionCancelarRecepcion(orden) {
+  const o = orden || {};
+  return o.enCaminoEn ? 'cancelarRecepcionEnCamino' : o.estado === OC_PAGADA ? 'cancelarRecepcionPagada' : 'cancelarRecepcion';
+}
 
 /** Estado nuevo de una requisición tras la acción; error si no se puede desde su estado actual. */
 function transicionReq(estado, accion) {
@@ -9541,9 +9555,11 @@ function planAnulacion_(d, objetivo) {
           q ? q.folio + (rq ? ' pasa de ' + q.estado + ' a ' + rq : ' sigue ' + q.estado) : ''].filter(Boolean).join('; ') +
           ': la orden queda por pagar otra vez.' });
     } else if (r.clave === 'rec' && r.x.filas.some(m => m.estado === 'Vigente') && !enPlan('oc', r.x.ocFolio)) {
-      // La orden espera el material otra vez (como cancelarRecepcion; una Cerrada vuelve a Pagada)
+      // La orden espera el material otra vez (como cancelarRecepcion: una Recibida vuelve a En camino, Pagada o Autorizada según
+      // su orden; una Cerrada vuelve a Pagada)
       const o = ordenDe(r.x.ocFolio), q = reqDe(r.x.reqFolio);
-      const rq = q && vivo(q) ? (q.estado === REQ_RECIBIDA ? REQ_AUTORIZADA : q.estado === REQ_CERRADA ? REQ_PAGADA : '') : '';
+      const rq = q && vivo(q) ? (q.estado === REQ_RECIBIDA ? TRANSICIONES_REQ[accionCancelarRecepcion(o)].a
+        : q.estado === REQ_CERRADA ? REQ_PAGADA : '') : '';
       const oc = rq === REQ_PAGADA && o && o.estado === OC_RECIBIDA ? OC_PAGADA : '';
       plan.efectos.push({ clave: 'recepcion', rec: r.x, orden: o && vivo(o) ? o : null, oc: oc, req: rq ? q : null, a: rq,
         texto: (q ? q.folio + (rq ? ' pasa de ' + q.estado + ' a ' + rq : ' sigue ' + q.estado) + '; ' : '') +
