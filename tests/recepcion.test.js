@@ -26,6 +26,7 @@ function verificar(op, cuerpo) {
 }
 const rutas = [
   { re: /^https:\/\/drogheda\.test\/api\/integracion\/cotizador\/evento$/, fn: (url, op) => {
+    if (CM.modoEvento === '500') return { codigo: 500, cuerpo: 'Internal Server Error' };
     const cuerpo = String(op.payload || ''), e = verificar(op, cuerpo);
     if (e) { CM.rechazos.push(e); return { codigo: 401, cuerpo: { ok: false, error: e } }; }
     const ev = JSON.parse(cuerpo);
@@ -102,10 +103,15 @@ assert.throws(() => P.normalizarResolucion({ resolucion: 'Tirar' }), /Reponer, D
 assert.throws(() => P.normalizarResolucion({ resolucion: 'Devolver al proveedor', nota: 'x' }), /nota de crédito o reembolso/);
 assert.throws(() => P.normalizarResolucion({ resolucion: 'Cancelar renglón' }), /por qué se cancela/);
 assert.throws(() => P.normalizarResolucion({ resolucion: 'Conservar', guia: 'x'.repeat(61) }), /guía/);
-assert.deepEqual(plain(P.efectoResolucion('Reponer')), { movimiento: 'Devolución', reabre: true });
-assert.deepEqual(plain(P.efectoResolucion('Devolver al proveedor')), { movimiento: 'Devolución sin reponer', reabre: false });
-assert.deepEqual(plain(P.efectoResolucion('Cancelar renglón')), { movimiento: 'Devolución sin reponer', reabre: false });
-assert.deepEqual(plain(P.efectoResolucion('Conservar')), { movimiento: '', reabre: false });
+assert.deepEqual(plain(P.efectoResolucion('Reponer', 'Dañado', 'CAPRI')), { movimiento: 'Devolución', signo: -1, reabre: true });
+assert.deepEqual(plain(P.efectoResolucion('Devolver al proveedor', 'Incorrecto', 'Centro de mando')), { movimiento: 'Devolución sin reponer', signo: -1, reabre: false });
+assert.deepEqual(plain(P.efectoResolucion('Cancelar renglón', 'Faltante', 'CAPRI')), { movimiento: 'Devolución sin reponer', signo: -1, reabre: false },
+  'en CAPRI un faltante se registró como recibido: se descuenta');
+assert.deepEqual(plain(P.efectoResolucion('Conservar', 'Dañado', 'CAPRI')), { movimiento: '', signo: 0, reabre: false });
+// Lo que nunca se contó no se descuenta (como el centro de mando): sobrante; faltante reportado en el sitio
+assert.deepEqual(plain(P.efectoResolucion('Reponer', 'Sobrante', 'CAPRI')), { movimiento: '', signo: 0, reabre: false });
+assert.deepEqual(plain(P.efectoResolucion('Reponer', 'Faltante', 'Centro de mando')), { movimiento: '', signo: 0, reabre: false });
+assert.deepEqual(plain(P.efectoResolucion('Devolver al proveedor', 'Faltante', 'Centro de mando')), { movimiento: 'Faltante aceptado', signo: 1, reabre: false });
 // Avance con devoluciones: Reponer regresa a por recibir; sin reponer = faltante aceptado (el renglón queda completo)
 const ren = [{ descripcion: 'Cable', unidad: 'M', cantidad: 80 }, { descripcion: 'Tubo', unidad: 'PZA', cantidad: 12 }];
 const mv = (renglon, cantidad, tipo) => ({ renglon, cantidad, tipo: tipo || 'Entrada por compra', estado: 'Vigente' });
@@ -113,6 +119,8 @@ let av = plain(P.avanceRecepcion(ren, [mv(1, 80), mv(2, 12), mv(1, -10, 'Devoluc
 assert.deepEqual([av.completo, av.lineas[0].recibido, av.lineas[0].pendiente, av.lineas[0].faltante], [false, 70, 10, undefined]);
 av = plain(P.avanceRecepcion(ren, [mv(1, 80), mv(2, 12), mv(1, -10, 'Devolución sin reponer')], []));
 assert.deepEqual([av.completo, av.lineas[0].recibido, av.lineas[0].pendiente, av.lineas[0].faltante], [true, 70, 0, 10]);
+av = plain(P.avanceRecepcion(ren, [mv(1, 70), mv(2, 12), mv(1, 10, 'Faltante aceptado')], []));
+assert.deepEqual([av.completo, av.lineas[0].recibido, av.lineas[0].faltante], [true, 70, 10], 'faltante aceptado: no toca lo recibido');
 assert.equal(P.cuentaEnRecepcion('Recogido en tienda'), false, '"Lo recogí" no cuenta como recepción');
 assert.equal(P.dentroDeVentanaDev('2026-10-01', '2026-10-31'), true);
 assert.equal(P.dentroDeVentanaDev('2026-10-01', '2026-11-01'), false);
@@ -430,8 +438,7 @@ assert(/Pagada; queda Recibida \(sin cerrar\) hasta que compras resuelva la devo
 falla('pedro', 'cancelarRecepcion', [rr.folio, 'Se registró mal'], /tiene la devolución DEV-\d{4}-0008 \(abierta\)/);
 rs = ok('pedro', 'resolverDevolucion', DEV('0008'), { resolucion: 'Cancelar renglón', nota: 'El sobrante se queda en el sitio' });
 assert.deepEqual([rs.estado, rs.vista.orden.estado], ['Cerrada', 'Recibida']);
-const ultima = movsDe(o2.oc).slice(-1)[0];
-assert.deepEqual([ultima[3], ultima[12]], ['Devolución sin reponer', -1]);
+assert(!movsDe(o2.oc).some(r => /Devolución|Faltante/.test(r[3])), 'un sobrante nunca se contó (no se recibe más de lo pedido): no se descuenta');
 props.ROL_OPERACIONES = '';
 
 // ================= Centro de mando: fotos y problemas del sitio =================
@@ -553,6 +560,55 @@ como(null); P.traerRecepcionesPortal();
 assert.equal(devs().length, nDevs + 1, 'una sola DEV por problema');
 assert.deepEqual(devs().slice(-1).map(r => [r[2], r[8], r[12], r[13], r[10]].join('|')), [c2.req + '|Faltante|Centro de mando|alan|']);
 assert.equal(ok('pedro', 'getRequisicion', c2.req).requisicion.estado, 'Cerrada', 'una cerrada sigue cerrada; la DEV la resuelve compras');
+// Faltante reportado en el sitio (allá no se contó): "Devolver al proveedor" solo acepta el faltante y la requisición se completa
+const c4 = siempre(P1, true, 'Querétaro');
+CM.fotos['F-Z1'] = JPEG_CM; CM.fotos['F-Z2'] = JPEG_CM;
+CM.recepciones = [{ oc_folio: c4.oc, req_folio: c4.req, sitio: 'QRO', completa: false, recibio: 'jesusr', cuando: new Date().toISOString(), renglones: [
+  { n: 1, pedido: 80, recibido: 70, foto: { id: 'F-Z1', archivada: false, url: '' }, problema: { tipo: 'Faltante', comentario: 'Faltaron 10 m', cantidad: 10, foto: null } },
+  { n: 2, pedido: 12, recibido: 12, foto: { id: 'F-Z2', archivada: false, url: '' }, problema: null }] }];
+como(null);
+tr = plain(P.traerRecepcionesPortal());
+assert.deepEqual([tr.ok, tr.parciales, tr.devoluciones.length, tr.archivadas], [true, [c4.req], 1, 2]);
+const d4f = tr.devoluciones[0];
+assert.deepEqual(devs().find(r => r[0] === d4f).slice(7, 9), [10, 'Faltante'], 'la cantidad del faltante no se recorta a lo recibido');
+CM.eventos = {};
+rs = ok('pedro', 'resolverDevolucion', d4f, { resolucion: 'Devolver al proveedor', nota: 'Nota de crédito NC-9' });
+assert.deepEqual(movsDe(c4.oc).slice(-1).map(r => r[3] + ':' + r[12]), ['Faltante aceptado:10'], 'no descuenta lo recibido; ya no se espera');
+assert.deepEqual([rs.estado, rs.vista.requisicion.estado, rs.vista.orden.estado, rs.vista.avance[0].faltante, rs.vista.avance[0].recibido],
+  ['Cerrada', 'Cerrada', 'Recibida', 10, 70], 'lo último que faltaba ya no se espera: se cierra');
+assert(/Recepción completa: ya no se espera lo que faltaba/.test(rs.vista.eventos.slice(-1)[0].nota));
+assert.deepEqual(Object.values(CM.eventos).filter(e => e.tipo === 'oc.devolucion').map(e => e.devolucion.tipo + ':' + e.devolucion.resolucion),
+  ['Faltante:Devolver al proveedor']);
+// Orden cancelada con fotos sin archivar: se archivan igual (si no, el centro de mando las vuelve a ofrecer siempre)
+const c5 = siempre(P1, false, 'Querétaro');
+CM.recepciones = [];
+ok('pedro', 'cancelarOrdenCompra', c5.oc, 'El proveedor no surtió');
+CM.fotos['F-H1'] = JPEG_CM;
+CM.recepciones = [{ oc_folio: c5.oc, req_folio: c5.req, sitio: 'QRO', completa: false, recibio: 'jesusr', cuando: new Date().toISOString(), renglones: [
+  { n: 1, pedido: 80, recibido: 5, foto: { id: 'F-H1', archivada: false, url: '' }, problema: { tipo: 'Dañado', comentario: 'Golpeado', cantidad: 1, foto: null } }] }];
+const nDevs2 = devs().length;
+como(null);
+tr = plain(P.traerRecepcionesPortal());
+assert.deepEqual([tr.ok, tr.archivadas, !!CM.archivadas['F-H1'], devs().length], [true, 1, true, nDevs2], 'se archiva; sin DEV de una orden cancelada');
+assert(tr.ignoradas.some(x => x === c5.oc + ' (cancelada)'));
+// Un "Reponer" cuyo aviso no ha llegado al centro de mando: lo que mande antes de recibirlo no se copia en ese renglón
+const c6 = siempre(P1, true, 'Querétaro');
+CM.recepciones = [{ oc_folio: c6.oc, req_folio: c6.req, sitio: 'QRO', completa: true, recibio: 'jesusr', cuando: new Date(Date.now() - 60000).toISOString(), renglones: [
+  { n: 1, pedido: 80, recibido: 80, foto: null }, { n: 2, pedido: 12, recibido: 12, foto: null }] }];
+como(null); P.traerRecepcionesPortal();
+assert.equal(ok('pedro', 'getRequisicion', c6.req).requisicion.estado, 'Cerrada');
+const d6 = ok('pedro', 'reportarProblema', c6.req, { renglon: 1, cantidad: 10, tipo: 'Dañado', comentario: 'Rollo aplastado', foto: F, idSolicitud: id('d') }).folio;
+CM.modoEvento = '500';
+rs = ok('pedro', 'resolverDevolucion', d6, { resolucion: 'Reponer' });
+assert.deepEqual([rs.vista.requisicion.estado, rs.avisoPortal], ['Pagada', 'Guardado. El centro de mando se actualizará en unos minutos.']);
+CM.modoEvento = 'ok';
+CM.recepciones = [{ oc_folio: c6.oc, req_folio: c6.req, sitio: 'QRO', completa: true, recibio: 'jesusr', cuando: new Date(Date.now() + 600000).toISOString(), renglones: [
+  { n: 1, pedido: 80, recibido: 80, foto: null }, { n: 2, pedido: 12, recibido: 12, foto: null }] }];
+como(null);
+tr = plain(P.traerRecepcionesPortal());
+assert.deepEqual([tr.cerradas, movsDe(c6.oc).filter(r => r[3] === 'Entrada por compra').length, ok('pedro', 'getRequisicion', c6.req).requisicion.estado],
+  [[], 2, 'Pagada'], 'su "recibido" todavía no baja: no es la reposición');
+
 // Proyecto sin ligar (con el enlace encendido): resolver no avisa al centro de mando
 const s4 = siempre(P2, true);
 ok('obrero', 'cerrarRequisicion', s4.req, '', FOTOS);

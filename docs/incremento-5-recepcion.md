@@ -31,6 +31,8 @@ Tareas frecuentes, Historial, Pendientes).
   - `Devolución` (folio = el DEV, cantidad **negativa**): "Reponer"; el renglón vuelve a "por recibir".
   - `Devolución sin reponer` (folio DEV, cantidad negativa): "Devolver al proveedor" o "Cancelar renglón"; además baja lo que se
     espera del renglón (faltante aceptado: `avanceRecepcion` lo devuelve como `faltante` y el renglón queda completo).
+  - `Faltante aceptado` (folio DEV, cantidad **positiva**): un faltante reportado en el centro de mando que compras ya no espera
+    ("Devolver al proveedor" o "Cancelar renglón"): solo baja lo que se espera; lo recibido no cambia (allá nunca se contó).
   - `Recogido en tienda` (folio REC): la foto de cada renglón de "Lo recogí". No cuenta como recepción.
   - `Entrada por compra` (como siempre). **"Recibí el material" y el cierre de compras ahora también dejan entradas** (folio REC)
     de lo pendiente de cada renglón: así el flujo de siempre tiene avance por renglón y se puede reportar un problema después.
@@ -61,10 +63,10 @@ las columnas.
 `avanceDeReq_`, `validarFotosYProblemas_`, `crearDevolucionesDeRecepcion_`, `recibirTodoConFotos_`, `validarCierreConFotos_`,
 `fotosRecogido_`, `devDesdeFila_`, `momentoTexto_`, `devolucionesDelLibro_` (memo por petición en `MEMO_.devs`),
 `devolucionAbiertaDe_`, `ocupadoEnDevoluciones_`, `exigirSinDevolucionAbierta_`, `exigirSinDevoluciones_`, `fechaRecepcionReq_`,
-`motivoSinReporte_`, `renglonesReportables_`, `crearDevolucion_`, `devolucionParaVista_`, `cerrarRetenida_`,
+`motivoSinReporte_`, `renglonesReportables_`, `crearDevolucion_`, `devolucionParaVista_`, `cerrarRetenida_`, `completarTrasDevolucion_`,
 `recepcionParaSolicitante_`, `recepcionParaCompras_`, `fotosDeMovimientos_`, `accesoFotos_`, `devolucionesParaPendientes_`;
 centro de mando: `fotosYProblemasPortal_`, `crearDevolucionPortal_`, `archivarFotosPortal_`, `descargarFotoPortal_`,
-`anotarFotoPortal_`, `recepcionAntesDeReponer_`.
+`anotarFotoPortal_`, `recepcionAntesDeReponer_`, `avisoPendiente_`.
 
 **Lógica pura** (Node): `cuentaEnRecepcion`, `validarFoto`, `nombreArchivoFoto`, `normalizarProblema`, `normalizarResolucion`,
 `efectoResolucion`, `textoResolucionDev`, `textoRetenida`, `dentroDeVentanaDev`, `fotoPortal`, `claveProblemaPortal`; y, ya
@@ -91,7 +93,8 @@ parámetro), `cerrarRequisicionCompras` (bloqueo + entradas de lo pendiente), `r
 | `cerrarRetenida` | Recibida | Cerrada | al resolver la última devolución abierta de una Recibida con la orden pagada y todo recibido (la orden queda Recibida) |
 | `devolucionAutorizada` / `devolucionPagada` / `devolucionEnCamino` | Recibida, Cerrada | Autorizada / Pagada / En camino | "Reponer": el renglón vuelve a por recibir. **En camino** si la orden ya había ido en camino (`en_camino_en`), si no **Pagada** si la orden está pagada (una Recibida regresa a Pagada), si no **Autorizada**. Se borran la fecha y quién recibió de la orden |
 
-Efecto de cada resolución:
+Efecto de cada resolución (`efectoResolucion(resolucion, tipo, origen)`, la misma regla que el centro de mando: lo que nunca se
+contó como recibido no se descuenta):
 
 | Resolución | Movimiento | Renglón | Requisición |
 |---|---|---|---|
@@ -99,6 +102,12 @@ Efecto de cada resolución:
 | Devolver al proveedor (nota obligatoria; guía opcional) | `Devolución sin reponer` −cantidad | cerrado con faltante aceptado | no cambia (una retenida se cierra si ya no hay otra abierta) |
 | Cancelar renglón (nota obligatoria) | igual que devolver | igual | igual |
 | Conservar | ninguno | igual | no cambia (una retenida se cierra) |
+| **Sobrante** (cualquier resolución) | ninguno (no se recibe más de lo pedido: nunca se contó) | igual | igual que Conservar |
+| **Faltante del centro de mando**: Reponer | ninguno (allá se recibió lo que llegó: el renglón ya está por recibir) | sigue por recibir | no cambia |
+| **Faltante del centro de mando**: Devolver / Cancelar | `Faltante aceptado` +cantidad (hasta lo pendiente) | cerrado con faltante | si con eso ya no se espera nada, se completa como al recibir (`completarTrasDevolucion_`: pagada → Cerrada y la orden Recibida; sin pagar → Recibida) |
+
+Un **Faltante reportado en CAPRI** es "se registró como recibido pero no llegó" (p. ej. "Recibí el material" registra todo lo
+pendiente): ese sí se descuenta, como un dañado.
 
 Cierres bloqueados con una devolución Abierta: "Recibí el material" (queda Recibida), `cerrarRequisicionCompras` (error),
 `registrarRecepcion` completa y pagada (queda Recibida), el pago de una Recibida (sigue Recibida), el centro de mando
@@ -112,9 +121,13 @@ abierta o una resuelta con movimiento. Con la requisición retenida, compras no 
   centro de mando la vuelve a mandar cuando cambia su foto): no se copia ni cuenta su `completa`; (c) cada movimiento nuevo con
   foto no archivada lleva `foto_id = centro:<id>`; (d) `fotosYProblemasPortal_` anota en `res.fotos` cada foto no archivada
   (renglón y problema) y crea la DEV de cada problema una sola vez (`origen_clave` = OC:renglón:f:<id de la foto> o, sin foto,
-  OC:renglón:c:<hash de tipo|cantidad|comentario>), con `origen` Centro de mando y `reporto_email` = `recibio`. También para una
-  requisición ya **Cerrada** (fotos por archivar y problemas reportados después). (e) Completa y pagada con una devolución
-  abierta → Recibida (retenida).
+  OC:renglón:c:<hash de tipo|cantidad|comentario>), con `origen` Centro de mando y `reporto_email` = `recibio` (la cantidad de un
+  faltante o sobrante no se recorta a lo recibido). También para una requisición ya **Cerrada** (fotos por archivar y problemas
+  reportados después) y, solo las fotos, para una orden **cancelada o anulada** (el centro de mando ofrece una foto sin archivar
+  en cada consulta: si no se archivara, la alerta de "material en una orden cancelada" se repetiría cada 15 minutos). (e)
+  Completa y pagada con una devolución abierta → Recibida (retenida). (f) Mientras el `oc.devolucion` de esa orden siga
+  **Pendiente** (el centro de mando no lo ha recibido y su `recibido` todavía no baja), nada nuevo se copia en los renglones
+  repuestos.
 - `archivarFotosPortal_` (fuera del candado, hasta 40 por corrida): `GET /api/integracion/cotizador/foto?id=` firmado (cuerpo
   vacío) → Drive (`Recepciones`, privada) → anota `foto_id`/`foto_url` en el movimiento o la devolución con la marca (si no hay,
   la última entrada vigente sin foto de ese renglón; si tampoco, queda en la Bitacora "Foto del centro de mando sin renglón") →
@@ -168,7 +181,7 @@ Sin montos, proveedor ni folio de orden (reglas de B). Fuera de doPost (activado
    tipo · cantidad de descripción"); sí en la DEV (lo ven quien pidió, quien recibe y compras) y en la Bitacora de compras.
 7. Una devolución del centro de mando se crea aunque la cantidad reportada pase de lo recibido (se recorta a lo recibido) o sea
    de una requisición cerrada hace más de 30 días: lo reportó el sitio.
-8. Las fotos del centro de mando de órdenes canceladas o anuladas no se archivan (la recepción se ignora como hasta hoy).
+8. Las fotos del centro de mando de órdenes canceladas o anuladas se archivan (sin DEV); la recepción se ignora como hasta hoy.
 9. Las fotos se guardan dentro del candado (como la cotización y el comprobante de siempre: Drive, no el centro de mando).
 
 ## 9. Desviaciones del contrato
@@ -199,9 +212,11 @@ Sin montos, proveedor ni folio de orden (reglas de B). Fuera de doPost (activado
   `tests/proveedores.test.js` (de F): `cerrarRequisicion(r3, 'Llegó completo', FOTOS)` (foto obligatoria) y el `falla` de
   `cancelarOrdenCompra` acepta también `/ya tiene material recibido/` ("Recibí el material" ahora deja entradas y esa revisión
   va primero). `tests/recepcion.test.js` ya manda `formaPago` y salta el bloqueo de documentos (`P.exigirDocumentosParaPagar_`).
-- **Centro de mando (módulo I)**: este lado supone que `recibido` de cada renglón es acumulado y que, tras `oc.devolucion`
-  "Reponer", el sitio baja `recibido` y reabre el renglón (o que su recepción vieja conserva su `cuando`); con cualquiera de las
-  dos, CAPRI no duplica (regla de `cuando` vs. la última reposición). Confirmar con `backend/compras.py`.
+- **Centro de mando (módulo I)**: revisado contra `backend/compras.py` de la rama `fotos-devoluciones` (`3be3a1d`): `recibido` =
+  acumulado y neto de devoluciones; tras `oc.devolucion` "Reponer" baja `recibido` y borra `recibido_en` del renglón; un
+  Faltante o Sobrante no mueve existencias allá (por eso aquí tampoco se descuentan, ver §4); una foto sin archivar se vuelve a
+  ofrecer en cada consulta; `oc.devolucion` lee `devolucion.{folio, renglon, cantidad, tipo, resolucion, nota}`. Coincide con
+  este lado.
 
 ## 11. Pruebas
 
@@ -213,7 +228,8 @@ no); problema al recibir → Recibida retenida → se cierra al resolver; compra
 recogí" con fotos, recepción con foto y problema, pagar una retenida, cancelar recepción bloqueada, Cancelar renglón; centro de
 mando: fotos bajadas y archivadas (firmas), DEV del sitio una vez, retenida, `oc.devolucion` sin montos, recepción vieja tras
 Reponer no se duplica, reposición nueva se copia y cierra, falla de foto no avanza la última consulta y se recupera, aviso de
-archivada que falla no vuelve a bajar la foto, 404 no es error, proyecto sin ligar no avisa; sincronizar; y la interfaz con DOM
+archivada que falla no vuelve a bajar la foto, 404 no es error, faltante del sitio (no se descuenta; "Devolver" lo acepta y
+completa la requisición), fotos de una orden cancelada, "Reponer" con el aviso pendiente, proyecto sin ligar no avisa; sincronizar; y la interfaz con DOM
 simulado conectada al servidor simulado ("Recibí el material", reportar, "Lo recogí", Compras: lista, caja y resolver).
 Pruebas existentes actualizadas solo donde el comportamiento cambió a propósito (las recepciones llevan foto; la pestaña
 Devoluciones existe; centro: los movimientos de "Lo recogí"). `bash tests/todas.sh`: todas pasan.

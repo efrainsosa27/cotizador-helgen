@@ -5359,9 +5359,12 @@ function avanceRecepcion(renglones, movimientos, sinRecibir) {
   const r4 = n => Math.round(n * 10000) / 10000;
   const recibido = {}, faltante = {};
   (movimientos || []).forEach(m => {
-    if (m.estado === 'Vigente') recibido[m.renglon] = r4((recibido[m.renglon] || 0) + (Number(m.cantidad) || 0));
-    // Incremento 5 (H): devuelto sin reponer (devolver al proveedor o cancelar el renglón) = faltante aceptado: ya no se espera
-    if (m.estado === 'Vigente' && m.tipo === TIPO_DEVOLUCION_CIERRA) faltante[m.renglon] = r4((faltante[m.renglon] || 0) - (Number(m.cantidad) || 0));
+    if (m.estado !== 'Vigente') return;
+    // Incremento 5 (H): devuelto sin reponer (devolver al proveedor o cancelar el renglón) = faltante aceptado: ya no se espera.
+    // "Faltante aceptado" (cantidad positiva) solo baja lo que se espera: lo que nunca llegó no se había contado como recibido
+    if (m.tipo === TIPO_FALTANTE_ACEPTADO) { faltante[m.renglon] = r4((faltante[m.renglon] || 0) + (Number(m.cantidad) || 0)); return; }
+    recibido[m.renglon] = r4((recibido[m.renglon] || 0) + (Number(m.cantidad) || 0));
+    if (m.tipo === TIPO_DEVOLUCION_CIERRA) faltante[m.renglon] = r4((faltante[m.renglon] || 0) - (Number(m.cantidad) || 0));
   });
   const lineas = (renglones || []).map((r, i) => {
     const pedido = Number(r.cantidad) || 0, rec = recibido[i + 1] || 0, falta = faltante[i + 1] || 0;
@@ -8499,6 +8502,8 @@ function aplicarRecepcionPortal_(libro, x, det, res) {
   if (!proyectoLigado_(orden.proyectoFolio)) { res.ignoradas.push(ocFolio + ' (proyecto no ligado)'); return; }
   const huerfana = motivo => {
     res.ignoradas.push(ocFolio + ' (' + motivo + ')');
+    // H (incremento 5): sus fotos también se archivan (evidencia; si no, el centro de mando las vuelve a ofrecer siempre)
+    fotosYProblemasPortal_(libro, x, orden, { folio: orden.reqFolio || orden.folio, proyectoFolio: orden.proyectoFolio }, res, '', [], true);
     // Llegó material al sitio de una orden que ya no cuenta: nunca en silencio (compras lo ve en el estado del enlace)
     const llego = (Array.isArray(x.renglones) ? x.renglones : []).some(y => Number(y && y.recibido) > 0);
     if (!llego) return;
@@ -8530,7 +8535,7 @@ function aplicarRecepcionPortal_(libro, x, det, res) {
   const avance = avanceRecepcion(orden.renglones, movsOc, renglonesSinRecepcion(propuestaVigente_(req)));
   // H (incremento 5): una recepción registrada antes de que compras resolviera "Reponer" en ese renglón ya está contada (si el
   // centro de mando la vuelve a mandar, p. ej. porque se archivó su foto, no es material nuevo); tampoco su "completa"
-  const anterior = recepcionAntesDeReponer_(movsOc, x.cuando);
+  const anterior = recepcionAntesDeReponer_(movsOc, x.cuando, avisoPendiente_(libro, ocFolio, 'oc.devolucion'));
   const nuevos = [];
   (Array.isArray(x.renglones) ? x.renglones : []).forEach(l => {
     const linea = avance.lineas.find(a => a.renglon === Number(l && l.n));
@@ -9793,6 +9798,8 @@ const RESOLUCIONES_DEV = [RES_REPONER, RES_DEVOLVER, RES_CANCELAR, RES_CONSERVAR
 const ORIGEN_DEV_CAPRI = 'CAPRI', ORIGEN_DEV_CENTRO = 'Centro de mando';
 /** Movimientos de una devolución (cantidad negativa): Reponer → el renglón vuelve a "por recibir"; sin reponer → faltante aceptado. */
 const TIPO_DEVOLUCION = 'Devolución', TIPO_DEVOLUCION_CIERRA = 'Devolución sin reponer';
+/** Faltante que nunca se contó como recibido (problema "Faltante" del centro de mando) y compras ya no espera: cantidad positiva. */
+const TIPO_FALTANTE_ACEPTADO = 'Faltante aceptado';
 /** "Lo recogí": la foto de cada renglón que se recogió (no cuenta como recepción: se recibe al llegar al sitio). */
 const TIPO_RECOGIDO = 'Recogido en tienda';
 const DIAS_REPORTAR_DEV = 30;
@@ -10198,17 +10205,19 @@ function resolverDevolucion(folioDev, d) {
     if (dev.estado !== DEV_ABIERTA) throw new Error('La devolución ' + dev.folio + ' ya está resuelta (' + dev.resolucion + ').');
     const { hoja, req } = buscarReq_(libro, dev.reqFolio);
     const { hoja: hO, orden } = buscarOrden_(libro, dev.ocFolio);
-    const efecto = efectoResolucion(r.resolucion);
+    const efecto = efectoResolucion(r.resolucion, dev.tipo, dev.origen);
     const avance = avanceDeReq_(libro, req, orden);
     const linea = avance.lineas.find(l => l.renglon === dev.renglon);
     const t = textoCelda, ahora = ahoraTexto_();
-    if (efecto.movimiento) {
-      if (!linea || linea.recibido + 1e-9 < dev.cantidad) {
-        throw new Error('Del renglón ' + dev.renglon + ' ya no hay ' + dev.cantidad + ' recibidos (¿se canceló la recepción?): resuélvela como "Conservar" o revisa las recepciones.');
-      }
+    // Cuánto se mueve: lo devuelto (descuenta lo recibido) o, en un faltante del sitio, lo que ya no se espera (hasta lo pendiente)
+    const cantidadMov = !efecto.movimiento || !linea ? 0 : efecto.signo < 0 ? dev.cantidad : Math.min(dev.cantidad, linea.pendiente);
+    if (efecto.movimiento && efecto.signo < 0 && (!linea || linea.recibido + 1e-9 < dev.cantidad)) {
+      throw new Error('Del renglón ' + dev.renglon + ' ya no hay ' + dev.cantidad + ' recibidos (¿se canceló la recepción?): resuélvela como "Conservar" o revisa las recepciones.');
+    }
+    if (cantidadMov > 1e-9) {
       hojaCompras_(libro, 'MovimientosInventario').appendRow(conFotoMov_([dev.folio, textoFecha_(hoyIso_()), ahora, efecto.movimiento,
         t(req.sitio), req.proyectoFolio, req.folio, orden.folio, dev.renglon, t(linea.clave), t(linea.descripcion), t(linea.unidad),
-        -dev.cantidad, t(yo_()), t(nombreYo_()), t('Devolución ' + dev.folio + ' · ' + r.resolucion), '', '', 'Vigente', '', '', ''], null));
+        efecto.signo * cantidadMov, t(yo_()), t(nombreYo_()), t('Devolución ' + dev.folio + ' · ' + r.resolucion), '', '', 'Vigente', '', '', ''], null));
     }
     hojaCompras_(libro, 'Devoluciones').getRange(dev.fila, 15, 1, 6).setValues([[DEV_RESUELTA, r.resolucion, t(r.nota), t(r.guia),
       t(yo_()), "'" + ahora]]);
@@ -10234,13 +10243,33 @@ function resolverDevolucion(folioDev, d) {
       avisarPortal_('oc.devolucion', orden.folio, { devolucion: { folio: dev.folio, renglon: dev.renglon, cantidad: dev.cantidad, tipo: dev.tipo,
         resolucion: r.resolucion, nota: r.nota } });
     }
-    nuevo = cerrarRetenida_(libro, hoja, req, hO, orden) || nuevo;
+    nuevo = cerrarRetenida_(libro, hoja, req, hO, orden) || completarTrasDevolucion_(libro, hoja, req, hO, orden, dev.folio) || nuevo;
     SpreadsheetApp.flush();
     const resultado = { folio: dev.folio, estado: nuevo, vista: vistaRequisicion_(libro, req.folio),
       devoluciones: listarDevoluciones({ estado: DEV_ABIERTA }) };
     guardarIdempotencia_(cache, claveCache, resultado);
     return resultado;
   }));
+}
+
+/**
+ * La resolución aceptó el faltante de lo último que se esperaba (p. ej. un faltante del sitio que ya no se repone): sin
+ * devoluciones abiertas y con todo recibido, la requisición en curso se completa como al recibir (pagada → Cerrada y la orden
+ * Recibida; sin pagar → Recibida, espera el pago). Devuelve el estado nuevo o ''.
+ */
+function completarTrasDevolucion_(libro, hoja, req, hO, orden, folioDev) {
+  if ([REQ_AUTORIZADA, REQ_PAGADA, REQ_EN_CAMINO].indexOf(req.estado) === -1 || orden.estado === OC_CANCELADA) return '';
+  if (devolucionAbiertaDe_(libro, req.folio)) return '';
+  const avance = avanceDeReq_(libro, req, orden);
+  if (!avance.completo || !avance.algo) return '';
+  const pagada = orden.estado === OC_PAGADA, t = textoCelda;
+  const nuevo = transicionReq(req.estado, pagada ? 'recibirPagada' : 'recibir');
+  if (pagada) { hO.getRange(orden.fila, COL_ESTADO_OC, 1, 3).setValues([[OC_RECIBIDA, textoFecha_(hoyIso_()), t(yo_())]]); orden.estado = OC_RECIBIDA; }
+  else hO.getRange(orden.fila, COL_ESTADO_OC + 1, 1, 2).setValues([[textoFecha_(hoyIso_()), t(yo_())]]);
+  cambiarReq_(hoja, req, nuevo, {});
+  eventoReq_(libro, req.folio, nuevo, 'Recepción completa: ya no se espera lo que faltaba (' + folioDev + ')' + (pagada ? '.' : ' · falta el pago al proveedor.'));
+  bitacora_(libro, 'Completar recepción (devolución resuelta)', req.proyectoFolio, req.folio + ' · ' + orden.folio + ' · ' + folioDev + ' · ' + nuevo, '', HOJAS_COMPRAS);
+  return nuevo;
 }
 
 /**
@@ -10345,7 +10374,7 @@ function devolucionesParaPendientes_() {
  * Fotos por archivar y problemas de una recepción del centro de mando (dentro del candado; no llama al centro de mando):
  * cada foto no archivada se anota en res.fotos para bajarla después; cada problema crea su DEV una sola vez (origen_clave).
  */
-function fotosYProblemasPortal_(libro, x, orden, req, res, folioRec, movs) {
+function fotosYProblemasPortal_(libro, x, orden, req, res, folioRec, movs, soloFotos) {
   const recibio = String(x.recibio == null ? '' : x.recibio).trim().replace(/\s+/g, ' ').slice(0, 60) || CORREO_CENTRO_MANDO;
   res.fotos = res.fotos || [];
   // Folio REC del movimiento que ya espera esa foto ("centro:<id>"): el archivo se llama como su recepción
@@ -10362,6 +10391,10 @@ function fotosYProblemasPortal_(libro, x, orden, req, res, folioRec, movs) {
     const p = l.problema && typeof l.problema === 'object' ? l.problema : null;
     if (!p) return;
     const pf = fotoPortal(p.foto);
+    if (soloFotos) { // orden cancelada o anulada: no hay DEV que crear; la foto se guarda igual (queda en la Bitacora)
+      if (pf && !pf.archivada) res.fotos.push(Object.assign({ id: pf.id, destino: 'dev', folio: req.folio }, base));
+      return;
+    }
     const clave = claveProblemaPortal(orden.folio, n, p);
     let dev = devolucionesDelLibro_(libro).find(d => d.origenClave === clave);
     if (!dev) {
@@ -10380,8 +10413,10 @@ function crearDevolucionPortal_(libro, req, orden, n, p, pf, recibio, clave) {
   if (!linea) return '';
   const pedida = Number(p.cantidad);
   const recibido = Math.max(0, linea.recibido);
-  const cantidad = Math.round((isFinite(pedida) && pedida > 0 ? (recibido > 0 ? Math.min(pedida, recibido) : pedida) : recibido || 1) * 10000) / 10000;
   const tipo = TIPOS_DEV.find(t => textoNormal(t) === textoNormal(p.tipo)) || 'Otro';
+  // Un faltante o un sobrante del sitio no se contó como recibido: su cantidad no se recorta a lo recibido
+  const tope = tipo === 'Faltante' || tipo === 'Sobrante' ? Infinity : recibido > 0 ? recibido : Infinity;
+  const cantidad = Math.round((isFinite(pedida) && pedida > 0 ? Math.min(pedida, tope) : recibido || 1) * 10000) / 10000;
   const comentario = String(p.comentario == null ? '' : p.comentario).trim().replace(/\s+/g, ' ').slice(0, 500) ||
     'Reportado en el centro de mando (sin comentario).';
   const foto = pf ? (pf.archivada && /^https?:/.test(pf.url) ? { id: '', url: pf.url } : { id: MARCA_FOTO_CENTRO + pf.id, url: '' }) : null;
@@ -10464,24 +10499,33 @@ function anotarFotoPortal_(libro, tarea, id, url) {
  * ¿La recepción del centro de mando (cuando) es de antes de que compras resolviera "Reponer" en ese renglón? Entonces su
  * cantidad ya está contada (y su "completa" es vieja). Devuelve una función renglon → bool.
  */
-function recepcionAntesDeReponer_(movs, cuando) {
+function recepcionAntesDeReponer_(movs, cuando, sinAvisar) {
   const fecha = new Date(String(cuando || ''));
-  if (isNaN(fecha.getTime())) return () => false;
-  const recibida = Utilities.formatDate(fecha, 'America/Mexico_City', 'yyyy-MM-dd HH:mm');
+  const recibida = isNaN(fecha.getTime()) ? '' : Utilities.formatDate(fecha, 'America/Mexico_City', 'yyyy-MM-dd HH:mm');
   const reposicion = {};
   (movs || []).forEach(m => {
     if (m.tipo !== TIPO_DEVOLUCION || m.estado !== 'Vigente') return;
     const t = marcaOrdenable(m.fechaRegistro);
     if (t > (reposicion[m.renglon] || '')) reposicion[m.renglon] = t;
   });
-  return renglon => !!reposicion[renglon] && recibida <= reposicion[renglon];
+  // sinAvisar: el centro de mando todavía no recibe el oc.devolucion de esa orden (su "recibido" aún no baja): nada nuevo en
+  // los renglones repuestos hasta que lo reciba
+  return renglon => !!reposicion[renglon] && (!!sinAvisar || !recibida || recibida <= reposicion[renglon]);
+}
+
+/** ¿Hay en PortalPendientes un aviso de ese tipo de la orden que todavía no llega (Pendiente)? */
+function avisoPendiente_(libro, folioOc, tipo) {
+  if (!libro.getSheetByName('PortalPendientes')) return false;
+  const p = (String(folioOc) + ':' + tipo + ':').toUpperCase();
+  return filasDeArea_(hojaCompras_(libro, 'PortalPendientes'), HOJAS_COMPRAS, 'PortalPendientes')
+    .some(r => String(r[0] || '').toUpperCase().indexOf(p) === 0 && String(r[5] || '') === 'Pendiente');
 }
 
 // -- Recepción y devoluciones: lógica pura (sin servicios de Google; se prueba en Node) --
 
 /** ¿El movimiento cuenta en el avance de la recepción? (entradas por compra y devoluciones). */
 function cuentaEnRecepcion(tipo) {
-  return tipo === TIPO_ENTRADA_COMPRA || tipo === TIPO_DEVOLUCION || tipo === TIPO_DEVOLUCION_CIERRA;
+  return tipo === TIPO_ENTRADA_COMPRA || tipo === TIPO_DEVOLUCION || tipo === TIPO_DEVOLUCION_CIERRA || tipo === TIPO_FALTANTE_ACEPTADO;
 }
 
 /** Tipo real de una foto (imagen JPG, PNG o HEIC; máximo 10 MB). bytes con o sin signo. Devuelve {mime, ext}. */
@@ -10537,11 +10581,19 @@ function normalizarResolucion(d) {
   return { resolucion: resolucion, nota: nota, guia: guia };
 }
 
-/** Efecto de una resolución: {movimiento (tipo del movimiento negativo o ''), reabre (el renglón vuelve a por recibir)}. */
-function efectoResolucion(resolucion) {
-  if (resolucion === RES_REPONER) return { movimiento: TIPO_DEVOLUCION, reabre: true };
-  if (resolucion === RES_DEVOLVER || resolucion === RES_CANCELAR) return { movimiento: TIPO_DEVOLUCION_CIERRA, reabre: false };
-  return { movimiento: '', reabre: false };
+/**
+ * Efecto de una resolución: {movimiento (tipo del movimiento o ''), signo (−1 descuenta lo recibido; +1 solo baja lo que se
+ * espera), reabre (el renglón vuelve a por recibir)}. Lo que nunca se contó como recibido no se descuenta (igual que el centro
+ * de mando): un Sobrante (no se recibe más de lo pedido) y un Faltante reportado en el centro de mando (allá se recibió lo que
+ * llegó). En CAPRI un Faltante es "se registró como recibido pero no llegó": sí se descuenta.
+ */
+function efectoResolucion(resolucion, tipo, origen) {
+  const nada = { movimiento: '', signo: 0, reabre: false };
+  if (resolucion === RES_CONSERVAR || tipo === 'Sobrante') return nada;
+  const reponer = resolucion === RES_REPONER;
+  if (!reponer && resolucion !== RES_DEVOLVER && resolucion !== RES_CANCELAR) return nada;
+  if (tipo === 'Faltante' && origen === ORIGEN_DEV_CENTRO) return reponer ? nada : { movimiento: TIPO_FALTANTE_ACEPTADO, signo: 1, reabre: false };
+  return reponer ? { movimiento: TIPO_DEVOLUCION, signo: -1, reabre: true } : { movimiento: TIPO_DEVOLUCION_CIERRA, signo: -1, reabre: false };
 }
 
 /** Texto de cada resolución (historial y correos). */
