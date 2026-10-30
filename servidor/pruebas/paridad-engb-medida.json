@@ -1,0 +1,474 @@
+{
+  "fechaMedicion": "2026-10-29",
+  "zona": "America/Mexico_City",
+  "casos": [
+    {
+      "entrada": "123",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "numero",
+        "valor": 123
+      }
+    },
+    {
+      "entrada": "-12.5",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "numero",
+        "valor": -12.5
+      }
+    },
+    {
+      "entrada": "  42 ",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "numero",
+        "valor": 42
+      }
+    },
+    {
+      "entrada": "1,234.56",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "numero",
+        "valor": 1234.56
+      }
+    },
+    {
+      "entrada": "007",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "numero",
+        "valor": 7
+      }
+    },
+    {
+      "entrada": "012345678901234567",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "012345678901234567"
+      }
+    },
+    {
+      "entrada": "'012345678901234567",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "012345678901234567"
+      }
+    },
+    {
+      "entrada": "15%",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "numero",
+        "valor": 0.15
+      }
+    },
+    {
+      "entrada": "12.5%",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "numero",
+        "valor": 0.125
+      }
+    },
+    {
+      "entrada": "$1,160.00",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "$1,160.00"
+      }
+    },
+    {
+      "entrada": "1e3",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "numero",
+        "valor": 1000
+      }
+    },
+    {
+      "entrada": "+5",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "+5"
+      }
+    },
+    {
+      "entrada": "TRUE",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "booleano",
+        "valor": true
+      }
+    },
+    {
+      "entrada": "false",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "booleano",
+        "valor": false
+      }
+    },
+    {
+      "entrada": "VERDADERO",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "VERDADERO"
+      }
+    },
+    {
+      "entrada": "2026-10-20",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "fecha",
+        "valor": "2026-10-20 00:00:00"
+      }
+    },
+    {
+      "entrada": "2026-10-20 17:30",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "fecha",
+        "valor": "2026-10-20 17:30:00"
+      }
+    },
+    {
+      "entrada": "2026-10-20 17:30:05",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "fecha",
+        "valor": "2026-10-20 17:30:05"
+      }
+    },
+    {
+      "entrada": "2026/10/20",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "fecha",
+        "valor": "2026-10-20 00:00:00"
+      }
+    },
+    {
+      "entrada": "20/10/2026",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "fecha",
+        "valor": "2026-10-20 00:00:00"
+      }
+    },
+    {
+      "entrada": "20/10/26",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "fecha",
+        "valor": "2026-10-20 00:00:00"
+      }
+    },
+    {
+      "entrada": "3/4",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "fecha",
+        "valor": "2026-04-03 00:00:00"
+      }
+    },
+    {
+      "entrada": "17:30",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "fecha",
+        "valor": "1899-12-30 17:30:00"
+      }
+    },
+    {
+      "entrada": "5:30 pm",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "fecha",
+        "valor": "1899-12-30 17:30:00"
+      }
+    },
+    {
+      "entrada": "2026-02-30",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "2026-02-30"
+      }
+    },
+    {
+      "entrada": "=A1*2",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "formula",
+        "valor": "=A1*2"
+      }
+    },
+    {
+      "entrada": "+52 442 644 5391",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "+52 442 644 5391"
+      }
+    },
+    {
+      "entrada": "'+52 442 644 5391",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "+52 442 644 5391"
+      }
+    },
+    {
+      "entrada": "-abc",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "-abc"
+      }
+    },
+    {
+      "entrada": "-",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "-"
+      }
+    },
+    {
+      "entrada": "@usuario",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "@usuario"
+      }
+    },
+    {
+      "entrada": "HLG-2026-0001",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "HLG-2026-0001"
+      }
+    },
+    {
+      "entrada": "442 644 5391",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "442 644 5391"
+      }
+    },
+    {
+      "entrada": "SPEI 123",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "SPEI 123"
+      }
+    },
+    {
+      "entrada": "",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "vacio",
+        "valor": ""
+      }
+    },
+    {
+      "entrada": "0012",
+      "celda": "texto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "0012"
+      }
+    },
+    {
+      "entrada": "123",
+      "celda": "texto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "123"
+      }
+    },
+    {
+      "entrada": "2026-10-20",
+      "celda": "texto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "2026-10-20"
+      }
+    },
+    {
+      "entrada": "2026-10-20 17:30:00",
+      "celda": "texto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "2026-10-20 17:30:00"
+      }
+    },
+    {
+      "entrada": "20/10/2026",
+      "celda": "texto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "20/10/2026"
+      }
+    },
+    {
+      "entrada": "+52 442 644 5391",
+      "celda": "texto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "+52 442 644 5391"
+      }
+    },
+    {
+      "entrada": "TRUE",
+      "celda": "texto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "TRUE"
+      }
+    },
+    {
+      "entrada": "=A1",
+      "celda": "texto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "formula",
+        "valor": "=A1"
+      }
+    },
+    {
+      "entrada": "'abc",
+      "celda": "texto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "texto",
+        "valor": "abc"
+      }
+    },
+    {
+      "entrada": "2026-10-20 17:30",
+      "celda": "fecha",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "fecha",
+        "valor": "2026-10-20 17:30:00"
+      }
+    },
+    {
+      "entrada": "123",
+      "celda": "fecha",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "numero",
+        "valor": 123
+      }
+    },
+    {
+      "entrada": "03/04/2026",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "fecha",
+        "valor": "2026-04-03 00:00:00"
+      }
+    },
+    {
+      "entrada": "04/03/2026",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "fecha",
+        "valor": "2026-03-04 00:00:00"
+      }
+    },
+    {
+      "entrada": "2026-10-20 5:30 pm",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "fecha",
+        "valor": "2026-10-20 17:30:00"
+      }
+    },
+    {
+      "entrada": "20/10/2026 5:30 pm",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "fecha",
+        "valor": "2026-10-20 17:30:00"
+      }
+    },
+    {
+      "entrada": "2026-10-20 5:30 am",
+      "celda": "auto",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "fecha",
+        "valor": "2026-10-20 05:30:00"
+      }
+    },
+    {
+      "entrada": "15%",
+      "celda": "fecha",
+      "locale": "en_GB",
+      "espera": {
+        "tipo": "numero",
+        "valor": 0.15
+      }
+    }
+  ]
+}

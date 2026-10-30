@@ -56,6 +56,25 @@ caso('tabla de paridad (' + CASOS.length + ' casos): números, fechas, horas, ap
   console.log('   fuentes: ' + Object.keys(fuentes).map(k => k + ' ' + fuentes[k]).join(' · '));
 });
 
+caso('en_GB: 52 casos medidos con Apps Script real el 29/10/2026 (tipo y valor)', () => {
+  const medidos = require('./paridad-engb-medida.json').casos;
+  for (const c of medidos) {
+    const r = resultado(c);
+    assert.deepEqual({ tipo: r.tipo, valor: r.valor }, c.espera, JSON.stringify(c));
+  }
+});
+
+caso('en_GB: límites de las horas de 12 horas; texto plano y es_MX conservan el texto', () => {
+  for (const [entrada, hora] of [['12:00 am', '00:00:00'], ['12:00 pm', '12:00:00'], ['1:02:03 PM', '13:02:03']]) {
+    const r = resultado({ entrada, locale: 'en_GB' });
+    assert.equal(r.tipo, 'fecha'); assert.equal(r.valor, '1899-12-30 ' + hora);
+  }
+  for (const entrada of ['0:30 pm', '13:30 pm', '5:60 pm', '5:30:60 pm'])
+    assert.equal(resultado({ entrada, locale: 'en_GB' }).tipo, 'texto');
+  assert.equal(resultado({ entrada: '5:30 pm', locale: 'es_MX' }).tipo, 'texto');
+  assert.equal(resultado({ entrada: '5:30 pm', locale: 'en_GB', celda: 'texto' }).tipo, 'texto');
+});
+
 caso('lo que no es texto pasa tal cual (número, booleano, Date); un número en una celda de fecha se lee como fecha', () => {
   const d = new Date(2026, 9, 29, 15, 30);
   assert.deepEqual(M.interpretar(1160), { valor: 1160 });

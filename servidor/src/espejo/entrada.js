@@ -74,6 +74,8 @@ function numero(t, L) {
   let m = L.reNumero.exec(t);
   if (m) {
     const [, s1, pesos, s2, mantisa, porciento] = m;
+    // Medido con Apps Script en en_GB: el dólar escrito como texto no se convierte en moneda.
+    if (pesos && /^en[_-]GB$/i.test(L.locale)) return null;
     if ((s1 && s2) || (pesos && porciento) || (s2 && !pesos)) return null;
     if (s1 === '+' || s2 === '+') return null; // "+5" queda texto (medido)
     const signo = (s1 || s2) === '-' ? -1 : 1;
@@ -104,7 +106,7 @@ function numero(t, L) {
 // ---- Fechas y horas ----
 const MS_DIA = 86400000, EPOCA = 25569;
 const diasDelMes = (a, m) => new Date(Date.UTC(a, m, 0)).getUTCDate();
-// Sin am/pm: "5:30 pm" queda texto (medido con Apps Script real)
+// En es_MX, "5:30 pm" queda texto (medido). En en_GB se normaliza antes de aplicar estas expresiones.
 const RE_HORA = '(\\d{1,2}):(\\d{2})(?::(\\d{2}))?';
 const RE_ISO = new RegExp('^(\\d{4})([-/])(\\d{1,2})\\2(\\d{1,2})(?:\\s+' + RE_HORA + ')?$');
 const RE_NUMERICA = new RegExp('^(\\d{1,2})([/-])(\\d{1,2})(?:\\2(\\d{4}|\\d{2}))?(?:\\s+' + RE_HORA + ')?$');
@@ -125,6 +127,16 @@ function fechaDePared(a, m, d, seg, desdeSerial, zona) {
 }
 
 function fecha(t, L, ctx) {
+  // Medido en en_GB: acepta am/pm en horas solas y con fecha. México conserva el comportamiento medido anterior.
+  if (/^en[_-]GB$/i.test(L.locale)) {
+    const doce = /(^|\s)(\d{1,2}):(\d{2})(?::(\d{2}))?\s+(am|pm)$/i.exec(t);
+    if (doce) {
+      const h = Number(doce[2]);
+      if (h < 1 || h > 12) return null;
+      const h24 = h % 12 + (/pm/i.test(doce[5]) ? 12 : 0);
+      t = t.slice(0, doce.index) + doce[1] + h24 + ':' + doce[3] + (doce[4] === undefined ? '' : ':' + doce[4]);
+    }
+  }
   let m = RE_ISO.exec(t);
   let a, mes, dia, conHora = false, seg = 0, ph = '', base;
   if (m) {
