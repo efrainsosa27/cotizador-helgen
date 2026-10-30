@@ -1147,6 +1147,17 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
   rechaza el cambio, decirlo y anotarlo en §9 como pendiente.
 
 ## 9. Pendientes e ideas
+- **Servidor propio, etapa 1 (`capri.helgen.online`, decisión de Leo del 29/10/2026; DNS listo): construido, SIN instalar.** Mismo
+  `Code.js` en Node dentro de Docker (UID 10001, `127.0.0.1:8090`) detrás del nginx de helgensrvr con certificado propio
+  (`certbot certonly --webroot`), como facilities@ con dos tokens OAuth (Sheets+Drive y solo `gmail.send`) de un proyecto de Cloud
+  **Interno** `capri-servidor`; Sheets y Drive siguen siendo la base de datos; la interfaz sigue en Cloudflare. Carpeta `servidor/`,
+  diseño `docs/servidor-etapa-1.md`, pasos de Google `docs/servidor-google-paso-a-paso.md`, comandos en orden
+  `docs/servidor-comandos.md` (A0 subir ramas → A certificado y imagen → B/C Google → D propiedades → E sombra → F cambio → G
+  regreso). Cambio y regreso con la Script Property `API_MUDADA` (la costura va en `Code.js` desde `incremento-7`; sin la
+  propiedad no hace nada). **`servidor-etapa-1` = `incremento-7`**: el servidor y Apps Script deben correr el mismo `Code.js`
+  (la sombra se corre después de publicar 5–7). Falta comprobar en el servidor real: construcción de la imagen y PDF con
+  Chromium, adaptadores de Google, certbot/puerto 80, `extra_hosts` hacia drogheda, 14 de 49 casos de la tabla de escritura (E3)
+  y el tipo MIME de `unzip`. `tests/todas.sh` corre también `servidor/pruebas` si existe `servidor/node_modules`.
 - **CAPRI — incremento 7: construido e integrado el 29/10/2026 (rama `incremento-7`, sobre `incremento-6-final`), SIN PUBLICAR.**
   Se publica después de (o junto con) el 5 y el 6: respaldar los libros de compras y cobranza; `clasp push`; **como facilities@,
   `prepararCapri()`** (crea el área de Nómina y las pestañas nuevas) **antes** de la nueva versión del deployment; `wrangler deploy` el

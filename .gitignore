@@ -1,5 +1,5 @@
 # Dependencias de Node (se reinstalan con `npm install`)
-node_modules/
+node_modules
 
 # Archivos temporales de Wrangler (Cloudflare)
 .wrangler/
@@ -23,3 +23,9 @@ service-account*.json
 # Registros
 *.log
 npm-debug.log*
+
+# Servidor de CAPRI (etapa 1): credenciales de Google, propiedades (con secretos) y datos locales; nunca en git
+servidor/datos/
+servidor/capri.json
+google-*.json
+propiedades*.json

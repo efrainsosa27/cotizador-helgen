@@ -198,7 +198,8 @@ module.exports = function crearArnes(dir, opciones) {
         : { bytes: a, mime: b, name: c, getBytes: () => a, getName: () => c, getContentType: () => b },
       base64Encode: b => Buffer.from(typeof b === 'string' ? b : b.map(x => (x + 256) % 256)).toString('base64'),
       base64Decode: s => firmados(Buffer.from(s, 'base64')),
-      base64EncodeWebSafe: b => Buffer.from(typeof b === 'string' ? b : b.map(x => (x + 256) % 256)).toString('base64url'),
+      // Como Apps Script: alfabeto web (- y _) CON relleno '=' (base64url de Node lo quita: las huellas salían distintas de las reales)
+      base64EncodeWebSafe: b => Buffer.from(typeof b === 'string' ? b : b.map(x => (x + 256) % 256)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
       base64DecodeWebSafe: s => firmados(Buffer.from(s, 'base64url')),
       DigestAlgorithm: { SHA_256: 'sha256', MD5: 'md5' }, Charset: { UTF_8: 'utf8' },
       computeDigest: (a, s) => firmados(crypto.createHash(a || 'sha256').update(typeof s === 'string' ? s : Buffer.from(s)).digest()),

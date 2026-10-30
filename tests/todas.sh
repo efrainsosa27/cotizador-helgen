@@ -19,4 +19,6 @@ PY
 if node --check "$tmp/ui.js" 2>"$tmp/err"; then echo "✔ sintaxis de la interfaz"; else echo "✘ sintaxis de la interfaz"; head -8 "$tmp/err"; fallas=1; fi
 node --check Code.js || fallas=1
 rm -rf "$tmp"
+# Servidor propio (etapa 1): solo si ya se instalaron sus dependencias (cd servidor && npm ci)
+if [ -d servidor/node_modules ]; then node servidor/pruebas/todas.js || fallas=1; fi
 exit $fallas

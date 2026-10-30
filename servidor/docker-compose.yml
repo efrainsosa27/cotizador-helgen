@@ -1,0 +1,55 @@
+# CAPRI — etapa 1 en Docker, detrás del nginx del servidor (docs/servidor-etapa-1.md §10; comandos en
+# docs/servidor-comandos.md). Se usa desde esta carpeta (servidor/):
+#   docker compose build && docker compose up -d
+#   docker compose exec capri node herramientas/admin.js salud
+# CAPRI_VERSION (en servidor/.env, lo escribe despliegue/actualizar.sh) = la etiqueta de la imagen que corre; las
+# anteriores se quedan para regresar con `despliegue/actualizar.sh --regresar`.
+#
+# Fuera de la imagen (nunca en el repositorio ni en la imagen):
+#   /srv/capri/config  → /etc/capri (solo lectura): capri.json y los dos tokens de Google; carpeta 700, archivos 600,
+#                        dueño capri (UID 10001, el mismo de la imagen)
+#   /srv/capri/datos   → /var/lib/capri: propiedades.json (Script Properties, con secretos), cache.json, estado.json
+name: capri
+
+services:
+  capri:
+    image: capri:${CAPRI_VERSION:-local}
+    build:
+      context: ..
+      dockerfile: servidor/Dockerfile
+      target: app
+    container_name: capri
+    restart: unless-stopped
+    # tini como PID 1: recoge los procesos de Chromium y pasa SIGTERM al servicio (apagado en orden, §5)
+    init: true
+    stop_grace_period: 45s
+    environment:
+      # Dentro del contenedor escucha en todas sus interfaces; hacia fuera solo 127.0.0.1 del servidor (ports)
+      CAPRI_HOST: 0.0.0.0
+      CAPRI_PUERTO: "8090"
+      TZ: America/Mexico_City
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - ${CAPRI_CONFIG_DIR:-/srv/capri/config}:/etc/capri:ro
+      - ${CAPRI_DATOS_DIR:-/srv/capri/datos}:/var/lib/capri
+    # Solo escribe en /var/lib/capri y en /tmp (Chromium); el código y node_modules son de solo lectura
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # Presupuesto (docs §11): ~350 MB normal, ~800 MB con PDF y fotos grandes a la vez
+    mem_limit: 1200m
+    memswap_limit: 1200m
+    pids_limit: 512
+    # El centro de mando está en esta misma máquina: se le habla por la puerta del servidor (nginx con su certificado),
+    # sin depender de que el ruteador regrese el tráfico a su propia IP pública
+    extra_hosts:
+      - "drogheda.helgen.online:host-gateway"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

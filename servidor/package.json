@@ -1,0 +1,25 @@
+{
+  "name": "capri-servidor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CAPRI etapa 1: corre Code.js (Apps Script) sin cambios en un servicio de Node, contra los mismos Sheets y Drive.",
+  "main": "src/index.js",
+  "engines": { "node": ">=20.11" },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node pruebas/todas.js",
+    "medir": "node pruebas/medir.js",
+    "autorizar": "node herramientas/autorizar.js",
+    "sombra": "node herramientas/sombra.js"
+  },
+  "dependencies": {
+    "@googleapis/drive": "27.0.0",
+    "@googleapis/gmail": "22.0.2",
+    "@googleapis/sheets": "18.1.1",
+    "google-auth-library": "11.3.2",
+    "jose": "6.2.14"
+  },
+  "optionalDependencies": {
+    "puppeteer-core": "25.16.0"
+  }
+}

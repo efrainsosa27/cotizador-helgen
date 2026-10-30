@@ -188,6 +188,9 @@ function doPost(e) {
   let respuesta;
   VENDEDOR_ = null; VERSIONES_ = null; SIN_CACHE_ = false; MEMO_ = {}; CANDADO_TOMADO_ = 0;
   try {
+    // Mudanza al servidor propio (etapa 1, docs/servidor-etapa-1.md): con API_MUDADA en Script Properties esta copia ya
+    // no atiende ni escribe nada (un solo escritor). Sin la propiedad, todo como siempre; borrarla es el regreso.
+    if (propiedades_().API_MUDADA) throw errorMudada_();
     let cuerpo;
     try {
       cuerpo = JSON.parse((e && e.postData && e.postData.contents) || '');
@@ -2018,6 +2021,13 @@ const esquemaDeAdicional_ = r => String(r[colEsq_('adicional') - 1] == null ? ''
 function errorPermiso_(mensaje) {
   const e = new Error(mensaje);
   e.codigo = 'PERMISO';
+  return e;
+}
+
+/** CAPRI ya corre en el servidor nuevo (API_MUDADA): la pestaña abierta tiene la interfaz vieja (codigo 'MUDADA'). */
+function errorMudada_() {
+  const e = new Error('CAPRI se cambió a su servidor nuevo. Recarga la página (Ctrl+Shift+R o Cmd+Shift+R) para seguir trabajando.');
+  e.codigo = 'MUDADA';
   return e;
 }
 
@@ -9572,6 +9582,7 @@ function aplicarRecepcionPortal_(libro, x, det, res) {
  */
 function cadaQuinceMinutos() {
   VENDEDOR_ = null; VERSIONES_ = null; SIN_CACHE_ = false; MEMO_ = {};
+  if (propiedades_().API_MUDADA) return { mudada: true }; // el servidor nuevo es el que trae recepciones y manda avisos
   const r = {};
   try { r.avisos = enviarPendientesPortal_(null); } catch (e) { r.avisos = { error: e.message }; }
   try { r.recepciones = traerRecepcionesPortal(); } catch (e) { r.recepciones = { error: e.message }; }
