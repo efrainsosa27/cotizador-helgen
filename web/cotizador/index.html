@@ -309,6 +309,9 @@
           <button type="button" class="btn btn-sec" onclick="abrirNuevoProyecto()">+ Nuevo proyecto</button>
         </div>
         <div id="proyInfo" class="nota" style="margin-top:4px"></div>
+        <!-- A (incremento 7): solo con un proyecto de contrato firmado (pintarProyInfo) -->
+        <label id="cotAdicionalCaja" class="oculto" style="display:flex; align-items:center; gap:6px; margin-top:6px">
+          <input type="checkbox" id="cotAdicional" style="width:auto" onchange="alMarcarAdicional()"> Cotización <b>adicional</b> (trabajo extra del contrato firmado; misma moneda del contrato)</label>
         <div id="nuevoProy" class="sat oculto">
           <div class="sat-titulo">Nuevo proyecto · cliente: <span id="npCliente"></span></div>
           <div class="grid">
@@ -448,8 +451,8 @@
             <tbody id="resLista"></tbody>
           </table>
         </div>
-        <div class="nota" style="margin-top:8px">Haz clic en un proyecto para ver su contrato, esquema y pagos. Contratado, cobrado y saldo
-          con IVA; costo de órdenes de compra y margen sin IVA. Los contratos "Por firmar" no suman a los totales; los proyectos
+        <div class="nota" style="margin-top:8px">Haz clic en un proyecto para ver su contrato, esquema y pagos. Contratado (con sus
+          adicionales aparte), cobrado y saldo con IVA; costo de órdenes de compra y margen sin IVA. Los contratos "Por firmar" no suman a los totales; los proyectos
           cancelados no aparecen.</div>
       </div>
     </div>
@@ -486,6 +489,8 @@
       <div id="cobEsqAcciones" class="acciones"></div>
       <!-- R (incremento 6): fechas esperadas de cobro por etapa (mod-reportes) -->
       <div id="cobFechas" class="oculto"></div>
+      <!-- A (incremento 7): adicionales del proyecto (por aceptar, aceptadas con su mini-esquema, fechas y cancelar; mod-adicionales) -->
+      <div id="cobAdicionales" class="oculto"></div>
     </div>
 
     <div id="cobModPagos" class="modulo oculto">
@@ -1295,6 +1300,10 @@
 
 <script>
   let IVA = 0.16, CATALOGO = [], CLIENTES = [], PROYECTOS = [], PERMISOS = {}, SOLO_REQ = false;
+  // A (incremento 7): proyectos Activos con contrato firmado, solo para cotizaciones adicionales (los llena mod-adicionales; el
+  // buscador de siempre no los trae). Cada uno trae contratoFirmado: true y la moneda del contrato.
+  let PROYECTOS_FIRMADOS = [];
+  const proyectosCotizar = () => PROYECTOS.concat(PROYECTOS_FIRMADOS.filter(f => !PROYECTOS.some(p => p.folio === f.folio)));
   let TC = { valor: null, fuente: '' }, MONEDA_ANT = 'MXN'; // tipo de cambio del catálogo (pestaña "Tipo de cambio")
   // Un id por cotización: si el envío se repite, el servidor devuelve el mismo folio en vez de crear otro.
   const nuevoId = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(36).slice(2));
@@ -1683,12 +1692,18 @@
       const p = proyectoElegido();
       if (!p) { mostrarError('Elige un proyecto de la lista o deja el campo vacío para cotizar sin proyecto.'); return; }
       payload.proyectoFolio = p.folio;
+      // A (incremento 7): con contrato firmado solo se cotiza una adicional, en la moneda del contrato (el servidor lo vuelve a revisar)
+      if (p.contratoFirmado) {
+        if (!$('cotAdicional').checked) { mostrarError('El proyecto ' + folioVis(p) + ' tiene contrato firmado: solo admite cotizaciones adicionales. Marca «Adicional» o elige otro proyecto.'); return; }
+        if (p.moneda && monedaActual() !== p.moneda) { mostrarError('La cotización adicional debe ser en ' + p.moneda + ', la moneda del contrato de ' + folioVis(p) + '.'); return; }
+        payload.adicional = true;
+      }
     }
     $('btnGuardar').disabled = true; $('btnGuardar').textContent = 'Generando PDF…';
     google.script.run
       .withSuccessHandler(r => {
-        const pr = r.proyectoFolio && PROYECTOS.find(p => p.folio === r.proyectoFolio);
-        aviso('ok', 'Cotización <b>' + esc(r.folio) + '</b> guardada · Total ' + dinero(r.total, r.moneda) +
+        const pr = r.proyectoFolio && proyectosCotizar().find(p => p.folio === r.proyectoFolio);
+        aviso('ok', 'Cotización <b>' + esc(r.folio) + '</b>' + (r.tipo === 'Adicional' ? ' (adicional)' : '') + ' guardada · Total ' + dinero(r.total, r.moneda) +
               (r.proyectoFolio ? ' · Proyecto <b>' + esc(pr ? folioVis(pr) : r.proyectoFolio) + '</b>' : '') +
               ' · <a href="' + esc(r.url) + '" target="_blank">Abrir PDF</a>');
         limpiar();
@@ -1768,8 +1783,10 @@
 
   function recibirProyectos(lista) {
     PROYECTOS = lista || [];
-    $('proyectosList').innerHTML = PROYECTOS.map(p =>
-      '<option value="' + esc(etiquetaProyecto(p)) + '" label="' + esc(p.ubicacion || 'Proyecto activo') + '">').join('');
+    // A (incremento 7): también los de contrato firmado, marcados (solo admiten una cotización adicional)
+    $('proyectosList').innerHTML = proyectosCotizar().map(p =>
+      '<option value="' + esc(etiquetaProyecto(p)) + '" label="' + esc(p.contratoFirmado ? 'Contrato firmado · solo cotización adicional'
+        : p.ubicacion || 'Proyecto activo') + '">').join('');
     pintarProyInfo();
   }
 
@@ -1777,14 +1794,18 @@
   function proyectoElegido() {
     const v = $('proyecto').value.trim();
     const folio = (v.match(/^PRY-\d{4}-\d{4}/i) || [''])[0].toUpperCase();
-    return (folio && PROYECTOS.find(p => p.folio === folio)) || null;
+    return (folio && proyectosCotizar().find(p => p.folio === folio)) || null;
   }
 
   function pintarProyInfo() {
     const v = $('proyecto').value.trim(), p = proyectoElegido();
-    $('proyInfo').textContent = p ? 'Proyecto activo' + (p.ubicacion ? ' · ' + p.ubicacion : '') + ' · desde ' + p.fecha
+    const firmado = !!(p && p.contratoFirmado); // A (incremento 7): la casilla «Adicional» solo con contrato firmado
+    $('proyInfo').textContent = firmado ? 'Contrato firmado (' + (p.moneda || 'MXN') + '): este proyecto solo admite cotizaciones adicionales.'
+      : p ? 'Proyecto activo' + (p.ubicacion ? ' · ' + p.ubicacion : '') + ' · desde ' + p.fecha
       : v ? 'Elige un proyecto de la lista (solo aparecen los activos) o deja el campo vacío.'
       : 'Sin proyecto: el PDF se guarda en la carpeta del año, como siempre.';
+    $('cotAdicionalCaja').classList.toggle('oculto', !firmado);
+    if (!firmado) $('cotAdicional').checked = false;
   }
 
   /** Al elegir un proyecto con "Nombre / Contacto" vacío, se llena con su cliente. */
@@ -2029,7 +2050,10 @@
     $('resTotales').innerHTML = RESUMEN.totales.length ? RESUMEN.totales.map(t =>
       '<div class="sat-titulo" style="margin-top:4px">' + esc(t.moneda) + ' · ' + t.proyectos + (t.proyectos === 1 ? ' contrato firmado' : ' contratos firmados') +
       (t.porFirmar ? ' · ' + t.porFirmar + ' por firmar (' + dinero(t.montoPorFirmar, t.moneda) + ', no suman)' : '') + '</div>' +
-      '<div class="tiles">' + tile('Contratado (con IVA)', dinero(t.contratado, t.moneda)) + tile('Cobrado', dinero(t.cobrado, t.moneda)) +
+      // A (incremento 7): con adicionales, contratado, adicionales y total aparte
+      '<div class="tiles">' + tile('Contratado (con IVA)', dinero(t.contratado, t.moneda)) +
+      (t.adicionales ? tile('Adicionales (con IVA)', dinero(t.adicionales, t.moneda)) + tile('Total contratado', dinero(t.total, t.moneda)) : '') +
+      tile('Cobrado', dinero(t.cobrado, t.moneda)) +
       tile('Por cobrar', dinero(t.porCobrar, t.moneda)) + tile('Avance', t.avance + '%') +
       tile('Proyectos con saldo', t.conSaldo + ' de ' + t.proyectos) +
       tile('Margen (sin IVA)', t.margen == null ? '—' : dinero(t.margen, t.moneda) + (t.margenPorcentaje == null ? '' : ' · ' + t.margenPorcentaje + '%'),
@@ -2042,7 +2066,8 @@
         ' <span class="nota">· ' + esc(MARCA_TXT[p.marca] || '') + '</span><div class="nota">' + esc(p.cliente) + ' · ' + esc(p.nombre) +
         (p.estadoProyecto !== 'Activo' ? ' · ' + esc(p.estadoProyecto) : '') + '</div></td><td>' +
         '<span class="chip ' + (firmado ? 'firmado' : 'aceptada') + '" style="white-space:nowrap">' + esc(p.estadoContrato) + '</span></td>' +
-        '<td class="num">' + dinero(p.contratado, p.moneda) + '</td><td class="num">' + dinero(p.pagado, p.moneda) + '</td>' +
+        '<td class="num">' + dinero(p.contratado, p.moneda) + (p.adicionales ? '<div class="nota">+ adicionales ' + dinero(p.adicionales, p.moneda) +
+          '</div><div class="nota">= total ' + dinero(p.total, p.moneda) + '</div>' : '') + '</td><td class="num">' + dinero(p.pagado, p.moneda) + '</td>' +
         '<td class="num"><b>' + dinero(p.saldo, p.moneda) + '</b></td>' +
         '<td><div class="barra" title="' + p.avance + '%"><i style="width:' + Math.max(0, Math.min(100, p.avance)) + '%"></i></div><span class="nota">' + p.avance + '%</span></td>' +
         '<td>' + (p.siguienteEtapa ? esc(p.siguienteEtapa) + ' · ' + dinero(p.siguienteSaldo, p.moneda) : 'Pagado') +
@@ -2059,11 +2084,12 @@
     const texto = s => { const v = String(s ?? ''); return '"' + (/^[=+\-@\t\r]/.test(v) ? "'" + v : v).replace(/"/g, '""') + '"'; };
     const num = n => n == null ? '' : r2(n).toFixed(2);
     const enc = ['Folio', 'Proyecto', 'Cliente', 'Línea de negocio', 'Contrato', 'Moneda', 'Contratado con IVA', 'Cobrado', 'Saldo', 'Avance %',
-      'Siguiente etapa', 'Saldo siguiente etapa', 'Último pago', 'Órdenes de compra', 'Costo OC sin IVA', 'Margen sin IVA', 'Margen %'];
+      'Siguiente etapa', 'Saldo siguiente etapa', 'Último pago', 'Órdenes de compra', 'Costo OC sin IVA', 'Margen sin IVA', 'Margen %',
+      'Adicionales con IVA', 'Total contratado con IVA']; // A (incremento 7): al final, para no mover las columnas de antes
     const filas = lista.map(p => [texto(folioVis(p)), texto(p.nombre), texto(p.cliente), texto(MARCA_TXT[p.marca] || ''), texto(p.estadoContrato),
       texto(p.moneda), num(p.contratado), num(p.pagado), num(p.saldo), String(p.avance), texto(p.siguienteEtapa),
       p.siguienteEtapa ? num(p.siguienteSaldo) : '', texto(p.ultimoPago), String(p.ordenes), num(p.costoOc), num(p.margen),
-      p.margenPorcentaje == null ? '' : String(p.margenPorcentaje)].join(','));
+      p.margenPorcentaje == null ? '' : String(p.margenPorcentaje), num(p.adicionales || 0), num(p.total != null ? p.total : p.contratado)].join(','));
     return '﻿' + [enc.map(texto).join(',')].concat(filas).join('\r\n');
   }
 
@@ -2091,10 +2117,13 @@
     // Cotizaciones del proyecto: una sola aceptada
     $('cobCots').innerHTML = v.cotizaciones.length ? v.cotizaciones.map(q => {
       const esAceptada = c && c.cotizacion === q.folio;
+      // A (incremento 7): una adicional no es el contrato (se acepta en «Adicionales», en el esquema de pagos)
+      const adic = q.tipo === 'Adicional', adicAceptada = adic && (v.adicionales || []).some(a => a.cotizacion === q.folio);
       return '<tr><td><b>' + esc(q.folio) + '</b></td><td>' + esc(q.fecha) + '</td><td>' + esc(MARCA_TXT[q.marca]) + '</td><td>' + esc(q.moneda) +
         '</td><td class="num">' + dinero(q.subtotal, q.moneda) + '</td><td class="num">' + dinero(q.total, q.moneda) + '</td><td>' +
         (q.pdf ? '<a href="' + esc(q.pdf) + '" target="_blank">Ver</a>' : '') + '</td><td>' +
-        (esAceptada ? '<span class="chip ' + (firmado ? 'firmado' : 'aceptada') + '">Aceptada</span>'
+        (adic ? '<span class="chip ' + (adicAceptada ? 'firmado' : 'aceptada') + '">' + (adicAceptada ? 'Adicional aceptada' : 'Adicional') + '</span>'
+          : esAceptada ? '<span class="chip ' + (firmado ? 'firmado' : 'aceptada') + '">Aceptada</span>'
           : !v.puedeAceptar ? '' : '<button type="button" class="btn btn-sec" onclick="aceptarCot(\'' + esc(q.folio) + '\')">Marcar aceptada</button>') +
         '</td></tr>';
     }).join('') : '<tr><td colspan="8" class="nota">Este proyecto no tiene cotizaciones.</td></tr>';
@@ -2108,6 +2137,11 @@
     else {
       h = '<div class="sat-titulo">Monto contratado: ' + dinero(c.total, mon) + ' (con IVA) · subtotal ' + dinero(c.subtotal, mon) +
         ' · ' + esc(MARCA_TXT[c.marca]) + '</div>';
+      // A (incremento 7): adicionales aceptadas, en renglones aparte del contrato (que no cambia)
+      if (r && r.nAdicionales) {
+        h += '<div>Adicionales (' + r.nAdicionales + '): <b>' + dinero(r.adicionales, mon) + '</b> (con IVA)</div>' +
+          '<div>Total contratado: <b>' + dinero(r.total, mon) + '</b> (con IVA)</div>';
+      }
       if (firmado) {
         h += '<div>Contrato firmado el <b>' + esc(c.fechaFirma) + '</b> · registró ' + esc(c.firmadoPor) +
           '. La cotización aceptada, el monto y el esquema ya no se pueden cambiar.</div>';
@@ -2153,8 +2187,11 @@
 
     // Pagos
     $('cobModPagos').classList.toggle('oculto', !c);
-    $('cobResumen').innerHTML = r ? [['Contratado (con IVA)', dinero(r.contratado, mon)], ['Subtotal (referencia)', dinero(r.subtotal, mon)],
-      ['Pagado', dinero(r.pagado, mon)], ['Saldo', dinero(r.saldo, mon)], ['Avance', r.avance + '%']]
+    // A (incremento 7): con adicionales, contratado, adicionales y total en renglones aparte (el saldo y el avance ya son del total)
+    $('cobResumen').innerHTML = r ? [['Contratado (con IVA)', dinero(r.contratado, mon)]].concat(r.nAdicionales
+      ? [['Adicionales (con IVA)', dinero(r.adicionales, mon)], ['Total contratado', dinero(r.total, mon)]] : [])
+      .concat([['Subtotal (referencia)', dinero(r.subtotal, mon)],
+      ['Pagado', dinero(r.pagado, mon)], ['Saldo', dinero(r.saldo, mon)], ['Avance', r.avance + '%']])
       .map(([k, x]) => '<div class="tile"><span>' + k + '</span><b>' + x + '</b></div>').join('') : '';
     $('cobFormPago').classList.toggle('oculto', !v.puedePagar);
     $('cobSinPagos').textContent = c && !v.puedePagar ? 'Los pagos se registran cuando el contrato está firmado.' : '';
@@ -2162,10 +2199,13 @@
       $('pgFecha').max = v.hoy; if (!$('pgFecha').value) $('pgFecha').value = v.hoy;
       $('pgMoneda').value = mon;
       $('pgMetodo').innerHTML = (v.metodos || []).map(m => '<option>' + esc(m) + '</option>').join('');
-      $('pgEtapa').innerHTML = (r ? r.etapas : []).map((e, i) => '<option value="' + (i + 1) + '">' + (i + 1) + ' · ' + esc(e.etapa) +
+      // A (incremento 7): las etapas de las adicionales van como "HLG-…#orden" (registrarPago manda etapaAdicional y su orden)
+      const valorEtapa = (e, i) => e.adicional ? e.adicional + '#' + e.orden : String(i + 1);
+      $('pgEtapa').innerHTML = (r ? r.etapas : []).map((e, i) => '<option value="' + esc(valorEtapa(e, i)) + '">' +
+        (e.adicional ? 'Adicional ' + esc(e.adicional) + ' · ' + e.orden : (i + 1)) + ' · ' + esc(e.etapa) +
         ' (saldo ' + dinero(e.saldo, mon) + ')</option>').join('');
       const pendiente = r && r.etapas.findIndex(e => e.saldo > 0);
-      if (pendiente >= 0) $('pgEtapa').value = String(pendiente + 1);
+      if (pendiente >= 0) $('pgEtapa').value = valorEtapa(r.etapas[pendiente], pendiente);
       pintarTipoCambio();
     }
     $('cobPagos').innerHTML = (v.pagos || []).map(p => '<tr' + (p.estado === 'Cancelado' ? ' class="fila-cancelada" title="' +
@@ -2281,7 +2321,9 @@
         aviso('ok', 'Pago <b>' + esc(r.folio) + '</b> registrado · <a href="' + esc(r.url) + '" target="_blank">Ver comprobante</a>');
       }).withFailureHandler(err => { listo(); mostrarError(err); }).registrarPago({
         proyectoFolio: COB.proyecto.folio, fecha: $('pgFecha').value, monto: $('pgMonto').value, monedaPago: $('pgMoneda').value,
-        tipoCambio: $('pgTc').value, metodo: $('pgMetodo').value, referencia: $('pgRef').value, etapaOrden: Number($('pgEtapa').value),
+        tipoCambio: $('pgTc').value, metodo: $('pgMetodo').value, referencia: $('pgRef').value,
+        // A (incremento 7): "HLG-…#2" = etapa 2 de esa adicional; un número = etapa del contrato, como siempre
+        etapaOrden: Number(String($('pgEtapa').value).split('#').pop()), etapaAdicional: String($('pgEtapa').value).includes('#') ? String($('pgEtapa').value).split('#')[0] : '',
         comprobante: { nombre: archivo.name, datos: datos }, idSolicitud: ID_PAGO,
       });
     }, err => { listo(); mostrarError(err); });
@@ -5993,6 +6035,140 @@
         else if (TAB === 'rep' && est.tipo && def(est.tipo).porDia && est.datos[est.tipo] && est.dia[est.tipo] !== hoyLocal()) cargar(est.tipo); // cambió el día
       },
       alCobranza(v) { pintarFechas(v); },
+    });
+  })();
+</script>
+<script id="mod-adicionales">
+  // Adicionales (incremento 7, módulo A): una cotización "Adicional" es trabajo extra de un proyecto con contrato firmado.
+  //  - Nueva cotización: los proyectos con contrato firmado salen en la lista marcados (solo admiten una adicional); al elegir uno
+  //    aparece la casilla «Adicional» (pintarProyInfo) y la cotización va en la moneda del contrato (alMarcarAdicional la pone).
+  //  - Cobranza → proyecto → "2 · Esquema de pagos": bloque Adicionales (#cobAdicionales): por aceptar, aceptadas con su
+  //    mini-esquema (editable mientras no tenga pagos), fechas esperadas de cobro y cancelar (con motivo, sin pagos).
+  // Es solo interfaz: el servidor revisa permisos, moneda y pagos en cada llamada. MXN y USD nunca se suman.
+  (function () {
+    let VISTA = null;      // vista de cobranza con la que se pintó el bloque
+    let ESQ_ADIC = {};     // índice de la adicional → [{etapa, porcentaje}] mientras se edita su esquema
+    const tabla = (enc, cuerpo) => '<div class="tabla-desliza"><table style="font-size:12px"><thead><tr>' + enc + '</tr></thead><tbody>' + cuerpo + '</tbody></table></div>';
+
+    function recibirFirmados(lista) {
+      PROYECTOS_FIRMADOS = Array.isArray(lista) ? lista : [];
+      recibirProyectos(PROYECTOS); // vuelve a pintar la lista de proyectos para cotizar (con los de contrato firmado marcados)
+    }
+
+    /** Casilla «Adicional»: la cotización va en la moneda del contrato del proyecto. */
+    window.alMarcarAdicional = function () {
+      const p = proyectoElegido();
+      if (!p || !p.contratoFirmado || !$('cotAdicional').checked) return;
+      if (p.moneda && monedaActual() !== p.moneda) {
+        $('moneda').value = p.moneda; cambiarMoneda();
+        aviso('ok', 'La cotización adicional va en <b>' + esc(p.moneda) + '</b>, la moneda del contrato de ' + esc(folioVis(p)) + '.');
+      }
+    };
+
+    // ---- Cobranza: bloque Adicionales ----
+    function suma(i) { return r2((ESQ_ADIC[i] || []).reduce((t, e) => t + (Number(e.porcentaje) || 0), 0)); }
+    function bloque(a, i, v) {
+      const mon = a.moneda, edit = !!a.esquemaEditable, fechas = !!a.fechasEditables;
+      const esq = edit ? ESQ_ADIC[i] : a.etapas;
+      const filas = esq.map((e, k) => {
+        const x = edit ? (a.etapas[k] && a.etapas[k].etapa === e.etapa ? a.etapas[k] : {}) : e;
+        const fecha = (a.etapas[k] || {}).fechaEsperada || '';
+        return '<tr><td>' + (k + 1) + '</td><td>' + (edit ? '<input value="' + esc(e.etapa) + '" maxlength="40" oninput="ADICIONALES.editarEtapa(' + i + ',' + k + ',\'etapa\',this.value)">' : esc(e.etapa)) +
+          '</td><td class="num">' + (edit ? '<input type="number" min="0" max="100" step="0.01" style="text-align:right" value="' + esc(e.porcentaje) +
+          '" oninput="ADICIONALES.editarEtapa(' + i + ',' + k + ',\'porcentaje\',this.value)">' : esc(e.porcentaje) + '%') +
+          '</td><td class="num">' + (x.monto != null ? dinero(x.monto, mon) : '') + '</td><td class="num">' + (x.pagado != null ? dinero(x.pagado, mon) : '') +
+          '</td><td class="num">' + (x.saldo != null ? dinero(x.saldo, mon) : '') + '</td><td>' +
+          (fechas && a.etapas[k] && (!edit || a.etapas[k].etapa === e.etapa) ? '<input id="adicFecha_' + i + '_' + (k + 1) + '" type="date" value="' + esc(fecha) + '">'
+            : esc(fecha ? fechaMx(fecha) : '—')) + '</td><td>' +
+          (edit && esq.length > 1 ? '<button type="button" class="quitar" title="Quitar etapa" onclick="ADICIONALES.quitarEtapa(' + i + ',' + k + ')">×</button>' : '') + '</td></tr>';
+      }).join('') + (edit ? '<tr><td></td><td><b>Suma</b></td><td class="num"><b id="adicSuma_' + i + '"' + (Math.abs(suma(i) - 100) > 0.001 ? ' class="aviso-moneda"' : '') + '>' +
+        suma(i) + '%</b></td><td class="num"><b>' + dinero(a.total, mon) + '</b></td><td colspan="4"></td></tr>' : '');
+      return '<div style="margin-top:12px"><div><b>' + esc(a.cotizacion) + '</b>' + (a.pdf ? ' · <a href="' + esc(a.pdf) + '" target="_blank">PDF</a>' : '') +
+        ' · total ' + dinero(a.total, mon) + ' (con IVA) · pagado ' + dinero(a.pagado, mon) + ' · saldo <b>' + dinero(a.saldo, mon) + '</b>' +
+        '<div class="nota">Aceptada' + (a.aceptadaPor ? ' por ' + esc(a.aceptadaPor) : '') + (a.fechaAceptacion ? ' el ' + esc(a.fechaAceptacion) : '') +
+        (edit ? ' · su esquema se puede cambiar mientras no tenga pagos (deben sumar 100%)' : a.conPagos ? ' · con pagos: su esquema ya no cambia' : '') + '</div></div>' +
+        tabla('<th style="width:30px">#</th><th>Etapa</th><th class="num" style="width:110px">%</th><th class="num">Monto</th><th class="num">Pagado</th>' +
+          '<th class="num">Saldo</th><th style="width:160px">Fecha esperada</th><th style="width:30px"></th>', filas) +
+        '<div class="acciones">' +
+        (edit ? '<button type="button" class="btn btn-sec" onclick="ADICIONALES.agregarEtapa(' + i + ')">+ Agregar etapa</button>' +
+          '<button type="button" class="btn btn-sec" id="btnEsqAdic_' + i + '" onclick="ADICIONALES.guardarEsquema(' + i + ')">Guardar esquema</button>' : '') +
+        (fechas ? '<button type="button" class="btn btn-sec" id="btnFechasAdic_' + i + '" onclick="ADICIONALES.guardarFechas(' + i + ')">Guardar fechas</button>' : '') +
+        (a.puedeCancelar ? '<button type="button" class="btn btn-sec" onclick="ADICIONALES.cancelar(' + i + ')">Cancelar adicional</button>' : '') +
+        '</div></div>';
+    }
+
+    function pintar(v) {
+      const caja = $('cobAdicionales');
+      VISTA = v || null;
+      const c = v && v.contrato, lista = (v && v.adicionales) || [], porAceptar = (v && v.adicionalesPorAceptar) || [];
+      if (!c || (!lista.length && !porAceptar.length)) { caja.classList.add('oculto'); caja.innerHTML = ''; return; }
+      ESQ_ADIC = {};
+      lista.forEach((a, i) => { if (a.esquemaEditable) ESQ_ADIC[i] = a.etapas.map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje })); });
+      repintar();
+    }
+    function repintar() {
+      const v = VISTA, caja = $('cobAdicionales');
+      if (!v) return;
+      const c = v.contrato, lista = v.adicionales || [], porAceptar = v.adicionalesPorAceptar || [];
+      caja.classList.remove('oculto');
+      caja.innerHTML = '<div class="sat" style="margin-top:14px"><div class="sat-titulo">Adicionales (trabajo extra del contrato firmado)</div>' +
+        '<div class="nota" style="margin-bottom:8px">Se cobran con el contrato: el saldo del proyecto es contratado + adicionales − pagado. ' +
+        'El contrato original y su esquema no cambian.</div>' +
+        (porAceptar.length ? '<div><b>Por aceptar</b></div>' + tabla('<th>Cotización</th><th>Fecha</th><th class="num">Total con IVA</th><th>PDF</th><th></th>',
+          porAceptar.map(q => '<tr><td><b>' + esc(q.folio) + '</b></td><td>' + esc(q.fecha) + '</td><td class="num">' + dinero(q.total, q.moneda) + '</td><td>' +
+            (q.pdf ? '<a href="' + esc(q.pdf) + '" target="_blank">Ver</a>' : '') + '</td><td>' +
+            (q.otraMoneda ? '<span class="nota aviso-moneda">En ' + esc(q.moneda) + ': el contrato es en ' + esc(c.moneda) + '</span>'
+              : v.puedeAceptarAdicional ? '<button type="button" class="btn btn-sec" onclick="ADICIONALES.aceptar(' + jsArg(q.folio) + ')">Aceptar adicional</button>'
+              : '<span class="nota">Se acepta con el contrato firmado</span>') + '</td></tr>').join('')) : '') +
+        lista.map((a, i) => bloque(a, i, v)).join('') + '</div>';
+    }
+
+    function folioProyecto() { return VISTA && VISTA.proyecto ? VISTA.proyecto.folio : ''; }
+    window.ADICIONALES = {
+      aceptar(folio) {
+        accionCob(null, 'aceptarAdicional', [folioProyecto(), folio], v => { pintarCobranza(v); aviso('ok', 'Adicional <b>' + esc(folio) + '</b> aceptada: se cobra con el contrato.'); });
+      },
+      cancelar(i) {
+        const a = (VISTA.adicionales || [])[i];
+        if (!a) return;
+        const motivo = window.prompt('Motivo para cancelar la adicional ' + a.cotizacion + ' (queda registrado; la cotización sigue en el proyecto):');
+        if (motivo == null) return;
+        if (!motivo.trim()) { mostrarError('Escribe el motivo de la cancelación.'); return; }
+        accionCob(null, 'cancelarAdicional', [folioProyecto(), a.cotizacion, motivo], v => { pintarCobranza(v); aviso('ok', 'Adicional <b>' + esc(a.cotizacion) + '</b> cancelada.'); });
+      },
+      editarEtapa(i, k, campo, valor) {
+        if (!ESQ_ADIC[i] || !ESQ_ADIC[i][k]) return;
+        ESQ_ADIC[i][k][campo] = valor;
+        const b = $('adicSuma_' + i);
+        if (campo === 'porcentaje' && b) { b.textContent = suma(i) + '%'; b.className = Math.abs(suma(i) - 100) > 0.001 ? 'aviso-moneda' : ''; }
+      },
+      agregarEtapa(i) { if (!ESQ_ADIC[i]) return; if (ESQ_ADIC[i].length >= 10) { mostrarError('Máximo 10 etapas.'); return; } ESQ_ADIC[i].push({ etapa: '', porcentaje: 0 }); repintar(); },
+      quitarEtapa(i, k) { if (!ESQ_ADIC[i] || ESQ_ADIC[i].length < 2) return; ESQ_ADIC[i].splice(k, 1); repintar(); },
+      guardarEsquema(i) {
+        const a = (VISTA.adicionales || [])[i];
+        if (!a || !ESQ_ADIC[i]) return;
+        accionCob('btnEsqAdic_' + i, 'guardarEsquemaAdicional', [folioProyecto(), a.cotizacion, ESQ_ADIC[i].map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje }))],
+          v => { pintarCobranza(v); aviso('ok', 'Esquema de la adicional <b>' + esc(a.cotizacion) + '</b> guardado.'); });
+      },
+      // Solo manda las fechas que cambiaron (como el bloque de fechas del contrato); la etapa va con su adicional
+      guardarFechas(i) {
+        const a = (VISTA.adicionales || [])[i];
+        if (!a) return;
+        const fechas = a.etapas.map(e => ({ orden: e.orden, etapa: e.etapa, fecha: ($('adicFecha_' + i + '_' + e.orden) || {}).value || '', adicional: a.cotizacion }))
+          .filter((x, k) => x.fecha !== (a.etapas[k].fechaEsperada || ''));
+        if (!fechas.length) { aviso('ok', 'Las fechas no cambiaron.'); return; }
+        accionCob('btnFechasAdic_' + i, 'guardarFechasEsperadas', [folioProyecto(), fechas],
+          v => { pintarCobranza(v); aviso('ok', 'Fechas esperadas de la adicional <b>' + esc(a.cotizacion) + '</b> guardadas.'); });
+      },
+    };
+
+    registrarModulo({
+      nombre: 'Adicionales',
+      alBootstrap(d) { if (d && d.proyectosFirmados) recibirFirmados(d.proyectosFirmados); },
+      alSincronizar(r) { if (r && r.proyectosFirmados) recibirFirmados(r.proyectosFirmados); },
+      // Sin ventas (o solo requisiciones) no hay a qué cotizar: la lista se vacía
+      alPermisos(permisos, solo) { if ((solo || !puedeVender()) && PROYECTOS_FIRMADOS.length) recibirFirmados([]); },
+      alCobranza(v) { pintar(v); },
     });
   })();
 </script>

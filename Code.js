@@ -92,7 +92,8 @@ function verificarTokenGoogle_(idToken) {
 const MODULOS_ = [modIdentidad_(), modAnular_(), modCorreos_(), modCentroMando_(), modPantallas_(),
   modProveedores_(), // incremento 5: F · Proveedores y forma de pago (§6.F)
   modRecepcion_(), // incremento 5: H · recepción con fotos y devoluciones (§6.H)
-  modReportes_()]; // incremento 6: R · reportes de CxC y CxP, flujo y margen; fecha esperada por etapa (§6.R)
+  modReportes_(), // incremento 6: R · reportes de CxC y CxP, flujo y margen; fecha esperada por etapa (§6.R)
+  modAdicionales_()]; // incremento 7: A · cotizaciones adicionales de un proyecto con contrato firmado (§6.A, incremento 7)
 /** Une un campo de todos los módulos: objetos con Object.assign, listas con concat. */
 function deModulos_(campo, inicial) {
   return MODULOS_.reduce((acc, m) => Array.isArray(inicial) ? acc.concat(m[campo] || []) : Object.assign(acc, m[campo] || {}), inicial);
@@ -430,8 +431,9 @@ function sitiosDetalle_() {
 // consulta cada 20 s con la pestaña visible, sin recargar. Los permisos se siguen revisando en cada función.
 
 // permisos: Permisos y Delegaciones (incremento 4); anulaciones: lo que un super admin anuló (se esconde de listas y totales)
+// adicionales (A, incremento 7): pestaña Adicionales de cobranza (sus etapas están en Esquemas: también sube contratos)
 const COLECCIONES = ['proyectos', 'contratos', 'cotizaciones', 'catalogo', 'requisiciones', 'oc', 'pagosCobranza',
-  'pagosProveedores', 'facturasProveedor', 'permisos', 'anulaciones'];
+  'pagosProveedores', 'facturasProveedor', 'permisos', 'anulaciones', 'adicionales'];
 
 /** Colecciones que cambia cada función de la API: doPost sube su versión cuando termina bien. */
 const CAMBIOS_API = Object.assign({
@@ -1028,7 +1030,8 @@ const CONFIG_EJEMPLO_ANTERIOR = {
 const ENCABEZADOS_COTIZACIONES = [
   'Folio', 'Fecha', 'Cliente', 'Empresa', 'RFC', 'Correo', 'Teléfono',
   'Subtotal', 'IVA', 'Total', 'Elaboró', 'PDF', 'Conceptos (JSON)', 'Notas', 'Marca', 'Dirección',
-  'vendedor_email', 'vendedor_nombre', 'vendedor_apellido', 'proyecto_folio', 'moneda', 'tipo_cambio'
+  'vendedor_email', 'vendedor_nombre', 'vendedor_apellido', 'proyecto_folio', 'moneda', 'tipo_cambio',
+  'tipo', // A (incremento 7): 'Adicional' = trabajo extra de un proyecto con contrato firmado; vacío = normal (filas de antes)
 ];
 
 function setup() {
@@ -1557,6 +1560,11 @@ function guardarCotizacion(payload) {
   // Proyecto opcional: vacío = "Sin proyecto" (el PDF va a la carpeta del año, como antes)
   // Siempre la llave interna PRY-AAAA-NNNN en la columna T, aunque llegue el folio con clave
   const proyectoFolio = folioInterno(payload && payload.proyectoFolio);
+  // A (incremento 7): cotización "Adicional" = trabajo extra de un proyecto con contrato firmado (columna tipo)
+  const adicional = esPedidoAdicional(payload);
+  if (adicional && !proyectoFolio) {
+    throw new Error('Una cotización adicional va dentro de un proyecto con contrato firmado: elige el proyecto o quita la marca «Adicional».');
+  }
 
   const lock = candado_();
   // Evita folios duplicados si dos personas guardan a la vez
@@ -1578,10 +1586,11 @@ function guardarCotizacion(payload) {
         throw errorProyecto_('El proyecto ' + proyectoFolio + ' está ' + proyecto.estado.toLowerCase() +
           ': ya no se le pueden agregar cotizaciones.');
       }
-      // Fase 2: con contrato firmado ya no se cotiza dentro del proyecto (se revisará con los adicionales)
-      if (foliosConContratoFirmado_()[proyecto.folio.toUpperCase()]) {
-        throw errorProyecto_('Proyecto con contrato firmado: no admite cotizaciones nuevas.');
-      }
+      // Con contrato firmado ya no se cotiza dentro del proyecto, salvo una cotización marcada "Adicional" (A, incremento 7) en la
+      // moneda del contrato; una adicional solo va en un proyecto con contrato firmado
+      const firmado = foliosConContratoFirmado_()[proyecto.folio.toUpperCase()];
+      reglaCotizacionAdicional(firmado || null, adicional, datos.moneda, proyecto.folioVisible || proyecto.folio);
+      if (adicional) datos.adicional = (proyecto.folioVisible || proyecto.folio) + (proyecto.nombre ? ' · ' + proyecto.nombre : '');
       carpetaPdf = subcarpetaProyecto_(proyecto, 'Cotizaciones');
     }
 
@@ -1622,11 +1631,12 @@ function guardarCotizacion(payload) {
       datos.subtotal, datos.iva, datos.total, datos.elaboro, archivo.getUrl(),
       JSON.stringify(datos.items), t(datos.notas), MARCAS[datos.marca], t(datos.cliente.direccion),
       t(vendedor.email), t(vendedor.nombre), t(vendedor.apellido), proyectoFolio, datos.moneda, datos.tipoCambio,
+      adicional ? TIPO_ADICIONAL : '', // A (incremento 7): columna tipo
     ]);
     SpreadsheetApp.flush();
 
     const resultado = { folio: folio, url: archivo.getUrl(), total: datos.total, moneda: datos.moneda,
-      proyectoFolio: proyectoFolio };
+      proyectoFolio: proyectoFolio, tipo: adicional ? TIPO_ADICIONAL : '' };
     guardarIdempotencia_(cache, claveCache, resultado); // 6 h; si no cabe no lanza (ya se escribió)
     return resultado;
   } finally {
@@ -1929,19 +1939,35 @@ const HOJAS_COBRANZA = {
   // R (incremento 6): fecha_esperada = fecha en que se espera cobrar la etapa (AAAA-MM-DD, opcional; la cambia cobranza aun con
   // el contrato firmado porque no cambia montos: guardarFechasEsperadas, §6.R). Se lee por nombre (colEsq_) y escribirEsquema_
   // la conserva por el nombre de la etapa al reescribir el esquema.
-  Esquemas: { enc: ['proyecto_folio', 'orden', 'etapa', 'porcentaje', 'monto', 'fecha_esperada'], numeros: [2, 4, 5] },
+  // A (incremento 7): adicional = folio de la cotización adicional dueña de la etapa (vacío = etapa del contrato original). Las
+  // etapas del contrato y las de cada adicional se reescriben por separado (escribirEsquema_ / escribirEsquemaAdicional_).
+  Esquemas: { enc: ['proyecto_folio', 'orden', 'etapa', 'porcentaje', 'monto', 'fecha_esperada', 'adicional'], numeros: [2, 4, 5] },
   Pagos: {
+    // A (incremento 7): etapa_adicional = folio de la adicional a cuya etapa (etapa_orden, dentro de su mini-esquema) se aplicó el
+    // pago; vacío = etapa del contrato (filas de antes)
     enc: ['folio', 'fecha_pago', 'fecha_registro', 'proyecto_folio', 'monto', 'moneda_pago', 'tipo_cambio',
       'monto_aplicado', 'moneda_proyecto', 'metodo', 'referencia', 'etapa_orden', 'etapa', 'aplicacion (JSON)',
       'comprobante_id', 'comprobante_url', 'registro_email', 'registro_nombre', 'estado', 'cancelado_por',
-      'fecha_cancelacion', 'motivo_cancelacion'],
+      'fecha_cancelacion', 'motivo_cancelacion', 'etapa_adicional'],
     numeros: [5, 7, 8, 12],
   },
   Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
+  // A (incremento 7): cotizaciones adicionales aceptadas de un proyecto con contrato firmado (una fila por aceptación; estado
+  // Aceptada / Cancelada / Anulada; nunca se borran). Sus etapas viven en Esquemas con la columna adicional.
+  Adicionales: {
+    enc: ['proyecto_folio', 'cotizacion', 'marca', 'moneda', 'subtotal', 'iva', 'total', 'estado', 'aceptada_por',
+      'fecha_aceptacion', 'actualizado', 'cancelado_por', 'fecha_cancelacion', 'motivo'],
+    numeros: [5, 6, 7],
+  },
 };
 const ESTADO_ACEPTADA = 'Aceptada', ESTADO_FIRMADO = 'Firmado';
 /** Columna (desde 1) de un encabezado de Esquemas (R, incremento 6: fecha_esperada se busca por nombre). */
 const colEsq_ = nombre => HOJAS_COBRANZA.Esquemas.enc.indexOf(nombre) + 1;
+/** A (incremento 7): columna (desde 1) de un encabezado de Adicionales, y la de etapa_adicional en Pagos (desde 0). */
+const colAdic_ = nombre => HOJAS_COBRANZA.Adicionales.enc.indexOf(nombre) + 1;
+const COL_PAGO_ADICIONAL_ = HOJAS_COBRANZA.Pagos.enc.indexOf('etapa_adicional');
+/** ¿La fila de Esquemas es de una adicional? (columna adicional con folio; vacía = etapa del contrato original) */
+const esquemaDeAdicional_ = r => String(r[colEsq_('adicional') - 1] == null ? '' : r[colEsq_('adicional') - 1]).trim().toUpperCase();
 
 /** Error de permisos: doPost lo manda con codigo 'PERMISO'. */
 function errorPermiso_(mensaje) {
@@ -2182,6 +2208,8 @@ function pagoDesdeFila_(r, fila) {
     referencia: String(r[10] || ''), etapaOrden: Number(r[11]) || 1, etapa: String(r[12] || ''),
     comprobanteUrl: String(r[15] || ''), registro: String(r[17] || r[16] || ''), estado: String(r[18] || 'Vigente'),
     canceladoPor: String(r[19] || ''), motivoCancelacion: String(r[21] || ''), fila: fila,
+    // A (incremento 7): folio de la adicional de la etapa elegida ('' = etapa del contrato)
+    etapaAdicional: String(r[COL_PAGO_ADICIONAL_] == null ? '' : r[COL_PAGO_ADICIONAL_]).trim().toUpperCase(),
   };
 }
 
@@ -2210,15 +2238,23 @@ function datosCobranza_(libro, folio) {
     if (String(r[0]).toUpperCase() === f && String(r[7] || '') !== ESTADO_ANULADA) contrato = contratoDesdeFila_(r, i + 2);
   });
   const cF = colEsq_('fecha_esperada') - 1; // R (incremento 6)
-  const etapas = filasCobranza_(hE, 'Esquemas')
-    .filter(r => String(r[0]).toUpperCase() === f)
+  const delProyecto = filasCobranza_(hE, 'Esquemas').filter(r => String(r[0]).toUpperCase() === f);
+  const etapasDe = adic => delProyecto.filter(r => esquemaDeAdicional_(r) === adic) // A (incremento 7): '' = contrato original
     .sort((a, b) => Number(a[1]) - Number(b[1]))
     .map(r => ({ etapa: String(r[2]), porcentaje: Number(r[3]), fechaEsperada: fechaIso_(r[cF]) }));
+  const etapas = etapasDe('');
   const pagos = [];
   filasCobranza_(hP, 'Pagos').forEach((r, i) => {
     if (String(r[3]).toUpperCase() === f && String(r[18] || '') !== ESTADO_ANULADA) pagos.push(pagoDesdeFila_(r, i + 2));
   });
-  return { hojas: { contratos: hC, esquemas: hE, pagos: hP }, contrato: contrato, etapas: etapas, pagos: pagos };
+  // A (incremento 7): adicionales Aceptadas del proyecto (en el orden en que se aceptaron), cada una con sus etapas. La pestaña no
+  // se crea al leer (la crea la primera aceptación).
+  const hA = libro.getSheetByName('Adicionales');
+  const adicionales = hA ? filasCobranza_(hA, 'Adicionales').map((r, i) => adicionalDesdeFila_(r, i + 2))
+    .filter(a => a.proyectoFolio.toUpperCase() === f && a.estado === ADIC_ACEPTADA && (!contrato || a.moneda === contrato.moneda))
+    .map(a => Object.assign(a, { etapas: etapasDe(a.cotizacion.toUpperCase()) })) : [];
+  return { hojas: { contratos: hC, esquemas: hE, pagos: hP, adicionales: hA }, contrato: contrato, etapas: etapas, pagos: pagos,
+    adicionales: adicionales };
 }
 
 /** {"PRY-2026-0001": <contrato>, …} de todos los contratos (aceptados y firmados), leídos de la hoja. Sin libro: ninguno. */
@@ -2250,14 +2286,17 @@ function foliosConContratoFirmado_() {
 function cotizacionesDeProyecto_(folio) {
   const f = String(folio).toUpperCase();
   const hoja = db_().getSheetByName('Cotizaciones');
+  const valores = hoja.getDataRange().getValues();
+  const iTipo = colTipoCotizacion_(valores[0]); // A (incremento 7): columna tipo, por su encabezado
   // Una anulada ni se muestra ni se puede aceptar (§6.E)
-  return hoja.getDataRange().getValues().slice(1)
+  return valores.slice(1)
     .filter(r => String(r[19] || '').toUpperCase() === f && String(r[0] || '').trim() && !esAnulado_(r[0]))
     .map(r => ({
       folio: String(r[0]), fecha: r[1] instanceof Date ? Utilities.formatDate(r[1], 'America/Mexico_City', 'dd/MM/yyyy') : String(r[1] || ''),
       cliente: String(r[2] || ''), subtotal: Number(r[7]) || 0, iva: Number(r[8]) || 0, total: Number(r[9]) || 0,
       pdf: String(r[11] || ''), marca: marcaDeTexto_(r[14]), moneda: String(r[20] || '') || 'MXN',
       vendedor: vendedorDeFila(r, {}),
+      tipo: tipoCotizacion(r[iTipo]), // A (incremento 7): 'Adicional' o '' (normal; filas de antes)
     }));
 }
 
@@ -2288,7 +2327,8 @@ function escribirEsquema_(hoja, folio, etapas, total) {
   const filas = filasCobranza_(hoja, 'Esquemas');
   const cF = colEsq_('fecha_esperada') - 1, fechas = {};
   for (let i = filas.length - 1; i >= 0; i--) {
-    if (String(filas[i][0]).toUpperCase() === f) {
+    // A (incremento 7): solo las etapas del contrato original; las de las adicionales no se tocan
+    if (String(filas[i][0]).toUpperCase() === f && !esquemaDeAdicional_(filas[i])) {
       const fecha = fechaIso_(filas[i][cF]);
       if (fecha) fechas[textoNormal(filas[i][2])] = fecha;
       escribe_(hoja).deleteRow(i + 2);
@@ -2302,10 +2342,12 @@ function escribirEsquema_(hoja, folio, etapas, total) {
 function vistaCobranza_(libro, proyecto) {
   const d = datosCobranza_(libro, proyecto.folio);
   const c = d.contrato;
-  const resumen = c && d.etapas.length ? resumenCobranza(c, d.etapas, d.pagos) : null;
-  return {
+  // A (incremento 7): con las etapas de las adicionales aceptadas (contratado + adicionales − pagado)
+  const resumen = c && d.etapas.length ? resumenCobranza(c, d.etapas, d.pagos, d.adicionales) : null;
+  const cotizaciones = cotizacionesDeProyecto_(proyecto.folio);
+  return Object.assign({
     proyecto: datosProyectoCompras_(proyecto),
-    cotizaciones: cotizacionesDeProyecto_(proyecto.folio),
+    cotizaciones: cotizaciones,
     contrato: c ? { cotizacion: c.cotizacion, marca: c.marca, moneda: c.moneda, subtotal: c.subtotal, iva: c.iva,
       total: c.total, estado: c.estado, aceptadaPor: c.aceptadaPor, fechaAceptacion: c.fechaAceptacion,
       fechaFirma: c.fechaFirma, firmadoPor: c.firmadoPor } : null,
@@ -2325,7 +2367,7 @@ function vistaCobranza_(libro, proyecto) {
     margen: c ? margenDeContrato_(c) : margenSinContrato_(proyecto.folio),
     metodos: METODOS_COBRO,
     hoy: hoyIso_(),
-  };
+  }, vistaAdicionales_(proyecto, d, resumen, cotizaciones)); // A (incremento 7): adicionales, por aceptar y sus permisos
 }
 
 /**
@@ -2394,9 +2436,11 @@ function resumenCobranzaDeHojas_() {
   const contratos = filasCobranza_(hojaCobranza_(libro, 'Contratos'), 'Contratos')
     .map((r, i) => contratoDesdeFila_(r, i + 2)).filter(c => c.proyectoFolio && c.estado !== ESTADO_ANULADA);
   const esquemas = filasCobranza_(hojaCobranza_(libro, 'Esquemas'), 'Esquemas')
-    .map(r => ({ proyectoFolio: String(r[0]), orden: Number(r[1]), etapa: String(r[2]), porcentaje: Number(r[3]) }));
+    .map(r => ({ proyectoFolio: String(r[0]), orden: Number(r[1]), etapa: String(r[2]), porcentaje: Number(r[3]),
+      adicional: esquemaDeAdicional_(r) })); // A (incremento 7): '' = etapa del contrato
   const pagos = filasCobranza_(hojaCobranza_(libro, 'Pagos'), 'Pagos').map((r, i) => pagoDesdeFila_(r, i + 2))
     .filter(p => p.estado !== ESTADO_ANULADA);
+  const adicionales = adicionalesDelLibro_(libro); // A (incremento 7): las Aceptadas
   const proyectos = proyectosVisibles_();
   const libroCompras = libroComprasSiExiste_();
   const ordenes = libroCompras
@@ -2404,7 +2448,7 @@ function resumenCobranzaDeHojas_() {
       .map((r, i) => String(r[0] || '').trim() ? ordenDesdeFila_(r, i + 2) : null).filter(o => o && o.estado !== ESTADO_ANULADA)
     : [];
   return Object.assign(resumenGeneralCobranza({ contratos: contratos, esquemas: esquemas, pagos: pagos, proyectos: proyectos,
-    ordenes: ordenes }), { hoy: hoyIso_() });
+    ordenes: ordenes, adicionales: adicionales }), { hoy: hoyIso_() });
 }
 
 /**
@@ -2421,11 +2465,20 @@ function marcarAceptada(proyectoFolio, cotizacionFolio, confirmado) {
     const folioCot = String(cotizacionFolio || '').trim().toUpperCase();
     const cot = cotizacionesDeProyecto_(proyecto.folio).find(c => c.folio.toUpperCase() === folioCot);
     if (!cot) throw new Error('La cotización ' + folioCot + ' no pertenece al proyecto ' + proyecto.folio + '.');
+    // A (incremento 7): una adicional no es el contrato del proyecto (se acepta como adicional, con el contrato firmado)
+    if (cot.tipo === TIPO_ADICIONAL) {
+      throw new Error('La cotización ' + cot.folio + ' es adicional: se acepta en «Adicionales» cuando el contrato está firmado.');
+    }
 
     const d = datosCobranza_(libro, proyecto.folio);
     const c = d.contrato;
     if (c && c.estado === ESTADO_FIRMADO) throw new Error('Contrato firmado: la cotización aceptada ya no se puede cambiar.');
     if (c && c.cotizacion === cot.folio) return vistaCobranza_(libro, proyecto);
+    // A (incremento 7): con adicionales aceptadas (contrato desbloqueado) la nueva aceptada va en su moneda (nunca se mezclan)
+    const adicOtra = d.adicionales.find(a => a.moneda !== cot.moneda);
+    if (adicOtra) {
+      throw new Error('El proyecto tiene adicionales en ' + adicOtra.moneda + ': la cotización aceptada debe ser en ' + adicOtra.moneda + '.');
+    }
     const vigentes = d.pagos.filter(p => p.estado === 'Vigente');
     if (vigentes.length && vigentes[0].monedaProyecto && vigentes[0].monedaProyecto !== cot.moneda) {
       throw new Error('El proyecto ya tiene pagos en ' + vigentes[0].monedaProyecto + ': la cotización aceptada debe ser en ' +
@@ -2509,11 +2562,12 @@ function firmarContrato(proyectoFolio, fecha) {
     if (c.estado === ESTADO_FIRMADO) throw new Error('El contrato de ' + proyecto.folio + ' ya está firmado.');
     if (proyecto.estado === 'Cancelado') throw new Error('El proyecto ' + proyecto.folio + ' está cancelado.');
     const etapas = validarEsquema(d.etapas);
-    // Tras un desbloqueo puede haber pagos: el nuevo monto no puede quedar por debajo de lo pagado
-    const r = resumenCobranza(c, etapas, d.pagos);
+    // Tras un desbloqueo puede haber pagos: el nuevo monto no puede quedar por debajo de lo pagado (A, incremento 7: contra el
+    // contrato más sus adicionales aceptadas, que el desbloqueo no toca)
+    const r = resumenCobranza(c, etapas, d.pagos, d.adicionales);
     if (r.saldo < -TOLERANCIA_PAGO) {
       throw new Error('Lo pagado (' + formatoMoneda(r.pagado) + ' ' + c.moneda + ') supera el monto contratado (' +
-        formatoMoneda(r.contratado) + ').');
+        formatoMoneda(r.total) + ').');
     }
     escribirEsquema_(d.hojas.esquemas, proyecto.folio, etapas, c.total);
     escribe_(d.hojas.contratos).getRange(c.fila, 8).setValue(ESTADO_FIRMADO);
@@ -2579,16 +2633,28 @@ function registrarPago(p) {
     const d = datosCobranza_(libro, proyecto.folio);
     const c = d.contrato;
     if (!c || c.estado !== ESTADO_FIRMADO) throw new Error('Solo se registran pagos en proyectos con contrato firmado.');
-    const pago = normalizarPago(d0, { moneda: c.moneda, etapas: d.etapas.length, hoy: hoyIso_() });
+    // A (incremento 7): el pago puede ir a una etapa de una adicional aceptada (etapaAdicional = su folio; etapaOrden dentro de su
+    // mini-esquema). Sin etapaAdicional, a una etapa del contrato, como siempre.
+    const etapaAdic = String(d0.etapaAdicional || '').trim().toUpperCase();
+    const grupo = etapaAdic ? d.adicionales.find(a => a.cotizacion.toUpperCase() === etapaAdic) : null;
+    if (etapaAdic && !grupo) throw new Error('La adicional ' + etapaAdic + ' no está aceptada en ' + proyecto.folioVisible + '. Actualiza la vista.');
+    const pago = normalizarPago(d0, { moneda: c.moneda, etapas: (grupo ? grupo.etapas : d.etapas).length, hoy: hoyIso_() });
 
-    const resumen = resumenCobranza(c, d.etapas, d.pagos);
+    // Saldo del proyecto = contrato + adicionales − pagado; la tolerancia (1.00) se mide contra ese total
+    const resumen = resumenCobranza(c, d.etapas, d.pagos, d.adicionales);
     if (aCentavos(pago.montoAplicado) > aCentavos(resumen.saldo) + aCentavos(TOLERANCIA_PAGO)) {
       throw new Error('El pago (' + formatoMoneda(pago.montoAplicado) + ' ' + c.moneda + ') excede el saldo del proyecto (' +
         formatoMoneda(Math.max(resumen.saldo, 0)) + ' ' + c.moneda + ').');
     }
-    const reparto = repartirPago(resumen.etapas, pago.etapaOrden - 1, pago.montoAplicado);
-    if (reparto.sobranteCts) reparto.aplicacion.push({ orden: pago.etapaOrden, centavos: reparto.sobranteCts });
-    const aplicacion = reparto.aplicacion.map(a => ({ etapa: d.etapas[a.orden - 1].etapa, orden: a.orden, monto: a.centavos / 100 }));
+    const indice = indiceEtapaCobranza(resumen.etapas, etapaAdic, pago.etapaOrden);
+    const reparto = repartirPago(resumen.etapas, indice, pago.montoAplicado);
+    if (reparto.sobranteCts) reparto.aplicacion.push({ orden: indice + 1, centavos: reparto.sobranteCts });
+    // Contrato: {etapa, orden, monto} como siempre; adicional: además su folio (orden dentro de su mini-esquema)
+    const aplicacion = reparto.aplicacion.map(a => {
+      const e = resumen.etapas[a.orden - 1];
+      return e.adicional ? { etapa: e.etapa, orden: e.orden, adicional: e.adicional, monto: a.centavos / 100 }
+        : { etapa: e.etapa, orden: a.orden, monto: a.centavos / 100 };
+    });
 
     const hojaPagos = d.hojas.pagos;
     const folio = siguienteFolio_(PREFIJO_PAGO, hojaPagos, 'CONSECUTIVO_PAG_');
@@ -2601,12 +2667,13 @@ function registrarPago(p) {
     escribe_(hojaPagos).appendRow([
       folio, textoFecha_(pago.fecha), Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), proyecto.folio,
       pago.monto, pago.monedaPago, pago.tipoCambio, pago.montoAplicado, c.moneda, pago.metodo, t(pago.referencia),
-      pago.etapaOrden, t(d.etapas[pago.etapaOrden - 1].etapa), JSON.stringify(aplicacion), archivo.getId(), archivo.getUrl(),
+      pago.etapaOrden, t(etiquetaEtapaCobranza(resumen.etapas[indice])), JSON.stringify(aplicacion), archivo.getId(), archivo.getUrl(),
       t(VENDEDOR_.email), t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '',
+      etapaAdic, // A (incremento 7): etapa_adicional
     ]);
     bitacora_(libro, 'Registrar pago', proyecto.folio, folio + ' · ' + formatoMoneda(pago.monto) + ' ' + pago.monedaPago +
       (pago.tipoCambio ? ' · TC ' + pago.tipoCambio + ' = ' + formatoMoneda(pago.montoAplicado) + ' ' + c.moneda : '') +
-      ' · ' + pago.metodo + ' · ' + aplicacion.map(a => a.etapa + ' ' + formatoMoneda(a.monto)).join(' + '));
+      ' · ' + pago.metodo + ' · ' + aplicacion.map(a => etiquetaEtapaCobranza(a) + ' ' + formatoMoneda(a.monto)).join(' + '));
     SpreadsheetApp.flush();
 
     const resultado = { folio: folio, url: archivo.getUrl(), vista: vistaCobranza_(libro, proyecto) };
@@ -5176,11 +5243,32 @@ function repartirPago(etapas, indice, monto) {
  * pagos = [{estado, etapaOrden, montoAplicado}] en orden de registro (solo cuentan los Vigentes, se vuelven
  * a repartir en ese orden). Lo que no cabe en ninguna etapa (dentro de la tolerancia) se suma a la etapa elegida.
  */
-function resumenCobranza(contrato, etapas, pagos) {
-  const lista = montosDeEsquema(etapas, contrato.total).map(e => Object.assign(e, { pagado: 0 }));
+function resumenCobranza(contrato, etapas, pagos, adicionales) {
+  // A (incremento 7): adicionales = [{cotizacion, subtotal, total, etapas: [{etapa, porcentaje}]}] (las Aceptadas del proyecto, en
+  // su orden). Sus etapas van después de las del contrato (montos con el total de cada adicional) y todas se cobran juntas: el
+  // excedente de la última etapa del contrato pasa a la primera de la siguiente adicional. Un pago con etapaAdicional va a esa
+  // etapa (etapaOrden dentro de su mini-esquema); si esa adicional ya no está, desde la primera etapa del contrato. Sin el cuarto
+  // argumento todo queda exactamente como antes (mismo objeto, mismas cifras); con él (aunque sea []), cada etapa trae
+  // adicional ('' = contrato) y orden (dentro de su esquema), y el resumen adicionales, adicionalesSubtotal, nAdicionales y total.
+  const conAdic = Array.isArray(adicionales);
+  const lista = montosDeEsquema(etapas, contrato.total).map((e, i) => Object.assign(e, { pagado: 0 }, conAdic ? { adicional: '', orden: i + 1 } : {}));
+  const nContrato = lista.length;
+  let adicCts = 0, adicSubCts = 0, nAdic = 0;
+  if (conAdic) {
+    const vistos = {};
+    adicionales.forEach(a => {
+      const folio = String((a && (a.cotizacion || a.folio)) || '').trim().toUpperCase();
+      if (!folio || vistos[folio]) return;
+      vistos[folio] = true;
+      const ea = a.etapas && a.etapas.length ? a.etapas : esquemaAdicionalPorOmision();
+      montosDeEsquema(ea, a.total).forEach((e, i) => lista.push(Object.assign(e, { pagado: 0, adicional: folio, orden: i + 1 })));
+      adicCts += aCentavos(a.total); adicSubCts += aCentavos(a.subtotal); nAdic++;
+    });
+  }
   let pagadoCts = 0;
   (pagos || []).filter(p => p.estado === 'Vigente').forEach(p => {
-    const indice = Math.min(Math.max((Number(p.etapaOrden) || 1) - 1, 0), lista.length - 1);
+    const indice = conAdic && p.etapaAdicional ? indiceEtapaCobranza(lista, p.etapaAdicional, p.etapaOrden)
+      : Math.min(Math.max((Number(p.etapaOrden) || 1) - 1, 0), nContrato - 1);
     const r = repartirPago(lista, indice, p.montoAplicado);
     r.aplicacion.forEach(a => { lista[a.orden - 1].pagado = (aCentavos(lista[a.orden - 1].pagado) + a.centavos) / 100; });
     if (r.sobranteCts) lista[indice].pagado = (aCentavos(lista[indice].pagado) + r.sobranteCts) / 100;
@@ -5191,12 +5279,17 @@ function resumenCobranza(contrato, etapas, pagos) {
     e.avance = e.monto > 0 ? Math.min(100, Math.round(e.pagado / e.monto * 1000) / 10) : 0;
   });
   const contratadoCts = aCentavos(contrato.total);
-  return {
+  const totalCts = contratadoCts + adicCts; // sin adicionales = el contratado (las cifras de antes)
+  const resumen = {
     moneda: contrato.moneda, contratado: contratadoCts / 100, subtotal: redondear(contrato.subtotal),
-    pagado: pagadoCts / 100, saldo: (contratadoCts - pagadoCts) / 100,
-    avance: contratadoCts > 0 ? Math.min(100, Math.round(pagadoCts / contratadoCts * 1000) / 10) : 0,
+    pagado: pagadoCts / 100, saldo: (totalCts - pagadoCts) / 100,
+    avance: totalCts > 0 ? Math.min(100, Math.round(pagadoCts / totalCts * 1000) / 10) : 0,
     etapas: lista,
   };
+  if (conAdic) {
+    Object.assign(resumen, { adicionales: adicCts / 100, adicionalesSubtotal: adicSubCts / 100, nAdicionales: nAdic, total: totalCts / 100 });
+  }
+  return resumen;
 }
 
 /** Fecha "AAAA-MM-DD" válida, no futura (hoy = "AAAA-MM-DD") y no anterior a 2020. */
@@ -5467,8 +5560,11 @@ function costosDeOrdenes(ordenes, monedaContrato) {
 }
 
 /**
- * Resumen de cobranza de todos los proyectos. d = {contratos, esquemas: [{proyectoFolio, orden, etapa, porcentaje}], pagos,
- * proyectos, ordenes}. Los proyectos Cancelados no aparecen. Un renglón por contrato: "Firmado" o "Por firmar" (aceptada sin
+ * Resumen de cobranza de todos los proyectos. d = {contratos, esquemas: [{proyectoFolio, orden, etapa, porcentaje, adicional}], pagos,
+ * proyectos, ordenes, adicionales (A, incremento 7: filas Aceptadas de la pestaña Adicionales; opcional)}. Con adicionales, cada
+ * renglón y cada total traen además adicionales (con IVA) y total (contrato + adicionales); el saldo, lo cobrado y el avance ya
+ * cuentan sus etapas. El margen sigue siendo el del contrato (lo conecta el integrador).
+ * Los proyectos Cancelados no aparecen. Un renglón por contrato: "Firmado" o "Por firmar" (aceptada sin
  * firmar: se muestra pero no suma a los totales). Pagado y saldo salen de resumenCobranza (lo mismo que la vista del proyecto);
  * margen = contratado sin IVA − órdenes de compra no canceladas. Totales por moneda, solo de contratos firmados: nunca se suman
  * MXN y USD. Renglones: firmados primero (por moneda y del mayor saldo al menor); luego los por firmar.
@@ -5484,17 +5580,22 @@ function resumenGeneralCobranza(d) {
   };
   const esquemas = agrupar(d.esquemas, 'proyectoFolio'), pagos = agrupar(d.pagos, 'proyectoFolio');
   const ordenes = agrupar(d.ordenes, 'proyectoFolio');
+  // A (incremento 7): con d.adicionales (las Aceptadas) cada renglón suma las suyas; sin el campo, como antes
+  const conAdic = Array.isArray(d.adicionales);
+  const adicionales = agrupar(conAdic ? d.adicionales : [], 'proyectoFolio');
 
   const renglones = [];
   (d.contratos || []).forEach(c => {
     const folio = may(c.proyectoFolio);
     const p = proyectos[folio];
     if (!p || p.estado === 'Cancelado') return;
-    let etapas = (esquemas[folio] || []).slice().sort((a, b) => a.orden - b.orden)
+    const filasE = esquemas[folio] || [];
+    let etapas = filasE.filter(e => !e.adicional).sort((a, b) => a.orden - b.orden)
       .map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje }));
     if (!etapas.length) etapas = [{ etapa: 'Total', porcentaje: 100 }];
     const pagosP = pagos[folio] || [];
-    const r = resumenCobranza(c, etapas, pagosP);
+    const adics = conAdic ? adicionalesConEtapas(adicionales[folio] || [], filasE, c.moneda) : undefined;
+    const r = resumenCobranza(c, etapas, pagosP, adics);
     const siguiente = r.etapas.find(e => aCentavos(e.saldo) > 0);
     const ultimoPago = pagosP.filter(x => x.estado === 'Vigente').map(x => String(x.fecha || '')).sort().pop() || '';
     const ocs = (ordenes[folio] || []).filter(ocVigente); // ni canceladas ni anuladas
@@ -5504,15 +5605,15 @@ function resumenGeneralCobranza(d) {
     } catch (e) {
       margenError = e.message;
     }
-    renglones.push({
+    renglones.push(Object.assign({
       folio: p.folio, folioVisible: p.folioVisible || p.folio, nombre: p.nombre, cliente: p.cliente, estadoProyecto: p.estado,
       marca: c.marca, moneda: c.moneda,
       estadoContrato: c.estado === ESTADO_FIRMADO ? 'Firmado' : 'Por firmar', cotizacion: c.cotizacion, fechaFirma: c.fechaFirma,
       contratado: r.contratado, subtotal: r.subtotal, pagado: r.pagado, saldo: r.saldo, avance: r.avance,
-      siguienteEtapa: siguiente ? siguiente.etapa : '', siguienteSaldo: siguiente ? siguiente.saldo : 0, ultimoPago: ultimoPago,
+      siguienteEtapa: siguiente ? etiquetaEtapaCobranza(siguiente) : '', siguienteSaldo: siguiente ? siguiente.saldo : 0, ultimoPago: ultimoPago,
       ordenes: ocs.length, costoOc: margen ? margen.totalCostos : null, margen: margen ? margen.margen : null,
       margenPorcentaje: margen ? margen.porcentaje : null, margenError: margenError,
-    });
+    }, conAdic ? { adicionales: r.adicionales, nAdicionales: r.nAdicionales, total: r.total } : {}));
   });
   // Saldos de monedas distintas no se comparan entre sí: primero por moneda (MXN, USD), luego del mayor saldo al menor
   renglones.sort((a, b) => (a.estadoContrato === b.estadoContrato ? 0 : a.estadoContrato === 'Firmado' ? -1 : 1) ||
@@ -5522,24 +5623,27 @@ function resumenGeneralCobranza(d) {
   const tot = {};
   renglones.forEach(x => {
     const t = tot[x.moneda] || (tot[x.moneda] = { moneda: x.moneda, proyectos: 0, conSaldo: 0, contratado: 0, cobrado: 0,
-      porCobrar: 0, contratadoSinIva: 0, costoOc: 0, porFirmar: 0, montoPorFirmar: 0, margenError: false });
-    if (x.estadoContrato !== 'Firmado') { t.porFirmar++; t.montoPorFirmar += aCentavos(x.contratado); return; }
+      porCobrar: 0, contratadoSinIva: 0, costoOc: 0, porFirmar: 0, montoPorFirmar: 0, margenError: false, adicionales: 0 });
+    // A (incremento 7): un contrato por firmar con adicionales (desbloqueado) muestra contrato + adicionales; tampoco suman
+    if (x.estadoContrato !== 'Firmado') { t.porFirmar++; t.montoPorFirmar += aCentavos(x.total != null ? x.total : x.contratado); return; }
     t.proyectos++;
     if (aCentavos(x.saldo) > 0) t.conSaldo++;
     t.contratado += aCentavos(x.contratado); t.cobrado += aCentavos(x.pagado); t.porCobrar += aCentavos(x.saldo);
+    t.adicionales += aCentavos(x.adicionales || 0);
     t.contratadoSinIva += aCentavos(x.subtotal);
     if (x.margenError) t.margenError = true; else t.costoOc += aCentavos(x.costoOc);
   });
   const totales = Object.keys(tot).sort().map(k => {
     const t = tot[k];
     const margenCts = t.contratadoSinIva - t.costoOc;
-    return {
+    const totalCts = t.contratado + t.adicionales; // A (incremento 7): el avance se mide contra contrato + adicionales
+    return Object.assign({
       moneda: t.moneda, proyectos: t.proyectos, conSaldo: t.conSaldo, contratado: t.contratado / 100, cobrado: t.cobrado / 100,
-      porCobrar: t.porCobrar / 100, avance: t.contratado > 0 ? Math.min(100, Math.round(t.cobrado / t.contratado * 1000) / 10) : 0,
+      porCobrar: t.porCobrar / 100, avance: totalCts > 0 ? Math.min(100, Math.round(t.cobrado / totalCts * 1000) / 10) : 0,
       contratadoSinIva: t.contratadoSinIva / 100, costoOc: t.costoOc / 100, margen: t.margenError ? null : margenCts / 100,
       margenPorcentaje: t.margenError || t.contratadoSinIva <= 0 ? null : Math.round(margenCts / t.contratadoSinIva * 1000) / 10,
       porFirmar: t.porFirmar, montoPorFirmar: t.montoPorFirmar / 100,
-    };
+    }, conAdic ? { adicionales: t.adicionales / 100, total: totalCts / 100 } : {});
   });
   return { totales: totales, proyectos: renglones };
 }
@@ -6839,6 +6943,8 @@ function construirHtmlPdf(d, cfg, logoUrl) {
       : '') +
     docFila('Folio', d.folio, true) + docFila('Fecha', d.fecha) + docFila('Vigencia', d.vigencia) +
     (d.moneda === 'USD' ? docFila('Moneda', 'USD (dólares estadounidenses)', true) : '') +
+    // A (incremento 7): cotización adicional de un proyecto con contrato firmado (texto escapado en docFila)
+    (d.adicional ? docFila('Cotización adicional al proyecto', d.adicional, true) : '') +
     '</table></td></tr></table>' +
     '<div style="border-top:3px solid ' + AQUA + ';margin-top:8px;"></div>' +
     '<div style="padding:6px 0 0;color:#4B5563;line-height:1.5;">' +
@@ -9873,7 +9979,7 @@ function modAnular_() {
     api: { previsualizarAnulacion: previsualizarAnulacion, anular: anular, listarAnulados: listarAnulados },
     // Una anulación puede tocar cualquier colección (es rara: se suben todas y los navegadores vuelven a pedir sus listas)
     cambios: { anular: ['anulaciones', 'proyectos', 'contratos', 'cotizaciones', 'requisiciones', 'oc', 'pagosCobranza',
-      'pagosProveedores', 'facturasProveedor'] },
+      'pagosProveedores', 'facturasProveedor', 'adicionales'] }, // adicionales: A (incremento 7)
     solo: [], publicas: [],
     // La lista de anulados de Administración (solo super admin) se vuelve a mandar cuando alguien anula algo
     sincronizar(permisos, ctx, algo, r, errores) {
@@ -9889,7 +9995,8 @@ const PREFIJO_ARCHIVO_ANULADO = 'ANULADA — ', PREFIJO_CARPETA_ANULADA = 'ANULA
 const MOTIVO_ANULAR_MIN = 10, MOTIVO_ANULAR_MAX = 500;
 const TIPOS_ANULAR = { cotizacion: 'Cotización', proyecto: 'Proyecto', contrato: 'Contrato', pago: 'Pago de cliente',
   req: 'Requisición', oc: 'Orden de compra', pgp: 'Pago a proveedor', fpr: 'Factura de proveedor', rec: 'Recepción',
-  dev: 'Devolución' }; // incremento 5: solo en cascada (de su orden o su requisición)
+  dev: 'Devolución', // incremento 5: solo en cascada (de su orden o su requisición)
+  adicional: 'Adicional' }; // A (incremento 7): solo en cascada (de su cotización, del contrato o del proyecto)
 const PREFIJOS_ANULAR = { PRY: 'proyecto', PAG: 'pago', REQ: 'req', OC: 'oc', PGP: 'pgp', FPR: 'fpr', REC: 'rec' };
 
 /**
@@ -9948,7 +10055,7 @@ function anuladosDeHoja_() {
   if (!hoja) return set;
   filasDeArea_(hoja, HOJAS_ADMIN, 'Anulaciones').forEach(r => {
     const folio = String(r[3] || '').trim().toUpperCase();
-    if (folio && String(r[2] || '') !== TIPOS_ANULAR.contrato) set[folio] = true;
+    if (folio && String(r[2] || '') !== TIPOS_ANULAR.contrato && String(r[2] || '') !== TIPOS_ANULAR.adicional) set[folio] = true;
   });
   return set;
 }
@@ -9999,7 +10106,7 @@ function datosAnular_() {
   const may = s => String(s || '').trim().toUpperCase();
   const lc = libroCobranzaSiExiste_(), lo = libroComprasSiExiste_();
   const d = { libroCob: lc, libroCom: lo, anulados: anuladosDeHoja_(), cot: [], pry: [], contratos: [], esquemas: [], pagos: [],
-    ordenes: [], reqs: [], pgp: [], fpr: [], movs: [], devs: [] };
+    ordenes: [], reqs: [], pgp: [], fpr: [], movs: [], devs: [], adicionales: [] };
   db_().getSheetByName('Cotizaciones').getDataRange().getValues().slice(1).forEach((r, i) => {
     if (!String(r[0] || '').trim()) return;
     d.cot.push({ folio: String(r[0]).trim(), fila: i + 2, valores: r, proyectoFolio: may(r[19]), cliente: String(r[2] || ''),
@@ -10015,7 +10122,12 @@ function datosAnular_() {
   filasSiHay_(lc, HOJAS_COBRANZA, 'Contratos').forEach((r, i) => {
     if (String(r[0] || '').trim()) d.contratos.push(Object.assign(contratoDesdeFila_(r, i + 2), { valores: r }));
   });
-  filasSiHay_(lc, HOJAS_COBRANZA, 'Esquemas').forEach((r, i) => d.esquemas.push({ proyectoFolio: may(r[0]), fila: i + 2, valores: r }));
+  // A (incremento 7): adicional = folio de la adicional dueña de la etapa ('' = contrato)
+  filasSiHay_(lc, HOJAS_COBRANZA, 'Esquemas').forEach((r, i) => d.esquemas.push({ proyectoFolio: may(r[0]), fila: i + 2, valores: r,
+    adicional: esquemaDeAdicional_(r) }));
+  filasSiHay_(lc, HOJAS_COBRANZA, 'Adicionales').forEach((r, i) => {
+    if (String(r[0] || '').trim()) d.adicionales.push(Object.assign(adicionalDesdeFila_(r, i + 2), { valores: r }));
+  });
   filasSiHay_(lc, HOJAS_COBRANZA, 'Pagos').forEach((r, i) => {
     if (String(r[0] || '').trim()) {
       d.pagos.push(Object.assign(pagoDesdeFila_(r, i + 2), { valores: r, comprobanteId: String(r[14] || ''), registroEmail: String(r[16] || '') }));
@@ -10097,6 +10209,8 @@ function planAnulacion_(d, objetivo) {
   };
   const recs = recepciones();
   const vivo = x => x.estado !== ESTADO_ANULADA;
+  // A (incremento 7): adicionales Aceptadas (las Canceladas ya no tienen esquema ni cobro)
+  const adicionalesDe = pf => (d.adicionales || []).filter(a => may(a.proyectoFolio) === may(pf) && a.estado === ADIC_ACEPTADA);
 
   function proyecto(p) {
     if (!agregar({ clave: 'proyecto', folio: p.folio, x: p, proyectoFolio: p.folio, estado: p.estado,
@@ -10107,6 +10221,7 @@ function planAnulacion_(d, objetivo) {
     d.cot.filter(q => q.proyectoFolio === f && !d.anulados[may(q.folio)]).forEach(cotizacion);
     const c = contratoActivo(p.folio);
     if (c) contrato(c);
+    adicionalesDe(p.folio).forEach(adicional); // A (incremento 7): las que quedaran (normalmente ya van con el contrato)
     d.pagos.filter(x => may(x.proyectoFolio) === f && vivo(x)).forEach(pagoCliente);
     d.reqs.filter(r => may(r.proyectoFolio) === f && vivo(r)).forEach(requisicion);
     d.ordenes.filter(o => may(o.proyectoFolio) === f && vivo(o)).forEach(orden);
@@ -10114,20 +10229,30 @@ function planAnulacion_(d, objetivo) {
   function cotizacion(q) {
     const c = q.proyectoFolio ? contratoActivo(q.proyectoFolio) : null;
     const aceptada = !!c && may(c.cotizacion) === may(q.folio);
-    const estado = !aceptada ? '' : c.estado === ESTADO_FIRMADO ? 'Aceptada (contrato firmado)' : 'Aceptada';
+    // A (incremento 7): una cotización adicional aceptada arrastra su fila de Adicionales y su esquema
+    const adics = q.proyectoFolio ? adicionalesDe(q.proyectoFolio).filter(a => may(a.cotizacion) === may(q.folio)) : [];
+    const estado = adics.length ? 'Adicional aceptada' : !aceptada ? '' : c.estado === ESTADO_FIRMADO ? 'Aceptada (contrato firmado)' : 'Aceptada';
     if (!agregar({ clave: 'cotizacion', folio: q.folio, x: q, proyectoFolio: q.proyectoFolio, estado: estado,
       descripcion: [q.folio, [q.cliente, q.empresa].filter(Boolean).join(' — '), dinero(q.total, q.moneda),
         q.proyectoFolio ? fv(q.proyectoFolio) : 'Sin proyecto'].join(' · ') })) return;
     correo(q.vendedorEmail);
     archivo(idDeUrlDrive(q.pdfUrl));
     if (aceptada) contrato(c);
+    adics.forEach(adicional);
   }
   function contrato(c) {
     if (!agregar({ clave: 'contrato', folio: 'CONTRATO ' + may(c.proyectoFolio), x: c, proyectoFolio: c.proyectoFolio, estado: c.estado,
       descripcion: 'Contrato de ' + fv(c.proyectoFolio) + ' · ' + c.cotizacion + ' · ' + dinero(c.total, c.moneda) +
         (c.fechaFirma ? ' · firmado el ' + c.fechaFirma : ' · sin firmar') })) return;
     correo(c.aceptadaPor, c.firmadoPor);
+    adicionalesDe(c.proyectoFolio).forEach(adicional); // A (incremento 7): sin contrato no hay adicionales
     d.pagos.filter(x => may(x.proyectoFolio) === may(c.proyectoFolio) && vivo(x)).forEach(pagoCliente);
+  }
+  function adicional(a) {
+    // A (incremento 7): la fila de Adicionales queda Anulada y su esquema se borra (copia en Anulaciones). Los pagos no se tocan
+    if (!agregar({ clave: 'adicional', folio: 'ADICIONAL ' + may(a.cotizacion), x: a, proyectoFolio: a.proyectoFolio, estado: a.estado,
+      descripcion: 'Adicional ' + a.cotizacion + ' de ' + fv(a.proyectoFolio) + ' · ' + dinero(a.total, a.moneda) })) return;
+    correo(a.aceptadaPor);
   }
   function pagoCliente(x) {
     if (!agregar({ clave: 'pago', folio: x.folio, x: x, proyectoFolio: x.proyectoFolio, estado: x.estado,
@@ -10276,6 +10401,11 @@ function planAnulacion_(d, objetivo) {
       plan.efectos.push({ clave: 'info', texto: fv(c.proyectoFolio) + ' queda sin cotización aceptada' +
         (enPlan('cotizacion', c.cotizacion) ? '.' : '; ' + c.cotizacion + ' sigue en el proyecto, sin aceptar.') +
         ' Se borra su esquema de pagos (queda copia en Anulaciones).' });
+    } else if (r.clave === 'adicional' && !enPlan('contrato', 'CONTRATO ' + may(r.proyectoFolio)) && !enPlan('proyecto', r.proyectoFolio)) {
+      // A (incremento 7): el contrato sigue; lo cobrado de sus etapas se vuelve a repartir entre las demás
+      plan.efectos.push({ clave: 'info', texto: fv(r.proyectoFolio) + ' queda sin la adicional ' + r.x.cotizacion + ' (' + dinero(r.x.total, r.x.moneda) +
+        '): se borra su esquema de pagos (queda copia en Anulaciones). Los pagos que se le aplicaron siguen vigentes y se vuelven a repartir ' +
+        'entre las etapas del contrato y de las demás adicionales.' });
     } else if (r.clave === 'pago' && !enPlan('contrato', 'CONTRATO ' + may(r.proyectoFolio)) && !enPlan('proyecto', r.proyectoFolio)) {
       plan.efectos.push({ clave: 'info', texto: 'El cobrado, el saldo y el avance por etapa de ' + fv(r.proyectoFolio) + ' se recalculan sin ' + r.folio + '.' });
     } else if (r.clave === 'fpr' && !enPlan('oc', r.x.ocFolio)) {
@@ -10404,9 +10534,18 @@ function aplicarAnulacion_(d, plan, m) {
       const h = hojaCob('Contratos');
       escribe_(h).getRange(x.fila, 8).setValue(ESTADO_ANULADA);
       escribe_(h).getRange(x.fila, 13).setValue(ahora);
-      r.esquema = d.esquemas.filter(e => e.proyectoFolio === String(x.proyectoFolio).toUpperCase());
+      // Solo las etapas del contrato (las de cada adicional se borran con su registro 'adicional', que va en la misma cascada)
+      r.esquema = d.esquemas.filter(e => e.proyectoFolio === String(x.proyectoFolio).toUpperCase() && !e.adicional);
       r.esquema.forEach(e => esquemasBorrar.push(e.fila));
       bitacora_(d.libroCob, 'Anular contrato', x.proyectoFolio, r.descripcion + nota(r), m);
+    } else if (r.clave === 'adicional') {
+      // A (incremento 7): la fila queda Anulada (deja de contar) y su esquema se borra
+      const h = hojaCob('Adicionales');
+      escribe_(h).getRange(x.fila, colAdic_('estado')).setValue(ESTADO_ANULADA);
+      escribe_(h).getRange(x.fila, colAdic_('actualizado')).setValue(ahora);
+      r.esquema = d.esquemas.filter(e => e.proyectoFolio === String(x.proyectoFolio).toUpperCase() && e.adicional === String(x.cotizacion).toUpperCase());
+      r.esquema.forEach(e => esquemasBorrar.push(e.fila));
+      bitacora_(d.libroCob, 'Anular adicional', x.proyectoFolio, r.descripcion + nota(r), m);
     } else if (r.clave === 'pago') {
       marcar(hojaCob('Pagos'), x.fila, 19, 20, !!x.canceladoPor);
       bitacora_(d.libroCob, 'Anular pago', x.proyectoFolio, r.descripcion + nota(r), m);
@@ -10439,7 +10578,7 @@ function aplicarAnulacion_(d, plan, m) {
   // Esquemas de pagos de los contratos anulados (de abajo hacia arriba para no mover las filas que faltan)
   if (esquemasBorrar.length) {
     const h = hojaCob('Esquemas');
-    esquemasBorrar.sort((a, b) => b - a).forEach(fila => escribe_(h).deleteRow(fila));
+    esquemasBorrar.filter((f, i) => esquemasBorrar.indexOf(f) === i).sort((a, b) => b - a).forEach(fila => escribe_(h).deleteRow(fila));
   }
 
   // Efectos en lo que sigue en pie
@@ -10507,8 +10646,8 @@ function registrarAnulacion_(libroAdmin, plan, m) {
       : r.clave === 'dev' ? { hoja: 'Devoluciones', fila: x.fila, valores: x.valores,
         movimientos: (x.movs || []).map(f => ({ fila: f.fila, valores: f.valores })) }
       : { hoja: { proyecto: 'Proyectos', cotizacion: 'Cotizaciones', contrato: 'Contratos', pago: 'Pagos', req: 'Requisiciones',
-        oc: 'OrdenesCompra', pgp: 'PagosProveedores', fpr: 'FacturasProveedor' }[r.clave], fila: x.fila, valores: x.valores };
-    if (r.clave === 'contrato') antes.esquema = (r.esquema || []).map(e => e.valores);
+        oc: 'OrdenesCompra', pgp: 'PagosProveedores', fpr: 'FacturasProveedor', adicional: 'Adicionales' }[r.clave], fila: x.fila, valores: x.valores };
+    if (r.clave === 'contrato' || r.clave === 'adicional') antes.esquema = (r.esquema || []).map(e => e.valores);
     escribe_(hoja).appendRow([ahora, t(yo), r.tipo, t(r.folio), t(m), jsonCelda(cascada), jsonCelda(antes)]);
   });
   bitacoraAdmin_('Anular ' + raiz.tipo.toLowerCase(), raiz.folio, plan.registros.length + ' registro(s): ' +
@@ -12658,9 +12797,12 @@ function datosReportes_(que) {
     d.contratos = filasSiHay_(lc, HOJAS_COBRANZA, 'Contratos').map((r, i) => contratoDesdeFila_(r, i + 2))
       .filter(c => c.proyectoFolio.trim() && c.estado !== ESTADO_ANULADA);
     d.esquemas = filasSiHay_(lc, HOJAS_COBRANZA, 'Esquemas').filter(r => String(r[0] || '').trim())
-      .map(r => ({ proyectoFolio: String(r[0]), orden: Number(r[1]), etapa: String(r[2]), porcentaje: Number(r[3]), fechaEsperada: fechaIso_(r[cF]) }));
+      .map(r => ({ proyectoFolio: String(r[0]), orden: Number(r[1]), etapa: String(r[2]), porcentaje: Number(r[3]), fechaEsperada: fechaIso_(r[cF]),
+        adicional: esquemaDeAdicional_(r) })); // A (incremento 7): '' = etapa del contrato
     d.pagos = filasSiHay_(lc, HOJAS_COBRANZA, 'Pagos').filter(r => String(r[0] || '').trim()).map((r, i) => pagoDesdeFila_(r, i + 2))
       .filter(p => p.estado !== ESTADO_ANULADA && !esAnulado_(p.folio));
+    // A (incremento 7): adicionales Aceptadas (sus etapas por cobrar entran a CxC y al flujo con su fecha esperada)
+    d.adicionales = adicionalesDelLibro_(lc).filter(a => !esAnulado_(a.cotizacion));
   }
   if (que.compras) {
     const lo = libroComprasSiExiste_();
@@ -12692,14 +12834,19 @@ function guardarFechasEsperadas(proyectoFolio, fechas) {
     const d = datosCobranza_(libro, proyecto.folio);
     if (!d.contrato) throw new Error('Primero marca la cotización aceptada del proyecto.');
     const hoja = d.hojas.esquemas, f = proyecto.folio.toUpperCase(), cF = colEsq_('fecha_esperada');
-    const filas = {};
+    // A (incremento 7): las etapas de las adicionales tienen su propio orden (x.adicional = folio de la adicional; vacío = contrato)
+    const filas = {}, llave = (adic, orden) => (adic || '') + '#' + Number(orden);
     filasCobranza_(hoja, 'Esquemas').forEach((r, i) => {
-      if (String(r[0]).toUpperCase() === f) filas[Number(r[1])] = { fila: i + 2, etapa: String(r[2]), fecha: fechaIso_(r[cF - 1]) };
+      const adic = esquemaDeAdicional_(r);
+      if (String(r[0]).toUpperCase() === f) {
+        filas[llave(adic, r[1])] = { fila: i + 2, etapa: adic ? String(r[2]) + ' (adicional ' + adic + ')' : String(r[2]), nombre: String(r[2]),
+          fecha: fechaIso_(r[cF - 1]) };
+      }
     });
     const cambios = [];
     lista.forEach(x => {
-      const e = filas[x.orden];
-      if (!e || textoNormal(e.etapa) !== textoNormal(x.etapa)) {
+      const e = filas[llave(x.adicional, x.orden)];
+      if (!e || textoNormal(e.nombre) !== textoNormal(x.etapa)) {
         throw new Error('El esquema de pagos de ' + proyecto.folioVisible + ' cambió mientras capturabas. Actualiza la vista y vuelve a ' +
           'capturar las fechas.');
       }
@@ -12752,18 +12899,26 @@ function esFolioPrueba(folio, lista) {
  */
 function normalizarFechasEsperadas(fechas) {
   if (!Array.isArray(fechas) || !fechas.length) throw new Error('No hay fechas para guardar.');
-  if (fechas.length > MAX_ETAPAS) throw new Error('El esquema de pagos admite máximo ' + MAX_ETAPAS + ' etapas.');
+  // A (incremento 7): x.adicional (opcional) = folio de la adicional dueña de la etapa; el máximo de etapas es por esquema (el
+  // del contrato y el de cada adicional) y el orden se repite solo dentro del mismo esquema. Sin adicional, como antes.
+  const adicDe = x => String((x && x.adicional) || '').trim().toUpperCase();
+  const porEsquema = {};
+  fechas.forEach(x => { const a = adicDe(x); porEsquema[a] = (porEsquema[a] || 0) + 1; });
+  if (fechas.length > MAX_ETAPAS * 20 || Object.keys(porEsquema).some(a => porEsquema[a] > MAX_ETAPAS)) {
+    throw new Error('El esquema de pagos admite máximo ' + MAX_ETAPAS + ' etapas.');
+  }
   const vistas = {};
   return fechas.map(x => {
-    const orden = Number(x && x.orden), etapa = String((x && x.etapa) || '').trim().replace(/\s+/g, ' ');
+    const orden = Number(x && x.orden), etapa = String((x && x.etapa) || '').trim().replace(/\s+/g, ' '), adicional = adicDe(x);
     if (!Number.isInteger(orden) || orden < 1 || orden > MAX_ETAPAS) throw new Error('Etapa no válida.');
-    if (vistas[orden]) throw new Error('La etapa ' + orden + ' está repetida.');
-    vistas[orden] = true;
+    if (adicional && !/^[A-Z]{2,6}-\d{4}-\d{4,}$/.test(adicional)) throw new Error('Etapa no válida.');
+    if (vistas[adicional + '#' + orden]) throw new Error('La etapa ' + orden + ' está repetida.');
+    vistas[adicional + '#' + orden] = true;
     const s = String(x.fecha == null ? '' : x.fecha).trim();
     if (s && (!fechaIsoValida(s) || s < '2020-01-01' || s > '2100-12-31')) {
       throw new Error('La fecha esperada de "' + (etapa || 'etapa ' + orden) + '" no es válida (AAAA-MM-DD).');
     }
-    return { orden: orden, etapa: etapa, fecha: s };
+    return adicional ? { orden: orden, etapa: etapa, fecha: s, adicional: adicional } : { orden: orden, etapa: etapa, fecha: s };
   });
 }
 
@@ -12798,7 +12953,8 @@ function contratoDesbloqueado(c, pagos) {
  * firmó y luego se desbloqueó: se le sigue cobrando y va marcado desbloqueado), de proyectos que existen, no Cancelados ni de
  * prueba; solo etapas con saldo. Una aceptada sin pagos sigue fuera. Partida = {proyectoFolio, folioVisible, nombre, cliente,
  * clienteId, estadoProyecto, marca, moneda, desbloqueado, orden, etapa, montoEtapa, pagadoEtapa, monto (saldo), fecha (esperada
- * o '')}.
+ * o '')}. A (incremento 7): con d.adicionales (Aceptadas) también las etapas de las adicionales, con adicional (folio), etapaNombre
+ * y etapa = "Pago único (adicional HLG-…)"; orden es el de su mini-esquema. Sin d.adicionales, exactamente como antes.
  */
 
 function etapasPorCobrar(d) {
@@ -12808,17 +12964,32 @@ function etapasPorCobrar(d) {
   (d.proyectos || []).forEach(p => { proyectos[may(p.folio)] = p; });
   (d.esquemas || []).forEach(e => { (esquemas[may(e.proyectoFolio)] = esquemas[may(e.proyectoFolio)] || []).push(e); });
   (d.pagos || []).forEach(p => { (pagos[may(p.proyectoFolio)] = pagos[may(p.proyectoFolio)] || []).push(p); });
+  // A (incremento 7): con d.adicionales (Aceptadas) sus etapas también se cobran (mismo reparto que la vista del proyecto); sin el
+  // campo, como antes. Las filas de Esquemas de una adicional (columna adicional) no son etapas del contrato.
+  const conAdic = Array.isArray(d.adicionales), adicionales = {};
+  (conAdic ? d.adicionales : []).forEach(a => { (adicionales[may(a.proyectoFolio)] = adicionales[may(a.proyectoFolio)] || []).push(a); });
   const partidas = [];
   (d.contratos || []).forEach(c => {
     const folio = may(c.proyectoFolio), p = proyectos[folio];
     const desbloqueado = contratoDesbloqueado(c, pagos[folio]);
     if ((c.estado !== ESTADO_FIRMADO && !desbloqueado) || !p || p.estado === 'Cancelado' || esFolioPrueba(folio, prueba) ||
       esFolioPrueba(c.cotizacion, prueba)) return;
-    const filas = (esquemas[folio] || []).slice().sort((a, b) => a.orden - b.orden);
+    const todas = esquemas[folio] || [];
+    const filas = todas.filter(e => !e.adicional).sort((a, b) => a.orden - b.orden);
     const etapas = filas.length ? filas.map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje })) : [{ etapa: 'Total', porcentaje: 100 }];
-    resumenCobranza(c, etapas, pagos[folio] || []).etapas.forEach((e, i) => {
+    const adics = conAdic ? adicionalesConEtapas((adicionales[folio] || []).filter(a => !esFolioPrueba(a.cotizacion, prueba)), todas, c.moneda) : undefined;
+    resumenCobranza(c, etapas, pagos[folio] || [], adics).etapas.forEach((e, i) => {
       const cts = aCentavos(e.saldo);
       if (cts <= 0) return;
+      if (e.adicional) {
+        // Etapa de una adicional: su fecha esperada es la de su fila; la etiqueta dice de qué adicional es
+        const fila = todas.find(x => x.adicional === e.adicional && Number(x.orden) === e.orden);
+        partidas.push({ proyectoFolio: p.folio, folioVisible: p.folioVisible || p.folio, nombre: p.nombre || '', cliente: p.cliente || '',
+          clienteId: p.clienteId || '', estadoProyecto: p.estado, marca: c.marca, moneda: c.moneda, desbloqueado: desbloqueado, orden: e.orden,
+          etapa: etiquetaEtapaCobranza(e), adicional: e.adicional, etapaNombre: e.etapa,
+          montoEtapa: e.monto, pagadoEtapa: e.pagado, monto: cts / 100, fecha: fila && fechaIsoValida(fila.fechaEsperada) ? fila.fechaEsperada : '' });
+        return;
+      }
       const fecha = filas[i] && fechaIsoValida(filas[i].fechaEsperada) ? filas[i].fechaEsperada : '';
       partidas.push({ proyectoFolio: p.folio, folioVisible: p.folioVisible || p.folio, nombre: p.nombre || '', cliente: p.cliente || '',
         clienteId: p.clienteId || '', estadoProyecto: p.estado, marca: c.marca, moneda: c.moneda, desbloqueado: desbloqueado, orden: i + 1, etapa: e.etapa,
@@ -13226,4 +13397,351 @@ function margenPorProyecto(d) {
       porcentaje: t.contratado > 0 ? Math.round(margen / t.contratado * 1000) / 10 : null, porFirmar: t.porFirmar, conError: t.conError };
   });
   return { conceptos: conceptos, totales: totales, proyectos: filas };
+}
+
+// ---- 6.A (incremento 7) Adicionales: cotización "Adicional" en un proyecto con contrato firmado, su mini-esquema y su cobro ----
+// Contrato: docs/incremento-7.md §0–§3 (módulo A); detalle y decisiones: docs/incremento-7-adicionales.md; idea aprobada en
+// CLAUDE.md §6.10. Una adicional es una cotización HLG normal (folio, PDF) con tipo "Adicional" (columna tipo de Cotizaciones),
+// dentro de un proyecto con contrato firmado y en la moneda del contrato. Cobranza la acepta → fila en la pestaña Adicionales del
+// libro de cobranza + su mini-esquema en Esquemas (columna adicional = folio de la cotización; por omisión 100 % en una etapa,
+// editable por cobranza mientras no tenga pagos aplicados). Las etapas del contrato original no cambian. Los pagos se reparten
+// sobre todas las etapas (contrato y luego cada adicional en el orden en que se aceptó: resumenCobranza con su cuarto argumento);
+// saldo del proyecto = contrato + adicionales − pagado. Cancelar (cobranza, con motivo) solo sin pagos aplicados; anular la
+// cotización, el contrato o el proyecto (módulo E) la anula con su esquema. El desbloqueo del contrato no toca las adicionales.
+// Permisos: cotizar = ventas (como siempre); aceptar, editar el esquema, cancelar y ver = cobranza (exigirCobranza_). MXN y USD
+// nunca se suman: una adicional va en la moneda del contrato (se revisa al cotizar y al aceptar).
+
+const TIPO_ADICIONAL = 'Adicional';
+const ADIC_ACEPTADA = 'Aceptada', ADIC_CANCELADA = 'Cancelada';
+
+function modAdicionales_() {
+  // Aquí solo listas literales: este módulo se arma al cargar el archivo, antes de las const de más abajo
+  return { nombre: 'Adicionales',
+    api: { aceptarAdicional: aceptarAdicional, guardarEsquemaAdicional: guardarEsquemaAdicional, cancelarAdicional: cancelarAdicional },
+    // Las etapas viven en Esquemas (colección contratos): aceptar, editar y cancelar suben las dos
+    cambios: { aceptarAdicional: ['adicionales', 'contratos'], guardarEsquemaAdicional: ['adicionales', 'contratos'],
+      cancelarAdicional: ['adicionales', 'contratos'] },
+    solo: [], publicas: [],
+    // Ventas: los proyectos con contrato firmado (Activos) solo para cotizaciones adicionales (el buscador de siempre no los trae)
+    bootstrap(permisos) {
+      return permisos.ventas && !esSoloRequisicion_() ? { proyectosFirmados: listarProyectosFirmados_() } : {};
+    },
+    sincronizar(permisos, ctx, algo, r, errores) {
+      if (permisos.ventas && !r.soloRequisicion && algo('proyectos', 'contratos')) {
+        r.proyectosFirmados = intentar_(errores, 'Proyectos con contrato firmado', listarProyectosFirmados_);
+      }
+    },
+  };
+}
+
+/**
+ * Proyectos Activos con contrato firmado (no anulados), para cotizar una adicional: lo de la lista de proyectos más
+ * contratoFirmado: true y la moneda del contrato (para cotizar en esa moneda). Sin montos. Recientes primero, máx. 50.
+ */
+function listarProyectosFirmados_() {
+  const contratos = contratosCache_();
+  const firmado = p => (contratos[p.folio.toUpperCase()] || {}).estado === ESTADO_FIRMADO;
+  return filtrarProyectos(proyectosVisibles_().filter(firmado), '', false, 50)
+    .map(p => Object.assign(proyectoParaLista_(p), { contratoFirmado: true, moneda: contratos[p.folio.toUpperCase()].moneda || 'MXN' }));
+}
+
+/** Columna (desde 0) de "tipo" en Cotizaciones, por su encabezado (fila 1); si la fila 1 todavía no la tiene, la del código. */
+function colTipoCotizacion_(encabezado) {
+  const i = (encabezado || []).map(h => String(h || '').trim()).indexOf('tipo');
+  return i !== -1 ? i : ENCABEZADOS_COTIZACIONES.indexOf('tipo');
+}
+
+/** Fila de la pestaña Adicionales → objeto. */
+function adicionalDesdeFila_(r, fila) {
+  const c = n => r[colAdic_(n) - 1];
+  return {
+    proyectoFolio: String(c('proyecto_folio') || '').trim(), cotizacion: String(c('cotizacion') || '').trim(), marca: marcaDeTexto_(c('marca')),
+    moneda: String(c('moneda') || 'MXN'), subtotal: Number(c('subtotal')) || 0, iva: Number(c('iva')) || 0, total: Number(c('total')) || 0,
+    estado: String(c('estado') || ''), aceptadaPor: String(c('aceptada_por') || ''), fechaAceptacion: fechaTexto_(c('fecha_aceptacion')),
+    canceladoPor: String(c('cancelado_por') || ''), fechaCancelacion: fechaTexto_(c('fecha_cancelacion')), motivo: String(c('motivo') || ''),
+    fila: fila,
+  };
+}
+
+/** Adicionales Aceptadas de todos los proyectos (sin crear la pestaña; sin libro o sin pestaña: ninguna). */
+function adicionalesDelLibro_(libro) {
+  return filasSiHay_(libro, HOJAS_COBRANZA, 'Adicionales').map((r, i) => adicionalDesdeFila_(r, i + 2))
+    .filter(a => a.proyectoFolio && a.cotizacion && a.estado === ADIC_ACEPTADA);
+}
+
+/**
+ * Reescribe las etapas de UNA adicional en Esquemas (borra las suyas y agrega las nuevas con montos sobre su total); conserva la
+ * fecha esperada por el nombre de la etapa, como escribirEsquema_. Sin etapas: solo las borra (cancelar). No toca las demás.
+ */
+function escribirEsquemaAdicional_(hoja, folio, cotizacion, etapas, total) {
+  const f = String(folio).toUpperCase(), q = String(cotizacion).toUpperCase();
+  const filas = filasCobranza_(hoja, 'Esquemas');
+  const cF = colEsq_('fecha_esperada') - 1, fechas = {};
+  for (let i = filas.length - 1; i >= 0; i--) {
+    if (String(filas[i][0]).toUpperCase() === f && esquemaDeAdicional_(filas[i]) === q) {
+      const fecha = fechaIso_(filas[i][cF]);
+      if (fecha) fechas[textoNormal(filas[i][2])] = fecha;
+      escribe_(hoja).deleteRow(i + 2);
+    }
+  }
+  if (!etapas || !etapas.length) return;
+  montosDeEsquema(etapas, total).forEach((e, i) => escribe_(hoja).appendRow([f, i + 1, textoCelda(e.etapa), e.porcentaje, e.monto,
+    textoFecha_(fechas[textoNormal(e.etapa)] || ''), q]));
+}
+
+/** Lo que la vista de cobranza agrega para las adicionales (vistaCobranza_). */
+function vistaAdicionales_(proyecto, d, resumen, cotizaciones) {
+  const c = d.contrato, cancelado = proyecto.estado === 'Cancelado';
+  const etapasR = resumen ? resumen.etapas : [];
+  const conObjetivo = {}; // adicionales a las que algún pago Vigente se dirigió (aunque se haya aplicado a otra etapa)
+  d.pagos.forEach(p => { if (p.estado === 'Vigente' && p.etapaAdicional) conObjetivo[p.etapaAdicional] = true; });
+  const cots = {};
+  (cotizaciones || []).forEach(q => { cots[q.folio.toUpperCase()] = q; });
+  const adicionales = d.adicionales.map(a => {
+    const folio = a.cotizacion.toUpperCase(), q = cots[folio] || {};
+    const er = etapasR.filter(e => e.adicional === folio);
+    const base = a.etapas.length ? a.etapas : esquemaAdicionalPorOmision();
+    const montos = montosDeEsquema(base, a.total);
+    const etapas = base.map((e, i) => Object.assign({ orden: i + 1, clave: claveEtapaCobranza(folio, i + 1), etapa: e.etapa,
+      porcentaje: e.porcentaje, fechaEsperada: e.fechaEsperada || '', monto: montos[i].monto },
+      er[i] ? { pagado: er[i].pagado, saldo: er[i].saldo, avance: er[i].avance } : { pagado: 0, saldo: montos[i].monto, avance: 0 }));
+    const pagadoCts = etapas.reduce((s, e) => s + aCentavos(e.pagado), 0);
+    const conPagos = pagadoCts > 0 || !!conObjetivo[folio];
+    return { cotizacion: a.cotizacion, fecha: q.fecha || '', pdf: q.pdf || '', marca: a.marca, moneda: a.moneda, subtotal: a.subtotal,
+      iva: a.iva, total: a.total, estado: a.estado, aceptadaPor: a.aceptadaPor, fechaAceptacion: a.fechaAceptacion, etapas: etapas,
+      pagado: pagadoCts / 100, saldo: (aCentavos(a.total) - pagadoCts) / 100, conPagos: conPagos,
+      esquemaEditable: !cancelado && !conPagos, puedeCancelar: !cancelado && !conPagos, fechasEditables: !cancelado };
+  });
+  const aceptadas = {};
+  adicionales.forEach(a => { aceptadas[a.cotizacion.toUpperCase()] = true; });
+  return {
+    adicionales: adicionales,
+    // Cotizaciones del proyecto marcadas Adicional que todavía no se aceptan (otraMoneda: no se pueden aceptar)
+    adicionalesPorAceptar: (cotizaciones || []).filter(q => q.tipo === TIPO_ADICIONAL && !aceptadas[q.folio.toUpperCase()])
+      .map(q => ({ folio: q.folio, fecha: q.fecha, cliente: q.cliente, marca: q.marca, moneda: q.moneda, subtotal: q.subtotal, iva: q.iva,
+        total: q.total, pdf: q.pdf, otraMoneda: !!c && q.moneda !== c.moneda })),
+    puedeAceptarAdicional: !cancelado && !!c && c.estado === ESTADO_FIRMADO,
+  };
+}
+
+/**
+ * Cobranza acepta una cotización adicional del proyecto: con el contrato firmado, misma moneda, total > 0 y que no esté
+ * aceptada. Agrega su fila a Adicionales y su mini-esquema por omisión (100 % en una etapa) a Esquemas; Bitácora. Si ya estaba
+ * aceptada devuelve la vista sin cambiar nada. Devuelve vistaCobranza_.
+ */
+function aceptarAdicional(proyectoFolio, cotizacionFolio) {
+  exigirCobranza_();
+  const libro = libroCobranza_();
+  return conCandado_(() => {
+    const proyecto = proyectoParaCobranza_(proyectoFolio);
+    if (proyecto.estado === 'Cancelado') throw new Error('El proyecto ' + proyecto.folioVisible + ' está cancelado.');
+    const folioCot = String(cotizacionFolio || '').trim().toUpperCase();
+    const cot = cotizacionesDeProyecto_(proyecto.folio).find(q => q.folio.toUpperCase() === folioCot);
+    if (!cot) throw new Error('La cotización ' + folioCot + ' no pertenece al proyecto ' + proyecto.folioVisible + '.');
+    const d = datosCobranza_(libro, proyecto.folio);
+    if (d.adicionales.some(a => a.cotizacion.toUpperCase() === folioCot)) return vistaCobranza_(libro, proyecto);
+    validarAceptarAdicional(cot, d.contrato);
+    const hA = d.hojas.adicionales || hojaCobranza_(libro, 'Adicionales');
+    const ahora = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm');
+    escribe_(hA).appendRow([proyecto.folio, cot.folio, MARCAS[cot.marca], cot.moneda, cot.subtotal, cot.iva, cot.total, ADIC_ACEPTADA,
+      textoCelda(VENDEDOR_.email), ahora, ahora, '', '', '']);
+    const etapas = esquemaAdicionalPorOmision();
+    escribirEsquemaAdicional_(d.hojas.esquemas, proyecto.folio, cot.folio, etapas, cot.total);
+    bitacora_(libro, 'Aceptar adicional', proyecto.folio, cot.folio + ' · total ' + formatoMoneda(cot.total) + ' ' + cot.moneda + ' · ' +
+      etapas.map(e => e.etapa + ' ' + e.porcentaje + '%').join(' · '));
+    SpreadsheetApp.flush();
+    return vistaCobranza_(libro, proyecto);
+  });
+}
+
+/** Adicional Aceptada del proyecto (o error). */
+function adicionalDe_(d, proyecto, cotizacionFolio) {
+  const folio = String(cotizacionFolio || '').trim().toUpperCase();
+  const a = d.adicionales.find(x => x.cotizacion.toUpperCase() === folio);
+  if (!a) throw new Error('La adicional ' + folio + ' no está aceptada en ' + proyecto.folioVisible + '. Actualiza la vista.');
+  return a;
+}
+
+/** ¿La adicional tiene pagos aplicados a sus etapas (o algún pago Vigente dirigido a ella)? */
+function adicionalConPagos_(d, folio) {
+  const f = String(folio).toUpperCase();
+  if (d.pagos.some(p => p.estado === 'Vigente' && p.etapaAdicional === f)) return true;
+  if (!d.contrato) return false;
+  const r = resumenCobranza(d.contrato, d.etapas.length ? d.etapas : [{ etapa: 'Total', porcentaje: 100 }], d.pagos, d.adicionales);
+  return r.etapas.some(e => e.adicional === f && aCentavos(e.pagado) > 0);
+}
+
+/**
+ * Esquema de una adicional (cobranza): 1–10 etapas, suma 100 % (validarEsquema); solo mientras no tenga pagos aplicados y el
+ * proyecto no esté cancelado. Las reglas de Helgen Energy (60/30/10, solo el administrador) no aplican a las adicionales.
+ */
+function guardarEsquemaAdicional(proyectoFolio, cotizacionFolio, etapas) {
+  exigirCobranza_();
+  const limpio = validarEsquema(etapas);
+  const libro = libroCobranza_();
+  return conCandado_(() => {
+    const proyecto = proyectoParaCobranza_(proyectoFolio);
+    if (proyecto.estado === 'Cancelado') throw new Error('El proyecto ' + proyecto.folioVisible + ' está cancelado.');
+    const d = datosCobranza_(libro, proyecto.folio);
+    const a = adicionalDe_(d, proyecto, cotizacionFolio);
+    if (adicionalConPagos_(d, a.cotizacion)) {
+      throw new Error('La adicional ' + a.cotizacion + ' ya tiene pagos aplicados: su esquema de pagos ya no se puede cambiar.');
+    }
+    const antes = a.etapas.map(e => e.etapa + ' ' + e.porcentaje + '%').join(' · ');
+    escribirEsquemaAdicional_(d.hojas.esquemas, proyecto.folio, a.cotizacion, limpio, a.total);
+    escribe_(d.hojas.adicionales).getRange(a.fila, colAdic_('actualizado')).setValue(Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm'));
+    bitacora_(libro, 'Editar esquema de adicional', proyecto.folio, a.cotizacion + ' · ' + limpio.map(e => e.etapa + ' ' + e.porcentaje + '%').join(' · ') +
+      (antes ? ' (antes ' + antes + ')' : ''));
+    SpreadsheetApp.flush();
+    return vistaCobranza_(libro, proyecto);
+  });
+}
+
+/**
+ * Cancela una adicional aceptada (cobranza, motivo de 5 a 500 caracteres): solo sin pagos aplicados. La fila queda Cancelada
+ * (nunca se borra) y sus etapas salen de Esquemas (copia en la Bitácora). La cotización sigue en el proyecto (se puede volver a
+ * aceptar). Devuelve vistaCobranza_.
+ */
+function cancelarAdicional(proyectoFolio, cotizacionFolio, motivo) {
+  exigirCobranza_();
+  const m = String(motivo || '').trim();
+  if (m.length < 5) throw new Error('Escribe el motivo de la cancelación.');
+  if (m.length > 500) throw new Error('El motivo debe tener máximo 500 caracteres.');
+  const libro = libroCobranza_();
+  return conCandado_(() => {
+    const proyecto = proyectoParaCobranza_(proyectoFolio);
+    if (proyecto.estado === 'Cancelado') throw new Error('El proyecto ' + proyecto.folioVisible + ' está cancelado.');
+    const d = datosCobranza_(libro, proyecto.folio);
+    const a = adicionalDe_(d, proyecto, cotizacionFolio);
+    if (adicionalConPagos_(d, a.cotizacion)) {
+      throw new Error('La adicional ' + a.cotizacion + ' tiene pagos aplicados: cancela primero esos pagos (o pide a un super admin que la anule).');
+    }
+    const ahora = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
+    const h = d.hojas.adicionales;
+    escribe_(h).getRange(a.fila, colAdic_('estado')).setValue(ADIC_CANCELADA);
+    escribe_(h).getRange(a.fila, colAdic_('actualizado'), 1, 4).setValues([[ahora, textoCelda(VENDEDOR_.email), ahora, textoCelda(m)]]);
+    escribirEsquemaAdicional_(d.hojas.esquemas, proyecto.folio, a.cotizacion, [], a.total);
+    bitacora_(libro, 'Cancelar adicional', proyecto.folio, a.cotizacion + ' · total ' + formatoMoneda(a.total) + ' ' + a.moneda + ' · esquema ' +
+      a.etapas.map(e => e.etapa + ' ' + e.porcentaje + '%' + (e.fechaEsperada ? ' (' + e.fechaEsperada + ')' : '')).join(' · '), m);
+    SpreadsheetApp.flush();
+    return vistaCobranza_(libro, proyecto);
+  });
+}
+
+// ---- Adicionales: lógica pura (sin servicios de Google; se prueba en Node) ----
+
+/** 'Adicional' si el valor lo dice (sin acentos ni mayúsculas); si no, '' (cotización normal). */
+function tipoCotizacion(valor) {
+  return textoNormal(valor) === 'adicional' ? TIPO_ADICIONAL : '';
+}
+
+/** ¿Lo que manda la interfaz al guardar una cotización la marca como adicional? ({adicional: true} o {tipo: 'Adicional'}) */
+function esPedidoAdicional(payload) {
+  const p = payload || {};
+  return p.adicional === true || p.adicional === 'true' || tipoCotizacion(p.tipo) === TIPO_ADICIONAL;
+}
+
+/**
+ * Regla de guardarCotizacion para un proyecto (CLAUDE.md §6.9 y §6.10): firmado = contrato firmado del proyecto ({moneda}) o null.
+ * Con contrato firmado solo se admite una adicional, en la moneda del contrato; una adicional solo va con contrato firmado.
+ * Lanza el error (codigo 'PROYECTO' en la regla de siempre: la interfaz quita el proyecto) o no hace nada.
+ */
+function reglaCotizacionAdicional(firmado, adicional, moneda, folioVisible) {
+  if (firmado && !adicional) {
+    const e = new Error('Proyecto con contrato firmado: no admite cotizaciones nuevas. Si es trabajo extra, márcala como «Adicional».');
+    e.codigo = 'PROYECTO';
+    throw e;
+  }
+  if (!adicional) return;
+  if (!firmado) {
+    throw new Error('Solo un proyecto con contrato firmado admite cotizaciones adicionales: quita la marca «Adicional» para cotizar normal.');
+  }
+  const m = String(firmado.moneda || 'MXN');
+  if (String(moneda || 'MXN') !== m) {
+    throw new Error('La cotización adicional debe ser en ' + m + ', la moneda del contrato de ' + folioVisible + ' (nunca se mezclan monedas).');
+  }
+}
+
+/** Mini-esquema de una adicional recién aceptada: 100 % en una etapa. */
+function esquemaAdicionalPorOmision() {
+  return [{ etapa: 'Pago único', porcentaje: 100 }];
+}
+
+/**
+ * Valida que una cotización del proyecto se pueda aceptar como adicional: cot = cotizacionesDeProyecto_ ({folio, tipo, moneda,
+ * total}); contrato = el del proyecto (contratoDesdeFila_) o null. Lanza el error o no hace nada.
+ */
+function validarAceptarAdicional(cot, contrato) {
+  if (!cot || cot.tipo !== TIPO_ADICIONAL) {
+    throw new Error('La cotización ' + ((cot && cot.folio) || '') + ' no está marcada como adicional: solo una cotización «Adicional» se acepta como adicional.');
+  }
+  if (!contrato || contrato.estado !== ESTADO_FIRMADO) throw new Error('Las adicionales se aceptan cuando el contrato del proyecto está firmado.');
+  if (cot.moneda !== contrato.moneda) {
+    throw new Error('La adicional ' + cot.folio + ' es en ' + cot.moneda + ' y el contrato en ' + contrato.moneda + ': nunca se mezclan monedas.');
+  }
+  if (!(aCentavos(cot.total) > 0)) throw new Error('La adicional ' + cot.folio + ' no tiene monto.');
+}
+
+/** Clave de una etapa de cobranza: 'CONTRATO#2' (etapa 2 del contrato) o 'HLG-2026-0010#1' (etapa 1 de esa adicional). */
+function claveEtapaCobranza(adicional, orden) {
+  return (String(adicional || '').trim().toUpperCase() || 'CONTRATO') + '#' + (Number(orden) || 1);
+}
+
+/** Nombre de una etapa para mostrar: el de siempre en el contrato; "Pago único (adicional HLG-2026-0010)" en una adicional. */
+function etiquetaEtapaCobranza(e) {
+  return e && e.adicional ? e.etapa + ' (adicional ' + e.adicional + ')' : String((e && e.etapa) || '');
+}
+
+/**
+ * Posición (desde 0) en la lista de etapas de resumenCobranza (contrato y adicionales) de la etapa orden (desde 1) de la adicional
+ * (o del contrato con adicional = ''). Un orden fuera de su esquema se ajusta a la primera o la última de su grupo, como siempre.
+ * Si la adicional ya no está en la lista: 0 (la primera del contrato).
+ */
+function indiceEtapaCobranza(etapas, adicional, orden) {
+  const a = String(adicional || '').trim().toUpperCase();
+  let inicio = -1, n = 0;
+  (etapas || []).forEach((e, i) => { if (String(e.adicional || '') === a) { if (inicio === -1) inicio = i; n++; } });
+  if (inicio === -1) return 0;
+  return inicio + Math.min(Math.max((Number(orden) || 1) - 1, 0), n - 1);
+}
+
+/**
+ * Adicionales con sus etapas, para resumenCobranza: adicionales = filas de Adicionales del proyecto (adicionalDesdeFila_; solo
+ * cuentan las Aceptadas o sin estado), filasEsquema = filas de Esquemas del proyecto [{orden, etapa, porcentaje, fechaEsperada,
+ * adicional}], moneda = la del contrato (una adicional en otra moneda no se suma: nunca se mezclan). Sin etapas guardadas, el
+ * esquema por omisión. Devuelve [{cotizacion, subtotal, total, moneda, etapas: [{etapa, porcentaje, fechaEsperada}]}].
+ */
+function adicionalesConEtapas(adicionales, filasEsquema, moneda) {
+  const vistos = {};
+  return (adicionales || []).filter(a => a && (!a.estado || a.estado === ADIC_ACEPTADA) && (!moneda || !a.moneda || a.moneda === moneda))
+    .filter(a => { const f = String(a.cotizacion || '').trim().toUpperCase(); if (!f || vistos[f]) return false; vistos[f] = true; return true; })
+    .map(a => {
+      const f = String(a.cotizacion).trim().toUpperCase();
+      const etapas = (filasEsquema || []).filter(e => String(e.adicional || '').toUpperCase() === f).sort((x, y) => x.orden - y.orden)
+        .map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje, fechaEsperada: e.fechaEsperada || '' }));
+      return { cotizacion: f, subtotal: a.subtotal, total: a.total, moneda: a.moneda, etapas: etapas.length ? etapas : esquemaAdicionalPorOmision() };
+    });
+}
+
+/**
+ * CONTRATO §1 (para el margen y los reportes; lo conecta el integrador): lo contratado de más por adicionales aceptadas, por
+ * proyecto, en la moneda del proyecto. adicionales = filas de la pestaña Adicionales (adicionalDesdeFila_ o adicionalesDelLibro_);
+ * solo cuentan las de estado Aceptada. → { [proyectoFolio]: { subtotal (sin IVA), total (con IVA), moneda, n } }. Si un proyecto
+ * tuviera adicionales en otra moneda que la primera (no debería: se valida al cotizar y al aceptar), esas no se suman y se cuentan
+ * en revisar.
+ */
+function adicionalesPorProyecto(adicionales) {
+  const r = {};
+  (adicionales || []).forEach(a => {
+    if (!a || a.estado !== ADIC_ACEPTADA) return;
+    const f = folioInterno(a.proyectoFolio) || String(a.proyectoFolio || '').trim().toUpperCase();
+    if (!f) return;
+    const moneda = String(a.moneda || 'MXN').trim().toUpperCase();
+    const x = r[f] || (r[f] = { subtotal: 0, total: 0, moneda: moneda, n: 0 });
+    if (x.moneda !== moneda) { x.revisar = (x.revisar || 0) + 1; return; }
+    x.subtotal = (aCentavos(x.subtotal) + aCentavos(a.subtotal)) / 100;
+    x.total = (aCentavos(x.total) + aCentavos(a.total)) / 100;
+    x.n++;
+  });
+  return r;
 }

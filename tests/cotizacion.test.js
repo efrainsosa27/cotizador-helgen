@@ -94,7 +94,7 @@ if (ctx.monedaDeCotizacion) {
   assert.equal(ctx.normalizarCotizacion({...base,moneda:'USD',tipoCambio:0.05},0.16).tipoCambio,'','fuera de rango');
   assert.equal(ctx.normalizarCotizacion({...base,moneda:'USD'},0.16).tipoCambio,'','precios a mano sin tipo de cambio');
   ctx.guardarCotizacion({...base,moneda:'MXN',tipoCambio:18.5,idSolicitud:'mxn-tc'});
-  assert.deepEqual(cot.m[cot.m.length-1].slice(20),['MXN',''],'las cotizaciones en MXN quedan vacías en V');
+  assert.deepEqual(cot.m[cot.m.length-1].slice(20),['MXN','',''],'las cotizaciones en MXN quedan vacías en V (y W, tipo: normal)');
   assert(u.includes('TOTAL USD')&&!u.includes('TOTAL MXN')&&u.includes('USD (dólares estadounidenses)'));
   assert(u.includes('DÓLARES')&&u.includes('/100 USD)')&&!u.includes('PESOS'));
   assert(h.includes('TOTAL MXN')&&h.includes('M.N.')&&!h.includes('dólares'),'MXN sin cambios');

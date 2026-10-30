@@ -183,7 +183,7 @@ const carpCob=carpetas[props.COBRANZA_FOLDER_ID];
 assert.equal(ruta(carpCob),'Mi unidad/Cotizador Helgen — Cobranza');
 const LC=libros[props.COBRANZA_DB_ID];
 assert.equal(LC.nombre,'Cotizador Helgen — Cobranza (datos)'); assert.equal(archivos[LC.id].padre,carpCob);
-assert.deepEqual(Object.keys(LC.pest).sort(),['Bitacora','Contratos','Esquemas','Pagos']);
+assert.deepEqual(Object.keys(LC.pest).sort(),['Adicionales','Bitacora','Contratos','Esquemas','Pagos']); // Adicionales: incremento 7 (A)
 // Restringidos aunque Workspace comparta lo nuevo con todo el dominio
 assert.equal(carpCob.acceso,'PRIVATE','carpeta de cobranza restringida'); assert.equal(archivos[LC.id].acceso,'PRIVATE','libro restringido');
 const H=n=>LC.pest[n].m, bit=()=>H('Bitacora').slice(1);
