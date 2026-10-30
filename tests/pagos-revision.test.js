@@ -452,7 +452,7 @@ const guardado = {}; // lo que usa la sección de interfaz
     assert.equal(pagosDe(s.oc).length, 1);
   } finally { P.huellaPagoProv_ = original; }
   // El código la escribe con textoCelda (si alguien lo quita, esta prueba lo dice aunque la huella no empiece con "-")
-  assert(/tipoPago, t\(idSolicitud\), t\(huella\)\]/.test(require('fs').readFileSync(require('path').join(dir, 'Code.js'), 'utf8')));
+  assert(/tipoPago, t\(idSolicitud\), t\(huella\),/.test(require('fs').readFileSync(require('path').join(dir, 'Code.js'), 'utf8')));
 }
 
 // ================= Interfaz (al final: es asíncrona; DOM simulado conectado al servidor simulado) =================

@@ -1,0 +1,11 @@
+#!/bin/bash
+# Menú acotado para CAPRI; instalar como root, sin permiso de escritura para leo.
+set -euo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+[ "$#" -eq 1 ] || { echo 'Uso: capri-ops estado|salud|reiniciar'; exit 2; }
+case "$1" in
+ estado) /usr/bin/docker inspect --format '{{.Config.Image}} · {{.State.Status}} · {{if .State.Health}}{{.State.Health.Status}}{{end}}' capri ;;
+ salud) /usr/bin/docker exec --user 10001:10001 capri node /app/servidor/herramientas/admin.js salud ;;
+ reiniciar) /usr/bin/docker restart capri >/dev/null; echo 'CAPRI reiniciado; consulta salud en unos segundos.' ;;
+ *) echo 'Acción no permitida. Usa estado, salud o reiniciar.'; exit 2 ;;
+esac

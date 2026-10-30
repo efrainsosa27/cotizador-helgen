@@ -139,6 +139,7 @@ const API_FUNCIONES = Object.assign({
   devolverRequisicion: devolverRequisicion,
   registrarPagoProveedor: registrarPagoProveedor,
   cancelarPagoProveedor: cancelarPagoProveedor,
+  editarFinanciamientoProveedor: editarFinanciamientoProveedor,
   cerrarRequisicionCompras: cerrarRequisicionCompras,
   // Facturas de proveedor y cuentas por pagar (solo ROL_COMPRAS; 4.5)
   registrarFacturaProveedor: registrarFacturaProveedor,
@@ -454,6 +455,7 @@ const CAMBIOS_API = Object.assign({
   cancelarRequisicion: ['requisiciones'], cerrarRequisicion: ['requisiciones', 'oc'],
   autorizarRequisicion: ['requisiciones', 'oc'], rechazarRequisicion: ['requisiciones'],
   devolverRequisicion: ['requisiciones'], registrarPagoProveedor: ['pagosProveedores', 'requisiciones', 'oc'],
+  editarFinanciamientoProveedor: ['pagosProveedores'],
   cancelarPagoProveedor: ['pagosProveedores', 'requisiciones', 'oc'], cerrarRequisicionCompras: ['requisiciones', 'oc'],
   // Una factura con retenciones puede dejar pagada la orden (completarSiCubierta_): también cambian requisiciones y órdenes
   registrarFacturaProveedor: ['facturasProveedor', 'requisiciones', 'oc'], cancelarFacturaProveedor: ['facturasProveedor'],
@@ -2913,7 +2915,7 @@ const HOJAS_COMPRAS = {
       'tipo',
       // Revisión del incremento 6: el idSolicitud del envío y la huella de su contenido (un reenvío no duplica el pago aunque se
       // pierda el caché; el mismo id con otros datos se rechaza). Vacías en pagos de antes
-      'id_solicitud', 'huella_solicitud'],
+      'id_solicitud', 'huella_solicitud', 'financiamiento (JSON)'],
     numeros: [7, 9, 10],
   },
   Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
@@ -3821,7 +3823,8 @@ function pagoProvDesdeFila_(r, fila) {
     comprobanteUrl: String(r[14] || ''), registro: String(r[16] || r[15] || ''), estado: String(r[17] || 'Vigente'),
     canceladoPor: String(r[18] || ''), fechaCancelacion: fechaTexto_(r[19]), motivoCancelacion: String(r[20] || ''), fila: fila,
     tipo: String(r[21] || ''), // P (incremento 6): Anticipo · Parcial · Liquidación ('' en pagos de antes)
-    idSolicitud: String(r[22] || ''), huellaSolicitud: String(r[23] || ''), // revisión del incremento 6 (idempotencia)
+    idSolicitud: String(r[22] || ''), huellaSolicitud: String(r[23] || ''),
+    financiamiento: r[24] ? JSON.parse(String(r[24])) : null, // revisión del incremento 6 (idempotencia)
   };
 }
 
@@ -4078,7 +4081,7 @@ function registrarPagoProveedor(p, motivoExcepcion) {
     escribe_(hP).appendRow([folio, textoFecha_(pago.fecha), Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'),
       orden.folio, req.folio, req.proyectoFolio, pago.monto, pago.monedaPago, pago.tipoCambio, pago.montoAplicado, orden.moneda,
       pago.metodo, t(pago.referencia), archivo.getId(), archivo.getUrl(), t(VENDEDOR_.email),
-      t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '', tipoPago, t(idSolicitud), t(huella)]);
+      t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '', tipoPago, t(idSolicitud), t(huella), pago.financiamiento ? t(JSON.stringify(pago.financiamiento)) : '']);
     olvidarPagosProv_();
     let nuevo = req.estado, retenida = '';
     if (completo) {
@@ -4126,7 +4129,7 @@ function huellaPagoProv_(d, bytes) {
   const t = v => String(v == null ? '' : v).trim();
   const md5 = x => Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, x));
   return md5(JSON.stringify([t(d.reqFolio).toUpperCase(), t(d.ocFolio).toUpperCase(), n(d.monto), t(d.monedaPago).toUpperCase(),
-    n(d.tipoCambio), t(d.metodo), t(d.referencia), t(d.fecha), md5(bytes || [])])).replace(/=+$/, '');
+    n(d.tipoCambio), t(d.metodo), t(d.referencia), t(d.fecha), md5(bytes || [])].concat(d.financiamiento ? [normalizarFinanciamientoProveedor(d.financiamiento)] : []))).replace(/=+$/, '');
 }
 
 /**
@@ -5004,6 +5007,7 @@ function cuentasPorPagar(soloCache) {
       Object.assign(a, proyecto(a.proyectoFolio), { reqFolio: f.reqFolio || reqDeOrden[String(a.ocFolio).toUpperCase()] || '',
         xmlUrl: f.xmlUrl || '', pdfUrl: f.pdfUrl || '' });
     });
+    r.financiamientos = pagos.filter(p => p.financiamiento && p.estado === 'Vigente').map(p => Object.assign({}, p, proyecto(p.proyectoFolio)));
     r.faltantes.forEach(x => Object.assign(x, proyecto(x.proyectoFolio), { reqFolio: reqDeOrden[x.folio.toUpperCase()] || '' }));
     r.aFavor.forEach(x => Object.assign(x, proyecto(x.proyectoFolio), { reqFolio: reqDeOrden[x.ocFolio.toUpperCase()] || '' }));
     return r;
@@ -5283,7 +5287,7 @@ const ESQUEMA_POR_OMISION = [['Anticipo', 60], ['Instalación', 30], ['Encendido
 const MAX_ETAPAS = 10;
 // Métodos del pago real a un proveedor (F, incremento 5; con tarjeta la referencia es la autorización o el ticket, nunca el
 // número de la tarjeta). Los cobros a clientes (cobranza) siguen con METODOS_COBRO.
-const METODOS_PAGO = ['Transferencia', 'Tarjeta de crédito', 'Tarjeta de débito', 'Efectivo', 'Cheque'];
+const METODOS_PAGO = ['Crédito / financiera (proveedor cubierto)', 'Transferencia', 'Tarjeta de crédito', 'Tarjeta de débito', 'Efectivo', 'Cheque'];
 const METODOS_COBRO = ['Transferencia', 'Efectivo', 'Cheque'];
 const TOLERANCIA_PAGO = 1.00;              // en la moneda del proyecto (diferencias de redondeo)
 const MAX_COMPROBANTE = 10 * 1024 * 1024;  // 10 MB
@@ -5982,7 +5986,8 @@ function normalizarPagoProveedor(p, orden) {
       (pagadoCts > 0 ? '; ya se pagaron ' + formatoMoneda(pagadoCts / 100) + ' ' + m : '') + '; tolerancia ±1.00).');
   }
   return { fecha: pago.fecha, monto: pago.monto, monedaPago: pago.monedaPago, tipoCambio: pago.tipoCambio,
-    montoAplicado: pago.montoAplicado, metodo: pago.metodo, referencia: pago.referencia };
+    montoAplicado: pago.montoAplicado, metodo: pago.metodo, referencia: pago.referencia,
+    financiamiento: pago.metodo === 'Crédito / financiera (proveedor cubierto)' ? normalizarFinanciamientoProveedor(d.financiamiento || {}) : null };
 }
 
 /**
@@ -13309,6 +13314,13 @@ function porPagarProveedores(d, saldoFn) {
     tramosPorPagar(o, s, fs, sigResto).forEach(t => partidas.push(Object.assign({}, base,
       { monto: t.cts / 100, fecha: t.fecha, fuente: t.fuente, referencia: t.referencia })));
   });
+  (d.pagosProv || []).filter(p => p.estado === 'Vigente' && p.financiamiento && !esFolioPrueba(p.proyectoFolio, prueba)).forEach(p => {
+    const f = p.financiamiento, pry = proyectos[may(p.proyectoFolio)] || {};
+    partidas.push({ ocFolio: p.folio, reqFolio: p.reqFolio, proyectoFolio: p.proyectoFolio, proyectoVisible: pry.folioVisible || p.proyectoFolio,
+      proyectoNombre: pry.nombre || '', proveedorId: 'FIN:' + (f.financiera || 'PENDIENTE'), proveedor: 'Financiera: ' + (f.financiera || 'por confirmar'),
+      moneda: p.monedaPago, esperado: p.monto, pagado: 0, saldoOrden: p.monto, monto: p.monto,
+      fecha: f.vencimiento || '', fuente: 'financiamiento', referencia: p.ocFolio + ' · ' + f.dias + ' días' });
+  });
   return partidas;
 }
 
@@ -17832,4 +17844,38 @@ function itemsFacturasCliPendientes(lista, o) {
     }
   });
   return items;
+}
+
+
+/** El pago al proveedor no liquida el adeudo con la financiera. Datos desconocidos quedan pendientes. */
+function normalizarFinanciamientoProveedor(d) {
+  d = d || {};
+  const financiera = String(d.financiera || '').trim();
+  if (financiera.length > 120) throw new Error('La financiera admite máximo 120 caracteres.');
+  const dias = d.dias == null || d.dias === '' ? 90 : Number(d.dias);
+  if (!Number.isInteger(dias) || dias < 1 || dias > 730) throw new Error('El plazo debe ser de 1 a 730 días.');
+  const fechaPago = d.fechaPago ? validarFechaIso(d.fechaPago, hoyIso_(), 'La fecha de la financiera') : '';
+  const vencimiento = d.vencimiento ? validarFechaIso(d.vencimiento, '9999-12-31', 'El vencimiento') : '';
+  if (fechaPago && vencimiento && vencimiento < fechaPago) throw new Error('El vencimiento no puede ser anterior al pago de la financiera.');
+  return { financiera: financiera, dias: dias, fechaPago: fechaPago, vencimiento: vencimiento || (fechaPago ? fechaVencimiento(fechaPago, dias) : ''),
+    pendienteConfirmar: !financiera || !fechaPago };
+}
+
+/** Compras (incluida Tania) completa datos; no cambia importes, método, comprobante ni da por liquidada la deuda. */
+function editarFinanciamientoProveedor(folio, datos) {
+  exigirCompras_();
+  const limpio = normalizarFinanciamientoProveedor(datos);
+  return conCandado_(() => {
+    const libro = libroCompras_(), hoja = hojaCompras_(libro, 'PagosProveedores');
+    const filas = filasDeArea_(hoja, HOJAS_COMPRAS, 'PagosProveedores');
+    const i = filas.findIndex(r => String(r[0]).toUpperCase() === String(folio).trim().toUpperCase());
+    if (i < 0) throw new Error('No existe el pago.');
+    const p = pagoProvDesdeFila_(filas[i], i + 2);
+    if (p.estado !== 'Vigente' || !p.financiamiento) throw new Error('El pago no tiene un financiamiento vigente.');
+    escribe_(hoja).getRange(i + 2, 25).setValue(textoCelda(JSON.stringify(limpio)));
+    bitacora_(libro, 'Editar financiamiento', p.proyectoFolio, p.folio + ' · ' + JSON.stringify(p.financiamiento) + ' → ' + JSON.stringify(limpio), '', HOJAS_COMPRAS);
+    olvidarPagosProv_();
+    SpreadsheetApp.flush();
+    return vistaRequisicion_(libro, p.reqFolio);
+  });
 }

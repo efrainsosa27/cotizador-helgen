@@ -22,7 +22,7 @@ const meses = n => P.sumarMeses(HOY_ISO, n);
 // ================= Lógica pura =================
 assert.deepEqual(plain(P.FORMAS_PAGO_OC || correr('FORMAS_PAGO_OC')),
   ['Transferencia', 'Crédito del proveedor', 'Tarjeta de crédito', 'Tarjeta de débito (en sitio)', 'Efectivo', 'Cheque']);
-assert.deepEqual(plain(correr('METODOS_PAGO')), ['Transferencia', 'Tarjeta de crédito', 'Tarjeta de débito', 'Efectivo', 'Cheque']);
+assert.deepEqual(plain(correr('METODOS_PAGO')), ['Crédito / financiera (proveedor cubierto)', 'Transferencia', 'Tarjeta de crédito', 'Tarjeta de débito', 'Efectivo', 'Cheque']);
 assert.deepEqual(plain(correr('METODOS_COBRO')), ['Transferencia', 'Efectivo', 'Cheque'], 'cobranza (clientes) no cambia');
 // Forma de pago: obligatoria; crédito con días ≥ 1; órdenes de antes por sus días de crédito
 assert.equal(P.formaPagoDeOrden('', 0), 'Transferencia');

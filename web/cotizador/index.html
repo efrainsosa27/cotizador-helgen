@@ -206,7 +206,7 @@
     <button id="admTabPermisos" class="oculto" onclick="verAdmin('permisos')">Permisos</button>
     <button id="admTabDelegaciones" class="oculto" onclick="verAdmin('delegaciones')">Delegaciones</button>
     <button id="admTabCorreos" class="oculto" onclick="verAdmin('correos')">Correos enviados</button>
-    <button id="admTabAnulados" class="oculto" onclick="verAdmin('anulados')">Anulados</button>
+    <button id="admTabAnulados" class="oculto" onclick="verAdmin('anulados')">Anular / registros anulados</button>
   </div>
 </nav>
 
@@ -966,9 +966,14 @@
             <div id="ppTcCaja" class="oculto"><label>Tipo de cambio del día (pesos por dólar) *</label>
               <input id="ppTc" type="number" min="0" step="0.0001" style="text-align:right" oninput="pintarAplicadoPago()"></div>
             <div><label>Método *</label>
-              <select id="ppMetodo"><option>Transferencia</option><option>Tarjeta de crédito</option><option>Tarjeta de débito</option>
+              <select id="ppMetodo"><option>Crédito / financiera (proveedor cubierto)</option><option>Transferencia</option><option>Tarjeta de crédito</option><option>Tarjeta de débito</option>
                 <option>Efectivo</option><option>Cheque</option></select></div>
-            <div><label>Referencia (rastreo, autorización o ticket; nunca el número de la tarjeta)</label><input id="ppRef" maxlength="100"></div>
+            <div id="ppFinanciamiento" class="oculto"><p class="nota">Úsalo solo cuando el crédito o la financiera ya cubrió al proveedor. La deuda con la financiera sigue pendiente. Adjunta evidencia del portal o comprobante. Deja los datos desconocidos vacíos para que Compras los confirme.</p>
+<label for="ppFinanciera">Financiera (pendiente si no se conoce)</label><input id="ppFinanciera" maxlength="120">
+<label for="ppFinDias">Plazo en días</label><input id="ppFinDias" type="number" min="1" max="730" value="90">
+<label for="ppFinFecha">Fecha en que la financiera pagó (confirmada)</label><input id="ppFinFecha" type="date">
+<label for="ppFinVence">Vencimiento confirmado (opcional)</label><input id="ppFinVence" type="date"></div>
+<div><label>Referencia (rastreo, autorización o ticket; nunca el número de la tarjeta)</label><input id="ppRef" maxlength="100"></div>
             <div><label>Comprobante (PDF o imagen, máx. 10 MB) *</label>
               <input id="ppArchivo" type="file" accept="application/pdf,image/jpeg,image/png,image/heic,.heic"></div>
           </div>
@@ -3064,7 +3069,7 @@
     if (v.puedePagar && cambio) {
       $('ppFecha').value = v.hoy; $('ppFecha').max = v.hoy; $('ppFecha').min = o.fecha || '';
       $('ppMoneda').value = o.moneda; $('ppMetodo').value = 'Transferencia';
-      ['ppTc', 'ppRef', 'ppArchivo'].forEach(id => $(id).value = '');
+      ['ppTc', 'ppRef', 'ppArchivo', 'ppFinanciera', 'ppFinFecha', 'ppFinVence'].forEach(id => $(id).value = ''); $('ppFinDias').value = 90;
       ID_PGP = nuevoId();
       pintarTcPago();
     }
@@ -3090,7 +3095,7 @@
       esc('Cancelado por ' + p.canceladoPor + ': ' + p.motivoCancelacion) + '"' : '') + '><td><b>' + esc(p.folio) + '</b></td><td>' +
       (p.tipo ? '<span class="chip ' + (p.tipo === 'Liquidación' ? 'firmado' : 'aceptada') + '">' + esc(p.tipo) + '</span>' : '') + '</td><td>' + esc(fechaMx(p.fecha)) +
       '</td><td class="num">' + dinero(p.monto, p.monedaPago) + (p.tipoCambio ? '<div class="nota">TC ' + esc(p.tipoCambio) + ' = ' + dinero(p.montoAplicado, p.monedaOc) + '</div>' : '') +
-      '</td><td>' + esc(p.metodo) + (p.referencia ? '<div class="nota">' + esc(p.referencia) + '</div>' : '') + '</td><td>' + esc(p.estado) + '</td><td>' +
+      '</td><td>' + esc(p.metodo) + (p.referencia ? '<div class="nota">' + esc(p.referencia) + '</div>' : '') + htmlFinanciamiento(p) + '</td><td>' + esc(p.estado) + '</td><td>' +
       (p.comprobanteUrl ? '<a href="' + esc(p.comprobanteUrl) + '" target="_blank">Ver</a>' : '') + '</td><td>' +
       (p.estado === 'Vigente' && v.puedeCancelarPago ? '<button type="button" class="quitar" title="Cancelar pago" onclick="cancelarPagoProv(\'' + esc(p.folio) + '\')">×</button>' : '') +
       '</td></tr>').join('') : '<tr><td colspan="8" class="nota">Sin pagos.</td></tr>';
@@ -3492,6 +3497,30 @@
         : queda > 1.0001 ? ' · queda un saldo de ' + dinero(queda, o.moneda) : ' · liquida la orden');
   }
 
+  function htmlFinanciamiento(p) {
+    const f = p.financiamiento;
+    if (!f) return '';
+    return '<div class="aviso-moneda">Deuda con ' + esc(f.financiera || 'financiera por confirmar') + ': ' + dinero(p.monto,p.monedaPago) +
+      ' · ' + esc(f.dias) + ' días · vence ' + esc(f.vencimiento ? fechaMx(f.vencimiento) : 'pendiente') +
+      (f.pendienteConfirmar ? ' · datos pendientes de confirmar' : '') + '</div>' +
+      (p.estado === 'Vigente' ? '<button type="button" class="btn btn-sec" onclick="editarFinanciamiento(' + jsArg(p.folio) + ')">Editar financiamiento</button>' : '');
+  }
+  function htmlDeudasFinancieras(pagos) {
+    if (!pagos.length) return '';
+    return '<div class="modulo"><h3>Deudas con financieras (aparte del saldo de proveedores)</h3><p class="nota">El proveedor ya fue cubierto. Estos importes siguen pendientes con la financiera; no son un pago de la deuda financiera ni incluyen intereses. Las fechas sin confirmar no se calculan como vencidas.</p>' +
+      pagos.map(p => '<div><b>' + esc(p.folio) + ' · ' + esc(p.reqFolio) + '</b>' + htmlFinanciamiento(p) + '</div>').join('') + '</div>';
+  }
+  function editarFinanciamiento(folio) {
+    const pagos = (REQC && REQC.pagos || []).concat(CXP && CXP.financiamientos || []);
+    const pago = pagos.find(p => p.folio === folio); if (!pago || !pago.financiamiento) return;
+    const f=pago.financiamiento;
+    const financiera=window.prompt('Financiera (vacío = pendiente de confirmar)',f.financiera||''); if(financiera===null)return;
+    const dias=window.prompt('Plazo en días',String(f.dias||90)); if(dias===null)return;
+    const fechaPago=window.prompt('Fecha confirmada en que pagó la financiera: AAAA-MM-DD; vacío = pendiente',f.fechaPago||''); if(fechaPago===null)return;
+    const vencimiento=window.prompt('Vencimiento confirmado: AAAA-MM-DD; vacío = calcular desde la fecha confirmada',f.vencimiento||''); if(vencimiento===null)return;
+    google.script.run.withSuccessHandler(v=>{if(REQC && REQC.requisicion.folio===v.requisicion.folio)pintarReqCom(v); CXP=null; cargarCxp(); aviso('ok','Financiamiento actualizado. La deuda sigue pendiente.');}).withFailureHandler(e=>mostrarError(e.message || String(e))).editarFinanciamientoProveedor(folio,{financiera,dias,fechaPago,vencimiento});
+  }
+
   function registrarPagoProv() {
     if (!REQC || $('btnPagoProv').disabled) return;
     const archivo = $('ppArchivo').files && $('ppArchivo').files[0];
@@ -3511,6 +3540,7 @@
       accionConExcepcion('btnPagoProv', 'registrarPagoProveedor', [{
         reqFolio: folio, fecha: $('ppFecha').value, monto: $('ppMonto').value, monedaPago: $('ppMoneda').value,
         tipoCambio: $('ppTc').value, metodo: $('ppMetodo').value, referencia: $('ppRef').value,
+        financiamiento: $('ppMetodo').value === 'Crédito / financiera (proveedor cubierto)' ? {financiera:$('ppFinanciera').value,dias:$('ppFinDias').value,fechaPago:$('ppFinFecha').value,vencimiento:$('ppFinVence').value} : null,
         comprobante: { nombre: archivo.name, datos: datos }, idSolicitud: ID_PGP,
       }], r => {
         // P (incremento 6): el formulario sigue abierto si queda saldo: el siguiente pago es otro envío (otro idSolicitud y comprobante)
@@ -3780,6 +3810,7 @@
     $('cxpResumen').innerHTML = (CXP.totales.length ? '<div class="tiles">' + CXP.totales.map(t => tile('Por pagar ' + t.moneda, dinero(t.total, t.moneda)) +
       tile('Vencido ' + t.moneda, dinero(t.vencido, t.moneda), t.vencido > 0 ? 'negativo' : '')).join('') + '</div>' : 'No hay facturas por pagar.') +
       (extra ? '<div class="nota">' + esc(extra) + '</div>' : '');
+    $('cxpResumen').innerHTML += htmlDeudasFinancieras(CXP.financiamientos || []);
     $('cxpTotales').innerHTML = CXP.totales.length ? CXP.totales.map(t =>
       '<div class="sat-titulo" style="margin-top:4px">' + esc(t.moneda) + ' · ' + plural(t.facturas, 'factura por pagar', 'facturas por pagar') +
       (t.saldos ? ' y ' + plural(t.saldos, 'saldo sin factura', 'saldos sin factura') : '') + // P (incremento 6)
@@ -3788,6 +3819,7 @@
         r.clave !== 'porVencer' && t[r.clave] > 0 ? 'negativo' : '')).join('') + '</div>').join('')
       : '<span class="nota">No hay facturas por pagar.</span>';
     const lista = filtrarCxp();
+    $('cxpTotales').innerHTML += htmlDeudasFinancieras(CXP.financiamientos || []);
     $('cxpLista').innerHTML = lista.length ? lista.map(a => '<tr class="fila-cat"' + (a.reqFolio ? ' data-req="' + esc(a.reqFolio) + '"' : '') + '>' +
       '<td style="white-space:nowrap"><b>' + esc(fechaMx(a.fechaVencimiento)) + '</b><div class="nota' + (a.dias > 0 ? ' aviso-moneda' : '') + '">' + textoDias(a.dias) + '</div></td>' +
       // P (incremento 6): lo que falta de una orden pagada en parte que todavía no tiene factura (folio = la orden)
@@ -5297,6 +5329,7 @@
       const pp = v && v.puedePagar ? v.proveedorPago : null;
       if (!pp) { caja.classList.add('oculto'); caja.innerHTML = ''; return; }
       const metodo = $('ppMetodo').value, partes = [];
+      $('ppFinanciamiento').classList.toggle('oculto', metodo !== 'Crédito / financiera (proveedor cubierto)');
       partes.push('<b>' + esc(pp.razonSocial) + '</b>' + (pp.registrado && pp.id ? ' · ' + botonChico('Ver proveedor', 'PROVEEDORES_F.abrir(' + jsArg(pp.id) + ')') : ''));
       const exigidos = faltanParaPagar(pp, metodo), paraTransferir = faltanParaPagar(pp, 'Transferencia');
       if (exigidos.length) {

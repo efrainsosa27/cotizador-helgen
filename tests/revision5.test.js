@@ -298,7 +298,7 @@ aprobaciones(false);
 {
   const nac = plain(P.avisosProveedor({ rfc: 'EDC200101AB1' }, HOY_ISO).faltanPorMetodo);
   const ext = plain(P.avisosProveedor({ rfc: '', caratulaId: '' }, HOY_ISO).faltanPorMetodo);
-  assert.deepEqual(nac, { Transferencia: ['csf', 'caratula'], 'Tarjeta de crédito': [], 'Tarjeta de débito': [], Efectivo: [], Cheque: [] });
+  assert.deepEqual(nac, { 'Crédito / financiera (proveedor cubierto)': [], Transferencia: ['csf', 'caratula'], 'Tarjeta de crédito': [], 'Tarjeta de débito': [], Efectivo: [], Cheque: [] });
   assert.deepEqual(ext.Transferencia, ['caratula'], 'extranjero: nunca la CSF');
   assert.deepEqual(plain(P.avisosProveedor({ rfc: 'XEXX010101000', caratulaId: 'c' }, HOY_ISO).faltanPorMetodo.Transferencia), [], 'RFC genérico con carátula');
   // Por el servidor, con el bloqueo real: proveedor extranjero (sin RFC) sin documentos
