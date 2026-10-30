@@ -436,6 +436,25 @@ const guardado = {}; // lo que usa la sección de interfaz
   assert(/\$1,624\.00/.test(String(pb.detalle)) && !/por pagar/.test(String(pb.detalle)), String(pb.detalle));
 }
 
+// ================= 12. La huella del pago va a la hoja como texto (hallazgo del incremento 7) =================
+// Es base64 "web safe": 1 de cada 64 empieza con "-", y Sheets la leería como fórmula (#ERROR!); sin el caché, el mismo envío
+// se rechazaba como "otros datos". Con textoCelda se guarda con apóstrofo y se lee igual.
+{
+  const original = P.huellaPagoProv_;
+  P.huellaPagoProv_ = function () { return '-Ab_c' + original.apply(null, arguments).slice(5); };
+  try {
+    const s = siempre();
+    const r1 = pagar(s.req, 500, { referencia: 'SPEI H', idSolicitud: 'HUELLA-' });
+    const fila = pagosDe(s.oc)[0];
+    assert(String(fila[col('PagosProveedores', 'huella_solicitud')]).startsWith('-Ab_c'), 'se lee sin el apóstrofo');
+    delete A.cache['PGP_HUELLA-'];
+    assert.equal(pagar(s.req, 500, { referencia: 'SPEI H', idSolicitud: 'HUELLA-' }).folio, r1.folio, 'sin caché: el mismo pago');
+    assert.equal(pagosDe(s.oc).length, 1);
+  } finally { P.huellaPagoProv_ = original; }
+  // El código la escribe con textoCelda (si alguien lo quita, esta prueba lo dice aunque la huella no empiece con "-")
+  assert(/tipoPago, t\(idSolicitud\), t\(huella\)\]/.test(require('fs').readFileSync(require('path').join(dir, 'Code.js'), 'utf8')));
+}
+
 // ================= Interfaz (al final: es asíncrona; DOM simulado conectado al servidor simulado) =================
 const UI = require('./montar-interfaz')(A, dir);
 (async () => {
