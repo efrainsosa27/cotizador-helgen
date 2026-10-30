@@ -452,6 +452,8 @@
           con IVA; costo de órdenes de compra y margen sin IVA. Los contratos "Por firmar" no suman a los totales; los proyectos
           cancelados no aparecen.</div>
       </div>
+      <!-- C (incremento 7): facturas de clientes (XML de CONTALINK): importar, ligar a etapas, REP pendientes (mod-facturas) -->
+      <div id="cobModFacturas" class="modulo oculto"></div>
     </div>
 
     <div id="cobVistaProyecto" class="oculto">
@@ -486,6 +488,8 @@
       <div id="cobEsqAcciones" class="acciones"></div>
       <!-- R (incremento 6): fechas esperadas de cobro por etapa (mod-reportes) -->
       <div id="cobFechas" class="oculto"></div>
+      <!-- C (incremento 7): facturas por etapa, facturado contra cobrado y REP pendiente (mod-facturas) -->
+      <div id="cobFacturas" class="oculto"></div>
     </div>
 
     <div id="cobModPagos" class="modulo oculto">
@@ -4635,7 +4639,8 @@
   // sincronización) y las ligas directas de los correos (#req=REQ-AAAA-NNNN y #pend).
   let PEND = null, PEND_TODOS = false, PEND_PEDIDO = 0, PEND_CARGANDO = false, PEND_VISTOS = [], PEND_DIA = '', LIGA_VISTA = false;
   const SECCIONES_PEND = [['aprobaciones', 'Aprobaciones', 'Aprobaciones'], ['compras', 'Compras', 'Compras'],
-    ['mias', 'Mis requisiciones', 'Quien pide o recibe']];
+    ['mias', 'Mis requisiciones', 'Quien pide o recibe'],
+    ['cobranza', 'Cobranza', 'Cobranza']]; // incremento 7 (C): REP pendientes, XML sin ligar, facturas por revisar
   const hoyLocal = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); };
   const plural = (n, uno, varios) => n + ' ' + (n === 1 ? uno : varios);
 
@@ -4713,8 +4718,9 @@
   }
   /** Abre la pantalla donde se resuelve un pendiente: Aprobaciones, Compras (requisición o cuentas por pagar) o mis requisiciones. */
   function abrirDestino(destino, folio, tipo) {
-    const tab = { ops: 'ops', com: 'com', cxp: 'com', req: 'req' }[destino];
+    const tab = { ops: 'ops', com: 'com', cxp: 'com', req: 'req', fac: 'cob' }[destino];
     if (!tab || !tabVisible(tab)) { aviso('error', 'Tu cuenta no tiene acceso a esa pantalla.'); return; }
+    if (destino === 'fac') { FACTURAS_CLI.abrir(folio, tipo); return; } // incremento 7 (C): folio = UUID de la factura
     if (destino === 'ops') { verTab('ops'); abrirOps(folio); }
     else if (destino === 'com') { verTab('com'); abrirReqCom(folio); }
     else if (destino === 'cxp') { verTab('com'); verCxp(); }
@@ -5993,6 +5999,444 @@
         else if (TAB === 'rep' && est.tipo && def(est.tipo).porDia && est.datos[est.tipo] && est.dia[est.tipo] !== hoyLocal()) cargar(est.tipo); // cambió el día
       },
       alCobranza(v) { pintarFechas(v); },
+    });
+  })();
+</script>
+<script id="mod-facturas">
+  // Facturas de clientes (incremento 7, módulo C · CFDI fase A). Helgen timbra sus facturas en CONTALINK; aquí cobranza importa sus
+  // XML (uno, varios o el ZIP que descarga CONTALINK, con sus PDF), los liga a las etapas de un proyecto y ve los REP pendientes.
+  // Vive en la pestaña Cobranza: el bloque "3 · Facturas de clientes" del resumen (#cobModFacturas) y "Facturas por etapa" en la
+  // vista del proyecto (#cobFacturas, dentro del esquema). Solo con PERMISOS.cobranza: el servidor lo vuelve a revisar en cada
+  // llamada. MXN y USD siempre aparte. Lo que necesitan los onclick va en window.FACTURAS_CLI.
+  (function () {
+    const MAX_ENVIO = 20 * 1024 * 1024; // como MAX_LOTE_FACTURAS del servidor (bytes por envío)
+    const MAX_ARCHIVOS = 60;            // como MAX_ARCHIVOS_FACTURAS
+    const est = { lista: null, cargando: false, error: '', vista: 'atender', buscar: '', tipo: '', abierta: '', liga: null,
+      enviando: false, resultados: null, id: nuevoId(), montado: false, resaltar: '', ligando: false };
+    const ESTADO_RES = { importada: ['firmado', 'Importada'], pdf: ['firmado', 'PDF'], repetida: ['', 'Ya estaba'],
+      rechazada: ['cancelado', 'Rechazada'], pendiente: ['aceptada', 'Pendiente'], ignorada: ['', 'Ignorada'] };
+    const puede = () => !!(PERMISOS && PERMISOS.cobranza) && !SOLO_REQ;
+    const llamar = (f, ...args) => new Promise((ok, mal) => google.script.run.withSuccessHandler(ok).withFailureHandler(mal)[f](...args));
+    const plural = (n, uno, varios) => n + ' ' + (n === 1 ? uno : varios);
+    const cts = n => Math.round((Number(n) + Number.EPSILON) * 100);
+    const chip = (clase, t, titulo) => '<span class="chip' + (clase ? ' ' + clase : '') + '"' + (titulo ? ' title="' + esc(titulo) + '"' : '') + '>' + esc(t) + '</span>';
+    const idDe = u => String(u || '').replace(/[^A-Za-z0-9]/g, '');
+    const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const baseDe = n => String(n || '').split(/[\\/]/).pop().replace(/\.[A-Za-z0-9]{1,5}$/, '').trim().toLowerCase();
+    const tile = (k, x, alerta) => '<div class="tile"><span>' + esc(k) + '</span><b' + (alerta ? ' class="negativo"' : '') + '>' + x + '</b></div>';
+    const atiende = f => f.estado === 'Vigente' && !!(f.sinLigar || f.repPendiente || f.revisar);
+    const factura = u => ((est.lista && est.lista.facturas) || []).find(f => f.uuid === u) || null;
+    const proyectoDe = folio => ((est.lista && est.lista.proyectos) || []).find(p => p.folio === folio) || null;
+    const doc = f => (f.tipoTexto || '') + ' ' + (f.serieFolio || String(f.uuid).slice(0, 8));
+
+    function cargar() {
+      if (!puede() || est.cargando) return;
+      est.cargando = true; est.error = '';
+      pintar();
+      llamar('listarFacturasClientes').then(l => { est.cargando = false; recibir(l); },
+        err => { est.cargando = false; est.error = err && err.message ? err.message : String(err); pintar(); });
+    }
+    function recibir(l) {
+      if (!puede() || !l) return; // el rol cambió mientras llegaba: no se guarda
+      est.lista = l;
+      if (est.liga && !factura(est.liga.uuid)) { est.liga = null; est.abierta = ''; }
+      pintar();
+    }
+
+    // ---- Importar (cada ZIP en su envío; los XML y PDF sueltos juntos, hasta 20 MB y 60 archivos por envío) ----
+    function armarEnvios(files) {
+      const esZip = f => /\.zip$/i.test(f.name || '') || /zip/i.test(f.type || '');
+      files.forEach(f => { if (f.size > MAX_ENVIO) throw new Error(f.name + ' pesa más de 20 MB: descárgalo de CONTALINK por periodos más cortos.'); });
+      const envios = files.filter(esZip).map(f => [f]);
+      const grupos = {}; // un XML y su PDF (mismo nombre) siempre en el mismo envío
+      files.filter(f => !esZip(f)).forEach(f => { const b = baseDe(f.name); (grupos[b] = grupos[b] || []).push(f); });
+      let actual = [], peso = 0;
+      Object.keys(grupos).forEach(k => {
+        const g = grupos[k], p = g.reduce((s, f) => s + (f.size || 0), 0);
+        if (actual.length && (peso + p > MAX_ENVIO || actual.length + g.length > MAX_ARCHIVOS)) { envios.push(actual); actual = []; peso = 0; }
+        actual = actual.concat(g); peso += p;
+      });
+      if (actual.length) envios.push(actual);
+      return envios;
+    }
+    function leer(f) {
+      return new Promise((ok, mal) => {
+        const r = new FileReader();
+        r.onload = () => ok(String(r.result).split(',')[1] || '');
+        r.onerror = () => mal(new Error('No se pudo leer ' + f.name + '.'));
+        r.readAsDataURL(f);
+      });
+    }
+    const cuenta = lista => { const c = {}; (lista || []).forEach(r => { c[r.estado] = (c[r.estado] || 0) + 1; }); return c; };
+    const resumen = c => [c.importada ? plural(c.importada, 'importada', 'importadas') : '', c.pdf ? plural(c.pdf, 'PDF', 'PDF') : '',
+      c.repetida ? plural(c.repetida, 'ya estaba', 'ya estaban') : '', c.rechazada ? plural(c.rechazada, 'rechazada', 'rechazadas') : '',
+      c.pendiente ? plural(c.pendiente, 'pendiente', 'pendientes') : '', c.ignorada ? plural(c.ignorada, 'ignorada', 'ignoradas') : '']
+      .filter(Boolean).join(' · ') || 'Sin archivos';
+    async function importar() {
+      if (!puede() || est.enviando) return;
+      const input = $('facArchivos'), files = Array.from((input && input.files) || []);
+      if (!files.length) { aviso('error', 'Elige los XML (y sus PDF) o el ZIP que descargaste de CONTALINK.'); return; }
+      let envios;
+      try { envios = armarEnvios(files); } catch (e) { aviso('error', esc(e.message)); return; }
+      est.enviando = true; est.resultados = { lista: [], progreso: 'Leyendo archivos…' };
+      pintarResultados();
+      const id = est.id;
+      let ultima = null, error = '';
+      for (let i = 0; i < envios.length; i++) {
+        est.resultados.progreso = envios.length > 1 ? 'Importando ' + (i + 1) + ' de ' + envios.length + '…' : 'Importando…';
+        pintarResultados();
+        try {
+          const archivos = await Promise.all(envios[i].map(f => leer(f).then(datos => ({ nombre: f.name, datos: datos }))));
+          const r = await llamar('importarFacturasClientes', { archivos: archivos, idSolicitud: id + '-' + (i + 1) });
+          est.resultados.lista = est.resultados.lista.concat(r.resultados || []);
+          ultima = r.lista || ultima;
+        } catch (e) { error = e && e.message ? e.message : String(e); break; }
+      }
+      est.enviando = false; est.resultados.progreso = '';
+      if (!error) { est.id = nuevoId(); if (input) input.value = ''; } // un reintento tras un error usa el mismo envío
+      if (ultima && puede()) est.lista = ultima;
+      pintar();
+      const c = cuenta(est.resultados.lista);
+      if (error) aviso('error', 'No se terminó de importar: ' + esc(error) + ' Vuelve a subir los archivos: lo que ya se guardó se reconoce solo.');
+      else aviso('ok', 'Facturas de clientes: ' + esc(resumen(c)) + (c.rechazada ? '. Revisa el motivo de cada rechazada abajo.' : '.'));
+    }
+
+    // ---- Pantalla (bloque 3 del resumen de Cobranza) ----
+    function pintar() {
+      const caja = $('cobModFacturas');
+      caja.classList.toggle('oculto', !puede());
+      if (!puede()) { caja.innerHTML = ''; est.montado = false; return; }
+      if (!est.montado) {
+        est.montado = true;
+        caja.innerHTML = '<h2>3 · Facturas de clientes (CFDI)</h2>' +
+          '<div class="nota" style="margin-bottom:8px">Helgen timbra sus facturas en CONTALINK. Aquí se importan sus XML (facturas, notas de ' +
+          'crédito y complementos de pago) para ligarlos a las etapas de cobranza y ver qué REP faltan. CAPRI no timbra ni cancela ante el SAT.</div>' +
+          '<div class="sat" style="margin-top:0"><div class="sat-titulo">Importar XML de CONTALINK</div>' +
+          '<div class="acciones" style="margin-top:0"><input id="facArchivos" type="file" multiple ' +
+          'accept=".xml,.zip,.pdf,application/xml,text/xml,application/zip,application/pdf" style="flex:1; min-width:220px">' +
+          '<button type="button" class="btn" id="btnFacImportar" onclick="FACTURAS_CLI.importar()">Importar</button></div>' +
+          '<div class="nota">Uno o varios XML (con su PDF si quieres, con el mismo nombre de archivo) o el ZIP tal como lo descargas de ' +
+          'CONTALINK. Máximo 20 MB por envío; cada ZIP va en su propio envío. Lo ya importado se reconoce por su folio fiscal (UUID) y no se ' +
+          'duplica; un archivo con problema no detiene a los demás.</div><div id="facResultados"></div></div>' +
+          '<div id="facConteos" style="margin-top:14px"></div><div id="facFiltros"></div><div id="facTabla"></div>';
+      }
+      const b = $('btnFacImportar');
+      if (b) { b.disabled = est.enviando; b.textContent = est.enviando ? 'Importando…' : 'Importar'; }
+      pintarResultados(); pintarConteos(); pintarTabla();
+    }
+    function pintarResultados() {
+      const R = est.resultados, caja = $('facResultados');
+      if (!R) { caja.innerHTML = ''; return; }
+      const filas = R.lista.map(r => { const e = ESTADO_RES[r.estado] || ['', r.estado];
+        return '<tr><td style="max-width:260px;overflow-wrap:anywhere">' + esc(r.archivo) + '</td><td>' + chip(e[0], e[1]) + '</td><td>' +
+          (r.tipoCfdi ? esc(({ I: 'Factura', E: 'Nota de crédito', P: 'Complemento de pago' })[r.tipoCfdi] || r.tipoCfdi) + ' ' : '') + esc(r.serieFolio || '') +
+          (r.total != null && r.moneda ? '<div class="nota">' + dinero(r.total, r.moneda) + (r.receptor ? ' · ' + esc(r.receptor) : '') + '</div>' : '') +
+          '</td><td class="nota">' + esc(r.mensaje || '') + '</td></tr>'; }).join('');
+      caja.innerHTML = (R.progreso ? '<p class="nota">' + esc(R.progreso) + '</p>' : '') + (R.lista.length ? '<div class="sat-titulo" style="margin:12px 0 6px">' +
+        'Último envío: ' + esc(resumen(cuenta(R.lista))) + '</div><div class="tabla-desliza"><table style="font-size:12px"><thead><tr><th>Archivo</th>' +
+        '<th>Resultado</th><th>Documento</th><th>Detalle</th></tr></thead><tbody>' + filas + '</tbody></table></div>' : '');
+    }
+    function pintarConteos() {
+      const l = est.lista;
+      if (!l) {
+        $('facConteos').innerHTML = est.error ? '<div class="aviso error" style="display:block">No se pudieron cargar las facturas: ' + esc(est.error) +
+          ' <a href="#" onclick="FACTURAS_CLI.cargar();return false">Intentar de nuevo</a></div>' : '<p class="nota">' + (est.cargando ? 'Cargando…' : '') + '</p>';
+        $('facFiltros').innerHTML = '';
+        return;
+      }
+      const c = l.conteos || {}, n = (l.facturas || []).filter(atiende).length;
+      $('facConteos').innerHTML = '<div class="tiles">' + tile('XML sin ligar', c.sinLigar || 0, c.sinLigar > 0) +
+        tile('REP pendientes', c.repPendientes || 0, c.repPendientes > 0) + tile('Por revisar', c.revisar || 0, c.revisar > 0) +
+        tile('Importadas', c.facturas || 0) + '</div>';
+      const boton = (v, t) => '<button type="button" class="btn' + (est.vista === v ? '' : ' btn-sec') + '" onclick="FACTURAS_CLI.vista(\'' + v + '\')">' + esc(t) + '</button>';
+      $('facFiltros').innerHTML = '<div class="acciones" style="margin-top:0">' + boton('atender', 'Por atender (' + n + ')') + boton('todas', 'Todas') +
+        '<input id="facBuscar" placeholder="Buscar por folio, cliente, RFC, UUID o proyecto…" value="' + esc(est.buscar) +
+        '" oninput="FACTURAS_CLI.buscar(this.value)" style="flex:1; min-width:200px">' +
+        '<select id="facTipo" onchange="FACTURAS_CLI.tipo(this.value)" style="width:auto">' + [['', 'Todos los tipos'], ['I', 'Facturas'],
+          ['E', 'Notas de crédito'], ['P', 'Complementos de pago']].map(([v, t]) => '<option value="' + v + '"' + (est.tipo === v ? ' selected' : '') + '>' + t + '</option>').join('') +
+        '</select><button type="button" class="btn btn-sec" onclick="FACTURAS_CLI.cargar()"' + (est.cargando ? ' disabled' : '') + '>' +
+        (est.cargando ? 'Actualizando…' : 'Actualizar') + '</button></div>';
+    }
+    function visibles() {
+      const q = norm(est.buscar);
+      return ((est.lista && est.lista.facturas) || []).filter(f => (est.vista === 'todas' || atiende(f)) && (!est.tipo || f.tipo === est.tipo) &&
+        (!q || norm([f.serieFolio, f.uuid, f.receptorNombre, f.receptorRfc, f.proyectoVisible, f.proyectoNombre, f.tipoTexto].join(' ')).includes(q)));
+    }
+    function pintarTabla() {
+      const caja = $('facTabla');
+      if (!est.lista) { caja.innerHTML = ''; return; }
+      const lista = visibles();
+      if (!lista.length) {
+        caja.innerHTML = '<p class="nota">' + (!(est.lista.facturas || []).length ? 'Todavía no hay facturas importadas.' : est.vista === 'atender' && !est.buscar && !est.tipo
+          ? 'Nada por atender: todas las facturas están ligadas y con su REP.' : 'Ninguna factura coincide con los filtros.') + '</p>';
+        return;
+      }
+      caja.innerHTML = '<div class="tabla-desliza"><table style="font-size:12px"><thead><tr><th>Fecha</th><th>Documento</th><th>Cliente</th>' +
+        '<th class="num">Total</th><th>Proyecto y etapas</th><th>Estado</th><th></th></tr></thead><tbody>' +
+        lista.map(f => filaHtml(f) + (est.abierta === f.uuid ? formLiga(f) : '')).join('') + '</tbody></table></div>' +
+        '<div class="nota" style="margin-top:8px">Importes con IVA, en la moneda de cada factura. Una nota de crédito resta de su factura; un ' +
+        'complemento de pago (REP) cubre lo cobrado de las facturas PPD. "REP pendiente" = hay cobros registrados en Cobranza que ningún REP cubre: ' +
+        'pídelo en CONTALINK e impórtalo.</div>';
+      if (est.resaltar && lista.some(f => f.uuid === est.resaltar)) {
+        const fila = document.getElementById('facFila-' + idDe(est.resaltar));
+        est.resaltar = '';
+        if (fila && fila.classList) {
+          fila.classList.add('resaltado');
+          if (fila.scrollIntoView) fila.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          setTimeout(() => fila.classList.remove('resaltado'), 2500);
+        }
+      }
+    }
+    function proyectoYEtapas(f) {
+      if (f.tipo === 'P') {
+        return (f.documentos || []).map(d => '<div>' + esc(d.serieFolio || d.uuid.slice(0, 8)) + (d.parcialidad ? ' · parc. ' + d.parcialidad : '') + ' · ' +
+          dinero(d.pagado, d.moneda || f.moneda) + (d.encontrado ? '' : ' <span class="nota">(no está en CAPRI)</span>') +
+          (d.otraMoneda ? ' <span class="nota aviso-moneda">(otra moneda)</span>' : '') + '</div>').join('') +
+          (f.proyectoVisible ? '<div class="nota">' + esc(f.proyectoVisible) + '</div>' : '');
+      }
+      if (f.sinProyecto) return '<span class="nota">Sin proyecto: ' + esc(f.sinProyecto) + '</span>';
+      if (f.tipo === 'E' && (f.aplicadaA || []).length) {
+        return f.aplicadaA.map(a => 'Resta de <b>' + esc(a.serieFolio || a.uuid.slice(0, 8)) + '</b> ' + dinero(a.monto, f.moneda)).join('<br>') +
+          (f.proyectoVisible ? '<div class="nota">' + esc(f.proyectoVisible) + (f.proyectoNombre ? ' · ' + esc(f.proyectoNombre) : '') + '</div>' : '');
+      }
+      if (f.ligada) {
+        return '<b>' + esc(f.proyectoVisible) + '</b>' + (f.proyectoNombre ? ' <span class="nota">· ' + esc(f.proyectoNombre) + '</span>' : '') +
+          '<div class="nota">' + (f.etapas || []).map(e => esc(e.etapa) + ' ' + dinero(e.monto, f.moneda)).join(' + ') + '</div>';
+      }
+      const s = (f.sugerencias || [])[0];
+      return chip('aceptada', 'Sin ligar') + (f.tipo === 'E' ? '<div class="nota">Su factura relacionada no está en CAPRI.</div>' : '') +
+        (s ? '<div class="nota">Sugerido: <b>' + esc(s.folioVisible) + '</b> · ' + esc(s.razon) + '</div>' : '');
+    }
+    function estadoHtml(f) {
+      if (f.estado !== 'Vigente') {
+        return chip('cancelado', f.estado) + (f.motivoCancelacion ? '<div class="nota">' + esc(f.motivoCancelacion) + '</div>' : '');
+      }
+      const h = [];
+      if (f.tipo === 'I') {
+        if (f.repPendiente) h.push(chip('cancelado', 'REP pendiente') + '<div class="nota">Falta REP por ' + dinero(f.porCubrirRep, f.moneda) + '</div>');
+        else if (f.metodo === 'PPD' && f.repCubierto > 0) h.push(chip('firmado', 'REP al día'));
+        if (f.ligada) h.push('<div class="nota">Cobrado ' + dinero(f.cobrado, f.moneda) + (f.metodo === 'PPD' ? ' · con REP ' + dinero(f.repCubierto, f.moneda) : '') + '</div>');
+        if (f.repSinCobro) h.push('<div class="nota aviso-moneda">Hay REP por más de lo cobrado en Cobranza: ¿falta registrar un pago?</div>');
+        if ((f.notas || []).length) h.push('<div class="nota">Notas de crédito: ' + f.notas.map(n => esc(n.serieFolio || n.uuid.slice(0, 8)) + ' ' + dinero(n.monto, f.moneda)).join(', ') + '</div>');
+      }
+      if (f.tipo === 'E' && f.sinAplicar > 0) h.push('<div class="nota">Sin aplicar ' + dinero(f.sinAplicar, f.moneda) + '</div>');
+      if (f.revisar) h.push('<div class="nota aviso-moneda">' + esc(f.revisar) + '</div>');
+      if (!h.length && f.sinLigar) return ''; // "Sin ligar" ya sale en la columna del proyecto
+      return h.join('') || chip('firmado', 'Vigente');
+    }
+    function filaHtml(f) {
+      const liga = f.estado === 'Vigente' && (f.tipo === 'I' || (f.tipo === 'E' && !(f.aplicadaA || []).length));
+      const montoP = f.tipo === 'P' ? (f.pagos || []).map(p => dinero(p.monto, p.moneda)).join('<br>') : dinero(f.total, f.moneda);
+      return '<tr id="facFila-' + idDe(f.uuid) + '"' + (f.estado !== 'Vigente' ? ' class="fila-cancelada"' : '') + '><td style="white-space:nowrap">' +
+        esc(fechaMx(f.fecha)) + '</td><td><b>' + esc(f.serieFolio || '(sin serie ni folio)') + '</b><div class="nota">' + esc(f.tipoTexto) +
+        (f.metodo ? ' · ' + esc(f.metodo) : '') + '</div><div class="nota" title="' + esc(f.uuid) + '">UUID ' + esc(f.uuid.slice(0, 8)) + '…</div></td><td>' +
+        esc(f.receptorNombre) + '<div class="nota">' + esc(f.receptorRfc) + '</div></td><td class="num">' + montoP +
+        (f.tipo === 'I' && f.neto != null && cts(f.neto) !== cts(f.total) ? '<div class="nota">neto ' + dinero(f.neto, f.moneda) + '</div>' : '') +
+        '</td><td>' + proyectoYEtapas(f) + '</td><td>' + estadoHtml(f) + '</td><td style="white-space:nowrap">' +
+        (f.xmlUrl ? '<a href="' + esc(f.xmlUrl) + '" target="_blank">XML</a> ' : '') + (f.pdfUrl ? '<a href="' + esc(f.pdfUrl) + '" target="_blank">PDF</a> ' : '') +
+        (liga ? '<button type="button" class="btn btn-sec" onclick="FACTURAS_CLI.abrirLiga(' + jsArg(f.uuid) + ')">' + (f.ligada || f.sinProyecto ? 'Cambiar' : 'Ligar') + '</button> ' : '') +
+        (f.estado === 'Vigente' ? '<button type="button" class="quitar" title="Marcar cancelada (se canceló en CONTALINK)" onclick="FACTURAS_CLI.cancelar(' + jsArg(f.uuid) + ')">×</button>' : '') +
+        '</td></tr>';
+    }
+
+    // ---- Ligar a un proyecto y sus etapas ----
+    /** Lo que cabe en una etapa: lo que falta facturar (factura) o lo ya facturado (nota de crédito ligada a mano), como el servidor. */
+    const cupo = (e, f) => cts(f && f.tipo === 'E' ? e.facturado : e.porFacturar);
+    /** Etapas que cubren el total (mismo criterio que el servidor): de la primera con cupo hasta cubrirlo. */
+    function etapasQueCubren(p, f) {
+      const abiertas = (p.etapas || []).filter(e => cupo(e, f) > 0);
+      let resto = cts(f.total);
+      const r = abiertas.filter(e => { if (resto <= 0) return false; resto -= cupo(e, f); return true; });
+      return (r.length ? r : (p.etapas || []).slice(-1)).map(e => e.clave);
+    }
+    function ligaInicial(f) {
+      const s = (f.sugerencias || [])[0];
+      if (f.ligada && f.proyectoFolio && proyectoDe(f.proyectoFolio)) {
+        return { uuid: f.uuid, proyecto: f.proyectoFolio, claves: (f.etapas || []).map(e => e.clave), montos: {}, motivo: '' };
+      }
+      if (s) return { uuid: f.uuid, proyecto: s.proyectoFolio, claves: s.etapas.slice(), montos: {}, motivo: '' };
+      return { uuid: f.uuid, proyecto: '', claves: [], montos: {}, motivo: '' };
+    }
+    /** Reparto que hará el servidor sin montos: en el orden del esquema, hasta lo que falta facturar; la última se queda con el resto. */
+    function reparto(p, claves, total, f) {
+      const propias = {}; // al cambiar la liga, lo que esta factura ya ocupa vuelve a estar libre (una nota de crédito resta: monto negativo)
+      if (f && f.ligada && f.proyectoFolio === p.folio) (f.etapas || []).forEach(e => { propias[e.clave] = cts(e.monto); });
+      const elegidas = (p.etapas || []).filter(e => claves.indexOf(e.clave) !== -1), nota = f && f.tipo === 'E';
+      let resto = cts(total);
+      return elegidas.map((e, i) => {
+        const falta = Math.max(0, cupo(e, f) + (nota ? -1 : 1) * (propias[e.clave] || 0));
+        const toma = i === elegidas.length - 1 ? resto : Math.min(falta, resto);
+        resto -= toma;
+        return { clave: e.clave, etapa: e.etapa, monto: toma / 100 };
+      }).filter(x => x.monto > 0);
+    }
+    function formLiga(f) {
+      if (!est.liga || est.liga.uuid !== f.uuid) est.liga = ligaInicial(f);
+      const L = est.liga, u = idDe(f.uuid), p = proyectoDe(L.proyecto);
+      const opciones = ((est.lista && est.lista.proyectos) || []).filter(x => x.moneda === f.moneda && x.estadoProyecto !== 'Cancelado');
+      const sug = (f.sugerencias || []).map((s, i) => '<div class="sat-op" onclick="FACTURAS_CLI.sugerencia(' + jsArg(f.uuid) + ',' + i + ')"><b>' +
+        esc(s.folioVisible) + '</b><span>' + esc(s.nombre) + ' · ' + esc(s.cliente) + '<small class="sat-razon">' + esc(s.razon) + '</small></span></div>').join('');
+      const etapas = p ? (p.etapas || []).map(e => {
+        const k = idDe(e.clave), elegida = L.claves.indexOf(e.clave) !== -1;
+        return '<tr><td><input type="checkbox" id="facEt-' + u + '-' + k + '"' + (elegida ? ' checked' : '') + ' style="width:auto" onchange="FACTURAS_CLI.etapa(' +
+          jsArg(f.uuid) + ',' + jsArg(e.clave) + ',this.checked)"></td><td>' + esc(e.etapa) + '</td><td class="num">' + dinero(e.monto, p.moneda) +
+          '</td><td class="num">' + dinero(e.facturado, p.moneda) + '</td><td class="num">' + dinero(e.porFacturar, p.moneda) + '</td><td>' +
+          '<input id="facMonto-' + u + '-' + k + '" type="number" min="0" step="0.01" style="text-align:right;max-width:140px" placeholder="automático" value="' +
+          esc(L.montos[e.clave] || '') + '" oninput="FACTURAS_CLI.monto(' + jsArg(f.uuid) + ',' + jsArg(e.clave) + ',this.value)"></td></tr>';
+      }).join('') : '';
+      const rep = p ? reparto(p, L.claves, f.total, f) : [];
+      return '<tr class="fac-liga"><td colspan="7"><div class="sat" style="margin-top:0"><div class="sat-titulo">' + (f.ligada ? 'Cambiar la liga de ' : 'Ligar ') +
+        esc(doc(f)) + ' · ' + dinero(f.total, f.moneda) + ' · ' + esc(f.receptorNombre) + '</div>' +
+        (f.tipo === 'E' ? '<div class="nota" style="margin-bottom:6px">Su factura relacionada no está en CAPRI: ligada aquí, la nota de crédito resta de las etapas elegidas.</div>' : '') +
+        (sug ? '<div class="nota" style="margin-bottom:4px">Sugerencias (por RFC del cliente, razón social y monto):</div>' + sug : '<div class="nota">Sin sugerencias: elige el proyecto.</div>') +
+        '<div style="margin-top:10px"><label>Proyecto (con cotización aceptada, en ' + esc(f.moneda) + ')</label><select id="facProy-' + u + '" onchange="FACTURAS_CLI.proyecto(' +
+        jsArg(f.uuid) + ',this.value)"><option value="">Elige el proyecto…</option>' + opciones.map(x => '<option value="' + esc(x.folio) + '"' +
+        (x.folio === L.proyecto ? ' selected' : '') + '>' + esc(x.folioVisible + ' — ' + x.cliente + ' — ' + x.nombre) + (x.estadoContrato === 'Firmado' ? '' : ' (por firmar)') +
+        '</option>').join('') + '</select></div>' +
+        (p ? '<div class="tabla-desliza" style="margin-top:8px"><table style="font-size:12px"><thead><tr><th></th><th>Etapa</th><th class="num">Monto</th>' +
+          '<th class="num">Facturado</th><th class="num">Por facturar</th><th>Monto de esta factura (opcional)</th></tr></thead><tbody>' + etapas + '</tbody></table></div>' +
+          '<div class="nota" id="facReparto-' + u + '">' + (rep.length ? 'Sin montos se reparte así: ' + rep.map(x => esc(x.etapa) + ' ' + dinero(x.monto, f.moneda)).join(' + ')
+            : 'Elige una o varias etapas.') + '</div>' : '') +
+        '<div class="acciones"><button type="button" class="btn" id="btnFacLigar" onclick="FACTURAS_CLI.ligar(' + jsArg(f.uuid) + ')">' + (f.ligada ? 'Cambiar liga' : 'Ligar') + '</button>' +
+        '<button type="button" class="btn btn-sec" onclick="FACTURAS_CLI.cerrarLiga()">Cerrar</button></div>' +
+        '<div class="nota" style="margin-top:10px">¿No es de un proyecto de CAPRI (p. ej. una venta que no se lleva aquí)? Escribe el motivo:</div>' +
+        '<div class="acciones" style="margin-top:4px"><input id="facSinMotivo-' + u + '" maxlength="500" value="' + esc(L.motivo) + '" placeholder="Motivo" ' +
+        'oninput="FACTURAS_CLI.motivo(' + jsArg(f.uuid) + ',this.value)" style="flex:1; min-width:200px"><button type="button" class="btn btn-sec" ' +
+        'onclick="FACTURAS_CLI.sinProyecto(' + jsArg(f.uuid) + ')">Marcar sin proyecto</button></div></div></td></tr>';
+    }
+    function abrirLiga(uuid) {
+      const f = factura(uuid);
+      if (!f) return;
+      est.abierta = uuid; est.liga = ligaInicial(f);
+      pintarTabla();
+    }
+    function ligar(uuid) {
+      const L = est.liga, f = factura(uuid);
+      if (!f || !L || L.uuid !== uuid || est.ligando) return;
+      const p = proyectoDe(L.proyecto);
+      if (!p) { aviso('error', 'Elige el proyecto.'); return; }
+      const etapas = (p.etapas || []).filter(e => L.claves.indexOf(e.clave) !== -1);
+      if (!etapas.length) { aviso('error', 'Elige al menos una etapa.'); return; }
+      const montos = etapas.map(e => String(L.montos[e.clave] == null ? '' : L.montos[e.clave]).trim());
+      const con = montos.filter(Boolean).length;
+      if (con && con !== etapas.length) { aviso('error', 'Escribe el monto de todas las etapas elegidas o de ninguna (sin montos se reparte solo).'); return; }
+      est.ligando = true;
+      llamar('ligarFacturaCliente', { uuid: uuid, proyectoFolio: p.folio, etapas: etapas.map((e, i) => ({ clave: e.clave, monto: con ? montos[i] : '' })) })
+        .then(r => {
+          est.ligando = false; est.abierta = ''; est.liga = null;
+          recibir(r.lista);
+          aviso('ok', esc(doc(f)) + ' ligada a <b>' + esc(p.folioVisible) + '</b> (' + esc(etapas.map(e => e.etapa).join(' + ')) + ').');
+        }, err => { est.ligando = false; mostrarError(err); });
+    }
+    function sinProyecto(uuid) {
+      const L = est.liga, f = factura(uuid);
+      if (!f || !L || L.uuid !== uuid || est.ligando) return;
+      const m = String(L.motivo || '').trim();
+      if (m.length < 5) { aviso('error', 'Escribe por qué la factura no es de un proyecto de CAPRI.'); return; }
+      est.ligando = true;
+      llamar('ligarFacturaCliente', { uuid: uuid, sinProyecto: m }).then(r => {
+        est.ligando = false; est.abierta = ''; est.liga = null;
+        recibir(r.lista);
+        aviso('ok', esc(doc(f)) + ' marcada sin proyecto.');
+      }, err => { est.ligando = false; mostrarError(err); });
+    }
+    function cancelar(uuid, desde) {
+      const f = factura(uuid) || { uuid: uuid, tipoTexto: 'Factura', serieFolio: '' };
+      const m = window.prompt('Marcar ' + doc(f) + ' como Cancelada (solo si ya se canceló en CONTALINK). Motivo:');
+      if (m === null) return;
+      if (String(m).trim().length < 5) { aviso('error', 'Escribe el motivo de la cancelación.'); return; }
+      llamar('cancelarFacturaCliente', uuid, String(m).trim(), desde || '').then(r => {
+        recibir(r.lista);
+        if (r.vista) pintarCobranza(r.vista);
+        aviso('ok', esc(doc(f)) + ' marcada como Cancelada.');
+      }, mostrarError);
+    }
+
+    /** Desde Pendientes: Cobranza → resumen → la factura (con su liga abierta si está sin ligar). */
+    function abrir(uuid, tipo) {
+      if (!puede()) { aviso('error', 'Tu cuenta no tiene acceso a Cobranza.'); return; }
+      verTab('cob');
+      verResumenCob();
+      est.vista = 'atender'; est.buscar = ''; est.tipo = ''; est.resaltar = uuid || '';
+      if (uuid && tipo === 'facSinLigar') { est.abierta = uuid; est.liga = null; }
+      if (!est.lista || (uuid && !factura(uuid))) cargar(); else pintar(); // la factura llegó después de la lista: se pide otra vez
+      const caja = $('cobModFacturas');
+      if (caja && caja.scrollIntoView && !est.resaltar) caja.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    // ---- Facturas por etapa en la vista de cobranza del proyecto (v.facturas, de vistaCobranza_) ----
+    function pintarBloque(v) {
+      const caja = $('cobFacturas'), b = v && v.facturas, c = v && v.contrato;
+      if (!b || !puede() || (!c && !(b.porRevisar || []).length && !b.error)) { caja.classList.add('oculto'); caja.innerHTML = ''; return; }
+      caja.classList.remove('oculto');
+      if (b.error) { caja.innerHTML = '<div class="nota aviso-moneda" style="margin-top:14px">' + esc(b.error) + '</div>'; return; }
+      const mon = c ? c.moneda : 'MXN', t = b.totales || {};
+      const facturasDe = e => (e.facturas || []).map(x => '<div style="white-space:nowrap"><b>' + esc(x.serieFolio || x.uuid.slice(0, 8)) + '</b> ' +
+        esc(x.metodo || '') + ' ' + dinero(x.total, x.moneda || mon) + (x.total !== x.totalFactura ? ' <span class="nota">de ' + dinero(x.totalFactura, x.moneda || mon) + '</span>' : '') +
+        (x.repPendiente ? ' ' + chip('cancelado', 'REP pendiente', 'Falta REP por ' + dinero(x.porCubrirRep, x.moneda || mon).replace(/<[^>]+>/g, ''))
+          : x.metodo === 'PPD' && x.repCubierto > 0 ? ' ' + chip('firmado', 'REP') : '') +
+        (x.pdfUrl ? ' <a href="' + esc(x.pdfUrl) + '" target="_blank">PDF</a>' : '') + (x.xmlUrl ? ' <a href="' + esc(x.xmlUrl) + '" target="_blank">XML</a>' : '') + '</div>').join('') ||
+        '<span class="nota">Sin facturas</span>';
+      caja.innerHTML = '<div class="sat" style="margin-top:14px"><div class="sat-titulo">Facturas por etapa (CONTALINK)</div>' +
+        '<div class="tiles">' + tile('Facturado (con IVA)', dinero(t.facturado || 0, mon)) + tile('Cobrado', dinero(t.cobrado || 0, mon)) +
+        tile('Por facturar', dinero(t.porFacturar || 0, mon), cts(t.porFacturar) < 0) + tile('REP pendientes', String(b.repPendientes || 0), b.repPendientes > 0) + '</div>' +
+        ((b.etapas || []).length ? '<div class="tabla-desliza"><table style="font-size:12px"><thead><tr><th>Etapa</th><th class="num">Monto</th><th class="num">Facturado</th>' +
+          '<th class="num">Cobrado</th><th class="num">Por facturar</th><th>Facturas</th></tr></thead><tbody>' + b.etapas.map(e => '<tr><td>' + esc(e.etapa) +
+          '</td><td class="num">' + dinero(e.monto, mon) + '</td><td class="num">' + dinero(e.facturado, mon) + '</td><td class="num">' + dinero(e.cobrado, mon) +
+          '</td><td class="num"' + (cts(e.porFacturar) < 0 ? ' title="Facturado de más"' : '') + '>' + dinero(e.porFacturar, mon) + '</td><td>' + facturasDe(e) +
+          '</td></tr>').join('') + '</tbody></table></div>' : '') +
+        ((b.porRevisar || []).length ? '<div class="nota aviso-moneda" style="margin-top:8px">Por revisar: ' + b.porRevisar.map(x => esc(x.serieFolio || x.uuid.slice(0, 8)) +
+          ' — ' + esc(x.revisar)).join('<br>') + '</div>' : '') +
+        (b.sinLigarCliente ? '<div class="nota" style="margin-top:8px">Hay ' + plural(b.sinLigarCliente, 'factura', 'facturas') + ' de este cliente sin ligar: ' +
+          '<a href="#" onclick="FACTURAS_CLI.abrir();return false">' + (b.sinLigarCliente === 1 ? 'ligarla' : 'ligarlas') + ' en Facturas de clientes</a>.</div>' : '') +
+        '<div class="nota" style="margin-top:8px">Facturado = facturas ligadas a la etapa menos sus notas de crédito; cobrado = pagos registrados en Cobranza. ' +
+        '"REP pendiente": una factura PPD con cobros que ningún complemento de pago cubre.</div></div>';
+    }
+
+    window.FACTURAS_CLI = {
+      importar: importar, cargar: cargar, abrir: abrir, abrirLiga: abrirLiga, ligar: ligar, sinProyecto: sinProyecto, cancelar: cancelar,
+      cerrarLiga: () => { est.abierta = ''; est.liga = null; pintarTabla(); },
+      vista: v => { est.vista = v === 'todas' ? 'todas' : 'atender'; pintarConteos(); pintarTabla(); },
+      buscar: q => { est.buscar = String(q || ''); pintarTabla(); },
+      tipo: t => { est.tipo = String(t || ''); pintarTabla(); },
+      sugerencia: (uuid, i) => {
+        const f = factura(uuid), s = f && (f.sugerencias || [])[i];
+        if (!s || !est.liga || est.liga.uuid !== uuid) return;
+        Object.assign(est.liga, { proyecto: s.proyectoFolio, claves: s.etapas.slice(), montos: {} });
+        pintarTabla();
+      },
+      proyecto: (uuid, folio) => {
+        const f = factura(uuid), p = proyectoDe(folio);
+        if (!f || !est.liga || est.liga.uuid !== uuid) return;
+        Object.assign(est.liga, { proyecto: p ? p.folio : '', claves: p ? etapasQueCubren(p, f) : [], montos: {} });
+        pintarTabla();
+      },
+      etapa: (uuid, clave, si) => {
+        const L = est.liga, f = factura(uuid);
+        if (!L || L.uuid !== uuid || !f) return;
+        L.claves = L.claves.filter(c => c !== clave).concat(si ? [clave] : []);
+        const p = proyectoDe(L.proyecto), rep = p ? reparto(p, L.claves, f.total, f) : [];
+        const caja = document.getElementById('facReparto-' + idDe(uuid));
+        if (caja) caja.innerHTML = rep.length ? 'Sin montos se reparte así: ' + rep.map(x => esc(x.etapa) + ' ' + dinero(x.monto, f.moneda)).join(' + ') : 'Elige una o varias etapas.';
+      },
+      monto: (uuid, clave, valor) => { if (est.liga && est.liga.uuid === uuid) est.liga.montos[clave] = valor; },
+      motivo: (uuid, valor) => { if (est.liga && est.liga.uuid === uuid) est.liga.motivo = valor; },
+      estado: () => est, // para las pruebas
+    };
+
+    registrarModulo({
+      nombre: 'Facturas de clientes',
+      alBootstrap(d) { if (d && d.facturasCli) recibir(d.facturasCli); else pintar(); },
+      alSincronizar(r) { if (r && r.facturasCli) recibir(r.facturasCli); },
+      // El servidor vuelve a mandar la lista cuando cambia algo de lo que usa (solo si ya se cargó)
+      contexto() { return est.lista && puede() ? { facturasCli: true } : {}; },
+      alPermisos() {
+        if (!puede()) { est.lista = null; est.resultados = null; est.abierta = ''; est.liga = null; }
+        pintar();
+        if (!puede()) pintarBloque(null);
+      },
+      alVerTab(t) { if (t === 'cob' && puede() && !est.lista && !est.cargando && BOOT) cargar(); },
+      alCobranza(v) { pintarBloque(v); },
     });
   })();
 </script>

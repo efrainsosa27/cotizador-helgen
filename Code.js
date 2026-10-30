@@ -92,7 +92,8 @@ function verificarTokenGoogle_(idToken) {
 const MODULOS_ = [modIdentidad_(), modAnular_(), modCorreos_(), modCentroMando_(), modPantallas_(),
   modProveedores_(), // incremento 5: F · Proveedores y forma de pago (§6.F)
   modRecepcion_(), // incremento 5: H · recepción con fotos y devoluciones (§6.H)
-  modReportes_()]; // incremento 6: R · reportes de CxC y CxP, flujo y margen; fecha esperada por etapa (§6.R)
+  modReportes_(), // incremento 6: R · reportes de CxC y CxP, flujo y margen; fecha esperada por etapa (§6.R)
+  modFacturasClientes_()]; // incremento 7: C · facturas de clientes (XML de CONTALINK), ligadas a etapas; REP pendientes (§6.C)
 /** Une un campo de todos los módulos: objetos con Object.assign, listas con concat. */
 function deModulos_(campo, inicial) {
   return MODULOS_.reduce((acc, m) => Array.isArray(inicial) ? acc.concat(m[campo] || []) : Object.assign(acc, m[campo] || {}), inicial);
@@ -431,7 +432,8 @@ function sitiosDetalle_() {
 
 // permisos: Permisos y Delegaciones (incremento 4); anulaciones: lo que un super admin anuló (se esconde de listas y totales)
 const COLECCIONES = ['proyectos', 'contratos', 'cotizaciones', 'catalogo', 'requisiciones', 'oc', 'pagosCobranza',
-  'pagosProveedores', 'facturasProveedor', 'permisos', 'anulaciones'];
+  'pagosProveedores', 'facturasProveedor', 'permisos', 'anulaciones',
+  'facturasClientes']; // incremento 7 (C): facturas de clientes (FacturasClientes del libro de cobranza)
 
 /** Colecciones que cambia cada función de la API: doPost sube su versión cuando termina bien. */
 const CAMBIOS_API = Object.assign({
@@ -1938,6 +1940,18 @@ const HOJAS_COBRANZA = {
     numeros: [5, 7, 8, 12],
   },
   Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
+  // C (incremento 7): facturas de clientes importadas de CONTALINK (§6.C; una fila por CFDI, llave = uuid; nunca se borran). tipo =
+  // I, E o P; iva = impuestos trasladados del CFDI; etapas (JSON) = [{clave, etapa, monto}] (claveEtapa); en una E o una P,
+  // proyecto_folio es informativo (el de su factura) salvo una E ligada a mano (con etapas); carpeta_proyecto = dónde están sus
+  // archivos ('' = Sin proyecto); sin_proyecto = motivo de "no es de un proyecto de CAPRI".
+  FacturasClientes: {
+    enc: ['uuid', 'tipo', 'serie_folio', 'fecha', 'metodo', 'forma', 'moneda', 'subtotal', 'iva', 'total', 'receptor_rfc',
+      'receptor_nombre', 'proyecto_folio', 'etapas (JSON)', 'relacionadas (JSON)', 'estado', 'xml_id', 'xml_url', 'pdf_id', 'pdf_url',
+      'registro_email', 'registro_nombre', 'fecha_registro', 'pagos (JSON)', 'descuento', 'retenidos', 'fecha_timbrado', 'uso_cfdi',
+      'archivo_xml', 'carpeta_proyecto', 'ligo_email', 'fecha_ligado', 'cancelado_por', 'fecha_cancelacion', 'motivo_cancelacion',
+      'id_solicitud', 'sin_proyecto'],
+    numeros: [8, 9, 10, 25, 26],
+  },
 };
 const ESTADO_ACEPTADA = 'Aceptada', ESTADO_FIRMADO = 'Firmado';
 /** Columna (desde 1) de un encabezado de Esquemas (R, incremento 6: fecha_esperada se busca por nombre). */
@@ -2323,6 +2337,8 @@ function vistaCobranza_(libro, proyecto) {
     fechasEditables: !!c && d.etapas.length > 0 && proyecto.estado !== 'Cancelado',
     // Solo llega al rol de cobranza (vistaCobranza_ se llama después de exigirCobranza_)
     margen: c ? margenDeContrato_(c) : margenSinContrato_(proyecto.folio),
+    // C (incremento 7): facturas de clientes por etapa (facturado vs cobrado, REP pendiente); null sin facturas importadas
+    facturas: facturasDeVistaCobranza_(libro, proyecto, c, resumen),
     metodos: METODOS_COBRO,
     hoy: hoyIso_(),
   };
@@ -9600,7 +9616,7 @@ function pendientes(todos) {
   const verTodos = todos === true;
   if (verTodos && !esSuperAdmin_()) throw errorPermiso_('Solo un super admin puede ver los pendientes de todos.');
   const hoy = hoyIso_(), avisos = [];
-  const roles = { aprobaciones: esOperaciones_(), compras: esCompras_(), requisicion: esRequisicion_() };
+  const roles = { aprobaciones: esOperaciones_(), compras: esCompras_(), requisicion: esRequisicion_(), cobranza: esCobranza_() };
   let cxp = [], aFavor = [];
   if (roles.compras) {
     try {
@@ -9615,6 +9631,10 @@ function pendientes(todos) {
   // Incremento 5 (H): devoluciones abiertas, para compras (y para el super admin que ve los de todos)
   if (roles.compras || esSuperAdmin_()) {
     try { o.devoluciones = devolucionesParaPendientes_(); } catch (e) { avisos.push('Devoluciones: ' + e.message); }
+  }
+  // Incremento 7 (C): REP pendientes, XML sin ligar y facturas por revisar (solo cobranza; el super admin tiene el rol)
+  if (roles.cobranza) {
+    try { o.facturasCli = facturasCliParaPendientes_(); } catch (e) { avisos.push('Facturas de clientes: ' + e.message); }
   }
   const base = basePendientes_();
   const mios = itemsPendientes(base, o);
@@ -9842,6 +9862,9 @@ function itemsPendientes(base, o) {
       detalle: [f.proveedor, f.serieFolio || '', dinero(debe(f), f.moneda), saldo ? '' : f.ocFolio, f.proyectoVisible].filter(Boolean).join(' · '),
       orden: marcaOrdenable(f.fechaVencimiento) }, todos ? { para: 'Compras' } : {}));
   }));
+
+  // Incremento 7 (C): facturas de clientes (REP pendientes, XML sin ligar, por revisar): solo cobranza (o el super admin con todos)
+  if (roles.cobranza || todos) itemsFacturasCliPendientes(x.facturasCli, { todos: todos, hoy: hoy }).forEach(it => items.push(it));
 
   items.sort((a, b) => a.orden < b.orden ? -1 : a.orden > b.orden ? 1 : a.folio < b.folio ? -1 : a.folio > b.folio ? 1 : 0);
   return items.map(it => { const y = Object.assign({}, it); delete y.orden; return y; });
@@ -13226,4 +13249,1196 @@ function margenPorProyecto(d) {
       porcentaje: t.contratado > 0 ? Math.round(margen / t.contratado * 1000) / 10 : null, porFirmar: t.porFirmar, conError: t.conError };
   });
   return { conceptos: conceptos, totales: totales, proyectos: filas };
+}
+
+// ---- 6.C Facturas de clientes (incremento 7; no confundir con el 6.C Centro de mando del incremento 4): importar los XML de
+// CONTALINK, ligarlos a etapas de cobranza, REP pendientes ----
+// Contrato: docs/incremento-7.md §0–§3 (módulo C, "CFDI fase A"); detalle: docs/incremento-7-facturas.md. Helgen timbra sus facturas
+// en CONTALINK (su PAC); CAPRI NO timbra: importa los XML que CONTALINK genera (uno, varios o el ZIP que descarga, con su PDF opcional)
+// y los liga a las etapas de cobranza de un proyecto. Solo cobranza (y el super admin, que tiene todos los roles): exigirCobranza_ en
+// cada función; nada de esto sale a ventas, compras ni a quien pide (tampoco en bootstrap, sincronizar ni Pendientes).
+//  - Datos: pestaña FacturasClientes del libro de cobranza (HOJAS_COBRANZA; se crea sola con la primera importación). La llave natural
+//    es el UUID: uno ya importado se informa y no se duplica (idempotencia en la hoja; id_solicitud dice si fue este mismo envío).
+//  - Archivos: Cobranza/<año del folio del proyecto>/<proyecto>/Facturas/ (como los comprobantes de pago) o, mientras la factura no
+//    se liga, Cobranza/<año de la factura>/Sin proyecto/Facturas/; al ligarla se mueven (también sus notas de crédito y los
+//    complementos de pago que ya solo tocan ese proyecto). Todo con privado_ de arriba abajo; carpeta_proyecto dice dónde están.
+//  - Ninguna llamada HTTP dentro del candado: las carpetas y los archivos (privado_ usa UrlFetchApp) se crean antes de tomarlo; dentro
+//    solo se vuelve a revisar la hoja y se escribe (y se mueven archivos ya privados, que es DriveApp).
+//  - Clave de etapa (claveEtapa): '1', '2'… = orden de la etapa del contrato; '<folio HLG de la adicional>/<orden>' = etapa de una
+//    adicional (módulo A). Las etapas salen de resumenCobranza (vistaCobranza_ y cobranzaParaFacturas): al integrar A, sus etapas
+//    llegan con {adicional, orden} y no hay que cambiar nada más aquí.
+//  - Una E (nota de crédito) resta de lo facturado de su relacionada (CfdiRelacionados); una P (REP, Pagos 2.0) marca cuánto de cada
+//    factura PPD ya tiene complemento. REP pendiente = PPD con cobros de cobranza (Pagos Vigentes aplicados a sus etapas) que sus REP
+//    no cubren (calcularFacturasClientes). MXN y USD nunca se suman ni se comparan.
+
+const TIPOS_CFDI_CLIENTE = ['I', 'E', 'P'];
+const TIPO_CFDI_TEXTO = { I: 'Factura', E: 'Nota de crédito', P: 'Complemento de pago' };
+const FAC_VIGENTE = 'Vigente', FAC_CANCELADA = 'Cancelada';
+const MAX_ARCHIVOS_FACTURAS = 60;               // archivos por envío (un ZIP cuenta como uno)
+const MAX_LOTE_FACTURAS = 20 * 1024 * 1024;      // bytes por envío (la interfaz manda cada ZIP en su propio envío)
+const MAX_ENTRADAS_ZIP = 400;                    // archivos dentro de un ZIP
+const MAX_DESCOMPRIMIDO = 60 * 1024 * 1024;      // lo que puede salir de un ZIP (uno que se infla de más se rechaza)
+const MAX_XML_LOTE = 100;                        // facturas nuevas por envío; las demás se importan al volver a subir el archivo
+const TIEMPO_MAX_IMPORTAR = 240000;              // ms: después ya no se crean archivos (Apps Script corta a los 6 min)
+const MAX_JSON_CELDA = 45000;                    // una celda de Sheets admite 50 000 caracteres
+const SUBCARPETA_SIN_PROYECTO = 'Sin proyecto';
+const RELACION_SUSTITUCION = '04';               // c_TipoRelacion 04: sustitución de los CFDI previos
+
+function modFacturasClientes_() {
+  // Aquí solo listas literales: este módulo se arma al cargar el archivo, antes de las const de más abajo
+  return { nombre: 'Facturas de clientes',
+    api: { importarFacturasClientes: importarFacturasClientes, listarFacturasClientes: listarFacturasClientes,
+      ligarFacturaCliente: ligarFacturaCliente, cancelarFacturaCliente: cancelarFacturaCliente },
+    cambios: { importarFacturasClientes: ['facturasClientes'], ligarFacturaCliente: ['facturasClientes'],
+      cancelarFacturaCliente: ['facturasClientes'] },
+    solo: [], publicas: [],
+    // Solo si ya está en caché (como el resumen de cobranza); si no, la interfaz la pide al abrir Cobranza
+    bootstrap(permisos) { return permisos.cobranza ? { facturasCli: listarFacturasClientes(true) } : {}; },
+    sincronizar(permisos, ctx, algo, r, errores) {
+      if (!permisos.cobranza) return;
+      if (ctx.facturasCli && algo('facturasClientes', 'proyectos', 'contratos', 'pagosCobranza', 'anulaciones')) {
+        r.facturasCli = intentar_(errores, 'Facturas de clientes', () => listarFacturasClientes());
+      }
+      // La vista del proyecto abierto lleva sus facturas por etapa: también se vuelve a mandar si solo cambiaron las facturas
+      if (ctx.cobProyecto && !r.cobranzaProyecto && algo('facturasClientes', 'anulaciones')) {
+        r.cobranzaProyecto = intentar_(errores, 'Cobranza del proyecto', () => getCobranzaProyecto(ctx.cobProyecto));
+      }
+      // Pendientes de cobranza (REP pendientes, XML sin ligar): dependen de colecciones que Pantallas no revisa
+      if (!r.pendientes && algo('facturasClientes', 'pagosCobranza', 'contratos')) {
+        r.pendientes = intentar_(errores, 'Pendientes', () => pendientes(!!(ctx && ctx.pendTodos) && esSuperAdmin_()));
+      }
+    },
+    // prepararCapri: la pestaña en el libro de cobranza, si ya existe (si no, la crea la primera importación)
+    preparar() {
+      const libro = libroCobranzaSiExiste_();
+      if (libro) hojaCobranza_(libro, 'FacturasClientes');
+      console.log('Facturas de clientes: ' + (libro ? 'pestaña FacturasClientes lista' : 'sin libro de cobranza todavía (se crea solo)'));
+    },
+  };
+}
+
+/** Columna (desde 1) de un encabezado de FacturasClientes. */
+const colFacCli_ = nombre => HOJAS_COBRANZA.FacturasClientes.enc.indexOf(nombre) + 1;
+
+/** Texto JSON de una celda → valor (o def si está vacía o no es JSON). */
+function jsonDeCelda_(v, def) {
+  try { const x = JSON.parse(String(v == null ? '' : v) || 'null'); return x == null ? def : x; } catch (e) { return def; }
+}
+
+function facturaCliDesdeFila_(r, fila) {
+  const c = n => r[colFacCli_(n) - 1];
+  const s = n => String(c(n) == null ? '' : c(n)).trim();
+  return {
+    uuid: s('uuid').toUpperCase(), tipo: s('tipo').toUpperCase(), serieFolio: s('serie_folio'), fecha: fechaIso_(c('fecha')),
+    metodo: s('metodo').toUpperCase(), forma: s('forma'), moneda: s('moneda').toUpperCase(), subtotal: Number(c('subtotal')) || 0,
+    iva: Number(c('iva')) || 0, total: Number(c('total')) || 0, receptorRfc: s('receptor_rfc').toUpperCase(), receptorNombre: s('receptor_nombre'),
+    proyectoFolio: s('proyecto_folio').toUpperCase(), etapas: jsonDeCelda_(c('etapas (JSON)'), []),
+    relacionadas: jsonDeCelda_(c('relacionadas (JSON)'), []), estado: s('estado') || FAC_VIGENTE, xmlId: s('xml_id'), xmlUrl: s('xml_url'),
+    pdfId: s('pdf_id'), pdfUrl: s('pdf_url'), registroEmail: s('registro_email'), registro: s('registro_nombre') || s('registro_email'),
+    fechaRegistro: fechaTexto_(c('fecha_registro')), pagos: jsonDeCelda_(c('pagos (JSON)'), []), descuento: Number(c('descuento')) || 0,
+    retenidos: Number(c('retenidos')) || 0, fechaTimbrado: s('fecha_timbrado'), usoCfdi: s('uso_cfdi'), archivoXml: s('archivo_xml'),
+    carpetaProyecto: s('carpeta_proyecto').toUpperCase(), ligoEmail: s('ligo_email'), fechaLigado: fechaTexto_(c('fecha_ligado')),
+    canceladoPor: s('cancelado_por'), fechaCancelacion: fechaTexto_(c('fecha_cancelacion')), motivoCancelacion: s('motivo_cancelacion'),
+    idSolicitud: s('id_solicitud'), sinProyecto: s('sin_proyecto'), fila: fila,
+  };
+}
+
+/** Facturas de clientes del libro (con su fila); sin libro o sin pestaña, ninguna. Solo lee: no crea la pestaña. */
+function facturasClientesDelLibro_(libro) {
+  return filasSiHay_(libro, HOJAS_COBRANZA, 'FacturasClientes').map((r, i) => facturaCliDesdeFila_(r, i + 2))
+    .filter(f => f.uuid && f.estado !== ESTADO_ANULADA);
+}
+
+/**
+ * Lo que necesitan la lista, la liga y Pendientes, leído una vez: las facturas, las etapas de cobranza de cada proyecto con
+ * cotización aceptada (cobranzaParaFacturas, con lo cobrado de cada etapa) y los proyectos. Sin facturas no lee nada más.
+ */
+function contextoFacturasCli_() {
+  const libro = libroCobranzaSiExiste_();
+  const facturas = facturasClientesDelLibro_(libro);
+  const proyectos = {};
+  proyectosVisibles_().forEach(p => { proyectos[p.folio.toUpperCase()] = p; });
+  if (!facturas.length) return { libro: libro, facturas: facturas, cobranza: {}, proyectos: proyectos };
+  const cF = colEsq_('fecha_esperada') - 1;
+  const contratos = filasSiHay_(libro, HOJAS_COBRANZA, 'Contratos').map((r, i) => contratoDesdeFila_(r, i + 2))
+    .filter(c => c.proyectoFolio.trim() && c.estado !== ESTADO_ANULADA);
+  const esquemas = filasSiHay_(libro, HOJAS_COBRANZA, 'Esquemas').filter(r => String(r[0] || '').trim())
+    .map(r => ({ proyectoFolio: String(r[0]), orden: Number(r[1]), etapa: String(r[2]), porcentaje: Number(r[3]), fechaEsperada: fechaIso_(r[cF]) }));
+  const pagos = filasSiHay_(libro, HOJAS_COBRANZA, 'Pagos').filter(r => String(r[0] || '').trim()).map((r, i) => pagoDesdeFila_(r, i + 2))
+    .filter(p => p.estado !== ESTADO_ANULADA && !esAnulado_(p.folio));
+  // PUNTO DE INTEGRACIÓN CON A (adicionales): cobranzaParaFacturas arma las etapas con resumenCobranza; si al integrar las etapas de
+  // las adicionales se agregan a otro lado, que esta función reciba también esas (con {adicional, orden}: claveEtapa)
+  return { libro: libro, facturas: facturas, proyectos: proyectos,
+    cobranza: cobranzaParaFacturas({ contratos: contratos, esquemas: esquemas, pagos: pagos, proyectos: proyectos }) };
+}
+
+/**
+ * Facturas de clientes con su estado (sin ligar, REP pendiente, por revisar), sugerencias para ligar y los proyectos con sus etapas
+ * (vistaFacturasClientes). Solo cobranza. En caché por versión de facturas, proyectos, contratos, pagos y anulaciones; soloCache: null
+ * si no está (carga inicial).
+ */
+function listarFacturasClientes(soloCache) {
+  exigirCobranza_();
+  const colecciones = ['facturasClientes', 'proyectos', 'contratos', 'pagosCobranza', 'anulaciones'];
+  if (soloCache) return enCache_('FACCLI', colecciones, TTL_CACHE) || null;
+  return enCache_('FACCLI', colecciones, TTL_CACHE, () => vistaFacturasClientes(contextoFacturasCli_(), hoyIso_()));
+}
+
+/**
+ * Lo que interrumpe ZIP: Utilities.unzip detrás de una función pequeña para que el servidor (etapa 1, Node) solo tenga que darla.
+ * blob = el ZIP. Devuelve [{nombre (ruta dentro del ZIP), bytes}]. No pide permisos nuevos de Google.
+ */
+function descomprimir_(blob) {
+  return Utilities.unzip(blob).map(b => ({ nombre: String(b.getName() || ''), bytes: b.getBytes() }));
+}
+
+/**
+ * Cobranza/<año>/<proyecto>/Facturas/ (año del folio del proyecto, como los comprobantes de pago) o, sin proyecto,
+ * Cobranza/<año de la factura>/Sin proyecto/Facturas/. Restringidas de arriba abajo; una vez por petición cada una. Usa privado_
+ * (HTTP): nunca dentro del candado.
+ */
+function carpetaFacturasCli_(proyectoFolio, anioFactura) {
+  const memo = MEMO_.carpetasFacCli || (MEMO_.carpetasFacCli = {});
+  const folio = String(proyectoFolio || '').toUpperCase();
+  const anio = String(folio ? folio.split('-')[1] || anioFactura : anioFactura || hoyIso_().slice(0, 4));
+  const k = anio + '/' + folio;
+  if (memo[k]) return memo[k];
+  const cAnio = privado_(subcarpeta_(carpetaCobranza_(), anio));
+  const cProy = privado_(subcarpeta_(cAnio, folio || SUBCARPETA_SIN_PROYECTO));
+  return (memo[k] = privado_(subcarpeta_(cProy, SUBCARPETA_FACTURAS)));
+}
+
+/** Crea el archivo y lo deja privado; si no se puede restringir, lo manda a la Papelera (nada queda abierto) y lanza el error. */
+function archivoPrivado_(carpeta, bytes, mime, nombre) {
+  const a = carpeta.createFile(Utilities.newBlob(bytes, mime, nombre));
+  try {
+    return privado_(a);
+  } catch (e) {
+    try { DriveApp.getFileById(a.getId()).setTrashed(true); } catch (e2) { /* sin Papelera: queda dentro de la carpeta restringida */ }
+    throw e;
+  }
+}
+
+/** Archivos que ya no se usan (un UUID que otro envío importó al mismo tiempo): a la Papelera, sin detener nada. */
+function papeleraFacturas_(ids) {
+  (ids || []).forEach(id => { try { DriveApp.getFileById(id).setTrashed(true); } catch (e) { console.warn('No se mandó a la Papelera ' + id + ': ' + e.message); } });
+}
+
+/**
+ * Importa facturas de clientes: p = {archivos: [{nombre, datos (base64)}], idSolicitud}. Cada archivo puede ser un XML (CFDI 4.0
+ * de Helgen: I, E o P), su PDF o un ZIP como el que descarga CONTALINK (XML y PDF, con o sin carpetas). Un archivo malo no detiene a
+ * los demás: devuelve el resultado de cada uno ({archivo, tipo, estado: importada | repetida | rechazada | ignorada | pendiente |
+ * pdf, mensaje, uuid…}), los conteos y la lista al día. Los PDF se emparejan con su XML por el nombre del archivo (sin extensión) o
+ * por el UUID en el nombre, en el mismo envío o con una factura ya importada que no tenga PDF.
+ */
+function importarFacturasClientes(p) {
+  exigirCobranza_();
+  const inicio = Date.now();
+  const d0 = p || {};
+  const archivos = Array.isArray(d0.archivos) ? d0.archivos : [];
+  if (!archivos.length) throw new Error('Adjunta uno o varios XML, o el ZIP que descargaste de CONTALINK.');
+  if (archivos.length > MAX_ARCHIVOS_FACTURAS) {
+    throw new Error('Sube máximo ' + MAX_ARCHIVOS_FACTURAS + ' archivos por envío (o un ZIP con todos).');
+  }
+  const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
+  const rfcHelgen = String(getConfig_().EMPRESA_RFC || '').toUpperCase().trim();
+
+  // 1. Leer los archivos y abrir los ZIP (antes del candado: no dependen de nada guardado)
+  const entradas = [], previos = [];
+  let peso = 0;
+  archivos.forEach((a, i) => {
+    const nombre = String((a && a.nombre) || 'archivo ' + (i + 1)).split(/[\\/]/).pop().slice(0, 120);
+    let bytes;
+    try { bytes = bytesDeAdjunto_(a, 'No se pudo leer el archivo.'); } catch (e) { bytes = null; }
+    if (!bytes || !bytes.length) { previos.push({ archivo: nombre, tipo: 'Otro', estado: 'rechazada', mensaje: 'No se pudo leer el archivo: vuelve a adjuntarlo.' }); return; }
+    peso += bytes.length;
+    if (peso > MAX_LOTE_FACTURAS) throw new Error('El envío pesa más de 20 MB: súbelo en partes (un ZIP o unos cuantos XML a la vez).');
+    const tipo = tipoArchivoFactura(bytes);
+    if (tipo === 'zip') entradasDeZip_(nombre, bytes, entradas, previos);
+    else if (tipo) entradas.push({ nombre: nombre, base: nombreBaseArchivo(nombre), tipo: tipo, bytes: bytes });
+    else previos.push({ archivo: nombre, tipo: 'Otro', estado: 'rechazada', mensaje: 'No es un XML, un PDF ni un ZIP.' });
+  });
+
+  // 2. Revisar y emparejar (lógica pura) contra lo ya importado (se vuelve a revisar dentro del candado)
+  const libro = libroCobranza_();
+  const existentes = {};
+  facturasClientesDelLibro_(libro).forEach(f => { existentes[f.uuid] = f; });
+  const lote = prepararLoteFacturasCliente(entradas, { rfcHelgen: rfcHelgen, existentes: existentes, idSolicitud: idSolicitud });
+
+  // 3. Carpetas y archivos, fuera del candado (privado_ es HTTP). Una E o una P cuya factura ya está ligada va directo a ese proyecto
+  const ahora = () => Date.now() - inicio;
+  const anioDe = f => String(f.fecha || hoyIso_()).slice(0, 4);
+  const creados = [];
+  const sinTiempo = r => Object.assign(r, { estado: 'pendiente', mensaje: 'No alcanzó el tiempo de este envío: vuelve a subir el archivo ' +
+    '(lo que ya se importó se reconoce solo).' });
+  lote.nuevas.forEach(x => {
+    if (x.omitida) return;
+    if (ahora() > TIEMPO_MAX_IMPORTAR) { x.omitida = true; sinTiempo(x.resultado); return; }
+    try {
+      x.proyecto = proyectoInicialFactura(x.f, existentes);
+      const carpeta = carpetaFacturasCli_(x.proyecto, anioDe(x.f));
+      x.xml = archivoPrivado_(carpeta, x.entrada.bytes, 'application/xml', nombreArchivoFacturaCliente(x.f, 'xml'));
+      creados.push(x.xml.getId());
+      if (x.pdf) {
+        x.pdfArchivo = archivoPrivado_(carpeta, x.pdf.bytes, 'application/pdf', nombreArchivoFacturaCliente(x.f, 'pdf'));
+        creados.push(x.pdfArchivo.getId());
+      }
+    } catch (e) {
+      x.omitida = true;
+      Object.assign(x.resultado, { estado: 'rechazada', mensaje: 'No se pudo guardar en Drive: ' + e.message });
+    }
+  });
+  lote.adjuntar.forEach(x => {
+    if (ahora() > TIEMPO_MAX_IMPORTAR) { x.omitida = true; sinTiempo(x.resultado); return; }
+    try {
+      const f = existentes[x.uuid];
+      x.pdfArchivo = archivoPrivado_(carpetaFacturasCli_(f.carpetaProyecto, anioDe(f)), x.pdf.bytes, 'application/pdf',
+        nombreArchivoFacturaCliente({ tipoComprobante: f.tipo, serieFolio: f.serieFolio, uuid: f.uuid, receptor: { nombre: f.receptorNombre } }, 'pdf'));
+    } catch (e) {
+      x.omitida = true;
+      Object.assign(x.resultado, { estado: 'rechazada', mensaje: 'No se pudo guardar el PDF en Drive: ' + e.message });
+    }
+  });
+
+  // 4. Dentro del candado: volver a revisar la hoja (otro envío pudo importar lo mismo) y escribir todo de una vez
+  const sobran = [];
+  conCandado_(() => {
+    const hoja = hojaCobranza_(libro, 'FacturasClientes');
+    const enc = HOJAS_COBRANZA.FacturasClientes.enc;
+    const actuales = {};
+    filasCobranza_(hoja, 'FacturasClientes').forEach((r, i) => {
+      const f = facturaCliDesdeFila_(r, i + 2);
+      if (f.uuid) actuales[f.uuid] = f;
+    });
+    const ahoraTxt = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
+    const filas = [], nuevas = [];
+    lote.nuevas.forEach(x => {
+      if (x.omitida) return;
+      const ya = actuales[x.f.uuid];
+      if (ya) { // otro envío lo importó mientras tanto
+        Object.assign(x.resultado, resultadoRepetida(ya, idSolicitud));
+        sobran.push(x.xml.getId()); if (x.pdfArchivo) sobran.push(x.pdfArchivo.getId());
+        return;
+      }
+      actuales[x.f.uuid] = { uuid: x.f.uuid };
+      filas.push(filaFacturaCliente(x, { ahora: ahoraTxt, idSolicitud: idSolicitud }));
+      nuevas.push(x);
+      Object.assign(x.resultado, { estado: 'importada', mensaje: mensajeImportada(x) });
+    });
+    if (filas.length) escribe_(hoja).getRange(hoja.getLastRow() + 1, 1, filas.length, enc.length).setValues(filas);
+    const pdfs = [];
+    lote.adjuntar.forEach(x => {
+      if (x.omitida) return;
+      const f = actuales[x.uuid];
+      if (!f || !f.fila || f.pdfId) {
+        sobran.push(x.pdfArchivo.getId());
+        Object.assign(x.resultado, { estado: 'ignorada', mensaje: 'La factura ya tiene su PDF.' });
+        return;
+      }
+      escribe_(hoja).getRange(f.fila, colFacCli_('pdf_id'), 1, 2).setValues([[x.pdfArchivo.getId(), x.pdfArchivo.getUrl()]]);
+      f.pdfId = x.pdfArchivo.getId();
+      pdfs.push(x);
+      Object.assign(x.resultado, { estado: 'pdf', mensaje: 'PDF agregado a la factura ' + (f.serieFolio || f.uuid) + ' (ya estaba importada).' });
+    });
+    if (nuevas.length || pdfs.length) {
+      const cuenta = t => nuevas.filter(x => x.f.tipoComprobante === t).length;
+      const detalle = [nuevas.length ? nuevas.length + ' nuevas (I ' + cuenta('I') + ', E ' + cuenta('E') + ', P ' + cuenta('P') + '): ' +
+          nuevas.map(x => [x.f.serieFolio, x.f.uuid].filter(Boolean).join(' ')).join(' · ') : '',
+        pdfs.length ? pdfs.length + ' PDF agregados: ' + pdfs.map(x => x.uuid).join(' · ') : ''].filter(Boolean).join(' · ');
+      bitacora_(libro, 'Importar facturas de clientes', '', detalle.length > 4000 ? detalle.slice(0, 3990) + '…' : detalle);
+      SpreadsheetApp.flush();
+    }
+  });
+  papeleraFacturas_(sobran);
+
+  const resultados = previos.concat(lote.resultados);
+  const conteo = e => resultados.filter(r => r.estado === e).length;
+  return { resultados: resultados,
+    conteos: { importadas: conteo('importada'), repetidas: conteo('repetida'), rechazadas: conteo('rechazada'), pendientes: conteo('pendiente'),
+      pdfs: conteo('pdf'), ignoradas: conteo('ignorada') },
+    lista: vistaFacturasClientes(contextoFacturasCli_(), hoyIso_()) };
+}
+
+/** Abre un ZIP y agrega sus XML y PDF a entradas; lo que no se puede usar va a previos con su motivo. Un ZIP malo no detiene nada. */
+function entradasDeZip_(nombre, bytes, entradas, previos) {
+  let contenido;
+  try {
+    contenido = descomprimir_(Utilities.newBlob(bytes, 'application/zip', nombre));
+  } catch (e) {
+    previos.push({ archivo: nombre, tipo: 'ZIP', estado: 'rechazada', mensaje: 'No se pudo abrir el ZIP (¿está dañado o tiene contraseña?).' });
+    return;
+  }
+  // Carpetas, archivos ocultos y la basura de macOS (__MACOSX) no son facturas: se saltan sin avisar
+  const utiles = (contenido || []).filter(x => {
+    const ruta = String(x.nombre || ''), base = ruta.split(/[\\/]/).pop();
+    return base && !/[\\/]$/.test(ruta) && !/(^|[\\/])__MACOSX[\\/]/.test(ruta) && base[0] !== '.';
+  });
+  if (utiles.length > MAX_ENTRADAS_ZIP) {
+    previos.push({ archivo: nombre, tipo: 'ZIP', estado: 'rechazada', mensaje: 'El ZIP trae ' + utiles.length + ' archivos (máximo ' +
+      MAX_ENTRADAS_ZIP + '): descárgalo de CONTALINK por periodos más cortos.' });
+    return;
+  }
+  const total = utiles.reduce((s, x) => s + ((x.bytes && x.bytes.length) || 0), 0);
+  if (total > MAX_DESCOMPRIMIDO) {
+    previos.push({ archivo: nombre, tipo: 'ZIP', estado: 'rechazada', mensaje: 'El ZIP descomprimido pesa más de 60 MB: divídelo en partes.' });
+    return;
+  }
+  if (!utiles.length) previos.push({ archivo: nombre, tipo: 'ZIP', estado: 'rechazada', mensaje: 'El ZIP no trae archivos.' });
+  utiles.forEach(x => {
+    const ruta = String(x.nombre), visible = nombre + ' › ' + ruta.slice(0, 160), b = x.bytes || [];
+    const tipo = tipoArchivoFactura(b);
+    if (tipo === 'zip') previos.push({ archivo: visible, tipo: 'ZIP', estado: 'rechazada', mensaje: 'Un ZIP dentro del ZIP: descomprímelo y sube su contenido.' });
+    else if (tipo) entradas.push({ nombre: visible, base: nombreBaseArchivo(ruta), tipo: tipo, bytes: b });
+    else previos.push({ archivo: visible, tipo: 'Otro', estado: 'ignorada', mensaje: 'No es XML ni PDF: se ignoró.' });
+  });
+}
+
+/**
+ * Liga una factura (I, o una E sin su factura relacionada en CAPRI) a un proyecto y una o varias etapas, o la marca "sin proyecto"
+ * (con motivo: p. ej. una venta que no se lleva en CAPRI). d = {uuid, proyectoFolio, etapas: [{clave, monto?}], sinProyecto (motivo),
+ * desde (folio del proyecto abierto: devuelve también su vista)}. Sin montos, el total se reparte en el orden de las etapas elegidas
+ * hasta lo que falta facturar de cada una (la última se queda con el resto). Volver a ligar cambia la liga (queda en la Bitácora).
+ * Mueve los archivos a Cobranza/AAAA/<proyecto>/Facturas/ (y los de sus notas de crédito y REP que ya solo tocan ese proyecto).
+ */
+function ligarFacturaCliente(d) {
+  exigirCobranza_();
+  const x = d || {};
+  const uuid = String(x.uuid || '').trim().toUpperCase();
+  if (!UUID_CFDI.test(uuid)) throw new Error('Elige la factura que vas a ligar.');
+  const sinProyecto = String(x.sinProyecto == null ? '' : x.sinProyecto).trim();
+  const folioPedido = folioInterno(x.proyectoFolio);
+  if (!folioPedido && !sinProyecto) throw new Error('Elige el proyecto (o marca la factura como "sin proyecto", con el motivo).');
+  if (sinProyecto) motivoObligatorio_(sinProyecto, 'Escribe por qué la factura no es de un proyecto de CAPRI.');
+  const elegidas = sinProyecto ? [] : normalizarEtapasElegidas(x.etapas);
+  const libro = libroCobranza_();
+  // Fuera del candado: el proyecto y su carpeta de facturas (privado_ es HTTP). Marcarla "sin proyecto" no mueve sus archivos.
+  const proyecto = sinProyecto ? null : proyectoParaCobranza_(folioPedido);
+  const carpeta = proyecto ? carpetaFacturasCli_(proyecto.folio) : null;
+
+  return conCandado_(() => {
+    const ctx = contextoFacturasCli_();
+    const f = ctx.facturas.find(y => y.uuid === uuid);
+    if (!f) throw new Error('No existe la factura ' + uuid + '.');
+    if (f.estado !== FAC_VIGENTE) throw new Error('La factura ' + (f.serieFolio || uuid) + ' está cancelada.');
+    if (f.tipo === 'P') throw new Error('Un complemento de pago no se liga: marca solas sus facturas.');
+    const hoja = hojaCobranza_(libro, 'FacturasClientes');
+    const t = textoCelda, ahora = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
+    const antes = f.sinProyecto ? 'sin proyecto (' + f.sinProyecto + ')' : f.proyectoFolio ? f.proyectoFolio + ' ' +
+      (f.etapas || []).map(e => e.etapa + ' ' + formatoMoneda(e.monto)).join(' + ') : 'sin ligar';
+    // Lo demás, sin esta factura: lo que falta facturar de cada etapa y si una nota de crédito ya la toca
+    const otras = ctx.facturas.map(y => y.uuid === uuid ? Object.assign({}, y, { proyectoFolio: '', etapas: [] }) : y);
+    const calc = calcularFacturasClientes(otras, ctx.cobranza);
+    const info = calc.facturas[uuid];
+    if (f.tipo === 'E' && info.aplicadaA.length) {
+      throw new Error('Esta nota de crédito ya resta de su factura relacionada (' + info.aplicadaA.map(a => a.serieFolio || a.uuid).join(', ') +
+        '): no se liga aparte.');
+    }
+    if (sinProyecto) {
+      escribe_(hoja).getRange(f.fila, colFacCli_('proyecto_folio'), 1, 2).setValues([['', '[]']]);
+      escribe_(hoja).getRange(f.fila, colFacCli_('ligo_email'), 1, 2).setValues([[t(VENDEDOR_.email), ahora]]);
+      escribe_(hoja).getRange(f.fila, colFacCli_('sin_proyecto')).setValue(t(sinProyecto));
+      bitacora_(libro, 'Factura de cliente sin proyecto', f.proyectoFolio, (f.serieFolio || '') + ' ' + uuid + ' · antes: ' + antes, sinProyecto);
+    } else {
+      const liga = armarLigaFactura({ factura: f, neto: info.netoCts / 100, proyecto: proyecto, cobranza: ctx.cobranza[proyecto.folio.toUpperCase()],
+        etapas: calc.proyectos[proyecto.folio.toUpperCase()], elegidas: elegidas });
+      escribe_(hoja).getRange(f.fila, colFacCli_('proyecto_folio'), 1, 2).setValues([[proyecto.folio, JSON.stringify(liga.partes)]]);
+      escribe_(hoja).getRange(f.fila, colFacCli_('ligo_email'), 1, 2).setValues([[t(VENDEDOR_.email), ahora]]);
+      if (f.sinProyecto) escribe_(hoja).getRange(f.fila, colFacCli_('sin_proyecto')).setValue('');
+      bitacora_(libro, f.proyectoFolio || f.sinProyecto ? 'Cambiar liga de factura de cliente' : 'Ligar factura de cliente', proyecto.folio,
+        (f.serieFolio || '') + ' ' + uuid + ' · ' + formatoMoneda(f.total) + ' ' + f.moneda + ' → ' + liga.partes.map(e => e.etapa + ' ' +
+          formatoMoneda(e.monto)).join(' + ') + ' · antes: ' + antes);
+      // Archivos: la factura y lo que ahora solo toca este proyecto (sus notas de crédito, los REP de sus facturas)
+      const despues = ctx.facturas.map(y => y.uuid === uuid ? Object.assign({}, y, { proyectoFolio: proyecto.folio, etapas: liga.partes }) : y);
+      const calc2 = calcularFacturasClientes(despues, ctx.cobranza);
+      despues.forEach(y => {
+        const k = calc2.facturas[y.uuid];
+        if (y.estado !== FAC_VIGENTE || !k || k.proyectoArchivos !== proyecto.folio.toUpperCase()) return;
+        if (y.tipo !== 'I' && !k.manual && y.proyectoFolio !== k.proyectoArchivos) {
+          escribe_(hoja).getRange(y.fila, colFacCli_('proyecto_folio')).setValue(k.proyectoArchivos); // dato informativo de la E o la P
+        }
+        if (y.carpetaProyecto === k.proyectoArchivos) return;
+        try {
+          [y.xmlId, y.pdfId].filter(Boolean).forEach(id => DriveApp.getFileById(id).moveTo(carpeta));
+          escribe_(hoja).getRange(y.fila, colFacCli_('carpeta_proyecto')).setValue(k.proyectoArchivos);
+        } catch (e) {
+          console.warn('No se movieron los archivos de ' + y.uuid + ': ' + e.message);
+        }
+      });
+    }
+    SpreadsheetApp.flush();
+    const r = { uuid: uuid, lista: vistaFacturasClientes(contextoFacturasCli_(), hoyIso_()) };
+    if (x.desde) r.vista = vistaCobranza_(libro, proyectoParaCobranza_(x.desde));
+    return r;
+  });
+}
+
+/**
+ * Marca una factura de cliente (I, E o P) como Cancelada, con motivo, cuando se canceló en CONTALINK (CAPRI no cancela ante el
+ * SAT). La fila no se borra y sus archivos se quedan; deja de contar como facturado y como REP. desde = folio del proyecto abierto.
+ */
+function cancelarFacturaCliente(uuidFactura, motivo, desde) {
+  exigirCobranza_();
+  const m = motivoObligatorio_(motivo, 'Escribe el motivo de la cancelación (p. ej. "Cancelada en CONTALINK, se refacturó con A-120").');
+  const uuid = String(uuidFactura || '').trim().toUpperCase();
+  const libro = libroCobranza_();
+  return conCandado_(() => {
+    const hoja = hojaCobranza_(libro, 'FacturasClientes');
+    let f = null;
+    filasCobranza_(hoja, 'FacturasClientes').forEach((r, i) => { if (String(r[0] || '').trim().toUpperCase() === uuid) f = facturaCliDesdeFila_(r, i + 2); });
+    if (!f || f.estado === ESTADO_ANULADA) throw new Error('No existe la factura ' + uuid + '.');
+    if (f.estado !== FAC_VIGENTE) throw new Error('La factura ' + (f.serieFolio || uuid) + ' ya está cancelada.');
+    escribe_(hoja).getRange(f.fila, colFacCli_('estado')).setValue(FAC_CANCELADA);
+    escribe_(hoja).getRange(f.fila, colFacCli_('cancelado_por'), 1, 3).setValues([[textoCelda(VENDEDOR_.email),
+      Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'), textoCelda(m)]]);
+    bitacora_(libro, 'Cancelar factura de cliente', f.proyectoFolio, (TIPO_CFDI_TEXTO[f.tipo] || f.tipo) + ' ' + (f.serieFolio || '') + ' ' +
+      uuid + ' · ' + formatoMoneda(f.total) + ' ' + f.moneda, m);
+    SpreadsheetApp.flush();
+    const r = { uuid: uuid, lista: vistaFacturasClientes(contextoFacturasCli_(), hoyIso_()) };
+    if (desde) r.vista = vistaCobranza_(libro, proyectoParaCobranza_(desde));
+    return r;
+  });
+}
+
+/**
+ * Bloque "Facturas" de la vista de cobranza del proyecto (vistaCobranza_; solo llega a cobranza): por etapa, facturado contra
+ * cobrado y sus facturas con "REP pendiente". contrato y resumen = los de la vista (con las adicionales, al integrar A). null si
+ * todavía no hay ninguna factura importada; {error} si algo falla (la vista carga igual).
+ */
+function facturasDeVistaCobranza_(libro, proyecto, contrato, resumen) {
+  try {
+    const facturas = facturasClientesDelLibro_(libro);
+    if (!facturas.length) return null;
+    const folio = String(proyecto.folio).toUpperCase(), cob = {};
+    if (contrato && resumen) {
+      cob[folio] = { moneda: contrato.moneda, estadoContrato: contrato.estado, estadoProyecto: proyecto.estado, etapas: etapasParaFacturas(resumen) };
+    }
+    return bloqueFacturasDeProyecto(calcularFacturasClientes(facturas, cob), facturas, folio, proyecto.clienteId);
+  } catch (e) {
+    return { error: 'No se pudieron leer las facturas: ' + e.message };
+  }
+}
+
+/** Pendientes de cobranza con las facturas de clientes (pendientes(); solo con el rol de cobranza). */
+function facturasCliParaPendientes_() {
+  return listarFacturasClientes() || null;
+}
+
+// ---- Facturas de clientes: lógica pura (sin servicios de Google; se prueba en Node) ----
+
+/** Mensaje de error de leerCfdi dicho para facturas de Helgen a sus clientes (no "al proveedor"). */
+function textoErrorCfdiCliente(mensaje) {
+  const t = String(mensaje || '');
+  if (/pide al proveedor/i.test(t)) {
+    return t.replace(/pide al proveedor la versión 4\.0/i, 'pide a quien factura en CONTALINK el XML en versión 4.0')
+      .replace(/Pide al proveedor/, 'Pide a quien factura en CONTALINK').replace(/pide al proveedor/, 'pide a quien factura en CONTALINK');
+  }
+  if (/no está timbrado|está incompleto/.test(t)) return t + ' Pide a quien factura en CONTALINK el XML timbrado.';
+  return t;
+}
+
+/**
+ * Lee un CFDI 4.0 emitido por Helgen a un cliente: lo mismo que leerCfdi (sin cambiar su salida) más relacionados
+ * [{uuid, tipoRelacion}] de CfdiRelacionados y, en un complemento de pago (tipo P), pagos [{fecha, monto, moneda, forma, documentos:
+ * [{uuid, serieFolio, parcialidad, saldoAnterior, pagado, saldoInsoluto, moneda}]}] del complemento Pagos 2.0. Igual de seguro que
+ * leerCfdi: sin DTD ni entidades, solo atributos. Los errores dicen "pide a quien factura en CONTALINK…".
+ */
+function leerCfdiCliente(texto) {
+  let base;
+  try { base = leerCfdi(texto); } catch (e) { throw new Error(textoErrorCfdiCliente(e.message)); }
+  const s = String(texto).replace(/^﻿/, '').replace(/<!--[\s\S]*?-->/g, '');
+  const re = /<(\/?)(?:[A-Za-z_][\w.\-]*:)?([A-Za-z_][\w.\-]*)((?:\s+[^\s=\/>]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g;
+  const pila = [], relacionados = [], pagos = [];
+  let tipoRelacion = '', pago = null, version = null, m;
+  const err = msg => new Error(msg + ' Pide a quien factura en CONTALINK el XML correcto.');
+  const importe = (v, campo, obligatorio) => {
+    if (v === undefined || v === '') { if (obligatorio) throw err('El complemento de pago no trae ' + campo + '.'); return 0; }
+    const n = Number(v);
+    if (!isFinite(n) || n < 0) throw err('El complemento de pago trae un ' + campo + ' no válido.');
+    return redondear(n);
+  };
+  while ((m = re.exec(s))) {
+    const nombre = m[2];
+    if (m[1]) { const i = pila.lastIndexOf(nombre); if (i !== -1) pila.length = i; continue; }
+    const padre = pila.length ? pila[pila.length - 1] : '';
+    if (nombre === 'CfdiRelacionados' && padre === 'Comprobante') {
+      tipoRelacion = String(atributosXml(m[3]).TipoRelacion || '').trim();
+    } else if (nombre === 'CfdiRelacionado' && padre === 'CfdiRelacionados') {
+      const u = String(atributosXml(m[3]).UUID || '').trim().toUpperCase();
+      if (u && !relacionados.some(r => r.uuid === u && r.tipoRelacion === tipoRelacion)) relacionados.push({ uuid: u, tipoRelacion: tipoRelacion });
+    } else if (nombre === 'Pagos' && padre === 'Complemento' && version === null) {
+      version = String(atributosXml(m[3]).Version || '').trim();
+    } else if (nombre === 'Pago' && padre === 'Pagos' && version !== null) {
+      const a = atributosXml(m[3]);
+      const fecha = String(a.FechaPago || '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) throw err('El complemento de pago no trae una fecha de pago válida.');
+      pago = { fecha: fecha, monto: importe(a.Monto, 'monto del pago', true), moneda: String(a.MonedaP || '').trim().toUpperCase(),
+        forma: String(a.FormaDePagoP || '').trim(), documentos: [] };
+      pagos.push(pago);
+    } else if (nombre === 'DoctoRelacionado' && padre === 'Pago' && pago) {
+      const a = atributosXml(m[3]);
+      const parcialidad = Number(a.NumParcialidad);
+      pago.documentos.push({ uuid: String(a.IdDocumento || '').trim().toUpperCase(),
+        serieFolio: [String(a.Serie || '').trim(), String(a.Folio || '').trim()].filter(Boolean).join('-'),
+        parcialidad: Number.isInteger(parcialidad) && parcialidad > 0 ? parcialidad : 0,
+        saldoAnterior: importe(a.ImpSaldoAnt, 'saldo anterior', true), pagado: importe(a.ImpPagado, 'importe pagado', true),
+        saldoInsoluto: importe(a.ImpSaldoInsoluto, 'saldo insoluto', true), moneda: String(a.MonedaDR || '').trim().toUpperCase() });
+    }
+    if (!m[4]) pila.push(nombre);
+  }
+  if (base.tipoComprobante === 'P') {
+    if (version === null) throw err('El complemento de pago no trae el complemento Pagos.');
+    if (version !== '2.0') throw err('El complemento de pago es versión ' + (version || '(sin versión)') + ': con CFDI 4.0 debe ser Pagos 2.0.');
+    if (!pagos.length) throw err('El complemento de pago no trae ningún pago.');
+  }
+  return Object.assign(base, { relacionados: relacionados, pagos: base.tipoComprobante === 'P' ? pagos : [] });
+}
+
+/** Revisa que un CFDI leído con leerCfdiCliente sea de Helgen a un cliente: emisor = RFC de Helgen, 4.0, tipo I, E o P. ctx = {rfcHelgen}. */
+function validarFacturaCliente(f, ctx) {
+  const rfcHelgen = String((ctx && ctx.rfcHelgen) || '').toUpperCase().trim();
+  if (!rfcHelgen) throw new Error('Falta el RFC de Helgen (EMPRESA_RFC en Config): no se puede revisar quién emitió el XML.');
+  if (f.version !== '4.0') throw new Error('El CFDI debe ser versión 4.0. Pide a quien factura en CONTALINK el XML correcto.');
+  if (f.emisor.rfc !== rfcHelgen) {
+    throw new Error('Este XML lo emitió ' + (f.emisor.nombre || 'otra empresa') + ' (' + (f.emisor.rfc || 'sin RFC') + '), no Helgen (' +
+      rfcHelgen + '): parece la factura de un proveedor. Esas se registran en Compras.');
+  }
+  const t = f.tipoComprobante;
+  if (TIPOS_CFDI_CLIENTE.indexOf(t) === -1) {
+    throw new Error(t === 'T' ? 'Es un CFDI de traslado (tipo T): no es una factura a un cliente.'
+      : t === 'N' ? 'Es un recibo de nómina (tipo N): no es una factura a un cliente.'
+      : 'El CFDI no es factura (I), nota de crédito (E) ni complemento de pago (P).');
+  }
+  if (!UUID_CFDI.test(f.uuid)) throw new Error('El folio fiscal (UUID) del CFDI no es válido.');
+  if (t === 'P') return true;
+  const que = t === 'E' ? 'La nota de crédito' : 'La factura';
+  if (MONEDAS.indexOf(f.moneda) === -1) throw new Error(que + ' es en ' + (f.moneda || '(sin moneda)') + ': CAPRI solo maneja MXN y USD.');
+  if (!(f.total > 0)) throw new Error(que + ' debe tener un total mayor a 0.');
+  if (t === 'I' && METODOS_CFDI.indexOf(f.metodoPago) === -1) throw new Error('El método de pago de la factura debe ser PUE o PPD.');
+  if (t === 'E' && f.metodoPago && METODOS_CFDI.indexOf(f.metodoPago) === -1) throw new Error('El método de pago de la nota de crédito no es válido.');
+  return true;
+}
+
+/** Tipo de un archivo subido por sus primeros bytes: 'zip', 'xml', 'pdf' o '' (otro). */
+function tipoArchivoFactura(bytes) {
+  if (!bytes || !bytes.length) return '';
+  const b = k => (bytes[k] || 0) & 0xFF;
+  if (b(0) === 0x50 && b(1) === 0x4B && ((b(2) === 3 && b(3) === 4) || (b(2) === 5 && b(3) === 6))) return 'zip';
+  if (b(0) === 0x25 && b(1) === 0x50 && b(2) === 0x44 && b(3) === 0x46 && b(4) === 0x2D) return 'pdf';
+  let i = b(0) === 0xEF && b(1) === 0xBB && b(2) === 0xBF ? 3 : 0;
+  while (i < bytes.length && i < 4096 && [0x20, 0x09, 0x0A, 0x0D].indexOf(b(i)) !== -1) i++;
+  return b(i) === 0x3C ? 'xml' : '';
+}
+
+/** "Facturas/2026-10/A-101.XML" → "a-101" (sin carpetas ni extensión, en minúsculas): para emparejar el PDF con su XML. */
+function nombreBaseArchivo(nombre) {
+  return String(nombre || '').split(/[\\/]/).pop().replace(/\.[A-Za-z0-9]{1,5}$/, '').trim().toLowerCase();
+}
+
+/** "Factura A-101 — CLIENTE SA DE CV — 6F1C5E2A.xml", sin caracteres que Drive o los sistemas de archivos rechazan. */
+function nombreArchivoFacturaCliente(f, ext) {
+  const limpio = s => String(s || '').replace(/[\/\\:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const tipo = TIPO_CFDI_TEXTO[f.tipoComprobante] || 'CFDI';
+  return [tipo + (f.serieFolio ? ' ' + limpio(f.serieFolio).slice(0, 40) : ''), limpio(f.receptor && f.receptor.nombre).slice(0, 60),
+    String(f.uuid || '').slice(0, 8)].filter(Boolean).join(' — ') + '.' + ext;
+}
+
+/** Resultado de un XML cuyo UUID ya está en la hoja: del mismo envío (reintento) = importada; si no, repetida. */
+function resultadoRepetida(ya, idSolicitud) {
+  const mismo = !!idSolicitud && ya.idSolicitud === idSolicitud;
+  const donde = ya.estado === FAC_CANCELADA ? 'está marcada Cancelada' : ya.proyectoFolio ? 'está ligada a ' + ya.proyectoFolio
+    : ya.sinProyecto ? 'está marcada sin proyecto' : 'está sin ligar';
+  return mismo ? { estado: 'importada', mensaje: 'Importada (este mismo envío ya la había guardado).' }
+    : { estado: 'repetida', mensaje: 'Ya estaba importada' + (ya.serieFolio ? ' (' + ya.serieFolio + ')' : '') + ' y ' + donde + ': no se duplicó.' };
+}
+
+/** Texto de una importación correcta. */
+function mensajeImportada(x) {
+  const f = x.f;
+  if (f.tipoComprobante === 'P') {
+    const docs = f.pagos.reduce((s, p) => s + p.documentos.length, 0);
+    return 'Complemento de pago importado: ' + docs + (docs === 1 ? ' factura pagada.' : ' facturas pagadas.');
+  }
+  if (f.tipoComprobante === 'E') return 'Nota de crédito importada' + (f.relacionados.length ? '.' : ' (sin factura relacionada: lígala a mano).');
+  return 'Importada' + (x.pdf ? ' con su PDF' : '') + ': falta ligarla a un proyecto.';
+}
+
+/**
+ * Revisa y empareja un envío (lógica pura). entradas = [{nombre, base, tipo: 'xml' | 'pdf', bytes}] (los ZIP ya abiertos);
+ * ctx = {rfcHelgen, existentes: {UUID: factura de la hoja}, idSolicitud}. Devuelve {nuevas: [{entrada, f, pdf, resultado}] (I, luego E,
+ * luego P, hasta MAX_XML_LOTE; el resto queda 'pendiente'), adjuntar: [{uuid, pdf, resultado}] (PDF de una factura ya importada sin
+ * PDF), resultados (uno por archivo, en el orden de entrada; los de nuevas y adjuntar se terminan de llenar al guardar)}.
+ */
+function prepararLoteFacturasCliente(entradas, ctx) {
+  const c = ctx || {}, existentes = c.existentes || {};
+  const resultados = [], nuevas = [], porUuid = {}, porBase = {};
+  const UUID_EN_TEXTO = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+  (entradas || []).filter(e => e.tipo === 'xml').forEach(e => {
+    const r = { archivo: e.nombre, tipo: 'XML', estado: 'rechazada', mensaje: '' };
+    resultados.push(r);
+    try {
+      validarXml(e.bytes);
+      const f = leerCfdiCliente(textoUtf8(e.bytes));
+      validarFacturaCliente(f, c);
+      Object.assign(r, { uuid: f.uuid, serieFolio: f.serieFolio, tipoCfdi: f.tipoComprobante, fecha: f.fecha, receptor: f.receptor.nombre,
+        total: f.tipoComprobante === 'P' ? totalPagosRep(f.pagos).total : f.total,
+        moneda: f.tipoComprobante === 'P' ? totalPagosRep(f.pagos).moneda : f.moneda });
+      const ya = existentes[f.uuid];
+      if (ya) { Object.assign(r, resultadoRepetida(ya, c.idSolicitud)); porBase[e.base] = porBase[e.base] || { existente: ya }; return; }
+      if (porUuid[f.uuid]) { Object.assign(r, { estado: 'repetida', mensaje: 'Viene dos veces en este envío: se importa una sola.' }); return; }
+      const x = { entrada: e, f: f, pdf: null, resultado: r };
+      porUuid[f.uuid] = x;
+      if (!porBase[e.base]) porBase[e.base] = { nueva: x };
+      nuevas.push(x);
+      Object.assign(r, { estado: 'importada', mensaje: '' });
+    } catch (err) {
+      r.mensaje = err.message;
+    }
+  });
+  // PDF: con su XML por el nombre (sin extensión) o por el UUID en el nombre; o con una factura ya importada que no tenga PDF
+  const adjuntar = [], conPdf = {};
+  (entradas || []).filter(e => e.tipo === 'pdf').forEach(e => {
+    const r = { archivo: e.nombre, tipo: 'PDF', estado: 'rechazada', mensaje: '' };
+    resultados.push(r);
+    try { validarArchivo(e.bytes, 'el PDF de la factura', 'El PDF de la factura'); } catch (err) { r.mensaje = err.message; return; }
+    const uuidNombre = (e.base.match(UUID_EN_TEXTO) || [''])[0].toUpperCase();
+    const par = porBase[e.base] || (uuidNombre && (porUuid[uuidNombre] ? { nueva: porUuid[uuidNombre] } : existentes[uuidNombre] ? { existente: existentes[uuidNombre] } : null)) ||
+      (() => { const k = Object.keys(existentes).find(u => existentes[u].archivoXml && nombreBaseArchivo(existentes[u].archivoXml) === e.base);
+        return k ? { existente: existentes[k] } : null; })();
+    if (!par) { r.mensaje = 'PDF sin su XML: sube el XML de la factura junto con su PDF (con el mismo nombre).'; return; }
+    const uuid = par.nueva ? par.nueva.f.uuid : par.existente.uuid;
+    Object.assign(r, { uuid: uuid, serieFolio: par.nueva ? par.nueva.f.serieFolio : par.existente.serieFolio });
+    if (conPdf[uuid] || (par.existente && par.existente.pdfId)) { Object.assign(r, { estado: 'ignorada', mensaje: 'La factura ya tiene su PDF.' }); return; }
+    conPdf[uuid] = true;
+    if (par.nueva) { par.nueva.pdf = e; Object.assign(r, { estado: 'pdf', mensaje: 'PDF de ' + (par.nueva.f.serieFolio || uuid) + '.' }); return; }
+    if (par.existente.estado === ESTADO_ANULADA) { r.mensaje = 'La factura está anulada.'; return; }
+    adjuntar.push({ uuid: uuid, pdf: e, resultado: r });
+    Object.assign(r, { estado: 'pdf', mensaje: '' });
+  });
+  // Primero las facturas, luego las notas de crédito y al final los complementos (así una E o una P encuentra su factura)
+  const orden = { I: 0, E: 1, P: 2 };
+  nuevas.sort((a, b) => orden[a.f.tipoComprobante] - orden[b.f.tipoComprobante] || (a.f.fecha < b.f.fecha ? -1 : a.f.fecha > b.f.fecha ? 1 : 0) ||
+    (a.f.uuid < b.f.uuid ? -1 : 1));
+  nuevas.forEach((x, i) => {
+    if (i < MAX_XML_LOTE) return;
+    x.omitida = true;
+    Object.assign(x.resultado, { estado: 'pendiente', mensaje: 'Este envío ya trae ' + MAX_XML_LOTE + ' facturas nuevas: vuelve a subir el archivo ' +
+      'para importar las que faltan (las ya importadas se reconocen solas).' });
+  });
+  return { nuevas: nuevas, adjuntar: adjuntar, resultados: resultados };
+}
+
+/** Total y moneda de los pagos de un REP: la suma solo si todos son de la misma moneda (nunca MXN + USD); si no, 0 y 'XXX'. */
+function totalPagosRep(pagos) {
+  const monedas = (pagos || []).map(p => p.moneda).filter((m, i, a) => a.indexOf(m) === i);
+  if (monedas.length !== 1) return { total: 0, moneda: monedas.length ? 'XXX' : '' };
+  return { total: (pagos || []).reduce((s, p) => s + aCentavos(p.monto), 0) / 100, moneda: monedas[0] };
+}
+
+/**
+ * Proyecto al que van los archivos de una factura al importarla: I = ninguno (todavía no se liga); E = el de su factura relacionada
+ * si ya está ligada; P = el único proyecto de las facturas que paga (si tocan varios, ninguno). existentes = {UUID: factura}.
+ */
+function proyectoInicialFactura(f, existentes) {
+  const ligada = u => { const y = (existentes || {})[u]; return y && y.tipo === 'I' && y.estado === FAC_VIGENTE && y.proyectoFolio ? y.proyectoFolio : ''; };
+  if (f.tipoComprobante === 'E') {
+    const r = (f.relacionados || []).filter(x => x.tipoRelacion !== RELACION_SUSTITUCION).map(x => ligada(x.uuid)).find(Boolean);
+    return r || '';
+  }
+  if (f.tipoComprobante === 'P') {
+    const ps = [];
+    (f.pagos || []).forEach(p => p.documentos.forEach(d => { const k = ligada(d.uuid); if (k && ps.indexOf(k) === -1) ps.push(k); }));
+    return ps.length === 1 ? ps[0] : '';
+  }
+  return '';
+}
+
+/** Renglón de FacturasClientes para una factura nueva (x de prepararLoteFacturasCliente, ya con sus archivos en Drive). */
+function filaFacturaCliente(x, o) {
+  const f = x.f, t = textoCelda, P = f.tipoComprobante === 'P' ? totalPagosRep(f.pagos) : null;
+  const fijo = s => (s ? "'" + String(s) : ''); // con apóstrofo: Sheets lo deja como texto ("03" no se vuelve 3; nada se lee como fórmula)
+  const json = (v, que) => {
+    const s = JSON.stringify(v || []);
+    if (s.length > MAX_JSON_CELDA) throw new Error('El CFDI trae demasiados ' + que + ' para guardarlo.');
+    return s;
+  };
+  const fila = {
+    uuid: f.uuid, tipo: f.tipoComprobante, serie_folio: fijo(f.serieFolio), fecha: textoFecha_(f.fecha),
+    metodo: t(f.metodoPago), forma: fijo(f.formaPago), moneda: P ? P.moneda : f.moneda, subtotal: P ? 0 : f.subtotal,
+    iva: P ? 0 : f.trasladados, total: P ? P.total : f.total, receptor_rfc: t(f.receptor.rfc), receptor_nombre: t(f.receptor.nombre),
+    proyecto_folio: f.tipoComprobante === 'I' ? '' : x.proyecto || '', 'etapas (JSON)': '[]',
+    'relacionadas (JSON)': json(f.relacionados, 'documentos relacionados'), estado: FAC_VIGENTE, xml_id: x.xml.getId(), xml_url: x.xml.getUrl(),
+    pdf_id: x.pdfArchivo ? x.pdfArchivo.getId() : '', pdf_url: x.pdfArchivo ? x.pdfArchivo.getUrl() : '', registro_email: t(VENDEDOR_.email),
+    registro_nombre: t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), fecha_registro: o.ahora,
+    'pagos (JSON)': json(f.pagos, 'pagos'), descuento: P ? 0 : f.descuento, retenidos: P ? 0 : f.retenidos, fecha_timbrado: t(f.fechaTimbrado),
+    uso_cfdi: t(f.usoCfdi), archivo_xml: t(String(x.entrada.nombre).split(/[\\/›]/).pop().trim().slice(0, 120)), carpeta_proyecto: x.proyecto || '',
+    ligo_email: '', fecha_ligado: '', cancelado_por: '', fecha_cancelacion: '', motivo_cancelacion: '', id_solicitud: t(o.idSolicitud || ''),
+    sin_proyecto: '',
+  };
+  return HOJAS_COBRANZA.FacturasClientes.enc.map(k => fila[k] === undefined ? '' : fila[k]);
+}
+
+/** Clave de una etapa de cobranza: '1', '2'… (orden en el contrato) o '<folio HLG de la adicional>/<orden>' (módulo A). */
+function claveEtapa(e, i) {
+  const orden = Number(e && e.orden) || (Number(i) || 0) + 1;
+  return e && e.adicional ? String(e.adicional).trim().toUpperCase() + '/' + orden : String(orden);
+}
+
+/** Etapas de un resumenCobranza para las facturas: [{clave, etapa, monto, cobrado, adicional}] (todo en la moneda del contrato). */
+function etapasParaFacturas(resumen) {
+  return ((resumen && resumen.etapas) || []).map((e, i) => ({ clave: claveEtapa(e, i), etapa: e.etapa, monto: redondear(e.monto),
+    cobrado: redondear(e.pagado || 0), adicional: e.adicional ? String(e.adicional).toUpperCase() : '' }));
+}
+
+/**
+ * Etapas de cobranza de cada proyecto con cotización aceptada o contrato firmado (lo que se puede facturar). d = {contratos
+ * (contratoDesdeFila_, sin anulados), esquemas [{proyectoFolio, orden, etapa, porcentaje}], pagos (cobranza; cuentan los Vigentes),
+ * proyectos {FOLIO: proyecto} (sin anulados)}. Lo cobrado de cada etapa sale de resumenCobranza (el mismo reparto que la vista).
+ * Devuelve {FOLIO: {moneda, estadoContrato, estadoProyecto, etapas: [{clave, etapa, monto, cobrado}], ultimoPago}}.
+ */
+function cobranzaParaFacturas(d) {
+  const may = s => String(s || '').trim().toUpperCase();
+  const contratos = {}, esquemas = {}, pagos = {};
+  (d.contratos || []).forEach(c => { contratos[may(c.proyectoFolio)] = c; });
+  (d.esquemas || []).forEach(e => { (esquemas[may(e.proyectoFolio)] = esquemas[may(e.proyectoFolio)] || []).push(e); });
+  (d.pagos || []).forEach(p => { (pagos[may(p.proyectoFolio)] = pagos[may(p.proyectoFolio)] || []).push(p); });
+  const r = {};
+  Object.keys(contratos).forEach(k => {
+    const c = contratos[k], p = (d.proyectos || {})[k];
+    if (!p) return; // proyecto anulado o que ya no existe
+    const filas = (esquemas[k] || []).slice().sort((a, b) => a.orden - b.orden);
+    const etapas = filas.length ? filas.map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje })) : [{ etapa: 'Total', porcentaje: 100 }];
+    const vig = (pagos[k] || []).filter(x => x.estado === 'Vigente');
+    r[k] = { moneda: c.moneda, estadoContrato: c.estado, estadoProyecto: p.estado,
+      etapas: etapasParaFacturas(resumenCobranza(c, etapas, pagos[k] || [])),
+      ultimoPago: vig.reduce((m, x) => (x.fecha > m ? x.fecha : m), '') };
+  });
+  return r;
+}
+
+/**
+ * Corazón de las facturas de clientes (lógica pura). facturas = filas de FacturasClientes (facturaCliDesdeFila_: uuid, tipo I/E/P,
+ * serieFolio, fecha, metodo, moneda, total, proyectoFolio, etapas [{clave, etapa, monto}], relacionadas [{uuid, tipoRelacion}],
+ * pagos (P), estado, sinProyecto); cobranza = {FOLIO: {moneda, etapas: [{clave, etapa, monto, cobrado}]}} (cobranzaParaFacturas).
+ * Reglas:
+ *  - Solo cuentan las Vigentes. Una I ligada reparte su total en sus etapas (lo guardado al ligar).
+ *  - Una E resta de sus relacionadas (no de una sustitución 04) que estén en CAPRI, Vigentes y en su misma moneda, en el orden del
+ *    XML y hasta lo que le queda a cada una; dentro de cada factura, de sus etapas en proporción. Sin relacionada en CAPRI, una E
+ *    ligada a mano resta de sus etapas.
+ *  - Lo cobrado de cada etapa (resumenCobranza) se reparte entre sus facturas de la más vieja a la más nueva, hasta lo facturado
+ *    de cada una.
+ *  - Una P suma a cada factura que paga (DoctoRelacionado.IdDocumento; ImpPagado en la moneda de la factura) lo que ya tiene REP.
+ *  - REP pendiente: factura PPD ligada con más cobrado que lo cubierto por sus REP (por más de TOLERANCIA_PAGO). Lo contrario (REP
+ *    por más de lo cobrado en CAPRI) es repSinCobro: probablemente falta registrar un pago.
+ * Devuelve {facturas: {UUID: info}, proyectos: {FOLIO: {CLAVE: {clave, etapa, monto, cobrado, facturado, porFacturar, facturas: [...]}}}}.
+ */
+function calcularFacturasClientes(facturas, cobranza) {
+  const may = s => String(s || '').trim().toUpperCase();
+  const tol = aCentavos(TOLERANCIA_PAGO);
+  const cob = {};
+  Object.keys(cobranza || {}).forEach(k => { cob[may(k)] = cobranza[k]; });
+  const todas = (facturas || []).filter(f => f && f.uuid);
+  const info = {}, ingresos = {};
+  const porFecha = (a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0) || (String(a.serieFolio) < String(b.serieFolio) ? -1 :
+    String(a.serieFolio) > String(b.serieFolio) ? 1 : 0) || (a.uuid < b.uuid ? -1 : a.uuid > b.uuid ? 1 : 0);
+  todas.forEach(f => {
+    const u = may(f.uuid);
+    info[u] = { uuid: u, tipo: f.tipo, vigente: f.estado === FAC_VIGENTE, proyectoFolio: may(f.proyectoFolio), partes: [], netoCts: aCentavos(f.total),
+      ligada: false, manual: false, notas: [], aplicadaA: [], sinAplicarCts: 0, cobradoCts: 0, repCts: 0, reps: [], documentos: [],
+      revisar: '', sustituye: [], sustituidaPor: '', proyectoArchivos: '' };
+    if (f.estado === FAC_VIGENTE && f.tipo === 'I') ingresos[u] = f;
+  });
+  const vig = todas.filter(f => f.estado === FAC_VIGENTE);
+  // 1. Facturas de ingreso ligadas: sus partes por etapa
+  vig.filter(f => f.tipo === 'I').forEach(f => {
+    const x = info[may(f.uuid)];
+    x.partes = (Array.isArray(f.etapas) ? f.etapas : []).map(e => ({ clave: String(e.clave), etapa: String(e.etapa || ''), cts: aCentavos(e.monto) }))
+      .filter(p => p.clave && p.cts > 0);
+    x.ligada = !!x.proyectoFolio && x.partes.length > 0;
+    x.proyectoArchivos = x.ligada ? x.proyectoFolio : '';
+  });
+  // 2. Sustituciones (04): la nueva dice a cuál sustituye; la sustituida queda por revisar (marcarla Cancelada)
+  vig.forEach(f => (f.relacionadas || []).filter(r => r.tipoRelacion === RELACION_SUSTITUCION).forEach(r => {
+    const u = may(r.uuid), y = info[u];
+    if (u === may(f.uuid)) return;
+    info[may(f.uuid)].sustituye.push(u);
+    if (y && y.vigente) y.sustituidaPor = may(f.uuid);
+  }));
+  // 3. Notas de crédito: restan de sus relacionadas en CAPRI (o de sus etapas, si se ligaron a mano)
+  const reducir = (y, cts) => {
+    const antes = y.netoCts;
+    y.netoCts -= cts;
+    if (!y.partes.length || antes <= 0) return;
+    let quitado = 0;
+    y.partes.forEach((p, i) => {
+      const q = i === y.partes.length - 1 ? cts - quitado : Math.round(cts * p.cts / antes);
+      p.cts -= q; quitado += q;
+    });
+  };
+  vig.filter(f => f.tipo === 'E').sort(porFecha).forEach(e => {
+    const x = info[may(e.uuid)];
+    let resto = aCentavos(e.total);
+    const vistos = {};
+    const destinos = (e.relacionadas || []).filter(r => r.tipoRelacion !== RELACION_SUSTITUCION).map(r => may(r.uuid))
+      .filter(u => !vistos[u] && (vistos[u] = true) && ingresos[u]);
+    const enOtraMoneda = destinos.filter(u => ingresos[u].moneda !== e.moneda);
+    destinos.filter(u => ingresos[u].moneda === e.moneda).forEach(u => {
+      const y = info[u], toma = Math.min(resto, Math.max(0, y.netoCts));
+      if (toma <= 0) return;
+      reducir(y, toma);
+      y.notas.push({ uuid: x.uuid, serieFolio: e.serieFolio, monto: toma / 100 });
+      x.aplicadaA.push({ uuid: u, serieFolio: ingresos[u].serieFolio, monto: toma / 100 });
+      resto -= toma;
+    });
+    if (x.aplicadaA.length) {
+      x.sinAplicarCts = resto;
+      if (resto > tol) x.revisar = 'La nota de crédito es mayor que lo que queda de sus facturas (sobran ' + formatoMoneda(resto / 100) + ' ' + e.moneda + ').';
+      x.proyectoArchivos = x.aplicadaA.map(a => info[a.uuid].proyectoArchivos).find(Boolean) || '';
+      return;
+    }
+    if (enOtraMoneda.length) x.revisar = 'Su factura relacionada es de otra moneda: revisa el XML.';
+    const manual = (Array.isArray(e.etapas) ? e.etapas : []).map(p => ({ clave: String(p.clave), etapa: String(p.etapa || ''), cts: -aCentavos(p.monto) }))
+      .filter(p => p.clave && p.cts < 0);
+    x.manual = !!x.proyectoFolio && manual.length > 0;
+    if (x.manual) { x.partes = manual; x.ligada = true; x.proyectoArchivos = x.proyectoFolio; }
+  });
+  // 4. Etapas de cada proyecto: lo facturado (I menos sus E) y lo cobrado repartido entre sus facturas
+  const proyectos = {};
+  Object.keys(cob).forEach(k => {
+    proyectos[k] = {};
+    (cob[k].etapas || []).forEach(e => {
+      proyectos[k][String(e.clave)] = { clave: String(e.clave), etapa: e.etapa, monto: redondear(e.monto), cobradoCts: aCentavos(e.cobrado),
+        facturadoCts: 0, entradas: [] };
+    });
+  });
+  vig.filter(f => (f.tipo === 'I' || f.tipo === 'E') && info[may(f.uuid)].ligada).sort(porFecha).forEach(f => {
+    const x = info[may(f.uuid)], c = cob[x.proyectoFolio], etapas = proyectos[x.proyectoFolio];
+    if (!c) { x.revisar = x.revisar || 'El proyecto ' + x.proyectoFolio + ' ya no tiene cotización aceptada (o se anuló): vuelve a ligar la factura.'; return; }
+    if (c.moneda !== f.moneda) { x.revisar = x.revisar || 'La factura es en ' + f.moneda + ' y el proyecto en ' + c.moneda + ': vuelve a ligarla.'; return; }
+    x.partes.forEach(p => {
+      const e = etapas[p.clave];
+      if (!e) { x.revisar = x.revisar || 'Una etapa de la liga ya no existe en el esquema de pagos del proyecto: vuelve a ligar la factura.'; return; }
+      e.facturadoCts += p.cts;
+      e.entradas.push({ f: f, x: x, cts: p.cts, cobradoCts: 0 });
+    });
+  });
+  Object.keys(proyectos).forEach(k => Object.keys(proyectos[k]).forEach(cl => {
+    const e = proyectos[k][cl];
+    let resto = e.cobradoCts;
+    e.entradas.filter(en => en.cts > 0).forEach(en => {
+      const toma = Math.max(0, Math.min(resto, en.cts));
+      en.cobradoCts = toma; en.x.cobradoCts += toma; resto -= toma;
+    });
+  }));
+  // 5. Complementos de pago: lo que cada factura ya tiene con REP
+  vig.filter(f => f.tipo === 'P').forEach(p => {
+    const x = info[may(p.uuid)], ps = [];
+    (p.pagos || []).forEach(pg => (pg.documentos || []).forEach(d => {
+      const u = may(d.uuid), i = ingresos[u], y = info[u];
+      const cuenta = !!i && (!d.moneda || d.moneda === i.moneda);
+      x.documentos.push({ uuid: u, encontrado: !!i, serieFolio: i ? i.serieFolio : d.serieFolio || '', fecha: pg.fecha, parcialidad: d.parcialidad,
+        pagado: redondear(d.pagado), saldoInsoluto: redondear(d.saldoInsoluto), moneda: d.moneda || '', otraMoneda: !!i && !cuenta });
+      if (!cuenta) return;
+      y.repCts += aCentavos(d.pagado);
+      y.reps.push({ uuid: x.uuid, serieFolio: p.serieFolio, fecha: pg.fecha, parcialidad: d.parcialidad, pagado: redondear(d.pagado),
+        saldoInsoluto: redondear(d.saldoInsoluto) });
+      if (y.proyectoArchivos && ps.indexOf(y.proyectoArchivos) === -1) ps.push(y.proyectoArchivos);
+    }));
+    x.proyectoArchivos = ps.length === 1 && x.documentos.every(dd => !dd.encontrado || info[dd.uuid].proyectoArchivos === ps[0]) ? ps[0] : '';
+  });
+  // 6. Estado de cada factura de ingreso
+  Object.keys(info).forEach(u => {
+    const x = info[u], f = ingresos[u];
+    if (!f) return;
+    x.reps.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.parcialidad - b.parcialidad));
+    x.repPendiente = f.metodo === 'PPD' && x.ligada && x.cobradoCts - x.repCts > tol;
+    x.porCubrirRepCts = f.metodo === 'PPD' ? Math.max(0, x.cobradoCts - x.repCts) : 0;
+    x.repSinCobro = x.repCts - x.cobradoCts > tol && x.ligada;
+    x.saldoSegunRep = x.reps.length ? x.reps[x.reps.length - 1].saldoInsoluto : null;
+    if (x.sustituidaPor && !x.revisar) x.revisar = 'La sustituye otra factura (relación 04): márcala Cancelada cuando la canceles en CONTALINK.';
+  });
+  const salida = {};
+  Object.keys(proyectos).forEach(k => {
+    salida[k] = {};
+    Object.keys(proyectos[k]).forEach(cl => {
+      const e = proyectos[k][cl];
+      salida[k][cl] = { clave: e.clave, etapa: e.etapa, monto: e.monto, cobrado: e.cobradoCts / 100, facturado: e.facturadoCts / 100,
+        porFacturar: (aCentavos(e.monto) - e.facturadoCts) / 100,
+        facturas: e.entradas.map(en => ({ uuid: en.x.uuid, tipo: en.f.tipo, serieFolio: en.f.serieFolio, fecha: en.f.fecha, metodo: en.f.metodo,
+          total: en.cts / 100, totalFactura: redondear(en.f.total), cobrado: en.cobradoCts / 100, moneda: en.f.moneda, repPendiente: !!en.x.repPendiente })) };
+    });
+  });
+  return { facturas: info, proyectos: salida };
+}
+
+/**
+ * CONTRATO (docs/incremento-7.md §1): facturas vigentes por proyecto y etapa (incluye las etapas de adicionales, con su clave).
+ * facturas = filas de FacturasClientes (todas las de la hoja: I, E y P). Devuelve {[proyectoFolio]: {[claveEtapa]: [{uuid,
+ * serieFolio, fecha, metodo, total, moneda, repPendiente}]}}; total = la parte de esa etapa, ya sin sus notas de crédito (una nota de
+ * crédito ligada a mano sale con total negativo). repPendiente necesita lo cobrado: con cobranza (opcional, {FOLIO: {moneda, etapas:
+ * [{clave, monto, cobrado}]}} = cobranzaParaFacturas) se calcula; sin ella vale lo que traiga cada factura en f.repPendiente (o false).
+ */
+function facturasPorEtapa(facturas, cobranza) {
+  const lista = (facturas || []).filter(f => f && f.uuid);
+  const calc = calcularFacturasClientes(lista, cobranza || {});
+  const r = {};
+  lista.filter(f => f.estado === FAC_VIGENTE && (f.tipo === 'I' || f.tipo === 'E')).forEach(f => {
+    const x = calc.facturas[String(f.uuid).trim().toUpperCase()];
+    if (!x || !x.ligada) return;
+    const pend = cobranza ? !!x.repPendiente : !!f.repPendiente;
+    x.partes.forEach(p => {
+      const porEtapa = r[x.proyectoFolio] || (r[x.proyectoFolio] = {});
+      (porEtapa[p.clave] = porEtapa[p.clave] || []).push({ uuid: x.uuid, serieFolio: f.serieFolio, fecha: f.fecha, metodo: f.metodo,
+        total: p.cts / 100, moneda: f.moneda, repPendiente: f.tipo === 'I' && pend });
+    });
+  });
+  return r;
+}
+
+/** Etapas que manda la interfaz al ligar: [{clave, monto?}] sin repetir (1 a 20); monto opcional (si no, se reparte solo). */
+function normalizarEtapasElegidas(etapas) {
+  if (!Array.isArray(etapas) || !etapas.length) throw new Error('Elige al menos una etapa del proyecto.');
+  if (etapas.length > 20) throw new Error('Elige máximo 20 etapas.');
+  const vistas = {};
+  return etapas.map(e => {
+    const clave = String((e && e.clave) == null ? '' : e.clave).trim().toUpperCase();
+    if (!clave || clave.length > 40) throw new Error('Etapa no válida.');
+    if (vistas[clave]) throw new Error('La etapa ' + clave + ' está repetida.');
+    vistas[clave] = true;
+    const t = e && e.monto;
+    if (t === '' || t == null) return { clave: clave, monto: null };
+    const n = Number(t);
+    if (!isFinite(n) || n <= 0 || Math.abs(redondear(n) - n) > 1e-9) throw new Error('El monto de la etapa ' + clave + ' no es válido.');
+    return { clave: clave, monto: redondear(n) };
+  });
+}
+
+/**
+ * Arma la liga de una factura a un proyecto (lógica pura). d = {factura (I o E), neto (lo que queda de ella, sin sus notas de
+ * crédito), proyecto {folio, folioVisible, estado}, cobranza (cobranzaParaFacturas del proyecto: moneda; undefined = sin aceptada),
+ * etapas (calcularFacturasClientes(…).proyectos[FOLIO], sin esta factura), elegidas [{clave, monto|null}]}. Reglas: proyecto no
+ * Cancelado, con cotización aceptada, misma moneda; etapas que existen; con montos: suman el total de la factura y cada etapa no pasa
+ * lo que le falta facturar; sin montos: el total se reparte en el orden de las etapas (de la primera a la última del esquema) hasta lo
+ * que falta facturar de cada una y la última elegida se queda con el resto; lo facturado (neto) no pasa lo que falta facturar de las
+ * etapas elegidas (+ TOLERANCIA_PAGO). Una nota de crédito (E, ligada a mano porque su factura no está en CAPRI) resta: se mide
+ * contra lo ya facturado de cada etapa, no contra lo que falta. Devuelve {partes: [{clave, etapa, monto}]} (montos de la factura
+ * completa; sus notas de crédito se restan al leer).
+ */
+function armarLigaFactura(d) {
+  const f = d.factura, p = d.proyecto, c = d.cobranza, etapas = d.etapas || {}, nota = f.tipo === 'E';
+  const vis = p.folioVisible || p.folio;
+  if (p.estado === 'Cancelado') throw new Error('El proyecto ' + vis + ' está cancelado.');
+  if (!c) throw new Error('El proyecto ' + vis + ' no tiene cotización aceptada: márcala antes de ligarle facturas.');
+  if (c.moneda !== f.moneda) throw new Error('La factura es en ' + f.moneda + ' y el proyecto ' + vis + ' en ' + c.moneda + ': deben coincidir.');
+  const orden = (c.etapas || []).map(e => String(e.clave));
+  const elegidas = (d.elegidas || []).slice();
+  elegidas.forEach(e => { if (!etapas[e.clave]) throw new Error('La etapa ' + e.clave + ' no existe en el esquema de pagos de ' + vis + '.'); });
+  elegidas.sort((a, b) => orden.indexOf(a.clave) - orden.indexOf(b.clave));
+  const totalCts = aCentavos(f.total), netoCts = aCentavos(d.neto == null ? f.total : d.neto), tol = aCentavos(TOLERANCIA_PAGO);
+  // Lo que cabe en cada etapa: lo que falta facturar (factura) o lo ya facturado (nota de crédito)
+  const falta = e => Math.max(0, aCentavos(nota ? etapas[e.clave].facturado : etapas[e.clave].porFacturar));
+  const faltaTotal = elegidas.reduce((s, e) => s + falta(e), 0);
+  const dinero = cts => formatoMoneda(cts / 100) + ' ' + c.moneda;
+  const cabe = nota ? 'lo facturado' : 'lo que falta facturar', porX = nota ? 'facturado' : 'por facturar';
+  let partes;
+  if (elegidas.every(e => e.monto != null)) {
+    const suma = elegidas.reduce((s, e) => s + aCentavos(e.monto), 0);
+    if (suma !== totalCts) throw new Error('Los montos por etapa suman ' + dinero(suma) + ' y la factura es por ' + dinero(totalCts) + '.');
+    partes = elegidas.map(e => ({ clave: e.clave, cts: aCentavos(e.monto) }));
+    // Cada etapa, hasta lo que le falta facturar (con sus notas de crédito, la parte neta: la E resta en proporción)
+    partes.forEach(x => {
+      const neta = totalCts > 0 ? Math.round(x.cts * netoCts / totalCts) : x.cts, e = etapas[x.clave];
+      if (neta > falta(x) + tol) {
+        throw new Error('La etapa ' + e.etapa + ' solo tiene ' + dinero(falta(x)) + ' ' + porX + ' (le asignaste ' + dinero(neta) + ').');
+      }
+    });
+  } else if (elegidas.some(e => e.monto != null)) {
+    throw new Error('Captura el monto de todas las etapas elegidas o de ninguna.');
+  } else {
+    let resto = totalCts;
+    partes = elegidas.map((e, i) => {
+      const toma = i === elegidas.length - 1 ? resto : Math.min(falta(e), resto);
+      resto -= toma;
+      return { clave: e.clave, cts: toma };
+    }).filter(x => x.cts > 0);
+  }
+  if (netoCts > faltaTotal + tol) {
+    throw new Error((nota ? 'La nota de crédito' : 'La factura') + ' (' + dinero(netoCts) + ') es mayor que ' + cabe + ' de ' +
+      (elegidas.length === 1 ? 'la etapa elegida' : 'las etapas elegidas') + ' (' + dinero(faltaTotal) + '): ' +
+      (nota ? 'elige las etapas que corrige, o revisa el proyecto.' : 'elige también la etapa siguiente, o revisa el proyecto.'));
+  }
+  return { partes: partes.map(x => ({ clave: x.clave, etapa: etapas[x.clave].etapa, monto: x.cts / 100 })) };
+}
+
+/** Razón social para comparar ("Antenas del Golfo, S.A. de C.V." → "antenas del golfo"). */
+function nombreFiscalNormal(s) {
+  return textoNormal(s).replace(/[.,;:'"()]/g, ' ')
+    .replace(/\b(s ?a ?p ?i|s ?a|s ?de ?r ?l|s ?en ?c|s ?c|a ?c|de ?c ?v|de ?r ?l|sociedad anonima|promotora de inversion)\b/g, ' ')
+    .replace(/\b(de|y)\s*$/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Sugerencias para ligar una factura (lógica pura): hasta 3 proyectos con cotización aceptada, no Cancelados y en la moneda de la
+ * factura, por RFC del cliente (cliente_id del proyecto), por razón social y por monto contra lo que falta facturar de sus etapas.
+ * candidatos = [{folio, folioVisible, nombre, cliente, clienteId, estadoProyecto, moneda, etapas: [{clave, etapa, porFacturar}]}].
+ * Devuelve [{proyectoFolio, folioVisible, nombre, cliente, porRfc, porNombre, porMonto ('exacto' | 'cabe' | ''), etapas: [claves],
+ * razon}]. Sin RFC ni nombre parecido solo se sugiere un monto exacto.
+ */
+function sugerirLigaFactura(f, candidatos) {
+  const may = s => String(s || '').trim().toUpperCase();
+  const rfc = may(f.receptorRfc), tol = aCentavos(TOLERANCIA_PAGO), total = aCentavos(f.total);
+  const rfcUtil = RFC_VALIDO.test(rfc) && RFC_GENERICOS.indexOf(rfc) === -1;
+  const nombre = nombreFiscalNormal(f.receptorNombre);
+  const parecido = cliente => nombre.length >= 4 && String(cliente || '').split(/\s+—\s+|\|/).map(nombreFiscalNormal)
+    .some(n => n.length >= 4 && (n.indexOf(nombre) !== -1 || nombre.indexOf(n) !== -1));
+  return (candidatos || []).filter(c => c.moneda === f.moneda && c.estadoProyecto !== 'Cancelado').map(c => {
+    const etapas = (c.etapas || []).map(e => ({ clave: e.clave, etapa: e.etapa, cts: Math.max(0, aCentavos(e.porFacturar)) }));
+    const abiertas = etapas.filter(e => e.cts > 0);
+    let porMonto = '', elegidas = [];
+    for (let i = 0; i < etapas.length && !porMonto; i++) { // etapas seguidas cuyo "por facturar" suma el total
+      if (!etapas[i].cts) continue;
+      let suma = 0;
+      for (let j = i; j < etapas.length; j++) {
+        suma += etapas[j].cts;
+        if (Math.abs(suma - total) <= tol) { porMonto = 'exacto'; elegidas = etapas.slice(i, j + 1).filter(e => e.cts > 0); break; }
+        if (suma > total + tol) break;
+      }
+    }
+    if (!porMonto) {
+      const una = abiertas.find(e => e.cts >= total - tol);
+      if (una) { porMonto = 'cabe'; elegidas = [una]; }
+      else if (abiertas.reduce((s, e) => s + e.cts, 0) >= total - tol) {
+        porMonto = 'cabe';
+        let resto = total;
+        elegidas = abiertas.filter(e => { if (resto <= 0) return false; resto -= e.cts; return true; });
+      } else elegidas = abiertas.slice(0, 1);
+    }
+    const porRfc = rfcUtil && may(c.clienteId) === rfc, porNombre = !porRfc && parecido(c.cliente);
+    const puntaje = (porRfc ? 100 : 0) + (porNombre ? 40 : 0) + (porMonto === 'exacto' ? 50 : porMonto === 'cabe' ? 20 : 0);
+    const razon = [porRfc ? 'mismo RFC del cliente' : porNombre ? 'razón social parecida' : '',
+      porMonto === 'exacto' ? 'el total coincide con lo que falta facturar de ' + elegidas.map(e => e.etapa).join(' + ')
+        : porMonto === 'cabe' ? 'cabe en ' + elegidas.map(e => e.etapa).join(' + ') : ''].filter(Boolean).join(' · ');
+    return { proyectoFolio: c.folio, folioVisible: c.folioVisible || c.folio, nombre: c.nombre || '', cliente: c.cliente || '', porRfc: porRfc,
+      porNombre: porNombre, porMonto: porMonto, etapas: elegidas.map(e => e.clave), razon: razon, puntaje: puntaje };
+  }).filter(s => s.porRfc || s.porNombre || s.porMonto === 'exacto')
+    .sort((a, b) => b.puntaje - a.puntaje || (a.proyectoFolio < b.proyectoFolio ? 1 : -1)).slice(0, 3)
+    .map(s => { delete s.puntaje; return s; });
+}
+
+/**
+ * Lista para la pantalla de facturas de clientes (lógica pura). ctx = contextoFacturasCli_ ({facturas, cobranza, proyectos}).
+ * Devuelve {hoy, facturas (recientes primero; con estado calculado: ligada, sinLigar, neto, cobrado, repCubierto, porCubrirRep,
+ * repPendiente, repSinCobro, revisar, sugerencias para las sin ligar), conteos {facturas, sinLigar, repPendientes, revisar}, proyectos
+ * (con cotización aceptada y sus etapas, para ligar)}.
+ */
+function vistaFacturasClientes(ctx, hoy) {
+  const may = s => String(s || '').trim().toUpperCase();
+  const c = ctx || {}, facturas = c.facturas || [], cob = c.cobranza || {}, pys = c.proyectos || {};
+  const calc = calcularFacturasClientes(facturas, cob);
+  const porUuid = {};
+  facturas.forEach(f => { porUuid[f.uuid] = f; });
+  const proyectos = Object.keys(cob).filter(k => pys[k]).map(k => {
+    const p = pys[k], etapas = calc.proyectos[k] || {};
+    return { folio: p.folio, folioVisible: p.folioVisible || p.folio, nombre: p.nombre, cliente: p.cliente, clienteId: p.clienteId,
+      estadoProyecto: p.estado, moneda: cob[k].moneda, estadoContrato: cob[k].estadoContrato,
+      etapas: (cob[k].etapas || []).map(e => { const x = etapas[e.clave] || {};
+        return { clave: e.clave, etapa: e.etapa, monto: e.monto, cobrado: e.cobrado, facturado: x.facturado || 0, porFacturar: x.porFacturar == null ? e.monto : x.porFacturar }; }) };
+  }).sort((a, b) => (a.folio < b.folio ? 1 : -1));
+  const lista = facturas.map(f => {
+    const x = calc.facturas[f.uuid] || {}, p = pys[x.proyectoArchivos || f.proyectoFolio] || null;
+    const vigente = f.estado === FAC_VIGENTE;
+    const sinLigar = vigente && (f.tipo === 'I' || f.tipo === 'E') && !x.ligada && !(x.aplicadaA || []).length && !f.sinProyecto;
+    const r = { uuid: f.uuid, tipo: f.tipo, tipoTexto: TIPO_CFDI_TEXTO[f.tipo] || f.tipo, serieFolio: f.serieFolio, fecha: f.fecha, metodo: f.metodo,
+      forma: f.forma, moneda: f.moneda, subtotal: f.subtotal, iva: f.iva, total: f.total, receptorRfc: f.receptorRfc, receptorNombre: f.receptorNombre,
+      proyectoFolio: x.proyectoArchivos || f.proyectoFolio, proyectoVisible: p ? p.folioVisible : x.proyectoArchivos || f.proyectoFolio,
+      proyectoNombre: p ? p.nombre : '', etapas: x.ligada ? x.partes.map(q => ({ clave: q.clave, etapa: q.etapa, monto: q.cts / 100 })) : [],
+      relacionadas: (f.relacionadas || []).map(q => ({ uuid: q.uuid, tipoRelacion: q.tipoRelacion,
+        serieFolio: porUuid[q.uuid] ? porUuid[q.uuid].serieFolio : '', enCapri: !!porUuid[q.uuid] })),
+      estado: f.estado, xmlUrl: f.xmlUrl, pdfUrl: f.pdfUrl, registro: f.registro, fechaRegistro: f.fechaRegistro,
+      canceladoPor: f.canceladoPor, fechaCancelacion: f.fechaCancelacion, motivoCancelacion: f.motivoCancelacion, sinProyecto: f.sinProyecto,
+      ligada: !!x.ligada, sinLigar: sinLigar, revisar: vigente ? x.revisar || '' : '' };
+    if (f.tipo === 'I') {
+      Object.assign(r, { neto: x.netoCts / 100, notas: x.notas, cobrado: x.cobradoCts / 100, repCubierto: x.repCts / 100,
+        porCubrirRep: (x.porCubrirRepCts || 0) / 100, repPendiente: vigente && !!x.repPendiente, repSinCobro: vigente && !!x.repSinCobro,
+        reps: x.reps, saldoSegunRep: x.saldoSegunRep, sustituidaPor: x.sustituidaPor,
+        ultimoPago: (cob[x.proyectoFolio] || {}).ultimoPago || '' });
+    }
+    if (f.tipo === 'E') Object.assign(r, { aplicadaA: x.aplicadaA, sinAplicar: x.sinAplicarCts / 100 });
+    if (f.tipo === 'P') Object.assign(r, { documentos: x.documentos, pagos: (f.pagos || []).map(q => ({ fecha: q.fecha, monto: q.monto, moneda: q.moneda })) });
+    if (sinLigar) {
+      r.sugerencias = sugerirLigaFactura(f, proyectos.map(q => ({ folio: q.folio, folioVisible: q.folioVisible, nombre: q.nombre, cliente: q.cliente,
+        clienteId: q.clienteId, estadoProyecto: q.estadoProyecto, moneda: q.moneda, etapas: q.etapas })));
+    }
+    return r;
+  }).sort((a, b) => (a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : 0) || (a.serieFolio < b.serieFolio ? 1 : a.serieFolio > b.serieFolio ? -1 : 0));
+  proyectos.forEach(q => { delete q.clienteId; });
+  return { hoy: hoy || '', facturas: lista, proyectos: proyectos,
+    conteos: { facturas: lista.length, sinLigar: lista.filter(x => x.sinLigar).length, repPendientes: lista.filter(x => x.repPendiente).length,
+      revisar: lista.filter(x => x.revisar).length } };
+}
+
+/**
+ * Bloque de facturas de un proyecto para su vista de cobranza (lógica pura). calc = calcularFacturasClientes(facturas, cobranza del
+ * proyecto); folio = PRY-AAAA-NNNN; clienteId = cliente_id del proyecto (para contar las de su RFC sin ligar). Devuelve {moneda,
+ * etapas: [{clave, etapa, monto, cobrado, facturado, porFacturar, facturas}], porRevisar, totales, repPendientes, sinLigarCliente}.
+ */
+function bloqueFacturasDeProyecto(calc, facturas, folio, clienteId) {
+  const may = s => String(s || '').trim().toUpperCase();
+  const k = may(folio), etapas = calc.proyectos[k];
+  const porUuid = {};
+  (facturas || []).forEach(f => { porUuid[may(f.uuid)] = f; });
+  const lista = etapas ? Object.keys(etapas).map(cl => etapas[cl]) : [];
+  const enlaces = u => { const f = porUuid[u] || {}; return { xmlUrl: f.xmlUrl || '', pdfUrl: f.pdfUrl || '' }; };
+  const rfc = may(clienteId);
+  const sinLigarCliente = RFC_VALIDO.test(rfc) && RFC_GENERICOS.indexOf(rfc) === -1 ? (facturas || []).filter(f => {
+    const x = calc.facturas[may(f.uuid)];
+    return f.estado === FAC_VIGENTE && (f.tipo === 'I' || f.tipo === 'E') && x && !x.ligada && !x.aplicadaA.length && !f.sinProyecto && may(f.receptorRfc) === rfc;
+  }).length : 0;
+  const porRevisar = (facturas || []).filter(f => { const x = calc.facturas[may(f.uuid)]; return f.estado === FAC_VIGENTE && x && x.revisar && x.proyectoArchivos === k; })
+    .map(f => ({ uuid: f.uuid, tipo: f.tipo, serieFolio: f.serieFolio, total: f.total, moneda: f.moneda, revisar: calc.facturas[may(f.uuid)].revisar }));
+  const suma = campo => lista.reduce((s, e) => s + aCentavos(e[campo]), 0) / 100;
+  return {
+    etapas: lista.map(e => Object.assign({}, e, { facturas: e.facturas.map(x => {
+      const i = calc.facturas[x.uuid] || {};
+      return Object.assign({}, x, enlaces(x.uuid), { repCubierto: (i.repCts || 0) / 100, porCubrirRep: (i.porCubrirRepCts || 0) / 100,
+        notas: i.notas || [] });
+    }) })),
+    porRevisar: porRevisar, sinLigarCliente: sinLigarCliente,
+    repPendientes: Object.keys(calc.facturas).filter(u => calc.facturas[u].repPendiente && calc.facturas[u].proyectoFolio === k).length,
+    totales: { monto: suma('monto'), facturado: suma('facturado'), cobrado: suma('cobrado'), porFacturar: suma('porFacturar') },
+  };
+}
+
+/**
+ * Pendientes de cobranza con las facturas de clientes (lógica pura; los llama itemsPendientes con roles.cobranza). lista =
+ * vistaFacturasClientes; o = {todos, hoy}. Items: REP pendiente (desde el último pago del proyecto), XML sin ligar (desde que se
+ * importó) y factura por revisar; destino 'fac' (Cobranza → Facturas de clientes) con req = UUID.
+ */
+function itemsFacturasCliPendientes(lista, o) {
+  const x = o || {}, hoy = String(x.hoy || ''), items = [];
+  const esFecha = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
+  const dias = d => esFecha(d) && esFecha(hoy) ? Math.max(0, diasEntre(d, hoy)) : 0;
+  const dinero = (n, m) => formatoMoneda(n) + ' ' + (m || 'MXN');
+  const agregar = (f, it, desde) => {
+    const d = String(marcaOrdenable(desde) || '').slice(0, 10);
+    items.push(Object.assign({ folio: f.serieFolio || String(f.uuid).slice(0, 8), req: f.uuid, uuid: f.uuid, sitio: '', desde: d, dias: dias(d),
+      prioridad: '', urgente: false, seccion: 'cobranza', destino: 'fac', orden: marcaOrdenable(desde) || '' }, it,
+      { detalle: (it.detalle || []).filter(Boolean).join(' · ') }, x.todos ? { para: 'Cobranza' } : {}));
+  };
+  ((lista && lista.facturas) || []).filter(f => f.estado === FAC_VIGENTE).forEach(f => {
+    const proyecto = [f.proyectoVisible, f.proyectoNombre].filter(Boolean).join(' · ');
+    if (f.repPendiente) {
+      agregar(f, { tipo: 'facRep', titulo: 'REP pendiente', accion: 'Ver factura', urgente: dias(f.ultimoPago) > 30,
+        detalle: [proyecto, f.receptorNombre, 'cobrado ' + dinero(f.cobrado, f.moneda), 'con REP ' + dinero(f.repCubierto, f.moneda),
+          'falta REP por ' + dinero(f.porCubrirRep, f.moneda)] }, f.ultimoPago || f.fecha);
+    } else if (f.sinLigar) {
+      const s = (f.sugerencias || [])[0];
+      agregar(f, { tipo: 'facSinLigar', titulo: f.tipo === 'E' ? 'Nota de crédito sin ligar' : 'XML sin ligar', accion: 'Ligar',
+        detalle: [f.receptorNombre, dinero(f.total, f.moneda), f.metodo, s ? 'sugerido: ' + s.folioVisible : 'sin sugerencia'] },
+        f.fechaRegistro || f.fecha);
+    } else if (f.revisar) {
+      agregar(f, { tipo: 'facRevisar', titulo: 'Factura por revisar', accion: 'Revisar',
+        detalle: [proyecto, f.tipoTexto, dinero(f.total, f.moneda), f.revisar] }, f.fechaRegistro || f.fecha);
+    }
+  });
+  return items;
 }
