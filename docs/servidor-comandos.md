@@ -13,19 +13,27 @@ Lista para copiar y pegar, de la instalación al cambio y el regreso. El porqué
 
 ## A0. Subir el código al repositorio (una vez) — [Leo]
 
-Claude no puede escribir en `git.helgen.online`: el código llega como *bundle* de git
-(`entregas/incremento-7/capri-incrementos-5-6-7-servidor.bundle`, historia completa: no necesita los bundles anteriores).
-En tu Mac, en tu copia del repositorio (`origin` = `git.helgen.online`):
+`git.helgen.online/leo/cotizador-helgen` es un **espejo de solo lectura** del repositorio de GitHub
+(`efrainsosa27/cotizador-helgen`): no acepta push. El código se sube a **GitHub** y el espejo lo copia (el servidor clona del
+espejo). Claude no puede escribir en ninguno de los dos: el código llega como *bundle* de git
+(`entregas/incremento-7/capri-incrementos-5-6-7-servidor.bundle`; solo necesita tu `main`).
+En tu Mac, en tu copia del repositorio (`github` = GitHub, `origin` = el espejo):
 ```bash
 cd ~/Documents/Claude/Projects/cotizador-helgen
 B=entregas/incremento-7/capri-incrementos-5-6-7-servidor.bundle
 git bundle verify "$B"
 git fetch "$B" incremento-5:incremento-5 incremento-6-final:incremento-6 incremento-7:incremento-7 servidor-etapa-1:servidor-etapa-1
-git push origin incremento-5 incremento-6 incremento-7 servidor-etapa-1
+git push github incremento-5 incremento-6 incremento-7 servidor-etapa-1
 ```
-[Verificar] `git bundle verify` dice "is okay"; el push crea las cuatro ramas. `incremento-7` y `servidor-etapa-1` apuntan al mismo
-commit (el servidor corre el mismo `Code.js` que se publicará en Apps Script). Gibran necesita acceso de lectura a
-`leo/cotizador-helgen` con la llave SSH de su usuario en el servidor (la usa `actualizar.sh` con `git fetch`).
+Luego el espejo, sin esperar a su sincronización automática: <https://git.helgen.online/leo/cotizador-helgen/settings> →
+**Configuración del espejo** → **Sincronizar ahora** ("Synchronize Now").
+```bash
+git ls-remote origin incremento-7 servidor-etapa-1      # los dos con el mismo commit que: git rev-parse incremento-7
+```
+[Verificar] `git bundle verify` dice "is okay"; el push crea las cuatro ramas en GitHub; `ls-remote` del espejo ya las muestra.
+`incremento-7` y `servidor-etapa-1` apuntan al mismo commit (el servidor corre el mismo `Code.js` que se publicará en Apps
+Script). Gibran necesita acceso de lectura a `leo/cotizador-helgen` en `git.helgen.online` con la llave SSH de su usuario en el
+servidor (la usa `actualizar.sh` con `git fetch`).
 
 ## A. Preparar el servidor (una vez) — [Gibran]
 
@@ -227,7 +235,8 @@ sudo docker compose restart capri                                          # rei
 sudo bash despliegue/nginx-capri.sh probar                                 # nginx y certificado
 ```
 Actualizar a lo último de la rama (fuera de horario; como dueño del repositorio, **sin** sudo: el script lo pide para
-docker si hace falta). Construye, corre las pruebas dentro de la imagen, cambia y revisa; si no queda sana, regresa sola:
+docker si hace falta). El código nuevo se sube a GitHub y el espejo de `git.helgen.online` lo copia: antes de actualizar,
+**Sincronizar ahora** en la configuración del espejo (si no, `actualizar.sh` dice "Ya está en …" con el commit viejo). Construye, corre las pruebas dentro de la imagen, cambia y revisa; si no queda sana, regresa sola:
 ```bash
 cd /srv/projects/capri/app
 servidor/despliegue/actualizar.sh servidor-etapa-1      # después del merge: servidor/despliegue/actualizar.sh main

@@ -1152,7 +1152,7 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
   (`certbot certonly --webroot`), como facilities@ con dos tokens OAuth (Sheets+Drive y solo `gmail.send`) de un proyecto de Cloud
   **Interno** `capri-servidor`; Sheets y Drive siguen siendo la base de datos; la interfaz sigue en Cloudflare. Carpeta `servidor/`,
   diseño `docs/servidor-etapa-1.md`, pasos de Google `docs/servidor-google-paso-a-paso.md`, comandos en orden
-  `docs/servidor-comandos.md` (A0 subir ramas → A certificado y imagen → B/C Google → D propiedades → E sombra → F cambio → G
+  `docs/servidor-comandos.md` (A0 subir ramas a GitHub y «Sincronizar ahora» en el espejo de solo lectura `git.helgen.online/leo/cotizador-helgen` → A certificado y imagen → B/C Google → D propiedades → E sombra → F cambio → G
   regreso). Cambio y regreso con la Script Property `API_MUDADA` (la costura va en `Code.js` desde `incremento-7`; sin la
   propiedad no hace nada). **`servidor-etapa-1` = `incremento-7`**: el servidor y Apps Script deben correr el mismo `Code.js`
   (la sombra se corre después de publicar 5–7). Falta comprobar en el servidor real: construcción de la imagen y PDF con

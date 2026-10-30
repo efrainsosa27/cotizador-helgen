@@ -585,8 +585,8 @@ escritura; escritura USER_ENTERED; puentes del incremento 7. Probado aquí todo 
 **Lo que pone Leo:**
 1. Pasos 1–6 de la guía de Google (proyecto en la organización, 3 API, pantalla Interna, permisos, cliente de escritorio,
    app de confianza) y estar como facilities@ en el paso 7.
-2. Que Gibran tenga sudo en helgensrvr y acceso para clonar el repositorio (`ssh://git@git.helgen.online:222/leo/cotizador-helgen.git`
-   al día, o GitHub con una llave de despliegue).
+2. Que Gibran tenga sudo en helgensrvr y acceso para clonar el repositorio (`ssh://git@git.helgen.online:222/leo/cotizador-helgen.git`,
+   espejo de solo lectura de GitHub: se sube a GitHub y se pulsa «Sincronizar ahora» en el espejo; o GitHub con una llave de despliegue).
 3. Su ID token para la sombra (y uno de cada rol, o las pruebas las hace Claude con Chrome).
 4. La función de la tabla de escritura en Apps Script (`servidor-comandos.md` E3).
 
