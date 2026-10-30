@@ -6,6 +6,10 @@
 'use strict';
 const M = require('../espejo/modelo');
 
+// Sheets no acepta más de 50 000 caracteres en una celda; Apps Script lanza este error y no escribe nada
+const MAX_CARACTERES_CELDA = 50000;
+const ERROR_CELDA_LARGA = 'Your input contains more than the maximum of 50000 characters in a single cell.';
+
 function crearSpreadsheetApp(amb) {
   /** Libro del espejo local; si este trabajador no lo tiene, lo pide al principal (lo carga de Google si hace falta). */
   function libroDe(id) {
@@ -17,11 +21,23 @@ function crearSpreadsheetApp(amb) {
     return l;
   }
   const escribir = (libroId, op) => amb.escribirHoja(libroId, op);
-  const textoCelda = v => M.interpretar(v);
-  const celdaDe = v => {
-    const x = textoCelda(v);
+  /**
+   * Celda del diario para lo que Code.js escribe en la celda (i, j) 0-based: como la guarda Sheets con entrada
+   * USER_ENTERED (espejo/entrada.js), según el locale del libro y el formato vigente de esa celda. {v} · {v, f} (fórmula) ·
+   * {v, p, t} (número o fecha con el formato que Sheets le pondría si la celda no tiene uno).
+   */
+  const formatosAnio = new Map();
+  const anio = zona => {
+    let f = formatosAnio.get(zona);
+    if (!f) { f = new Intl.DateTimeFormat('en-CA', { timeZone: zona, year: 'numeric' }); formatosAnio.set(zona, f); }
+    return Number(f.format(new Date()));
+  };
+  const celdaDe = (libro, h, i, j, v) => {
+    if (typeof v === 'string' && v.length > MAX_CARACTERES_CELDA) throw new Error(ERROR_CELDA_LARGA);
+    const x = M.interpretar(v, Object.assign(M.contextoCelda(libro, h, i, j), { anioActual: anio(libro.zona) }));
     if (x.formula) return { v: '', f: x.formula };
-    return x.patron ? { v: x.valor, p: x.patron } : { v: x.valor };
+    if (x.patron) return { v: x.valor, p: x.patron, t: x.tipo };
+    return { v: x.valor };
   };
 
   class Proteccion {
@@ -102,34 +118,37 @@ function crearSpreadsheetApp(amb) {
           throw new Error('The number of columns in the data does not match the number of columns in the range. The data has ' +
             (Array.isArray(fila) ? fila.length : 0) + ' but the range has ' + this.nc + '.');
         }
-        return fila.map(celdaDe);
+        return fila;
       });
-      escribir(this.libroId, { op: 'valores', hoja: this.hojaId, r: this.r, c: this.c, celdas: celdas });
+      const l = libroDe(this.libroId), h = M.hojaPorId(l, this.hojaId);
+      escribir(this.libroId, { op: 'valores', entrada: 'USER_ENTERED', hoja: this.hojaId, r: this.r, c: this.c,
+        celdas: celdas.map((fila, i) => fila.map((v, j) => celdaDe(l, h, this.r - 1 + i, this.c - 1 + j, v))) });
       return this;
     }
     setValue(v) {
-      const celda = celdaDe(v);
-      const celdas = Array.from({ length: this.nr }, () => Array.from({ length: this.nc }, () => Object.assign({}, celda)));
-      escribir(this.libroId, { op: 'valores', hoja: this.hojaId, r: this.r, c: this.c, celdas: celdas });
+      const l = libroDe(this.libroId), h = M.hojaPorId(l, this.hojaId);
+      const celdas = Array.from({ length: this.nr }, (_, i) => Array.from({ length: this.nc }, (__, j) => celdaDe(l, h, this.r - 1 + i, this.c - 1 + j, v)));
+      escribir(this.libroId, { op: 'valores', entrada: 'USER_ENTERED', hoja: this.hojaId, r: this.r, c: this.c, celdas: celdas });
       return this;
     }
     setFormula(f) {
       const formula = String(f)[0] === '=' ? String(f) : '=' + f;
       const celdas = Array.from({ length: this.nr }, () => Array.from({ length: this.nc }, () => ({ v: '', f: formula })));
-      escribir(this.libroId, { op: 'valores', hoja: this.hojaId, r: this.r, c: this.c, celdas: celdas });
+      escribir(this.libroId, { op: 'valores', entrada: 'RAW', hoja: this.hojaId, r: this.r, c: this.c, celdas: celdas });
       return this;
     }
     setFormulas(matriz) {
-      escribir(this.libroId, { op: 'valores', hoja: this.hojaId, r: this.r, c: this.c,
+      escribir(this.libroId, { op: 'valores', entrada: 'RAW', hoja: this.hojaId, r: this.r, c: this.c,
         celdas: matriz.map(fila => fila.map(f => (f ? { v: '', f: String(f) } : { v: '' }))) });
       return this;
     }
     clearContent() {
       const celdas = Array.from({ length: this.filasLeibles() }, () => Array.from({ length: this.nc }, () => ({ v: '' })));
-      escribir(this.libroId, { op: 'valores', hoja: this.hojaId, r: this.r, c: this.c, celdas: celdas });
+      escribir(this.libroId, { op: 'valores', entrada: 'RAW', hoja: this.hojaId, r: this.r, c: this.c, celdas: celdas });
       return this;
     }
     setNumberFormat(p) { escribir(this.libroId, { op: 'formatoNumero', hoja: this.hojaId, rango: this.coords(), patron: String(p) }); return this; }
+    getNumberFormat() { const x = M.formatoDe(this.h, this.r - 1, this.c - 1); return x ? x.patron : 'General'; }
     setNumberFormats(m) { return this.setNumberFormat(m && m[0] && m[0][0]); }
     estilo(campo, valor) { escribir(this.libroId, { op: 'estilo', hoja: this.hojaId, rango: this.coords(), [campo]: valor }); return this; }
     setFontWeight(w) { return this.estilo('negrita', String(w) === 'bold'); }
@@ -167,12 +186,16 @@ function crearSpreadsheetApp(amb) {
       return new Rango(this.libroId, this.hojaId, Number(a), Number(b == null ? 1 : b), Number(c == null ? 1 : c), Number(d == null ? 1 : d));
     }
     appendRow(fila) {
-      escribir(this.libroId, { op: 'agregar', hoja: this.hojaId, celdas: (fila || []).map(celdaDe) });
+      // La fila nueva es la siguiente a la última con contenido (la misma que calcula aplicar 'agregar'): su formato manda
+      const l = libroDe(this.libroId), h = M.hojaPorId(l, this.hojaId), i = M.ultimaFila(h);
+      escribir(this.libroId, { op: 'agregar', entrada: 'USER_ENTERED', hoja: this.hojaId, celdas: (fila || []).map((v, j) => celdaDe(l, h, i, j, v)) });
       return this;
     }
-    deleteRow(n) {
-      if (!(n >= 1) || n > this.h.filasMax) throw new Error('Esa fila no existe: ' + n + '.');
-      escribir(this.libroId, { op: 'borrarFila', hoja: this.hojaId, r: Number(n) });
+    deleteRow(n) { return this.deleteRows(n, 1); }
+    deleteRows(n, k) {
+      const r = Number(n), cuantas = Number(k == null ? 1 : k);
+      if (!(r >= 1) || !(cuantas >= 1) || r - 1 + cuantas > this.h.filasMax) throw new Error('Those rows are out of bounds.');
+      escribir(this.libroId, { op: 'borrarFila', hoja: this.hojaId, r, n: cuantas });
       return this;
     }
     insertRowsAfter(despues, n) {
@@ -193,6 +216,9 @@ function crearSpreadsheetApp(amb) {
     getName() { return this.l.titulo; }
     getUrl() { return amb.plantillas.libro.replace('{id}', this.id); }
     getSpreadsheetTimeZone() { return this.l.zona; }
+    getSpreadsheetLocale() { return this.l.locale; }
+    setSpreadsheetLocale(x) { escribir(this.id, { op: 'propiedadesLibro', locale: String(x) }); return this; }
+    setSpreadsheetTimeZone(x) { escribir(this.id, { op: 'propiedadesLibro', zona: String(x) }); return this; }
     getSheets() { return this.l.hojas.slice().sort((a, b) => a.indice - b.indice).map(h => new Hoja(this.id, h.id)); }
     getSheetByName(n) { const h = this.l.hojas.find(x => x.titulo === String(n)); return h ? new Hoja(this.id, h.id) : null; }
     getSheetById(id) { const h = this.l.hojas.find(x => x.id === id); return h ? new Hoja(this.id, h.id) : null; }

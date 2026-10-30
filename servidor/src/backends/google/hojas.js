@@ -11,8 +11,8 @@ const M = require('../../espejo/modelo');
 
 const CAMPOS_CELDA = 'values(userEnteredValue,effectiveValue,formattedValue,effectiveFormat/numberFormat)';
 const CAMPOS_HOJA = 'properties(sheetId,title,index,gridProperties(rowCount,columnCount,frozenRowCount)),data(startRow,startColumn,rowData(' + CAMPOS_CELDA + '))';
-const CAMPOS_LIBRO = 'spreadsheetId,properties(title,timeZone),namedRanges(namedRangeId,name,range),sheets(' + CAMPOS_HOJA + ')';
-const CAMPOS_META = 'spreadsheetId,properties(title,timeZone),namedRanges(namedRangeId,name,range),sheets(properties(sheetId,title,index,gridProperties(rowCount,columnCount,frozenRowCount)))';
+const CAMPOS_LIBRO = 'spreadsheetId,properties(title,timeZone,locale),namedRanges(namedRangeId,name,range),sheets(' + CAMPOS_HOJA + ')';
+const CAMPOS_META = 'spreadsheetId,properties(title,timeZone,locale),namedRanges(namedRangeId,name,range),sheets(properties(sheetId,title,index,gridProperties(rowCount,columnCount,frozenRowCount)))';
 const TIPOS_FECHA = { DATE: 1, TIME: 1, DATE_TIME: 1 };
 const PATRON_FECHA_HORA = 'yyyy-mm-dd hh:mm:ss';
 
@@ -30,6 +30,7 @@ function valorDeCelda(c, zona) {
   else if (ev.errorValue) out.v = c.formattedValue || '#ERROR!';
   else out.v = '';
   if (nf && TIPOS_FECHA[nf.type]) out.nf = { tipo: nf.type, patron: nf.pattern || '' }; // solo importa si ya es fecha
+  if (nf && nf.type === 'TEXT') out.texto = true; // texto plano ("@"): decide cómo se interpreta lo que se escriba ahí
   if (c.formattedValue !== undefined && c.formattedValue !== M.textoVisible(out.v)) out.d = c.formattedValue;
   return out;
 }
@@ -40,6 +41,7 @@ function hojaDesdeApi(s, zona) {
     congeladas: g.frozenRowCount || 0 });
   (s.data || []).forEach(bloque => {
     const r0 = bloque.startRow || 0, c0 = bloque.startColumn || 0;
+    h.cargadas = Math.max(h.cargadas, r0 + (bloque.rowData || []).length);
     (bloque.rowData || []).forEach((fila, i) => {
       const valores = [];
       (fila.values || []).forEach((celda, j) => {
@@ -48,6 +50,7 @@ function hojaDesdeApi(s, zona) {
         if (x.f) h.formulas[k] = x.f;
         if (x.nf) h.formatos[k] = x.nf;
         if (x.d !== undefined) h.mostrar[k] = x.d;
+        if (x.texto) M.marcarTexto(h, r0 + i, c0 + j, true);
       });
       for (let j = 0; j < valores.length; j++) if (valores[j] === undefined) valores[j] = '';
       while (valores.length && valores[valores.length - 1] === '') valores.pop();
@@ -66,7 +69,8 @@ function rangoDesdeApi(r) {
 
 function libroDesdeApi(d, version) {
   const zona = (d.properties && d.properties.timeZone) || 'America/Mexico_City';
-  const libro = M.nuevoLibro({ id: d.spreadsheetId, titulo: d.properties && d.properties.title, zona, version: String(version || '0') });
+  const libro = M.nuevoLibro({ id: d.spreadsheetId, titulo: d.properties && d.properties.title, zona,
+    locale: (d.properties && d.properties.locale) || undefined, version: String(version || '0') });
   libro.hojas = (d.sheets || []).map(s => hojaDesdeApi(s, zona)).sort((a, b) => a.indice - b.indice);
   (d.namedRanges || []).forEach(n => { libro.nombrados[n.name] = { id: n.namedRangeId, hoja: n.range.sheetId || 0, rango: rangoDesdeApi(n.range) }; });
   return libro;
@@ -88,7 +92,11 @@ function rangoApi(hojaId, x) {
 
 const TIPO_API = { TEXT: 'TEXT', NUMBER: 'NUMBER', CURRENCY: 'CURRENCY', PERCENT: 'PERCENT', DATE: 'DATE', TIME: 'TIME', DATE_TIME: 'DATE_TIME' };
 
-/** CellData con el valor (y si es fecha sin formato de fecha, también el formato). */
+/**
+ * CellData de una celda del diario, ya tipada como la guardaría Sheets con entrada USER_ENTERED (espejo/entrada.js), y el
+ * formato que Sheets le pondría: una fecha en una celda sin formato de fecha (también en texto plano: así la lee
+ * getValues como Date) y un número escrito con "%", "$", miles o exponente en una celda con formato automático.
+ */
 function celdaApi(celda, zona, formatoActual) {
   if (celda.f) return { cd: { userEnteredValue: { formulaValue: celda.f } } };
   const v = celda.v;
@@ -96,9 +104,13 @@ function celdaApi(celda, zona, formatoActual) {
   if (v instanceof Date) {
     const cd = { userEnteredValue: { numberValue: M.serialDesdeFecha(v, zona) } };
     const yaEsFecha = formatoActual && TIPOS_FECHA[formatoActual.tipo];
-    return { cd, formato: yaEsFecha ? null : { type: 'DATE_TIME', pattern: celda.p || PATRON_FECHA_HORA } };
+    const patron = celda.p || PATRON_FECHA_HORA;
+    return { cd, formato: yaEsFecha ? null : { type: TIPOS_FECHA[celda.t] ? celda.t : (TIPOS_FECHA[M.tipoDePatron(patron)] ? M.tipoDePatron(patron) : 'DATE_TIME'), pattern: patron } };
   }
-  if (typeof v === 'number' && isFinite(v)) return { cd: { userEnteredValue: { numberValue: v } } };
+  if (typeof v === 'number' && isFinite(v)) {
+    const cd = { userEnteredValue: { numberValue: v } };
+    return celda.t && celda.p && !formatoActual ? { cd, formato: { type: celda.t, pattern: celda.p } } : { cd };
+  }
   if (typeof v === 'boolean') return { cd: { userEnteredValue: { boolValue: v } } };
   return { cd: { userEnteredValue: { stringValue: String(v) } } };
 }
@@ -160,7 +172,7 @@ function peticionesDeDiario(libro, ops) {
         break;
       }
       case 'borrarFila':
-        requests.push({ deleteDimension: { range: { sheetId: h.id, dimension: 'ROWS', startIndex: op.r - 1, endIndex: op.r } } });
+        requests.push({ deleteDimension: { range: { sheetId: h.id, dimension: 'ROWS', startIndex: op.r - 1, endIndex: op.r - 1 + (op.n || 1) } } });
         tocar(h.id, null, true);
         break;
       case 'insertarFilas':
@@ -221,6 +233,13 @@ function peticionesDeDiario(libro, ops) {
         else requests.push({ addNamedRange: { namedRange: { name: op.nombre, range: rango } } });
         break;
       }
+      case 'propiedadesLibro': {
+        const pr = {}, campos = [];
+        if (op.locale) { pr.locale = op.locale; campos.push('locale'); }
+        if (op.zona) { pr.timeZone = op.zona; campos.push('timeZone'); }
+        if (campos.length) requests.push({ updateSpreadsheetProperties: { properties: pr, fields: campos.join(',') } });
+        break;
+      }
       case 'recalculo':
         requests.push({ updateSpreadsheetProperties: { properties: { autoRecalc: op.intervalo }, fields: 'autoRecalc' } });
         break;
@@ -269,13 +288,20 @@ function tramosDeRegreso(copia, cambios) {
 function ponerFilas(h, bloque, r0, r1, zona, completa) {
   const leida = hojaDesdeApi({ properties: { sheetId: h.id, title: h.titulo }, data: [bloque] }, zona);
   const quitar = (mapa, i) => Object.keys(mapa).forEach(k => { if (Number(k.slice(0, k.indexOf(','))) === i) delete mapa[k]; });
+  const columnas = new Set(Object.keys(h.texto || {}).concat(Object.keys(leida.texto || {})).map(Number));
   for (let i = r0 - 1; i < r1; i++) {
     ['formulas', 'formatos', 'mostrar'].forEach(n => { quitar(h[n], i); });
     h.valores[i] = (leida.valores[i] || []).slice();
     ['formulas', 'formatos', 'mostrar'].forEach(n => Object.keys(leida[n]).forEach(k => {
       if (Number(k.slice(0, k.indexOf(','))) === i) h[n][k] = leida[n][k];
     }));
+    columnas.forEach(j => M.marcarTexto(h, i, j, M.enTexto(leida, i, j)));
   }
+  if (completa) {
+    // Lo de más abajo no vino: vale el formato de la última fila leída (la "+1")
+    Object.keys(h.texto || {}).forEach(j => { h.texto[j] = h.texto[j].filter(t => t[0] < r1).map(t => [t[0], Math.min(t[1], r1 - 1)]); if (!h.texto[j].length) delete h.texto[j]; });
+    h.cargadas = r1;
+  } else h.cargadas = Math.max(h.cargadas || 0, r1);
   if (completa) h.valores.length = Math.min(h.valores.length, r1);
   for (let i = 0; i < h.valores.length; i++) if (!h.valores[i]) h.valores[i] = [];
   while (h.valores.length && !h.valores[h.valores.length - 1].some(v => !M.vacio(v)) &&

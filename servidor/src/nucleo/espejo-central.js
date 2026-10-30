@@ -14,7 +14,9 @@
 const crypto = require('crypto');
 const M = require('../espejo/modelo');
 
-const huella = libro => crypto.createHash('sha1').update(JSON.stringify(libro.hojas, (k, v) => (k === 'mostrar' ? undefined : v))).digest('hex');
+// Lo que define "el libro cambió": valores, fórmulas y estructura (no el texto visible ni lo que el espejo guarda de formato)
+const FUERA_DE_HUELLA = new Set(['mostrar', 'texto', 'cargadas']);
+const huella = libro => crypto.createHash('sha1').update(JSON.stringify(libro.hojas, (k, v) => (FUERA_DE_HUELLA.has(k) ? undefined : v))).digest('hex');
 
 class EspejoCentral {
   /**
@@ -184,7 +186,7 @@ class EspejoCentral {
 
   estado() {
     const ahora = Date.now();
-    return [...this.libros].map(([id, x]) => ({ id, titulo: x.libro.titulo, hojas: x.libro.hojas.length,
+    return [...this.libros].map(([id, x]) => ({ id, titulo: x.libro.titulo, locale: x.libro.locale, zona: x.libro.zona, hojas: x.libro.hojas.length,
       celdas: x.libro.hojas.reduce((s, h) => s + h.valores.reduce((t, f) => t + (f ? f.length : 0), 0), 0),
       version: x.version, segDesdeCarga: Math.round((ahora - x.cargado) / 1000) }));
   }

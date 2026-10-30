@@ -44,6 +44,59 @@ function crearBlob(amb) {
   return Blob;
 }
 
+// ---- Utilities.unzip: ZIP (sin cifrar; "stored" o "deflate"), con límites para que un ZIP malicioso no llene la memoria ----
+const zlib = require('zlib');
+const MAX_ARCHIVO_ZIP = 50 * 1024 * 1024; // lo más que pesa un Blob en Apps Script
+// Lo más que se infla en UNA llamada (todo el ZIP): un ZIP bomba no tumba el proceso. Cada archivo se infla con tope = el
+// tamaño que dice el directorio central, así lo inflado nunca pasa de lo declarado (y lo declarado se revisa antes)
+const MAX_TOTAL_ZIP = 60 * 1024 * 1024, MAX_ENTRADAS_ZIP = 10000;
+const TIPOS_POR_EXTENSION = { xml: 'application/xml', pdf: 'application/pdf', json: 'application/json', txt: 'text/plain',
+  csv: 'text/csv', html: 'text/html', htm: 'text/html', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  zip: 'application/zip' };
+const tipoPorNombre = n => { const m = /\.([a-z0-9]+)$/i.exec(String(n)); return (m && TIPOS_POR_EXTENSION[m[1].toLowerCase()]) || null; };
+
+/**
+ * Entradas de un ZIP como las da Utilities.unzip: [{nombre (con su carpeta dentro del ZIP), datos}], en el orden del
+ * directorio central; las carpetas ("dir/") también, vacías.
+ */
+function descomprimirZip(buf) {
+  const malo = q => new Error('No se pudo descomprimir: ' + q + '.');
+  if (!Buffer.isBuffer(buf) || buf.length < 22) throw malo('el archivo no es un ZIP');
+  let fin = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 65535); i--) if (buf.readUInt32LE(i) === 0x06054b50) { fin = i; break; }
+  if (fin < 0) throw malo('el archivo no es un ZIP');
+  const n = buf.readUInt16LE(fin + 10);
+  let p = buf.readUInt32LE(fin + 16);
+  if (n === 0xffff || p === 0xffffffff) throw malo('ZIP64 no está soportado');
+  if (n > MAX_ENTRADAS_ZIP) throw malo('demasiados archivos (' + n + ')');
+  const out = [];
+  let total = 0;
+  for (let k = 0; k < n; k++) {
+    if (p + 46 > buf.length || buf.readUInt32LE(p) !== 0x02014b50) throw malo('el ZIP está dañado');
+    const banderas = buf.readUInt16LE(p + 8), metodo = buf.readUInt16LE(p + 10), crc = buf.readUInt32LE(p + 16);
+    const comprimido = buf.readUInt32LE(p + 20), tamano = buf.readUInt32LE(p + 24);
+    const largoNombre = buf.readUInt16LE(p + 28), largoExtra = buf.readUInt16LE(p + 30), largoComentario = buf.readUInt16LE(p + 32);
+    const local = buf.readUInt32LE(p + 42);
+    const nombre = buf.subarray(p + 46, p + 46 + largoNombre).toString(banderas & 0x800 ? 'utf8' : 'latin1');
+    p += 46 + largoNombre + largoExtra + largoComentario;
+    if (nombre.endsWith('/') && tamano === 0) { out.push({ nombre, datos: Buffer.alloc(0) }); continue; }
+    if (banderas & 1) throw malo(nombre + ' está cifrado');
+    if (tamano > MAX_ARCHIVO_ZIP || (total += tamano) > MAX_TOTAL_ZIP) throw malo('el contenido pasa de ' + (MAX_TOTAL_ZIP / 1048576) + ' MB');
+    if (local + 30 > buf.length || buf.readUInt32LE(local) !== 0x04034b50) throw malo('el ZIP está dañado');
+    const ini = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+    const crudo = buf.subarray(ini, ini + comprimido);
+    if (crudo.length !== comprimido) throw malo('el ZIP está incompleto');
+    let datos;
+    if (metodo === 0) datos = Buffer.from(crudo);
+    else if (metodo === 8) {
+      try { datos = zlib.inflateRawSync(crudo, { maxOutputLength: Math.max(tamano, 1) }); } catch (e) { throw malo(nombre + ' está dañado o es más grande de lo que dice'); }
+    } else throw malo(nombre + ' usa una compresión no soportada (' + metodo + ')');
+    if (datos.length !== tamano || (zlib.crc32 && zlib.crc32(datos) !== crc)) throw malo(nombre + ' está dañado');
+    out.push({ nombre, datos });
+  }
+  return out;
+}
+
 // ---- Fechas como java.text.SimpleDateFormat (lo que usa Utilities.formatDate) ----
 const MESES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DIAS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -154,6 +207,9 @@ function crearUtilities(amb, Blob) {
     getUuid: () => crypto.randomUUID(),
     sleep: ms => amb.dormir(ms),
     parseCsv,
+    // Las entradas del ZIP como Blobs con su nombre (incluye la carpeta dentro del ZIP; las carpetas también, vacías); el
+    // tipo, por la extensión; getBytes() con signo, como todo Blob de Apps Script
+    unzip: blob => descomprimirZip(blob && blob.buf ? blob.buf : aBuffer(blob)).map(x => new Blob(x.datos, tipoPorNombre(x.nombre), x.nombre)),
     jsonStringify: o => JSON.stringify(o),
     jsonParse: s => JSON.parse(s),
     DigestAlgorithm: { MD2: 'MD2', MD5: 'MD5', SHA_1: 'SHA_1', SHA_256: 'SHA_256', SHA_384: 'SHA_384', SHA_512: 'SHA_512' },
@@ -282,5 +338,5 @@ function crearHtmlService() {
   return { createHtmlOutput: no, createHtmlOutputFromFile: no, createTemplateFromFile: no, XFrameOptionsMode: {}, SandboxMode: {} };
 }
 
-module.exports = { conSigno, aBuffer, crearBlob, formatDate, parseCsv, crearUtilities, crearUrlFetchApp, crearMailApp, crearSession,
+module.exports = { conSigno, aBuffer, crearBlob, formatDate, parseCsv, descomprimirZip, MAX_TOTAL_ZIP, crearUtilities, crearUrlFetchApp, crearMailApp, crearSession,
   crearScriptApp, crearContentService, crearHtmlService };

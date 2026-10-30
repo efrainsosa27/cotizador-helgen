@@ -11,14 +11,37 @@ const { Candado } = require('../src/nucleo/candado');
 const casos = [];
 const caso = (n, f) => casos.push([n, f]);
 
-caso('interpretar: apóstrofo = texto, fecha ISO = Date (con su formato), "=" = fórmula, lo demás tal cual', () => {
+caso('interpretar (USER_ENTERED): apóstrofo = texto, fecha ISO = Date (con su formato), "=" y "+…" = fórmula; en "@" texto (la tabla completa: escritura.test.js)', () => {
   assert.deepEqual(M.interpretar("'0012"), { valor: '0012' });
   assert.deepEqual(M.interpretar("'2026-10-20"), { valor: '2026-10-20' });
   const d = M.interpretar('2026-10-20 17:30');
   assert(d.valor instanceof Date && d.valor.getHours() === 17 && d.patron === 'yyyy-mm-dd hh:mm');
   assert.equal(M.interpretar('2026-10-20').patron, 'yyyy-mm-dd');
   assert.deepEqual(M.interpretar('=A1*2'), { valor: '', formula: '=A1*2' });
-  assert.deepEqual([M.interpretar(12.5).valor, M.interpretar(true).valor, M.interpretar('+52 442').valor, M.interpretar(null).valor], [12.5, true, '+52 442', '']);
+  assert.deepEqual([M.interpretar(12.5).valor, M.interpretar(true).valor, M.interpretar(null).valor], [12.5, true, '']);
+  assert.deepEqual(M.interpretar('+52 442'), { valor: '', formula: '=+52 442' }, 'como Sheets: #ERROR! (CLAUDE.md regla 7)');
+  assert.deepEqual(M.interpretar('+52 442', { formato: { tipo: 'TEXT', patron: '@' } }), { valor: '+52 442' }, 'en texto plano no');
+  assert.deepEqual(M.interpretar('123'), { valor: 123 });
+  assert.deepEqual(M.interpretar('123', { formato: { tipo: 'TEXT', patron: '@' } }), { valor: '123' });
+});
+
+caso('formato de texto plano por tramos: marcar, desmarcar, recorrer al borrar e insertar filas, y "más abajo de lo cargado"', () => {
+  const h = M.nuevaHoja({ id: 1, titulo: 'H' });
+  [0, 1, 2, 3, 5].forEach(i => M.marcarTexto(h, i, 2, true));
+  assert.deepEqual(h.texto[2], [[0, 3], [5, 5]]);
+  M.marcarTexto(h, 4, 2, true);
+  assert.deepEqual(h.texto[2], [[0, 5]], 'une tramos vecinos');
+  M.marcarTexto(h, 2, 2, false);
+  assert.deepEqual(h.texto[2], [[0, 1], [3, 5]]);
+  M.recorrerTexto(h, 0, -1);
+  assert.deepEqual(h.texto[2], [[0, 0], [2, 4]], 'borrar la fila 1 sube todo');
+  M.recorrerTexto(h, 1, 2);
+  assert.deepEqual(h.texto[2], [[0, 2], [4, 6]], 'las filas insertadas heredan el formato de arriba');
+  h.cargadas = 7;
+  assert.equal(M.formatoDe(h, 6, 2).tipo, 'TEXT');
+  assert.equal(M.formatoDe(h, 40, 2).tipo, 'TEXT', 'más abajo de lo cargado vale la última fila cargada');
+  assert.equal(M.formatoDe(h, 3, 2), null);
+  assert.equal(M.formatoDe(h, 0, 0), null);
 });
 
 caso('operaciones del diario sobre el modelo (como Apps Script: getLastRow cuenta fórmulas, appendRow tras la última fila)', () => {
@@ -210,6 +233,62 @@ caso('fachada de hojas: rangos A1 abiertos ("A2:A" no incluye el encabezado), se
   assert.throws(() => ss.insertSheet('Tipo de cambio'), /Ya existe/);
   assert.equal(h.createTextFinder('b').matchEntireCell(true).findNext().getRow(), 3);
   assert.equal(h.createTextFinder('zzz').findNext(), null);
+});
+
+caso('Utilities.unzip (incremento 7: CFDI de clientes en ZIP): carpetas incluidas, nombres UTF-8, deflate y sin comprimir, bytes con signo; ZIP malo, bomba o > 60 MB → error', () => {
+  const zlib = require('zlib');
+  // Hecho con zipfile de Python (no con el mismo código que lo lee): carpeta CFDI/, un XML comprimido con nombre en UTF-8 y un txt sin comprimir
+  const zip = Buffer.from('UEsDBBQAAAAAAAAAIQAAAAAAAAAAAAAAAAAFAAAAQ0ZESS9QSwMEFAAACAgA4JNdXd+gbUFSAAAAPAUAABgAAABDRkRJL0ZhY3R1cmFjacOzbiDDsS54bWyzsa/IzVEoSy0qzszPs1Uy1DNQsrezSU5LybRyzs8tKMpPSswrSVUIyS9JzLFVMjQ0M9AzMFBSCA31dLFVcnRyVtK3sxk1YtSIUSNGjRhpRgAAUEsDBBQAAAAAAOCTXV2I+aBvBAAAAAQAAAAJAAAAbGVlbWUudHh0aG9sYVBLAQIUAxQAAAAAAAAAIQAAAAAAAAAAAAAAAAAFAAAAAAAAAAAAAACAAQAAAABDRkRJL1BLAQIUAxQAAAgIAOCTXV3foG1BUgAAADwFAAAYAAAAAAAAAAAAAACAASMAAABDRkRJL0ZhY3R1cmFjacOzbiDDsS54bWxQSwECFAMUAAAAAADgk11diPmgbwQAAAAEAAAACQAAAAAAAAAAAAAAgAGrAAAAbGVlbWUudHh0UEsFBgAAAAADAAMAsAAAANYAAAAAAA==', 'base64');
+  const Blob = S.crearBlob({});
+  const U = S.crearUtilities({}, Blob);
+  // Como lo usará descomprimir_: el blob que llega de la interfaz en base64 (Utilities.newBlob(bytes))
+  const archivos = U.unzip(U.newBlob(U.base64Decode(zip.toString('base64')), 'application/zip', 'facturas.zip'));
+  assert.deepEqual(archivos.map(b => b.getName()), ['CFDI/', 'CFDI/Facturación ñ.xml', 'leeme.txt'], 'la carpeta también, como Apps Script');
+  assert.deepEqual(archivos.map(b => b.getContentType()), [null, 'application/xml', 'text/plain']);
+  assert.deepEqual(archivos[0].getBytes(), []);
+  assert.equal(archivos[1].getDataAsString(), '<?xml version="1.0"?><cfdi:Comprobante Total="1160.00" UUID="ABC"/>'.repeat(20));
+  assert.deepEqual(archivos[2].getBytes(), [104, 111, 108, 97]);
+
+  // ZIP armado aquí (con su CRC) para lo demás
+  const zipDe = entradas => {
+    const locales = [], centrales = [];
+    let pos = 0;
+    entradas.forEach(e => {
+      const nombre = Buffer.from(e.nombre), crudo = e.datos, comp = e.guardar ? crudo : zlib.deflateRawSync(crudo);
+      const tam = e.tamano == null ? crudo.length : e.tamano, metodo = e.guardar ? 0 : 8;
+      const lh = Buffer.alloc(30); lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(0x800, 6); lh.writeUInt16LE(metodo, 8);
+      lh.writeUInt32LE(zlib.crc32(crudo), 14); lh.writeUInt32LE(comp.length, 18); lh.writeUInt32LE(tam, 22); lh.writeUInt16LE(nombre.length, 26);
+      const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(0x800, 8); cd.writeUInt16LE(metodo, 10);
+      cd.writeUInt32LE(zlib.crc32(crudo), 16); cd.writeUInt32LE(comp.length, 20); cd.writeUInt32LE(tam, 24); cd.writeUInt16LE(nombre.length, 28); cd.writeUInt32LE(pos, 42);
+      const l = Buffer.concat([lh, nombre, comp]); locales.push(l); pos += l.length;
+      centrales.push(Buffer.concat([cd, nombre]));
+    });
+    const c = Buffer.concat(centrales), eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(entradas.length, 8); eocd.writeUInt16LE(entradas.length, 10); eocd.writeUInt32LE(c.length, 12); eocd.writeUInt32LE(pos, 16);
+    return Buffer.concat(locales.concat([c, eocd]));
+  };
+  const binario = Buffer.from([0, 127, 128, 200, 255]);
+  const b = U.unzip(U.newBlob(zipDe([{ nombre: 'factura.pdf', datos: binario }])))[0];
+  assert.deepEqual(b.getBytes(), [0, 127, -128, -56, -1], 'bytes con signo (−128…127), como Apps Script');
+  assert.equal(b.getContentType(), 'application/pdf');
+  assert.throws(() => U.unzip(U.newBlob('no soy un zip')), /no es un ZIP/);
+  // Bomba: el directorio dice 10 bytes, pero el deflate trae 5 MB → error sin inflarlo todo
+  assert.throws(() => S.descomprimirZip(zipDe([{ nombre: 'x.xml', datos: Buffer.alloc(5 * 1024 * 1024), tamano: 10 }])), /dañado o es más grande/);
+  // Tope por llamada: dos de 31 MB (comprimidos pesan nada) = 62 MB > 60 MB → error antes de inflar el segundo
+  const cero = Buffer.alloc(31 * 1024 * 1024);
+  assert.throws(() => S.descomprimirZip(zipDe([{ nombre: 'a.xml', datos: cero }, { nombre: 'b.xml', datos: cero }])), /pasa de 60 MB/);
+  assert.equal(S.descomprimirZip(zipDe([{ nombre: 'a.xml', datos: cero }])).length, 1, 'uno de 31 MB sí');
+});
+
+caso('Dockerfile: Chromium fijo en la versión exacta que pide puppeteer-core (si alguien sube puppeteer-core, esto avisa)', () => {
+  const fs = require('fs'), path = require('path');
+  const archivo = path.join(__dirname, '..', 'Dockerfile');
+  if (!fs.existsSync(archivo)) { console.log('   (sin Dockerfile: dentro de la imagen no se revisa)'); return; }
+  const fijo = (fs.readFileSync(archivo, 'utf8').match(/ARG CHROME_VERSION=(\S+)/) || [])[1];
+  const rev = path.join(path.dirname(require.resolve('puppeteer-core/package.json')), 'lib', 'puppeteer', 'revisions.js');
+  const pide = (fs.readFileSync(rev, 'utf8').match(/'chrome-headless-shell':\s*'([^']+)'/) || [])[1];
+  assert(fijo && pide, 'no encontré las versiones');
+  assert.equal(fijo, pide, 'CHROME_VERSION del Dockerfile ≠ chrome-headless-shell de puppeteer-core');
 });
 
 (async () => {

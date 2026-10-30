@@ -9,9 +9,14 @@
 //          formatos: {"f,c": {tipo, patron}}   formato de número por celda (lo que vino de Sheets; solo fechas y texto)
 //          formatosRango: [{r, c, nr, nc, abierto, tipo, patron}]  setNumberFormat desde la última carga (el último manda;
 //                         un rango de 1000 filas es un renglón aquí, no 1000 celdas)
-//          mostrar: {"f,c": texto} }  lo que da getDisplayValues cuando Sheets lo mandó (si no, String(valor))
+//          mostrar: {"f,c": texto}     lo que da getDisplayValues cuando Sheets lo mandó (si no, String(valor))
+//          texto: {c: [[fIni, fFin]]}  celdas con formato de texto plano ("@") que vinieron de Sheets, por columna en
+//                                      tramos de filas (las hojas de CAPRI tienen columnas enteras en "@": por celda
+//                                      costaría memoria). Decide cómo se interpreta lo que se escribe (entrada.js).
+//          cargadas: filas que vinieron de Sheets (la zona con datos + una); más abajo vale el formato de la última }
 // Filas y columnas empiezan en 1 en la interfaz (como Apps Script); en los arreglos, en 0.
 'use strict';
+const { interpretarEntrada, LOCALE_OMISION } = require('./entrada');
 
 const clave = (f, c) => f + ',' + c; // 0-based
 
@@ -19,13 +24,13 @@ function nuevaHoja(d) {
   return {
     id: d.id, titulo: d.titulo, indice: d.indice || 0, filasMax: d.filasMax || 1000, columnasMax: d.columnasMax || 26,
     congeladas: d.congeladas || 0, valores: d.valores || [], formulas: d.formulas || {}, formatos: d.formatos || {},
-    formatosRango: d.formatosRango || [], mostrar: d.mostrar || {},
+    formatosRango: d.formatosRango || [], mostrar: d.mostrar || {}, texto: d.texto || {}, cargadas: d.cargadas || 0,
   };
 }
 
 function nuevoLibro(d) {
-  return { id: d.id, titulo: d.titulo || '', zona: d.zona || 'America/Mexico_City', version: d.version || '0', rev: d.rev || 0,
-    hojas: (d.hojas || []).map(nuevaHoja), nombrados: d.nombrados || {} };
+  return { id: d.id, titulo: d.titulo || '', zona: d.zona || 'America/Mexico_City', locale: d.locale || LOCALE_OMISION,
+    version: d.version || '0', rev: d.rev || 0, hojas: (d.hojas || []).map(nuevaHoja), nombrados: d.nombrados || {} };
 }
 
 const vacio = v => v === '' || v === null || v === undefined;
@@ -93,22 +98,69 @@ function leerVisibles(h, r, c, nr, nc) {
 }
 
 /**
- * Cómo guarda Sheets lo que escribe Apps Script (la regla que reproduce el arnés, §6.2): apóstrofo al inicio = texto tal
- * cual; texto con forma de fecha ISO ("2026-10-20", "2026-10-20 17:30[:05]") = fecha; "=" al inicio = fórmula.
- * Lo demás se guarda como viene (número, booleano, Date, texto). Devuelve {valor, formula?}.
+ * Cómo guarda Sheets lo que escribe Apps Script (setValue, setValues, appendRow): entrada.js. ctx: {locale, formato, zona}
+ * (sin ctx: celda con formato automático en un libro es_MX de la Ciudad de México). Devuelve {valor, formula?, tipo?, patron?}.
  */
-function interpretar(v) {
-  if (v === null || v === undefined) return { valor: '' };
-  if (typeof v !== 'string') return { valor: v };
-  if (v[0] === "'") return { valor: v.slice(1) };
-  if (v[0] === '=' && v.length > 1) return { valor: '', formula: v };
-  const x = v.match(/^(\d{4})-(\d\d)-(\d\d)(?: (\d\d):(\d\d)(?::(\d\d))?)?$/);
-  if (x) {
-    // Sheets le pone a la celda un formato de fecha parecido a lo que se escribió
-    const patron = x[6] !== undefined ? 'yyyy-mm-dd hh:mm:ss' : x[4] !== undefined ? 'yyyy-mm-dd hh:mm' : 'yyyy-mm-dd';
-    return { valor: new Date(+x[1], +x[2] - 1, +x[3], +(x[4] || 0), +(x[5] || 0), +(x[6] || 0)), patron };
+function interpretar(v, ctx) {
+  const c = Object.assign({ locale: LOCALE_OMISION, formato: null, zona: 'America/Mexico_City', desdeSerial: fechaDesdeSerial }, ctx || {});
+  if (c.anioActual === undefined) c.anioActual = Number(new Intl.DateTimeFormat('en-CA', { timeZone: c.zona, year: 'numeric' }).format(new Date()));
+  return interpretarEntrada(v, c);
+}
+
+/** Lo que interpreta la celda (i, j) 0-based de la hoja h del libro: su locale, zona y formato vigente. */
+function contextoCelda(libro, h, i, j) {
+  return { locale: libro.locale, zona: libro.zona, formato: formatoDe(h, i, j) };
+}
+
+// ---- Formato de texto plano ("@") por columna, en tramos de filas ----
+function enTexto(h, i, j) {
+  const t = h.texto && h.texto[j];
+  if (!t) return false;
+  for (let k = 0; k < t.length; k++) { if (i < t[k][0]) return false; if (i <= t[k][1]) return true; }
+  return false;
+}
+/** Marca (si) o desmarca la celda (i, j) como texto plano, uniendo tramos vecinos. */
+function marcarTexto(h, i, j, si) {
+  if (!h.texto) h.texto = {};
+  const t = h.texto[j] || [];
+  for (let k = 0; k < t.length; k++) {
+    const [a, b] = t[k];
+    if (i < a) break;
+    if (i <= b) {
+      if (si) return;
+      const resto = [];
+      if (a <= i - 1) resto.push([a, i - 1]);
+      if (i + 1 <= b) resto.push([i + 1, b]);
+      t.splice(k, 1, ...resto);
+      break;
+    }
   }
-  return { valor: v };
+  if (si) {
+    let k = 0;
+    while (k < t.length && t[k][0] < i) k++;
+    t.splice(k, 0, [i, i]);
+    if (k + 1 < t.length && t[k + 1][0] === i + 1) { t[k][1] = t[k + 1][1]; t.splice(k + 1, 1); }
+    if (k > 0 && t[k - 1][1] === i - 1) { t[k - 1][1] = t[k][1]; t.splice(k, 1); }
+  }
+  if (t.length) h.texto[j] = t; else delete h.texto[j];
+}
+/** Recorre los tramos al borrar la fila i (n = -1) o al insertar n filas antes de la fila i (heredan el formato de arriba). */
+function recorrerTexto(h, i, n) {
+  Object.keys(h.texto || {}).forEach(j => {
+    const t = [];
+    h.texto[j].forEach(([a, b]) => {
+      if (n < 0) {
+        if (b < i) t.push([a, b]);
+        else if (a > i) t.push([a - 1, b - 1]);
+        else if (b - 1 >= a) t.push([a, b - 1]);
+      } else if (a >= i) t.push([a + n, b + n]);
+      else if (b >= i - 1) t.push([a, b + n]);
+      else t.push([a, b]);
+    });
+    for (let k = t.length - 1; k > 0; k--) if (t[k][0] <= t[k - 1][1] + 1) { t[k - 1][1] = Math.max(t[k - 1][1], t[k][1]); t.splice(k, 1); }
+    if (t.length) h.texto[j] = t; else delete h.texto[j];
+  });
+  if (h.cargadas && i < h.cargadas) h.cargadas = Math.max(0, h.cargadas + n);
 }
 
 function asegurarFila(h, i) {
@@ -165,11 +217,14 @@ function aplicar(libro, op) {
       op.celdas.forEach((celda, j) => ponerCelda(h, r - 1, j, celda));
       return r;
     }
-    case 'borrarFila': {
+    case 'borrarFila': { // deleteRow / deleteRows(r, n)
       const h = hojaPorId(libro, op.hoja);
-      h.valores.splice(op.r - 1, 1);
-      recorrerMapas(h, op.r - 1);
-      h.filasMax = Math.max(1, h.filasMax - 1);
+      for (let k = 0; k < (op.n || 1); k++) {
+        h.valores.splice(op.r - 1, 1);
+        recorrerMapas(h, op.r - 1);
+        recorrerTexto(h, op.r - 1, -1);
+        h.filasMax = Math.max(1, h.filasMax - 1);
+      }
       return op.r;
     }
     case 'insertarFilas': {
@@ -187,6 +242,7 @@ function aplicar(libro, op) {
           h[nombre] = nuevo;
         });
       }
+      recorrerTexto(h, op.despues, op.n);
       h.filasMax += op.n;
       return 0;
     }
@@ -212,6 +268,7 @@ function aplicar(libro, op) {
       return 0;
     }
     case 'congelar': hojaPorId(libro, op.hoja).congeladas = op.filas; return 0;
+    case 'propiedadesLibro': if (op.locale) libro.locale = op.locale; if (op.zona) libro.zona = op.zona; return 0;
     case 'nombrarRango': libro.nombrados[op.nombre] = { hoja: op.hoja, rango: op.rango }; return 0;
     // Solo apariencia o reglas de la hoja: no cambian lo que lee el código (sí van a Sheets)
     case 'estilo': case 'anchoColumna': case 'validacion': case 'proteger': case 'recalculo': return 0;
@@ -234,14 +291,21 @@ function tipoDePatron(p) {
   return 'NUMBER';
 }
 
-/** Formato de número vigente de una celda (0-based): el último setNumberFormat que la cubre o el que tenía en Sheets. */
+const TEXTO_PLANO = Object.freeze({ tipo: 'TEXT', patron: '@' });
+/**
+ * Formato de número vigente de una celda (0-based): el último setNumberFormat que la cubre o el que tenía en Sheets (fechas
+ * por celda; texto plano por tramos). Más abajo de lo que vino de Sheets vale el de la última fila que vino (la "+1").
+ */
 function formatoDe(h, i, j) {
   const f = i + 1, c = j + 1;
   for (let k = h.formatosRango.length - 1; k >= 0; k--) {
     const x = h.formatosRango[k];
     if (c >= x.c && c < x.c + x.nc && f >= x.r && (x.abierto || f < x.r + x.nr)) return x;
   }
-  return h.formatos[clave(i, j)] || null;
+  const x = h.formatos[clave(i, j)];
+  if (x) return x;
+  if (enTexto(h, i, j) || (h.cargadas > 0 && i >= h.cargadas && enTexto(h, h.cargadas - 1, j))) return TEXTO_PLANO;
+  return null;
 }
 
 // ---- Fechas ↔ número de serie de Sheets (días desde 1899-12-30 en la zona horaria del libro) ----
@@ -306,7 +370,7 @@ function rangoA1(a1, filasMax) {
  * después de cada guardado costaría decenas de ms en el principal). revBase = revisión sobre la que se aplica.
  */
 function parcheDe(libro, revBase, idsHojas, borradas) {
-  return { id: libro.id, rev: libro.rev, revBase, titulo: libro.titulo, zona: libro.zona, version: libro.version, nombrados: libro.nombrados,
+  return { id: libro.id, rev: libro.rev, revBase, titulo: libro.titulo, zona: libro.zona, locale: libro.locale, version: libro.version, nombrados: libro.nombrados,
     orden: libro.hojas.map(h => h.id), hojas: libro.hojas.filter(h => idsHojas.has(h.id)), borradas: borradas || [] };
 }
 
@@ -328,13 +392,14 @@ function aplicarLibroOParche(espejo, x) {
   x.hojas.forEach(h => { if (!hojas.some(y => y.id === h.id)) hojas.push(h); });
   const orden = new Map(x.orden.map((id, i) => [id, i]));
   hojas.sort((a, b) => (orden.has(a.id) ? orden.get(a.id) : 1e9) - (orden.has(b.id) ? orden.get(b.id) : 1e9));
-  espejo.set(x.id, Object.assign({}, local, { rev: x.rev, titulo: x.titulo, zona: x.zona, version: x.version, nombrados: x.nombrados, hojas }));
+  espejo.set(x.id, Object.assign({}, local, { rev: x.rev, titulo: x.titulo, zona: x.zona, locale: x.locale || local.locale,
+    version: x.version, nombrados: x.nombrados, hojas }));
   return true;
 }
 
 module.exports = {
   parcheDe, aplicarLibroOParche,
   clave, nuevaHoja, nuevoLibro, ultimaFila, ultimaColumna, leer, leerFormulas, leerVisibles, textoVisible, interpretar,
-  aplicar, hojaPorId, tipoDePatron, formatoDe, serialDesdeFecha, fechaDesdeSerial, desfase, columnaANumero,
+  contextoCelda, enTexto, marcarTexto, recorrerTexto, aplicar, hojaPorId, tipoDePatron, formatoDe, serialDesdeFecha, fechaDesdeSerial, desfase, columnaANumero,
   numeroAColumna, rangoA1, vacio,
 };
