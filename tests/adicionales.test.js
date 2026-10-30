@@ -411,6 +411,21 @@ ok('leo', 'anular', pE, 'Proyecto duplicado por error', id('a'));
 assert.equal(H('Adicionales').find(x => x[1] === adE)[7], 'Anulada');
 assert(!ok('ana', 'bootstrap').proyectosFirmados.some(p => p.folio === pE), 'ya no sale para cotizar');
 
+// Proyecto Cerrado: ya no se cotiza, pero una adicional ya cotizada sí se acepta; Cancelado: nada
+const pKo = pry('Kiosco', 'Cliente K'), pK = pKo.folio, cK = cotizar(pK, 100).folio;
+ok('tania', 'marcarAceptada', pK, cK, true); ok('tania', 'firmarContrato', pK, HOY_ISO);
+const adK = cotizar(pK, 40, { adicional: true }).folio, adK2 = cotizar(pK, 30, { adicional: true }).folio;
+const filaK = libros.DB.pest.Proyectos.m.find(x => x[0] === pK);
+filaK[6] = 'Cerrado';
+cotFalla(pK, 10, { adicional: true }, /está cerrado/, 'PROYECTO');
+assert.equal(ok('tania', 'aceptarAdicional', pK, adK).adicionales.length, 1, 'Cerrado: se acepta');
+filaK[6] = 'Cancelado';
+falla('tania', 'aceptarAdicional', [pK, adK2], /está cancelado/);
+falla('tania', 'guardarEsquemaAdicional', [pK, adK, [{ etapa: 'A', porcentaje: 100 }]], /está cancelado/);
+falla('tania', 'cancelarAdicional', [pK, adK, 'motivo suficiente'], /está cancelado/);
+v = vista(pK);
+assert.deepEqual([v.puedeAceptarAdicional, v.adicionales[0].esquemaEditable, v.adicionales[0].puedeCancelar, v.adicionales[0].fechasEditables], [false, false, false, false]);
+filaK[6] = 'Activo';
 
 // ================= 3. Interfaz (app + mod-adicionales, conectada al servidor simulado) =================
 const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
