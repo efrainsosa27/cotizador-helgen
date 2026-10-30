@@ -1,8 +1,17 @@
 # CAPRI — Etapa 1: servidor propio con los mismos Sheets y Drive
 
 Diseño técnico y prototipo (rama `servidor-etapa-1`, 29/10/2026). Plan aprobado por Leo el 28/10: en la etapa 1 solo se
-muda la API; Sheets y Drive se quedan; la interfaz solo cambia la dirección a la que llama. Servidor: el de
-`git.helgen.online` (el mismo de `drogheda.helgen.online`), decidido por Leo el 29/10.
+muda la API; Sheets y Drive se quedan; la interfaz solo cambia la dirección a la que llama. Servidor: **helgensrvr** (el
+mismo de `drogheda.helgen.online` y `git.helgen.online`; Ubuntu 26.04 LTS, 64 núcleos, 60 GiB, Docker 29.7.2, sin Node),
+decidido por Leo el 29/10. `capri.helgen.online` → 177.245.114.6 (esa máquina) desde el 29/10.
+
+**Decidido (29/10):** solo el programa se muda, **en Docker detrás de nginx** en `capri.helgen.online`; Google Sheets sigue
+siendo el almacén de registros en la etapa 1 (PostgreSQL en la etapa 2); los archivos se quedan en Drive para siempre; las
+pantallas siguen en Cloudflare (cambia `API_URL` el día del cambio). Identidad: **token OAuth de facilities@** de una app
+Interna, en dos tokens (§7); **nunca** una llave de cuenta de servicio. Efrain está de acuerdo.
+
+**Para operar:** Google paso a paso → [`servidor-google-paso-a-paso.md`](servidor-google-paso-a-paso.md); comandos en
+orden (Gibran / Leo / verificación) → [`servidor-comandos.md`](servidor-comandos.md).
 
 > **En una frase.** `Code.js` corre **sin cambios** en un servicio de Node: cada petición entra a un trabajador (hilo) que
 > tiene `Code.js` cargado con una imitación síncrona de los servicios de Apps Script; las lecturas salen de una copia en
@@ -13,7 +22,7 @@ muda la API; Sheets y Drive se quedan; la interfaz solo cambia la dirección a l
 Contenido: [1 Resumen](#1-resumen) · [2 Arquitectura](#2-arquitectura) · [3 El problema síncrono](#3-el-problema-síncrono-y-la-estrategia-elegida) ·
 [4 Servicios de Apps Script](#4-cada-servicio-de-apps-script-y-su-reemplazo) · [5 Consistencia, concurrencia y fallas](#5-consistencia-concurrencia-y-fallas) ·
 [6 Sesión](#6-sesión-verificación-local-del-token-de-google-y-sesiones-capri) · [7 Identidad de Google del servidor](#7-identidad-de-google-del-servidor) ·
-[8 Secretos](#8-secretos) · [9 Script Properties](#9-script-properties--archivo-json) · [10 Despliegue](#10-despliegue-en-el-servidor-de-drogheda) ·
+[8 Secretos](#8-secretos) · [9 Script Properties](#9-script-properties--archivo-json) · [10 Despliegue](#10-despliegue-en-helgensrvr-docker-detrás-de-nginx) ·
 [11 Memoria y CPU](#11-presupuesto-de-memoria-y-cpu) · [12 Sombra, cambio y regreso](#12-corrida-de-sombra-cambio-y-regreso) ·
 [13 Costura en Code.js](#13-costuras-en-codejs) · [14 Riesgos](#14-riesgos-y-desconocidos) · [15 Lo que falta](#15-lo-que-falta-hasta-la-corrida-de-sombra) ·
 [16 Pruebas](#16-pruebas-y-cómo-correrlas)
@@ -26,6 +35,8 @@ Contenido: [1 Resumen](#1-resumen) · [2 Arquitectura](#2-arquitectura) · [3 El
 |---|---|
 | **Estrategia** | (c) híbrida: **memoria primero + diario por libro confirmado al soltar el candado + puente síncrono** para lo que `Code.js` usa al instante. Detalle y números en §3. |
 | **Code.js** | Sin cambios para el servidor. Una costura opcional para el cambio: `API_MUDADA` (§13). |
+| **Despliegue** | Contenedor Docker (`servidor/Dockerfile`, `servidor/docker-compose.yml`) solo en `127.0.0.1:8090`, detrás de nginx con certbot (§10). Sin Node ni systemd en el servidor. |
+| **Escritura** | Lo que Code.js escribe queda en Sheets como lo dejaría Apps Script (entrada USER_ENTERED: números, fechas, `'`, `+52…`, fórmulas, booleanos), según el locale del libro y el formato de la celda (§4.4). |
 | **Interfaz** | Solo `API_URL` → `https://capri.helgen.online/api`. Mismo contrato que `doPost` (POST `text/plain`, `{funcion, args, token}` → `{ok, datos \| error, codigo}`). |
 | **Paridad** | El escenario bootstrap → requisición → autorizar → pagar → recibir (31 llamadas, 8 con error esperado) da **respuestas idénticas** por el arnés directo y por HTTP contra el servidor; también hojas, archivos, carpetas (con su acceso) y correos. |
 | **Tiempo en el proceso** | 1–35 ms por llamada sin red (el arnés directo: 0.2–8 ms). Con Google simulado: lecturas p50 2 ms / p95 5 ms aun con 3 guardados a la vez; un guardado 2.3–3.6 s, dominado por las llamadas a Google. |
@@ -38,10 +49,10 @@ Contenido: [1 Resumen](#1-resumen) · [2 Arquitectura](#2-arquitectura) · [3 El
  Navegador (interfaz en Cloudflare, igual que hoy; solo cambia API_URL)
         │ POST text/plain {funcion, args, token}
         ▼
- nginx  capri.helgen.online :443  (certbot, límite por IP, 50 MB, respuestas JSON si el servicio se reinicia)
-        │ 127.0.0.1:8090
+ nginx  capri.helgen.online :443  (certbot, CORS solo Cloudflare, límite por IP, 50 MB, JSON si el servicio se reinicia)
+        │ 127.0.0.1:8090 (Docker publica solo ese puerto del servidor)
         ▼
-┌──────────────────────────── servicio capri (Node, systemd) ────────────────────────────┐
+┌──────────────── contenedor capri (Docker; Node 22, Chromium; usuario 10001, raíz de solo lectura) ────────────────┐
 │ HILO PRINCIPAL (asíncrono)                                                              │
 │  http.js ── pool.js (cola; siempre deja un trabajador para lecturas; corte a los 120 s)  │
 │  candado.js       el candado de script (uno, en orden de llegada)                       │
@@ -84,16 +95,18 @@ llamada) y por Drive si `Code.js` lo pide.
 
 | Archivo | Qué hace |
 |---|---|
-| `src/index.js`, `src/servicio.js`, `src/http.js` | Arranque con `/etc/capri/capri.json`, armado del servicio, contrato HTTP de `doPost`, CORS, `/salud`. |
+| `src/index.js`, `src/servicio.js`, `src/http.js` | Arranque con `/etc/capri/capri.json` (en el contenedor; `CAPRI_HOST`/`CAPRI_PUERTO` lo ajustan), armado del servicio, contrato HTTP de `doPost`, CORS, `/salud`. |
 | `src/pool.js`, `src/trabajador.js`, `src/puente.js` | Trabajadores, contexto de `vm` con `Code.js`, puente síncrono (`Atomics.wait` + `receiveMessageOnPort`). |
 | `src/fachada/*.js` | Los servicios de Apps Script (síncronos) sobre el espejo y el puente. |
-| `src/espejo/modelo.js` | Modelo de un libro, operaciones del diario, fechas ↔ número de serie, A1, parches con revisión. |
+| `src/espejo/modelo.js` | Modelo de un libro (con su locale y el formato de texto plano por tramos), operaciones del diario, fechas ↔ número de serie, A1, parches con revisión. |
+| `src/espejo/entrada.js` | Cómo guarda Sheets lo que escribe Apps Script (USER_ENTERED), §4.4. |
 | `src/nucleo/*.js` | Candado, espejo canónico, almacenes, identidad, Drive con memoria, salida HTTP, correo, PDF, activadores, registro. |
 | `src/backends/google/*.js` | Sheets (carga acotada, diario → `batchUpdate`, lectura de regreso), Drive, Gmail, credenciales. |
 | `src/backends/memoria.js` | Google simulado con la semántica de `tests/arnes.js` (paridad) y latencia opcional (mediciones). |
-| `herramientas/` | `autorizar.js` (token de facilities@), `sombra.js` (corrida de sombra), `propiedades.js` (importar/comparar). |
-| `despliegue/` | `capri.service`, `nginx-capri.helgen.online.conf`, `revisar-servidor.sh`, `preparar-servidor.sh`, `actualizar.sh`. |
-| `pruebas/` | Unidades, adaptadores de Google con HTTP simulado, identidad, paridad, comportamiento, sombra; `medir.js`. |
+| `Dockerfile`, `docker-compose.yml`, `/.dockerignore` | La imagen (etapas `deps`, `app`, `pruebas`) y cómo corre (§10.2). |
+| `herramientas/` | `autorizar.js` (tokens de facilities@), `sombra.js` (corrida de sombra), `propiedades.js` (importar de Drive o de un archivo, comparar), `admin.js` (salud y "Ejecutar" dentro del contenedor), `paridad-escritura.js` (la tabla de escritura contra Apps Script real). |
+| `despliegue/` | `nginx-capri.helgen.online.conf` + `nginx-capri.sh` (certificado, aplicar, probar, deshacer), `revisar-servidor.sh`, `preparar-servidor.sh`, `actualizar.sh`. |
+| `pruebas/` | Unidades, escritura (tabla de paridad), puentes del incremento 7, adaptadores de Google con HTTP simulado, identidad, paridad, comportamiento, sombra; `medir.js`. |
 
 ## 3. El problema síncrono y la estrategia elegida
 
@@ -152,8 +165,8 @@ reescribir `Code.js` en todos los puntos con archivos, permisos, PDF y avisos.
 
 | Apps Script | En el servidor | Notas de comportamiento |
 |---|---|---|
-| `SpreadsheetApp` (`openById`, `create`, `flush`, `newDataValidation`, `RecalculationInterval`) · `Spreadsheet` · `Sheet` · `Range` · `TextFinder` · `Protection` | `fachada/hojas.js` sobre el espejo local; escrituras al diario; `backends/google/hojas.js` | Leer: memoria. `getValues` da `''`, número, texto, booleano o `Date` (un número con formato de fecha/hora en Sheets se vuelve `Date`, como en Apps Script). `getDisplayValues`: el texto que manda Sheets. `getFormulas`: la fórmula; su valor es el último que calculó Sheets. `setValues` revisa dimensiones (mismos mensajes que Apps Script). `setValue` en un rango llena todo el rango. `flush()` no hace nada: confirmar al soltar el candado da la misma garantía con menos viajes. `create()` crea el libro en el momento (es como lo usa `Code.js`). |
-| Texto que se escribe | `modelo.interpretar` | La regla que ya documenta §6.2 y reproduce el arnés: apóstrofo al inicio = texto literal; `aaaa-mm-dd[ hh:mm[:ss]]` = fecha (con formato de fecha); `=` = fórmula. **Todo otro texto se guarda como texto** (Apps Script convertiría "123" en número o "3/4" en fecha). Ver riesgo R1. |
+| `SpreadsheetApp` (`openById`, `create`, `flush`, `newDataValidation`, `RecalculationInterval`) · `Spreadsheet` · `Sheet` (`deleteRow(s)`, `getDataRange`…) · `Range` (`getNumberFormat`…) · `TextFinder` · `Protection` | `fachada/hojas.js` sobre el espejo local; escrituras al diario; `backends/google/hojas.js` | Leer: memoria. Más de 50 000 caracteres en una celda lanza el error de Apps Script y no escribe nada. `getValues` da `''`, número, texto, booleano o `Date` (un número con formato de fecha/hora en Sheets se vuelve `Date`, como en Apps Script). `getDisplayValues`: el texto que manda Sheets. `getFormulas`: la fórmula; su valor es el último que calculó Sheets. `setValues` revisa dimensiones (mismos mensajes que Apps Script). `setValue` en un rango llena todo el rango. `flush()` no hace nada: confirmar al soltar el candado da la misma garantía con menos viajes. `create()` crea el libro en el momento (es como lo usa `Code.js`). |
+| Texto que se escribe | `espejo/entrada.js` (§4.4) | Como Apps Script (USER_ENTERED): número, fecha, hora, booleano, fórmula o texto según el locale del libro y el formato de la celda; apóstrofo = texto; en celdas "@" solo la fecha ISO se convierte. Tabla de 49 casos con su fuente; riesgo R1. |
 | `Date` que se escribe | Número de serie en la zona del libro + formato `yyyy-mm-dd hh:mm:ss` solo si la celda no tenía ya formato de fecha | Así la columna "Fecha" de Cotizaciones (`dd/MM/yyyy HH:mm`) conserva su formato. |
 | `DriveApp` · `Folder` · `File` · iteradores | `fachada/drive.js` → `nucleo/servicios.js` (memoria de 60 s para búsquedas por nombre) → Drive API v3 | Mismas ligas que Apps Script (`…/file/d/ID/view?usp=drivesdk`, `…/drive/folders/ID`, `docs.google.com/spreadsheets/d/ID/edit`). `getFoldersByName` incluye los de la Papelera (Code.js los filtra con `isTrashed`). `setSharing` lanza "Access denied: DriveApp." como hoy en helgen.tech (`Code.js` usa `privado_`). |
 | `LockService.getScriptLock` | `fachada/transaccion.js` + `nucleo/candado.js` | Uno para todo el servicio, en orden de llegada, reentrante dentro de una petición. `tryLock(ms)` espera hasta `ms`; `waitLock` lanza "Lock timeout…". Al soltar: confirmación (§5). Si `Code.js` no lo suelta, se suelta al terminar la petición (como Apps Script). |
@@ -161,16 +174,17 @@ reescribir `Code.js` en todos los puntos con archivos, permisos, PDF y avisos.
 | `PropertiesService.getScriptProperties` | `nucleo/almacen.js` → `/var/lib/capri/propiedades.json` (600) | Igual que caché: dentro del candado se aplica con la confirmación (un `CONSECUTIVO_*` no avanza si la fila no llegó). Cada cambio se escribe a disco (temporal + `fsync` + renombrar) antes de contestar. §9. |
 | `UrlFetchApp.fetch` | `fachada/servicios.js` → `nucleo/servicios.js` (`crearSalida`) | Tres caminos: `oauth2.googleapis.com/tokeninfo` → verificación local (§6); `*.googleapis.com` con el token de `ScriptApp.getOAuthToken()` → la credencial del servidor (`privado_`); lo demás (centro de mando, API de Claude) → red. Respeta `muteHttpExceptions` (mismo mensaje de error), `followRedirects`, `payload` texto/bytes/formulario, `getContent()` con bytes con signo. |
 | `MailApp.sendEmail` / `getRemainingDailyQuota` | Gmail API `users.messages.send` como facilities@ (`backends/google/correo.js`) | MIME multipart (texto + HTML), nombre "CAPRI Helgen", `Reply-To`, encabezados UTF-8, sin saltos de línea inyectables. Cuota: 1,500 destinatarios por día (como MailApp), contada por el servicio en `estado.json`. |
-| `Utilities` | `fachada/servicios.js` | `formatDate` como `SimpleDateFormat` con zona; `newBlob`; base64 (web-safe con relleno, como Apps Script); `computeDigest`/`computeHmac*` con bytes con signo; `getUuid`; `sleep` (bloquea solo al trabajador); `parseCsv`. |
+| `Utilities` | `fachada/servicios.js` | `formatDate` como `SimpleDateFormat` con zona; `newBlob`; base64 (web-safe con relleno, como Apps Script); `computeDigest`/`computeHmac*` con bytes con signo; `getUuid`; `sleep` (bloquea solo al trabajador); `parseCsv`; **`unzip`** (incremento 7: carpetas incluidas, bytes con signo, "stored" y "deflate", CRC; tope de 60 MB inflados por llamada y cada archivo inflado con tope = su tamaño declarado, así un ZIP bomba no tumba el proceso; tipo MIME por extensión). |
 | `Blob.getAs('application/pdf')` | Chromium sin interfaz con `puppeteer-core` (`MotorPdf`) | §4.1. |
 | `Session` | `getActiveUser()` vacío (como `ANYONE_ANONYMOUS`; el usuario sale del token); `getEffectiveUser()` = facilities@ | |
-| `ScriptApp` (`getOAuthToken`, `newTrigger`, `getProjectTriggers`, `deleteTrigger`) | Token marcador (nunca el real dentro de `Code.js`); activadores en `/var/lib/capri/estado.json`, corridos por el servicio | `cadaQuinceMinutos` → un temporizador del servicio: viene declarado en la configuración (`activadoresFijos`) y corre cada 15 min como un trabajo más (límite 5 min; si la anterior sigue, se salta). `instalarActivadorPortal()` lo ve como suyo y no lo duplica. Las funciones del editor (`prepararCapri`, `asignarClavesProyectos`…) se corren con `POST 127.0.0.1:8090/admin/correr` (solo desde el servidor). |
+| `ScriptApp` (`getOAuthToken`, `newTrigger`, `getProjectTriggers`, `deleteTrigger`) | Token marcador (nunca el real dentro de `Code.js`); activadores en `/var/lib/capri/estado.json`, corridos por el servicio | `cadaQuinceMinutos` → un temporizador del servicio: viene declarado en la configuración (`activadoresFijos`) y corre cada 15 min como un trabajo más (límite 5 min; si la anterior sigue, se salta). `instalarActivadorPortal()` lo ve como suyo y no lo duplica. El recordatorio semanal del incremento 7 vive dentro de `cadaQuinceMinutos`: le basta que corra (comprobado en `pruebas/puentes.test.js`) y que las propiedades persistan; el ciclo de 15 min cuenta desde el arranque del contenedor. Las funciones del editor (`prepararCapri`, `asignarClavesProyectos`…) se corren **dentro del contenedor**: `docker compose exec capri node herramientas/admin.js correr <función>` (por nginx o desde el servidor `/admin/correr` no existe). |
 | `ContentService` | `createTextOutput` / `setMimeType` | `doPost` regresa lo mismo; el servidor manda su texto. |
 | `HtmlService` | No existe (lanza error) | `Code.js` no lo usa (la interfaz vive en Cloudflare). |
 | `console` / `Logger` | Líneas JSON con el trabajo y la función | §4.3. |
 
 ### 4.1 PDF con Chromium
-`MotorPdf` abre **un** Chromium sin interfaz (`chrome-headless-shell` en `/opt/capri/chrome`) y una página por PDF (máx. 2 a
+`MotorPdf` abre **un** Chromium sin interfaz (`chrome-headless-shell` 156.0.8078.47 en `/opt/capri/chrome` dentro de la
+imagen: la versión exacta que pide puppeteer-core 25.16.0, revisada por una prueba; se abre en modo `headless: 'shell'`) y una página por PDF (máx. 2 a
 la vez), con **JavaScript apagado y sin red** (solo imágenes `data:`; todo lo demás se aborta), `setContent(html)` y
 `page.pdf({format: 'Letter', printBackground: false, margin 10 mm})`. `printBackground: false` imita al conversor de Google
 (no imprime fondos, §6.3), así el HTML de hoy sale igual. Si Chromium se cae, se vuelve a abrir. Fuentes: `fonts-liberation`
@@ -191,10 +205,38 @@ Una línea JSON por llamada en la salida estándar (journald):
 "confirmaciones", "operaciones", "entrada", "salida" (bytes), "trabajador"}`; además lo que escribe `Code.js` con
 `console.warn/log` (con la función y el trabajo), errores de confirmación, recargas por edición a mano, "deriva" de la
 reconciliación y cortes por tiempo. **Nunca** cuerpos, tokens, archivos ni montos.
-Consultas: `journalctl -u capri -o cat | jq -c 'select(.texto=="llamada") | {funcion, ms, rpc}'`; lentas:
+Docker las guarda (json-file, 5 × 10 MB). Consultas: `sudo docker logs capri 2>&1 | jq -c 'select(.texto=="llamada") | {funcion, ms, rpc}'`; lentas:
 `… | jq -c 'select(.texto=="llamada" and .ms > 1000)'`. Opcional: mandarlas a Grafana Loki con Vector como las de htracker.
-`curl -s 127.0.0.1:8090/salud` (solo en el servidor): trabajadores, cola, candado, libros cargados y su antigüedad,
-métricas de confirmaciones/fallas/recargas, cuota de correo, memoria.
+`sudo docker compose exec capri node herramientas/admin.js salud` (solo dentro del contenedor; desde fuera y por nginx solo
+`{"ok":true}`): trabajadores, cola, candado, libros cargados con su locale, zona y antigüedad, métricas de
+confirmaciones/fallas/recargas, cuota de correo, memoria. El HEALTHCHECK de la imagen usa lo mismo.
+
+### 4.4 Escritura como Apps Script (USER_ENTERED)
+Apps Script escribe con `setValue`/`setValues`/`appendRow` como si alguien tecleara en la celda: Sheets convierte el texto
+en número, fecha, hora, booleano o fórmula según el **locale del libro** y el **formato de la celda**. `spreadsheets.batchUpdate`
+(la llamada atómica del diario) no tiene `valueInputOption` —solo `values.update`/`values.batchUpdate`, que costarían otra
+llamada por libro y la atomicidad entre estructura y valores—, así que la conversión se hace en el trabajador al escribir
+(`espejo/entrada.js`): el código lee en la línea siguiente lo ya convertido (como en Apps Script) y el diario manda cada
+celda tipada (`numberValue`, `boolValue`, `formulaValue`, `stringValue`) con el formato que Sheets le pondría (fecha en una
+celda sin formato de fecha; `%`, `$`, miles, exponente). Cada operación anota `entrada: 'USER_ENTERED'` (setValue(s),
+appendRow) o `'RAW'` (setFormula(s), clearContent).
+
+Reglas en orden: (1) lo que no es texto pasa tal cual (un número en una celda de fecha se lee como Date); (2) apóstrofo =
+texto literal (`textoCelda`, `textoFecha_`); (3) celda en texto plano "@": queda texto, **salvo** la fecha ISO
+`aaaa-mm-dd[ hh:mm[:ss]]`, que Sheets sí convierte (observado en producción, CLAUDE.md §6.2); (4) `=` = fórmula; (5)
+booleano, número (separadores del locale, signo, `$`, `%`, miles bien agrupados, exponente, 15 cifras), fecha
+(`aaaa-mm-dd`, `aaaa/mm/dd`, `d/m/aaaa` o `m/d/aaaa` según el locale, año de 2 cifras, `d/m` sin año), fecha y hora, hora
+(`h:mm[:ss][ am/pm]`); (6) `+…`/`-…` que no es número = fórmula `=+…` (así `+52 442 644 5391` queda `#ERROR!`, regla 7);
+(7) lo demás, texto. El espejo sabe el locale de cada libro (`properties.locale`) y qué celdas son texto plano: las que
+vinieron de Sheets (por tramos de filas por columna) y las que Code.js formateó con `setNumberFormat('@')`; más abajo de lo
+cargado vale el formato de la última fila que vino.
+
+La tabla `pruebas/casos-escritura.js` (49 casos) dice de dónde sale cada resultado: documentación de la API de Sheets
+(USER_ENTERED), CLAUDE.md §6.2 y regla 7, `migrarConfig_`, la ayuda de "texto sin formato", o **supuesto** (14 casos:
+`VERDADERO`, `+5`, `3/4` sin año, años de 2 cifras, `=…` y `d/m/aaaa` en "@"…). `herramientas/paridad-escritura.js codigo`
+genera una función temporal de Apps Script con los mismos casos; `comparar` dice cuáles difieren del servidor
+(`servidor-comandos.md` E3). Fuera de la tabla (quedan texto en el servidor; Sheets podría convertirlos): meses con nombre
+("20 oct 2026"), horas ≥ 24 (duraciones), números entre paréntesis, monedas distintas de `$`.
 
 ## 5. Consistencia, concurrencia y fallas
 
@@ -246,8 +288,9 @@ que ya se estaba confirmando termina y la idempotencia lo devuelve al repetir (p
 visible); eso reemplaza lo que el trabajador supuso. Si una hoja cambió de estructura (fila borrada, insertada, hoja
 nueva), se relee completa hasta su última fila con datos.
 
-**Apagado.** `systemctl stop/restart` → deja de aceptar, espera hasta 30 s a lo que está en curso, guarda el caché.
-nginx contesta mientras tanto `{ok:false, codigo:"REINICIO", "CAPRI se está actualizando…"}`.
+**Apagado.** `docker compose stop/restart` (o el cambio de imagen de `actualizar.sh`) → `tini` le pasa SIGTERM al servicio:
+deja de aceptar, espera hasta 30 s a lo que está en curso, guarda el caché (Docker espera 45 s antes de matar). nginx
+contesta mientras tanto `{ok:false, codigo:"REINICIO", "CAPRI se está actualizando…"}`.
 
 **Estado global de `Code.js`.** En Apps Script cada ejecución empieza de cero; aquí el contexto se reutiliza. Revisado:
 las únicas variables globales que cambian (`VENDEDOR_`, `VERSIONES_`, `SIN_CACHE_`, `MEMO_`) se limpian al empezar y al
@@ -266,148 +309,141 @@ entre peticiones sin limpiarla ahí.
   (probado de punta a punta). El resultado sigue en caché 10 min como hoy. Ya no hay una llamada a Google por sesión.
 - Sesiones CAPRI de @helgen.services (`capri.…`): las verifica `Code.js` con `SESION_SECRETO`, que viaja con las Script
   Properties (§9). Mismo secreto = las sesiones abiertas siguen valiendo después del cambio.
-- CORS: solo los orígenes de `origenes` en la configuración (la interfaz de Cloudflare y la copia local de pruebas).
+- CORS: solo los orígenes de `origenes` en la configuración (en producción, solo la interfaz de Cloudflare). nginx además
+  rechaza (403 `ORIGEN`) una llamada que traiga `Origin` de otro sitio; sin `Origin` pasa (curl, la herramienta de sombra).
+  La interfaz manda POST `text/plain` (petición simple: el navegador no hace la consulta previa OPTIONS). Para el ensayo con
+  la interfaz local, agregar `http://127.0.0.1:8788` en `origenes` y en los dos `map` de nginx, y quitarlo después.
 
 ## 7. Identidad de Google del servidor
 
 Hoy la API corre como facilities@ (`USER_DEPLOYING`): lee y escribe los libros, crea archivos y manda correo como esa
-cuenta. El servidor debe hacer lo mismo.
+cuenta. El servidor hace lo mismo con **un permiso OAuth de facilities@ dado a una app Interna** de la organización
+helgen.tech (decidido el 29/10). **Nunca una llave de cuenta de servicio**: una cuenta de servicio con delegación en todo el
+dominio sería una llave maestra (podría leer el Drive y mandar correo como cualquier persona de helgen.tech) guardada en un
+servidor compartido con git y Drogheda. (El código aún sabe leer ese tipo de credencial; no se usa.)
 
-| | (i) Cuenta de servicio con delegación en todo el dominio | (ii) Token de facilities@ (app OAuth Interna) — **recomendada** |
-|---|---|---|
-| Qué es | Una llave JSON que puede hacerse pasar por **cualquier** usuario de helgen.tech en los alcances autorizados | Un permiso de facilities@ (refresh token) solo para su propia cuenta |
-| Si se filtra | Leer/escribir el Drive de cualquiera (leo@, efrain@…) y mandar correo como cualquiera | Lo que ya puede facilities@ (lo mismo que hoy puede la API de Apps Script) |
-| Vencimiento | No vence (rotar la llave a mano) | No vence por tiempo (app Interna); se revoca si cambia la contraseña de facilities@ **en tokens con Gmail**, si alguien quita el acceso o tras 6 meses sin uso |
-| Políticas de Google | Las organizaciones nuevas traen bloqueada la creación de llaves (`iam.disableServiceAccountKeyCreation`): hay que hacer una excepción | Requiere que el proyecto de Cloud sea de la organización helgen.tech (pantalla "Interna") |
-| Correos | Salen como facilities@ | Salen como facilities@ |
+| | Token de facilities@ (app OAuth Interna) |
+|---|---|
+| Qué puede hacer | Lo que ya puede facilities@: exactamente lo que hoy hace la API de Apps Script |
+| Alcances | `spreadsheets` + `drive` (un token) y `gmail.send` (otro token) |
+| Vencimiento | No vence por tiempo (app Interna). Google lo revoca si cambia la contraseña de facilities@ (**solo** el que tiene Gmail), si alguien quita el acceso o tras 6 meses sin uso |
+| Si se revoca | `salud` y el registro muestran `invalid_grant`; se repite la autorización de ese token y se reinicia (minutos) |
 
-**Recomendación: (ii)**, con **dos tokens**: uno con Sheets + Drive (`/etc/capri/google-facilities.json`) y otro solo con
-`gmail.send` (`/etc/capri/google-facilities-correo.json`). La llave de (i) en un servidor compartido (git, Drogheda) es una
-llave maestra del dominio; (ii) tiene exactamente el alcance que tiene hoy la API.
+**Dos tokens**: `/srv/capri/config/google-facilities.json` (Sheets + Drive) y `/srv/capri/config/google-facilities-correo.json`
+(solo `gmail.send`). Un cambio de contraseña de facilities@ apaga los correos, no CAPRI.
 
-**Pasos (ii)** — Leo como super admin de helgen.tech:
-1. Google Cloud Console → elegir o crear un proyecto **dentro de la organización helgen.tech** (IAM y administración →
-   Configuración muestra la organización). El proyecto del Client ID actual (`884526916417`) sirve si ya está en la
-   organización; si no, crear "capri-servidor" en la organización.
-2. APIs y servicios → Biblioteca → habilitar **Google Sheets API**, **Google Drive API** y **Gmail API**.
-3. Google Auth Platform → Público: **Interno**. Marca: nombre "CAPRI servidor", correo de soporte. (Si se usa el proyecto
-   del Client ID actual, pasarlo a Interno también cambia el inicio de sesión de CAPRI para bien: ya no hay lista de
-   usuarios de prueba, CLAUDE.md §10.1; las @helgen.services entran con código y no se afectan. Probar la entrada.)
-4. Acceso a datos → agregar alcances: `…/auth/spreadsheets`, `…/auth/drive`, `…/auth/gmail.send` (y `openid`, `email`).
-5. Clientes → Crear cliente → **App de escritorio** "capri-autorizar" → descargar el JSON (`client_secret_….json`). No va
-   al repositorio.
-6. Admin de Google (admin.google.com) → Seguridad → Acceso y control de datos → Controles de API → Administrar el acceso de
-   apps de terceros: si las apps no configuradas están restringidas, agregar la app por su Client ID como **De confianza**.
-7. En el servidor, con túnel desde la Mac (`ssh -L 8765:127.0.0.1:8765 leo@git.helgen.online`), dos veces, entrando
-   como **facilities@** en el navegador de la Mac:
-   ```bash
-   cd /srv/projects/capri/app/servidor
-   node herramientas/autorizar.js --cliente ~/client_secret.json --alcances hojas,drive --salida /tmp/google-facilities.json
-   node herramientas/autorizar.js --cliente ~/client_secret.json --alcances correo --salida /tmp/google-facilities-correo.json
-   sudo install -o root -g capri -m 640 /tmp/google-facilities*.json /etc/capri/ && rm /tmp/google-facilities*.json ~/client_secret.json
-   ```
-   La herramienta usa PKCE, revisa que la cuenta sea facilities@ y que se aceptaron todos los alcances.
-8. Si un día se revoca (cambio de contraseña): repetir el paso 7 (solo el de correo, si se usaron dos tokens) y
-   `sudo systemctl restart capri`. `/salud` y el registro muestran el error.
-
-**Pasos (i)** (si se prefiere):
-1. Mismo proyecto de Cloud; habilitar las tres API.
-2. IAM → Cuentas de servicio → Crear "capri-servidor" (sin roles). Copiar su **ID único** (numérico).
-3. Llaves → Agregar llave → JSON → `/etc/capri/google-sa.json` (root:capri 640). Si la política lo impide, un admin de la
-   organización agrega una excepción a `iam.disableServiceAccountKeyCreation` para el proyecto.
-4. admin.google.com → Seguridad → Acceso y control de datos → Controles de API → **Delegación de todo el dominio** →
-   Agregar: ID de cliente = el ID único; alcances:
-   `https://www.googleapis.com/auth/spreadsheets,https://www.googleapis.com/auth/drive,https://www.googleapis.com/auth/gmail.send`.
-5. Configuración: `"google": {"credenciales": "/etc/capri/google-sa.json", "sujeto": "facilities@helgen.tech"}`.
-6. Rotar la llave cada 90 días.
+**Pasos** (proyecto `capri-servidor` en la organización, tres API, consentimiento Interno, alcances, cliente "App de
+escritorio", app de confianza en Controles de API, y la autorización como facilities@ con `herramientas/autorizar.js`
+dentro del contenedor por un túnel SSH): [`servidor-google-paso-a-paso.md`](servidor-google-paso-a-paso.md), pasos 1–7.
+La herramienta usa PKCE, revisa que la cuenta sea facilities@ y que se aceptaron todos los alcances, y guarda el token con
+permisos 600. Se usa un proyecto de Cloud nuevo (no el del Client ID de la interfaz, `884526916417`): así el inicio de
+sesión de la interfaz no se toca.
 
 ## 8. Secretos
 
-| Qué | Dónde | Permisos |
-|---|---|---|
-| Tokens de Google (§7) | `/etc/capri/google-facilities.json`, `/etc/capri/google-facilities-correo.json` | root:capri 640 |
-| Script Properties (incluyen `SESION_SECRETO`, `PORTAL_SECRETO`, `ANTHROPIC_API_KEY`) | `/var/lib/capri/propiedades.json` | capri 600 (lo escribe el servicio) |
-| Caché (claves de idempotencia, huellas de códigos de entrada) | `/var/lib/capri/cache.json` | capri 600 |
-| Configuración (sin secretos) | `/etc/capri/capri.json` | root:capri 640 |
+Todo fuera del repositorio y de la imagen (el contexto de construcción es una lista blanca, `/.dockerignore`). En el
+servidor, dueño `capri` (UID/GID 10001 = el usuario del contenedor), carpetas 700, archivos 600:
 
-Nunca en el repositorio (`.gitignore` agrega `servidor/capri.json`, `google-*.json`, `propiedades*.json`). `Code.js` nunca ve
-el token real de Google (ve un marcador; el principal pone la credencial al salir a `googleapis.com`). El registro nunca
-lleva secretos. Rotar `PORTAL_SECRETO`: cambiarlo en el archivo y en `COTIZADOR_SECRETO` del centro de mando a la vez.
+| Qué | Dónde (servidor → contenedor) | Lo escribe |
+|---|---|---|
+| Configuración (sin secretos) | `/srv/capri/config/capri.json` → `/etc/capri/` (solo lectura) | `preparar-servidor.sh`; Gibran |
+| Tokens de Google (§7) | `/srv/capri/config/google-facilities.json`, `…-correo.json` → `/etc/capri/` (solo lectura) | `autorizar.js` |
+| Script Properties (incluyen `SESION_SECRETO`, `PORTAL_SECRETO`, `ANTHROPIC_API_KEY`) | `/srv/capri/datos/propiedades.json` → `/var/lib/capri/` | `propiedades.js` y el servicio |
+| Caché (claves de idempotencia, huellas de códigos de entrada), activadores, cuota de correo | `/srv/capri/datos/cache.json`, `estado.json` | el servicio |
+
+`Code.js` nunca ve el token real de Google (ve un marcador; el principal pone la credencial al salir a `googleapis.com`).
+El registro nunca lleva secretos. Ninguna herramienta imprime el valor de un secreto (`propiedades.js comparar` solo dice
+"distinto"). Rotar `PORTAL_SECRETO`: cambiarlo en el archivo (con el servicio detenido) y en `COTIZADOR_SECRETO` del centro
+de mando a la vez.
 
 ## 9. Script Properties → archivo JSON
 
 Recomendado **archivo** (no una hoja: una hoja expondría los secretos a sus editores y costaría llamadas). `Code.js` las
-lee igual (`PropertiesService`). Se exportan al momento del cambio (con `API_MUDADA` ya puesta, §12), como facilities@ en
-el editor de Apps Script, con una función **temporal que no se guarda en el repositorio**:
+lee igual (`PropertiesService`). Se copian dos veces: al empezar la sombra y la noche del cambio (con `API_MUDADA` ya
+puesta, §12). Como facilities@, en el editor de Apps Script, con una función **temporal que no se guarda en el
+repositorio** (archivo `temporal` que se borra al terminar):
 
 ```javascript
 function exportarPropiedadesTemporal() {
   const p = PropertiesService.getScriptProperties().getProperties();
   const f = DriveApp.createFile('capri-propiedades.json', JSON.stringify(p), 'application/json');
   privado_(f); // restringido (§6.11)
-  console.log('Archivo: ' + f.getUrl() + ' (bajarlo, copiarlo al servidor y mandarlo a la Papelera)');
+  console.log('ID para el servidor: ' + f.getId());
 }
 ```
 
-En el servidor: `node herramientas/propiedades.js importar capri-propiedades.json /var/lib/capri/propiedades.json` (quita
-`API_MUDADA` y avisa qué falta; el servicio **no arranca** si encuentra `API_MUDADA`). Notas: los `CONSECUTIVO_*` son
-seguros aunque estén atrasados (el folio es el mayor entre el contador y la hoja, §6.1); los `VER_*` del servidor pueden
-ser distintos de los del navegador sin problema (la consulta manda todo de nuevo); `SESION_DESDE_*` (sesiones CAPRI
-cerradas) hay que copiarlos de regreso si se regresa a Apps Script (`propiedades.js comparar`).
+En el servidor, con el servicio detenido: `docker compose run --rm capri node herramientas/propiedades.js importar-drive
+<ID> /var/lib/capri/propiedades.json --borrar`. Baja el archivo de Drive **como facilities@** (con el token del servidor),
+lo valida, quita `API_MUDADA`, lo escribe con permisos 600, avisa qué propiedad necesaria falta y lo **elimina de Drive
+definitivamente** (sin Papelera): los secretos no pasan por ninguna computadora ni por el chat. El servicio **no arranca**
+si encuentra `API_MUDADA`. Notas: los `CONSECUTIVO_*` son seguros aunque estén atrasados (el folio es el mayor entre el
+contador y la hoja, §6.1); los `VER_*` del servidor pueden ser distintos de los del navegador sin problema (la consulta
+manda todo de nuevo); `SESION_DESDE_*` (sesiones CAPRI cerradas) hay que copiarlos de regreso si se regresa a Apps Script
+(`servidor-comandos.md` G1).
 
-## 10. Despliegue en el servidor de Drogheda
+## 10. Despliegue en helgensrvr (Docker detrás de nginx)
 
-**10.1 Lo que Leo corre primero** (solo lee; `bash servidor/despliegue/revisar-servidor.sh | tee revision.txt`):
-```bash
-uname -a; lsb_release -d; nproc; free -h; df -h /srv; node -v; docker -v
-timedatectl; nginx -v; certbot --version; ss -ltnp | grep -E ':(80|443|8081|8090)\b'
-curl -s -o /dev/null -w '%{http_code} %{time_total}\n' https://sheets.googleapis.com/
-```
-El script además revisa librerías de Chromium y fuentes, DNS y que no exista ya el usuario `capri`.
+Comandos exactos y en orden: [`servidor-comandos.md`](servidor-comandos.md). Aquí, qué hace cada pieza y por qué.
 
-**10.2 Node.** Node 20 o 22 (LTS). Si no está: `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo
-apt-get install -y nodejs` (o el paquete de la distribución si es ≥ 20). Docker es **opcional**: el servicio no lo necesita;
-si Leo prefiere contenedor, la misma imagen `node:22-bookworm-slim` + las librerías de Chromium, con
-`/var/lib/capri` y `/etc/capri` como volúmenes y `--network host` (o publicar solo 127.0.0.1:8090). El diseño de abajo es
-con systemd, como `actas-hbox`.
+**10.1 Revisión** (`despliegue/revisar-servidor.sh`, solo lee): arquitectura, Docker y compose, nginx/certbot y los
+archivos de Let's Encrypt, puertos, firewall, DNS, salida a Google, Docker Hub, npm, Chrome for Testing y Debian, el centro
+de mando por su nombre, UID 10001 libre.
 
-**10.3 Una sola vez.**
-```bash
-sudo mkdir -p /srv/projects/capri && sudo chown leo:leo /srv/projects/capri
-git clone <repositorio> /srv/projects/capri/app        # GitHub con llave de despliegue, o el espejo de git.helgen.online
-cd /srv/projects/capri/app && git checkout servidor-etapa-1
-sudo bash servidor/despliegue/preparar-servidor.sh /srv/projects/capri/app
-#   usuario capri, /var/lib/capri (700), /etc/capri (750), librerías y fuentes, Chromium en /opt/capri/chrome,
-#   npm ci, /etc/capri/capri.json desde el ejemplo, servicio capri habilitado (sin arrancar)
-sudo editor /etc/capri/capri.json                       # google.credenciales, origenes, soloLectura: true para la sombra
-# credenciales (§7) y propiedades (§9)
-```
-**DNS:** registro `A` de `capri.helgen.online` a la IP de `drogheda.helgen.online` (o `CNAME` a `git.helgen.online`).
-**nginx + certbot:**
-```bash
-sudo cp servidor/despliegue/nginx-capri.helgen.online.conf /etc/nginx/sites-available/capri.helgen.online
-sudo ln -s /etc/nginx/sites-available/capri.helgen.online /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d capri.helgen.online
-sudo systemctl start capri && curl -s 127.0.0.1:8090/salud | jq '.trabajadores, .libros'
-curl -s https://capri.helgen.online/salud              # {"ok":true}
-```
-El bloque de nginx: 50 MB por llamada, 180 s de espera, límite 10 llamadas/s por IP (ráfaga 80; la oficina sale por una
-sola IP), respuestas JSON en español si el servicio se reinicia o se excede el límite (con CORS para que la interfaz pueda
-leerlas), `/salud` sin detalle desde fuera y 404 para todo lo demás. El servicio escucha solo en 127.0.0.1:8090.
+**10.2 La imagen y el contenedor.** El servidor no tiene Node: todo corre en la imagen.
+- `servidor/Dockerfile` (contexto = raíz del repositorio, lista blanca en `/.dockerignore`): `node:22.23.4-bookworm-slim`
+  (la versión con la que pasan las pruebas; LTS hasta abril de 2027), `npm ci --omit=dev`, Chrome for Testing
+  `chrome-headless-shell` 156.0.8078.47 bajado con el `@puppeteer/browsers` de `package-lock` (en arm64, el chromium de
+  Debian), librerías de Chromium, `fonts-liberation` y `tzdata`; revisa con `ldd` que no falte ninguna librería; usuario
+  10001 sin privilegios; `HEALTHCHECK` = `herramientas/admin.js salud` (sano = los trabajadores cargaron Code.js). Etapa
+  `pruebas`: la misma imagen + `tests/arnes.js` + `servidor/pruebas`, para correr las pruebas dentro de la imagen.
+- `servidor/docker-compose.yml`: publica **solo `127.0.0.1:8090`**; `restart: unless-stopped` (Docker la levanta con el
+  servidor: no hace falta systemd y se quitó `capri.service`); `init: true` (tini: recoge los procesos de Chromium y pasa
+  SIGTERM); raíz de solo lectura con `/tmp` en memoria; sin capacidades y `no-new-privileges`; 1200 MB de memoria; 45 s
+  para apagar; `/srv/capri/config` en solo lectura y `/srv/capri/datos`; bitácora json-file rotada (5 × 10 MB); y
+  `drogheda.helgen.online` apuntando a la puerta del servidor (`extra_hosts: host-gateway`): los avisos al centro de mando
+  van por el nginx de drogheda con su certificado, sin depender de que el ruteador regrese el tráfico a su propia IP
+  pública.
+- Dentro del contenedor el servicio escucha en `0.0.0.0` (`CAPRI_HOST`); el archivo de configuración se queda con
+  `127.0.0.1`. Como nginx y el servidor llegan por la red de Docker, para el servicio no son "locales": `/salud` les da solo
+  `{"ok":true}` y `/admin/correr` no existe; el detalle y "Ejecutar" solo con `docker compose exec` (requiere sudo/docker).
 
-**10.4 Unidad de systemd** (`despliegue/capri.service`): usuario `capri`, `TZ=America/Mexico_City`, reinicio automático,
-45 s para apagar en orden, `ProtectSystem=strict` (solo escribe en `/var/lib/capri`), `MemoryHigh=900M`, `MemoryMax=1200M`.
-Convive con `actas-hbox` (8081) sin compartir nada.
+**10.3 Una sola vez** (`despliegue/preparar-servidor.sh`, con sudo, idempotente): usuario y grupo `capri` 10001,
+`/srv/capri/{config,datos}` 700, `capri.json` desde el ejemplo **en solo lectura** (la primera corrida es la sombra) y la
+imagen construida con la etiqueta del commit (`servidor/.env`: `CAPRI_VERSION`, `CAPRI_CONFIG_DIR`, `CAPRI_DATOS_DIR`). No
+arranca nada ni toca nginx.
 
-**10.5 Actualizar** (`despliegue/actualizar.sh [rama]`, fuera de horario): `git fetch` → checkout → `npm ci` →
-`node --check Code.js` → **pruebas del servidor sin Google** (~25 s) → `systemctl restart capri` → espera a que `/salud`
-diga que los trabajadores están listos. Si algo falla antes o después, regresa solo a la versión anterior. Un cambio de
-`Code.js` ya no se publica con `clasp`: es un `git pull` + reinicio (§12.4 para lo que pasa con Apps Script).
+**nginx + certbot** (`despliegue/nginx-capri.sh`, con sudo; mismo estilo que `cambiar-entrada.sh` de drogheda: respaldo,
+`nginx -t`, pruebas y regreso automático):
+1. `certificado`: instala solo el bloque del puerto 80 (reto ACME en `/var/www/letsencrypt` + redirección a https) y corre
+   `certbot certonly --webroot -d capri.helgen.online --deploy-hook 'systemctl reload nginx'`. **Por qué webroot y no
+   `certbot --nginx`** (como drogheda): así certbot nunca edita el archivo de nginx de capri (el del repositorio es la fuente
+   completa) y la renovación no depende de cómo certbot entiende ese archivo. Misma renovación automática (`certbot.timer`).
+2. `aplicar`: el archivo completo — 80 (reto + redirección) y 443 → `127.0.0.1:8090` con los `options-ssl-nginx.conf` y
+   `ssl-dhparams.pem` que ya usa drogheda; CORS solo para `https://cotizador-helgen.cotizador-helgen.workers.dev` (otro
+   `Origin` → 403 JSON; el `map` va con expresión regular porque esa llave no cabe en `map_hash_bucket_size` y `nginx -t`
+   fallaba); 50 MB por llamada (un archivo de 10 MB en base64 son ~13.4 MB y una recepción trae varias fotos; igual que el
+   límite del servicio) con 413 → JSON `GRANDE`; 180 s de espera (el servicio corta a los 120 s; un PDF aquí tarda 0.3–0.8 s,
+   en Apps Script ~15 s); límite por IP como drogheda (10 llamadas/s, ráfaga 80, 429 → JSON `LIMITE`; la oficina sale por
+   una IP); 502/503/504 → JSON `REINICIO`; HSTS; `/salud` limitado; lo demás 404. Zonas y variables con prefijo `capri`.
+3. Antes y después compara la huella de `nginx.conf` y de los demás sitios habilitados: si cambiara alguno (no debe),
+   regresa. `probar` corre las pruebas sin cambiar nada; `deshacer` quita el sitio de capri.
+Probado aquí con nginx 1.24 junto con una copia del archivo de drogheda: `nginx -t` limpio, redirección, reto ACME, CORS,
+origen ajeno, 413, 429, reinicio, `/admin/correr` oculto.
 
-**10.6 Coexistencia con el centro de mando.** CAPRI y `drogheda.helgen.online` quedan en la misma máquina; `PORTAL_URL`
-puede seguir siendo `https://drogheda.helgen.online` (sale y entra por nginx). El límite `hbox_cotizador` de su nginx
-estaba pensado para "IPs de Google": ahora CAPRI llega desde la IP del propio servidor; revisarlo.
+**10.4 Actualizar** (`despliegue/actualizar.sh [rama]`, como dueño del repositorio, fuera de horario): `git fetch` →
+construye la etapa `pruebas` y corre **las pruebas del servidor dentro de la imagen nueva** (sin red, raíz de solo
+lectura; ~20 s) → construye la imagen final con la etiqueta del commit → cambia el contenedor → espera el `HEALTHCHECK`.
+Si algo falla antes del cambio, no se toca nada; si la nueva no queda sana, regresa sola a la anterior, borra la que falló
+y deja el repositorio donde estaba. `--regresar [etiqueta]` (a la construida justo antes de la que corre) y `--estado`. Se
+quedan las 5 imágenes más nuevas. Se corre desde una copia temporal de sí mismo (el `git checkout` lo cambiaría a media
+lectura). Probado aquí de punta a punta (cambio sano, arranque roto con regreso solo, `--regresar`). Un cambio de
+`Code.js` ya no se publica con `clasp`: es esto (§12.4 para Apps Script).
+
+**10.5 Coexistencia con el centro de mando.** CAPRI y `drogheda.helgen.online` quedan en la misma máquina sin compartir
+nada (el contenedor no ve `127.0.0.1:8081`). `PORTAL_URL` sigue siendo `https://drogheda.helgen.online`: los avisos llegan
+al nginx de drogheda desde la red de Docker (IP 172.x), así que la zona `hbox_cotizador` (pensada para las IP de Google)
+los cuenta por esa IP; holgada. La ruta `/api/integracion/` de drogheda debe estar abierta sin sesión (ya lo está en
+`hbox-docs/backend/nginx/drogheda.helgen.online.conf`, que instala `cambiar-entrada.sh aplicar`).
 
 ## 11. Presupuesto de memoria y CPU
 
@@ -427,8 +463,8 @@ Medido (`pruebas/medir.js`, `/salud`):
 | Chromium | 0 (cerrado) – 150 MB | 300 MB |
 | **Total** | **~350 MB** | **~800 MB** |
 
-CPU: cada llamada usa 1–35 ms de CPU; el resto es espera a Google. 2 vCPU sobran. Recomendado: ≥ 1 GB libre en el servidor
-(revisar con `free -h`); el servicio se limita a 1.2 GB.
+CPU: cada llamada usa 1–35 ms de CPU; el resto es espera a Google. helgensrvr (64 núcleos, 60 GiB) sobra; el contenedor
+se limita a 1.2 GB (`mem_limit` en `docker-compose.yml`) y 512 procesos. La imagen pesa ~400 MB (Node + Chromium + fuentes).
 
 Cuotas de Google (todas las llamadas son de facilities@; [límites de la API de Sheets](https://developers.google.com/sheets/api/limits),
 revisados el 29/10/2026): **60 lecturas y 60 escrituras por minuto por usuario por proyecto** (300 por proyecto), máximo
@@ -439,53 +475,56 @@ regreso de solo las filas tocadas mantienen las peticiones chicas.
 
 ## 12. Corrida de sombra, cambio y regreso
 
+Comandos exactos: [`servidor-comandos.md`](servidor-comandos.md) secciones D–G; lo de Google, en
+[`servidor-google-paso-a-paso.md`](servidor-google-paso-a-paso.md) pasos 8–13.
+
 ### 12.1 Corrida de sombra (solo lectura, con datos reales)
-1. Servidor con `"soloLectura": true` y las propiedades exportadas (sin `API_MUDADA`). En ese modo: las funciones que
-   escriben (`CAMBIOS_API`) contestan `SOLO_LECTURA`; si una lectura intenta escribir en Sheets (migraciones de
-   encabezados), se descarta y queda en el registro ("solo lectura: no se escribió…"); Drive no crea nada; no se mandan correos; las
-   llamadas externas (centro de mando, Claude) se bloquean; no corren activadores. Apps Script sigue siendo el único que
-   escribe; el servidor ve sus cambios en ≤ 60 s (sondeo).
-2. `CAPRI_TOKEN=<ID token de leo@>` (en la pestaña de CAPRI: `localStorage.getItem('cotizadorHelgenSesion')`, vale ~1 h) y
-   `node herramientas/sombra.js --apps https://script.google.com/macros/s/AKfycbwBjF7…/exec --servidor http://127.0.0.1:8090/api --reintentar --salida /var/lib/capri/sombra.json`.
-   Manda **solo** lecturas de una lista fija (21 funciones + detalles de requisiciones y proyectos reales) a los dos,
-   compara las respuestas (sin `versiones`, `sesionCapri`, tiempos) y mide cada una. Con `--reintentar`, lo distinto se
-   repite a los 75 s (puede ser alguien que guardó en ese minuto). Probado con dos servidores en memoria.
+1. Servidor con `"soloLectura": true` (así lo deja `preparar-servidor.sh`) y las propiedades importadas (sin `API_MUDADA`).
+   En ese modo: las funciones que escriben (`CAMBIOS_API`) contestan `SOLO_LECTURA`; si una lectura intenta escribir en
+   Sheets (migraciones de encabezados), se descarta y queda en el registro ("solo lectura: no se escribió…"); Drive no crea
+   nada; no se mandan correos; las llamadas externas (centro de mando, Claude) se bloquean; no corren activadores. Apps
+   Script sigue siendo el único que escribe; el servidor ve sus cambios en ≤ 60 s (sondeo).
+2. `herramientas/sombra.js` dentro del contenedor con el ID token de leo@ (`localStorage.getItem('cotizadorHelgenSesion')`
+   en la pestaña de CAPRI, vale ~1 h; se pasa por una variable de entorno que no queda en el historial). Manda **solo**
+   lecturas de una lista fija (21 funciones + detalles de requisiciones y proyectos reales) a los dos, compara las
+   respuestas (sin `versiones`, `sesionCapri`, tiempos) y mide cada una. Con `--reintentar`, lo distinto se repite a los 75 s
+   (puede ser alguien que guardó en ese minuto). Probado con dos servidores en memoria.
 3. Repetir con un usuario de cada rol (compras, cobranza, solo requisiciones, @helgen.services).
 4. **Criterio para el cambio:** todas iguales en 2 corridas en días distintos (o cada diferencia explicada), latencias
-   reales registradas, y un **ensayo con escritura** contra copias de los libros (los archivos PRUEBAS de CLAUDE.md §10.5,
-   servidor en modo normal con sus propias propiedades, interfaz local apuntando al servidor; las pruebas en el navegador
-   las hace Claude, regla 13) que cubra
+   reales registradas, la **tabla de escritura confirmada con Apps Script** (`paridad-escritura.js`, §4.4) y un **ensayo con
+   escritura** contra copias de los libros (los archivos PRUEBAS de CLAUDE.md §10.5, servidor en modo normal con sus propias
+   propiedades, interfaz local apuntando al servidor; las pruebas en el navegador las hace Claude, regla 13) que cubra
    cotización con PDF, requisición → OC → pago → recepción con fotos, cobranza y anular.
 
 ### 12.2 El cambio (una noche, ~30 min; un solo escritor)
+0. **Antes (días antes):** el `Code.js` publicado en Apps Script debe traer la costura `API_MUDADA` (§13). Esta rama ya
+   incluye el incremento 5 sin publicar: la costura sale publicada con el incremento 5 (o el que siga), con sus pasos de
+   siempre como facilities@ (CLAUDE.md §9). Sin la propiedad no cambia nada.
 1. Aviso al equipo; respaldo de los libros (como siempre, §2).
-2. Antes (una vez): publicar `Code.js` con la costura `API_MUDADA` en Apps Script (`clasp push` + nueva versión del
-   deployment, como facilities@). Sin la propiedad no cambia nada.
-3. **Apps Script deja de escribir:** en Script Properties de `1GsH8Dja…` poner `API_MUDADA = https://capri.helgen.online`.
+2. **Apps Script deja de escribir:** en Script Properties de `1GsH8Dja…` poner `API_MUDADA = https://capri.helgen.online`.
    Desde ese momento toda llamada (y el activador de 15 min) contesta "CAPRI se cambió a su servidor nuevo. Recarga la
    página…" sin escribir nada.
-4. Exportar las propiedades (§9) e importarlas en el servidor.
-5. `/etc/capri/capri.json`: `"soloLectura": false`; `sudo systemctl restart capri`; `curl -s 127.0.0.1:8090/salud` con los
-   trabajadores listos y `activadores: ["cadaQuinceMinutos"]` (viene declarado en `activadoresFijos` de la configuración;
-   en solo lectura no corre). Para correr a mano cualquier función del editor (como el botón "Ejecutar"):
-   `curl -s 127.0.0.1:8090/admin/correr -d '{"funcion":"cadaQuinceMinutos"}'` (solo desde el servidor; por nginx no existe).
-6. Interfaz: `API_URL = 'https://capri.helgen.online/api'` en `web/cotizador/index.html` y
-   `CLOUDFLARE_ACCOUNT_ID=badd8bca… npx --yes wrangler@4 deploy`.
-7. Revisión (Claude in Chrome con la sesión de Leo): entrar, Pendientes, una lectura de cada pestaña, un guardado de prueba
-   marcado como prueba (§5 del CLAUDE.md). Revisar el registro (`journalctl -u capri -f -o cat`).
+3. Exportar las propiedades e importarlas en el servidor con el servicio detenido (§9).
+4. `/srv/capri/config/capri.json`: `"soloLectura": false`; `docker compose up -d`; `admin.js salud` con los trabajadores
+   listos y `activadores: ["cadaQuinceMinutos"]` (viene declarado en `activadoresFijos` de la configuración; en solo lectura
+   no corre).
+5. Interfaz: `API_URL = 'https://capri.helgen.online/api'` en `web/cotizador/index.html` y
+   `CLOUDFLARE_ACCOUNT_ID=badd8bca60b008822a73ca24e983ff43 npx --yes wrangler@4 deploy`.
+6. Revisión (Claude in Chrome con la sesión de Leo): entrar, Pendientes, una lectura de cada pestaña, un guardado de prueba
+   marcado como prueba (§5 del CLAUDE.md). Revisar el registro (`sudo docker logs -f capri`).
 
 ### 12.3 Regreso (si algo sale mal)
-1. Servidor en `"soloLectura": true` y reinicio (deja de escribir; un solo escritor).
-2. `node herramientas/propiedades.js comparar exportadas.json /var/lib/capri/propiedades.json`: copiar a Apps Script los
-   `SESION_DESDE_*` nuevos (sesiones cerradas) y, si se quiere, `PORTAL_*`; `VER_*` y `CONSECUTIVO_*` no hace falta.
+1. Servidor en `"soloLectura": true` y `docker compose restart capri` (deja de escribir; un solo escritor).
+2. `propiedades.js comparar` contra un archivo vacío lista las `SESION_DESDE_*` (sesiones cerradas; no son secretos):
+   copiarlas a Apps Script. `VER_*` y `CONSECUTIVO_*` no hace falta.
 3. **Borrar `API_MUDADA`** en Apps Script: vuelve a atender y su activador a correr.
 4. Interfaz: `API_URL` de regreso al deployment de Apps Script y `wrangler deploy` (o `wrangler rollback`).
 Las claves de idempotencia del servidor no pasan a Apps Script: un doble clic justo en el regreso podría duplicar; hacerlo
 sin gente guardando.
 
 ### 12.4 Mientras dure la estabilización (2–4 semanas)
-Cada cambio de `Code.js` que se publique en el servidor también se sube a Apps Script (`clasp push` y nueva versión con
-`API_MUDADA` puesta): así el regreso corre el mismo código que entiende las mismas columnas.
+Cada cambio de `Code.js` que se publique en el servidor (`actualizar.sh`) también se sube a Apps Script (`clasp push` y
+nueva versión con `API_MUDADA` puesta): así el regreso corre el mismo código que entiende las mismas columnas.
 
 ## 13. Costuras en Code.js
 
@@ -505,13 +544,14 @@ exigiría subir otro código (y el regreso, volver a subir `Code.js`, publicar y
 regresar es una propiedad.
 
 Fuera de `servidor/` también cambiaron: `.gitignore` (credenciales y propiedades del servidor), `tests/todas.sh` (corre
-las pruebas del servidor si ya se instalaron sus dependencias) y `tests/mudanza.test.js`.
+las pruebas del servidor si ya se instalaron sus dependencias), `tests/mudanza.test.js` y `/.dockerignore`. La escritura
+USER_ENTERED, Docker y los puentes del incremento 7 (29/10) no tocaron `Code.js`.
 
 ## 14. Riesgos y desconocidos
 
 | # | Riesgo | Qué tan probable / qué pasa | Qué se hace |
 |---|---|---|---|
-| R1 | **Texto que parece número o fecha** ("123", "3/4", "20/10/2026") se guarda como texto; Apps Script lo convertía | Solo filas nuevas; una respuesta podría traer `"123"` donde antes venía `123`. La sombra no lo ve (solo lee) | El ensayo con escritura; revisar los puntos donde `Code.js` escribe texto del usuario sin `textoCelda`; si hace falta, emular la conversión de números en `modelo.interpretar` |
+| R1 | **Texto que parece número o fecha**: el servidor emula la conversión de Sheets (§4.4); 14 de los 49 casos de la tabla son supuestos, y el locale real de los libros no se ha visto | Una fila nueva podría quedar distinta de como la dejaba Apps Script (p. ej. `"3/4"` o `VERDADERO`). La sombra no lo ve (solo lee) | `paridad-escritura.js` con Apps Script real antes del cambio (`servidor-comandos.md` E3); `salud` muestra el locale de cada libro; el ensayo con escritura |
 | R2 | **PDF de Chromium ≠ conversor de Google** (fuentes, márgenes, saltos de página) | Visual; no se pudo probar aquí | Comparar 5–10 PDF reales lado a lado en el ensayo; ajustar margen/formato; `fonts-liberation` |
 | R3 | **Los adaptadores de Google se probaron contra respuestas con la forma documentada**, no contra Google | Diferencias de detalle (máscaras de campos, `responseRanges`, `values.batchGet`, `corpora` de Drive) | Primer contacto real = 1–2 días de ajuste (§15) |
 | R4 | **La paridad es contra el arnés**, no contra Apps Script real (el arnés no tiene `getParent`, `setFormula`… y el servidor sí, como Apps Script) | La sombra compara contra Apps Script real, pero solo lecturas | Ensayo con escritura en copias antes del cambio |
@@ -519,39 +559,47 @@ las pruebas del servidor si ya se instalaron sus dependencias) y `tests/mudanza.
 | R6 | Fórmulas que se recalculan solas (`GOOGLEFINANCE`) se ven hasta 10 min tarde | Tipo de cambio del catálogo | Reconciliación cada 10 min (se puede bajar para el catálogo) |
 | R7 | Escritura en dos libros: el segundo falla y el primero ya quedó | Raro (falla de Google a media operación) | Mensaje explícito; las claves de idempotencia no quedan; revisar a mano |
 | R8 | Cuota de Sheets por usuario: **60 escrituras/min** (facilities@) | Solo con ráfagas grandes | 1–3 `batchUpdate` por guardado; 429 con reintento |
-| R9 | Revocación del token (cambio de contraseña de facilities@) | Se apagan los correos (con token aparte) o todo | Token de correo aparte; alerta en `/salud`; §7 paso 8 |
+| R9 | Revocación del token (cambio de contraseña de facilities@) | Se apagan los correos (con token aparte) o todo | Token de correo aparte; `invalid_grant` en el registro; guía paso 11 |
 | R10 | Un solo servidor (también git y Drogheda): si se cae, se cae CAPRI | | Regreso a Apps Script en minutos (§12.3) |
 | R11 | Reinicios en cada actualización (5–15 s) | Error "se está actualizando" en la interfaz | Actualizar fuera de horario; idempotencia protege los reintentos |
 | R12 | Estado global nuevo en `Code.js` que no se limpie | Se mezclaría entre peticiones (en Apps Script no) | Regla del §5; revisión en cada incremento |
-| R13 | Chromium en Ubuntu 24.04 (AppArmor restringe espacios de usuario) | Se usa `--no-sandbox` | Páginas sin JavaScript ni red, HTML escapado por `Code.js` (`escaparHtml`) |
-| R14 | Memoria con cuerpos grandes a la vez (fotos de 20 renglones) | Pico de cientos de MB | Límite de 50 MB por llamada, `MemoryMax`, 3 trabajadores |
+| R13 | Chromium sin su sandbox dentro del contenedor (sin capacidades ni espacios de usuario) | Se usa `--no-sandbox` | Páginas sin JavaScript ni red, HTML escapado por `Code.js` (`escaparHtml`); el contenedor sin capacidades, usuario 10001 y raíz de solo lectura |
+| R14 | Memoria con cuerpos grandes a la vez (fotos de 20 renglones) | Pico de cientos de MB | Límite de 50 MB por llamada (nginx y servicio), `mem_limit` 1200 MB, 3 trabajadores; `unzip` con tope de 60 MB |
 | R15 | Pestañas abiertas con la interfaz vieja después del cambio | Ven "CAPRI se cambió… recarga" | Por diseño (`API_MUDADA`) |
 | R16 | La búsqueda global por nombre de Drive (`DriveApp.getFilesByName`, solo al importar el SAT) ve lo de facilities@ y lo compartido con ella | Solo en la importación del SAT | Correr esa importación en Apps Script o compartir los CSV con facilities@ |
-| R17 | Desconocidos del servidor: SO, RAM, Node, si es VPS o local, latencia real a Google | | §10.1 |
+| R17 | Latencia real a Google desde helgensrvr; si el puerto 80 llega desde Internet (certbot) | | `revisar-servidor.sh`; `nginx-capri.sh certificado` lo prueba |
 | R18 | Lo que se sabe de carpetas de Drive se recuerda 60 s: una carpeta mandada a la Papelera a mano se puede seguir usando ese minuto (Apps Script lo veía al instante) | Raro; el archivo quedaría en la Papelera | `driveTtlMs` más bajo si hace falta; las subcarpetas se reparan solas al siguiente guardado (§6.9) |
+| R19 | **La imagen no se construyó contra Docker Hub real** (aquí no hay salida a Docker Hub, Debian ni Chrome for Testing): se probó con una base de sustitución con el mismo Node, sin los paquetes de Debian ni Chromium | La primera construcción en helgensrvr puede fallar en `apt-get` o en la descarga de Chromium; nada más cambia | `preparar-servidor.sh` lo dice al momento; el `ldd` del Dockerfile detiene la construcción si falta una librería |
+| R20 | Node 22 termina su soporte en abril de 2027; la base no lleva digest fijo | | Subir a Node 24 (cambiar `NODE_IMAGE` y correr la etapa `pruebas`); fijar el digest que imprime `preparar-servidor.sh` |
+| R21 | Chrome for Testing solo existe para amd64 | Si helgensrvr fuera arm64, Chromium de Debian (otra versión) | `revisar-servidor.sh` muestra la arquitectura |
+| R22 | Lo que Apps Script hace al descomprimir (`Utilities.unzip`) y que no está documentado: tipo MIME de cada archivo | El incremento 7 debe decidir por el nombre del archivo, no por su tipo | Tipo por extensión (`.xml` → `application/xml`); anotado para el incremento 7 |
 
 ## 15. Lo que falta hasta la corrida de sombra
 
-**Lo que pone Leo** (≈ medio día suyo):
-1. La salida de `revisar-servidor.sh` (SO, RAM, CPU, disco, Node, Docker, nginx, certbot, salida a Google).
-2. DNS: `capri.helgen.online` → la IP de `drogheda.helgen.online`.
-3. Google: decidir (ii) [recomendado] o (i); hacer los pasos del §7 (proyecto en la organización, 3 API, pantalla Interna,
-   cliente de escritorio, app de confianza en Controles de API) y entrar como facilities@ para `autorizar.js`.
-4. Acceso al servidor para instalar (sudo) y de dónde clonar el repositorio (GitHub con llave de despliegue o el espejo
-   de `git.helgen.online`, que debe estar al día).
-5. El ID token de leo@ para la sombra (y uno de cada rol, o las pruebas las hace Claude con Chrome).
+**Listo en el repositorio (29/10):** imagen y `docker-compose.yml`, nginx + certbot con su script de instalación, scripts
+de revisión, preparación y actualización (con regreso), herramientas para tokens, propiedades, salud, sombra y la tabla de
+escritura; escritura USER_ENTERED; puentes del incremento 7. Probado aquí todo lo que no necesita Google real ni Docker Hub
+(§16 y R19).
+
+**Lo que pone Leo:**
+1. Pasos 1–6 de la guía de Google (proyecto en la organización, 3 API, pantalla Interna, permisos, cliente de escritorio,
+   app de confianza) y estar como facilities@ en el paso 7.
+2. Que Gibran tenga sudo en helgensrvr y acceso para clonar el repositorio (`ssh://git@git.helgen.online:222/leo/cotizador-helgen.git`
+   al día, o GitHub con una llave de despliegue).
+3. Su ID token para la sombra (y uno de cada rol, o las pruebas las hace Claude con Chrome).
+4. La función de la tabla de escritura en Apps Script (`servidor-comandos.md` E3).
 
 **Trabajo (días hábiles):**
 
 | Tarea | Días |
 |---|---:|
-| Instalar en el servidor (preparar, nginx, certbot, credenciales, propiedades) y primer arranque real | 0.5 |
+| Instalar en el servidor (revisar, preparar, nginx/certbot, tokens, propiedades) y primer arranque real | 0.5 |
 | Primer contacto con Google real: ajustar adaptadores (máscaras, rangos, Drive), cargar los 5 libros, medir | 1–1.5 |
 | Chromium real: PDF de cotización, OC y solicitud lado a lado con los de Google; ajustar | 0.5–1 |
-| Corrida de sombra: 2 rondas con todos los roles, corregir diferencias (fechas, visibles, orden, R1) | 1–2 |
+| Corrida de sombra: 2 rondas con todos los roles, corregir diferencias (fechas, visibles, orden); tabla de escritura con Apps Script | 1–2 |
 | Alertas mínimas (token revocado, fallas de confirmación, deriva) por correo o Mattermost | 0.5 |
 | **Total hasta una sombra limpia** | **≈ 4–6** |
-| Después: ensayo con escritura en copias + cambio (§12.1–12.2) | 1 + una noche |
+| Después: ensayo con escritura en copias + publicar la costura con el incremento 5 + cambio (§12.1–12.2) | 1 + una noche |
 
 ## 16. Pruebas y cómo correrlas
 
@@ -566,6 +614,16 @@ node --expose-gc pruebas/medir.js        # mediciones del §3 y §11 (LATENCIA=0
 | `pruebas/servidor.test.js` | Lecturas en paralelo a una escritura; dos escrituras en serie; Sheets que rechaza (error, nada a medias, folio sin gastar, repetir); edición a mano (sondeo, versiones, consulta; frescura al tomar el candado); corte por tiempo (también esperando el candado); solo lectura; HTTP (CORS, 404, 413, `/salud`, `/admin/correr` solo local); activadores declarados y de `Code.js`; caché y propiedades tras reiniciar. |
 | `pruebas/google.test.js` | Adaptadores de Sheets, Drive y Gmail contra HTTP simulado: carga acotada (fechas, fórmulas, errores, visibles, rangos con nombre), diario → `batchUpdate` (valores tipados, crecer cuadrícula, formatos, estilos, validación, protección, nombres, hoja nueva, borrar fila), lectura de regreso, 429 sí / 500 no, espejo canónico ante una falla, Drive (comillas, multipart, mover, personas, contenido), `privado_`, MIME de Gmail. |
 | `pruebas/identidad.test.js` | Verificación local del token (firma, emisor, audiencia, vencimiento, algoritmo, carga alterada) y de punta a punta con `Code.js`. |
-| `pruebas/unidades.test.js` | Modelo, A1, fechas ↔ serie (con horario de verano de 2022), parches, `formatDate`, base64, digests, CSV, `getAs` PDF, candado, motor de PDF con navegador falso. |
+| `pruebas/unidades.test.js` | Modelo, A1, fechas ↔ serie (con horario de verano de 2022), parches, texto plano por tramos, `formatDate`, base64, digests, CSV, `getAs` PDF, candado, motor de PDF con navegador falso, `Utilities.unzip` (ZIP de Python; carpetas, bytes con signo, bomba, tope de 60 MB), Chromium del Dockerfile = el de puppeteer-core. |
+| `pruebas/escritura.test.js` | La tabla de escritura (49 casos: números, fechas, horas, apóstrofo, `+52…`, fórmulas, booleanos, locale, formato de la celda) por el camino real hasta la `batchUpdate`; la fachada con texto plano cargado de Sheets y puesto por `setNumberFormat`; carga y lectura de regreso del locale y el texto plano; la función de Apps Script que genera `paridad-escritura.js` corre y `comparar` sale igual. |
+| `pruebas/puentes.test.js` | Lo que llama el incremento 7, en un trabajador real: Drive (`createFile` con Blob de bytes con signo, `getBlob`, `moveTo`, `setTrashed`), Utilities (base64, MD5 web-safe de texto y de Byte[], `formatDate` con los patrones que usa), Sheets (`deleteRows`, `getDataRange().getValues()`, fecha/apóstrofo/fórmula, límite de 50 000 caracteres), `unzip`; el activador de 15 min declarado se crea y corre. |
 | `pruebas/sombra.test.js` | La herramienta de sombra con dos servidores: iguales; una edición a mano sale como distinta. |
 | `tests/mudanza.test.js` | La costura `API_MUDADA`. |
+
+**Docker y nginx** (no son pruebas automáticas; así se probaron el 29/10, con una base de sustitución porque aquí no hay
+salida a Docker Hub): el Dockerfile real se construye y la etapa `pruebas` pasa las 8 pruebas dentro de la imagen como el
+usuario 10001 con la raíz de solo lectura; con el `docker-compose.yml` real: sano en 5 s, puerto solo en 127.0.0.1,
+`/salud` sin detalle y `/admin/correr` 404 desde fuera, CORS solo para Cloudflare, `EROFS` fuera de `/var/lib/capri` y
+`/tmp`, `drogheda.helgen.online` → la puerta del servidor, apagado en orden con tini; nginx 1.24 con el archivo de drogheda
+al lado (`nginx -t`, redirección, reto ACME, CORS, origen ajeno, 413/429/reinicio en JSON); `actualizar.sh` contra un origen
+de prueba (cambio sano, arranque roto con regreso solo, `--regresar`). `hadolint` y `shellcheck` sin observaciones.
