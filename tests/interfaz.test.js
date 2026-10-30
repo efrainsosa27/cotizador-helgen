@@ -708,7 +708,7 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   assert(/Otra persona cambió esta información/.test(avisoSync.innerHTML));
   avisoSync.querySelector('a').onclick({preventDefault(){}});
   assert(/PRY-2026-0001-TEC/.test(T.$('cobInfo').innerHTML),'con el clic se actualiza');
-  assert(/Costo de órdenes de compra/.test(T.$('cobMargen').innerHTML)&&/\$1,000\.00 MXN/.test(T.$('cobMargen').innerHTML)&&/Sin contrato/.test(T.$('cobMargen').innerHTML),
+  assert(/Costos del proyecto/.test(T.$('cobMargen').innerHTML)&&/Órdenes de compra \(1\)/.test(T.$('cobMargen').innerHTML)&&/\$1,000\.00 MXN/.test(T.$('cobMargen').innerHTML)&&/Sin contrato/.test(T.$('cobMargen').innerHTML),
     'sin contrato: costo de las órdenes y "Sin contrato"');
   // Clave del proyecto: se sugiere con el nombre y se puede editar (3 letras A–Z)
   T.$('npNombre').value='Casa del Lago'; T.$('npNombre').disparar('input');

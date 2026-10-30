@@ -335,7 +335,7 @@ assert.equal(ruta(comp.padre),'Mi unidad/Cotizador Helgen — Compras/'+ANIO+'/'
 assert.equal(comp.blob.name,REQ('0001')+' — Comprobante pago.pdf'); assert.equal(comp.acceso,'PRIVATE');
 falla('pedro','registrarPagoProveedor',[pago()],/está pagada: no se puede pagar/,'');
 falla('pedro','cancelarOrdenCompra',[OC('0001'),'Ya no se necesita'],/ya está pagada: no se puede cancelar/);
-assert.deepEqual(Object.keys(libros[props.COBRANZA_DB_ID].pest).sort(),['Adicionales','Bitacora','Contratos','Esquemas','Pagos'],'los pagos a proveedores no van a cobranza'); // Adicionales: incremento 7 (A)
+assert.deepEqual(Object.keys(libros[props.COBRANZA_DB_ID].pest).sort(),['Adicionales','Bitacora','Contratos','Esquemas','FacturasClientes','Pagos'],'los pagos a proveedores no van a cobranza'); // Adicionales y FacturasClientes: incremento 7 (A, C)
 assert.equal(libros[props.COBRANZA_DB_ID].pest.Pagos.m.length<=1,true,'ni se mezclan con PAG-');
 // El solicitante ve "Pagada" y la fecha, nunca el comprobante ni el monto
 mias=ok('obrero','misRequisiciones');
@@ -418,8 +418,8 @@ assert.deepEqual([!!bP.cob,!!bP.com,!!bP.req],[false,true,true],'pedro: compras 
 assert.deepEqual([!!bA.cob,!!bA.com,!!bA.req,bA.proyectos.length>0,bA.catalogo[0].precio],[false,false,false,true,4100],'ana: solo cotizar');
 assert.deepEqual([bL.soloRequisicion,!!bL.req,!!bL.com,!!bL.cob,bL.clientes.length,bL.proyectos.length,bL.tipoCambio],[true,true,false,false,0,0,null]);
 assert(!/Cliente Secreto|Empresa Oculta|4100|98765/.test(JSON.stringify(bL)),'SOLO_REQUISICION: sin clientes, precios ni montos');
-// adicionales y gastos (A, G); costosPersonal y horas (N): incremento 7
-assert.deepEqual(Object.keys(bE.versiones).sort(),['adicionales','anulaciones','catalogo','contratos','costosPersonal','cotizaciones','facturasProveedor','gastos','horas','oc','pagosCobranza','pagosProveedores','permisos','proyectos','requisiciones']);
+// adicionales y gastos (A, G); costosPersonal y horas (N); facturasClientes (C): incremento 7
+assert.deepEqual(Object.keys(bE.versiones).sort(),['adicionales','anulaciones','catalogo','contratos','costosPersonal','cotizaciones','facturasClientes','facturasProveedor','gastos','horas','oc','pagosCobranza','pagosProveedores','permisos','proyectos','requisiciones']);
 // Sin cambios: solo versiones y permisos (ninguna lista)
 let sP=ok('pedro','sincronizar',bP.versiones,{});
 assert.deepEqual([sP.cambios.length,'comRequisiciones' in sP,'reqProyectos' in sP,sP.permisos.compras],[0,false,false,true]);
