@@ -76,8 +76,11 @@ factura las ajuste con los nombres reales la primera vez.
    nueva a su proyecto y etapas (la sugerencia sale por el RFC del cliente y el monto).
 5. Cuando se cancele algo en CONTALINK, márcalo **Cancelada** en CAPRI (×, con motivo).
 
-Rechazos típicos: XML emitido por otra empresa (factura de proveedor: va en Compras), CFDI 3.3, tipo T o N, moneda distinta de MXN/USD,
-XML sin timbre o que no cuadra ("pide a quien factura en CONTALINK el XML correcto").
+Rechazos típicos: XML emitido por otra empresa (factura de proveedor: va en Compras), CFDI de Helgen a la misma Helgen (receptor =
+`EMPRESA_RFC`), CFDI 3.3, tipo T o N, moneda distinta de MXN/USD (en un complemento de pago: cada pago y cada documento que paga),
+XML sin timbre, que no cuadra o con una referencia a un carácter que no existe ("El XML no es válido…"), y un REP o una nota de
+crédito tan grande que no cabe en una celda (más de 45,000 caracteres: "pide que lo divida en varios CFDI"). Cada rechazo es solo de
+ese archivo: los demás del envío se importan.
 
 ## 2. Qué cambió
 
@@ -89,24 +92,31 @@ XML sin timbre o que no cuadra ("pide a quien factura en CONTALINK el XML correc
   cobranza o contratos); `preparar` (crea la pestaña si el libro de cobranza ya existe).
 - **API (todas con `exigirCobranza_`; el super admin tiene el rol):**
   - `importarFacturasClientes({archivos: [{nombre, datos}], idSolicitud})` → `{resultados (uno por archivo), conteos, lista}`. Límites:
-    60 archivos y 20 MB por envío; XML ≤ 2 MB (`validarXml`); PDF ≤ 10 MB (`validarArchivo`); ZIP ≤ 400 archivos y ≤ 60 MB
-    descomprimido; ZIP dentro de ZIP rechazado; 100 facturas nuevas por envío (las demás "Pendiente": volver a subir); a los 4 min ya no
-    se crean archivos (lo que falta queda "Pendiente"). Orden: I, luego E, luego P.
+    60 archivos y 20 MB por envío; XML ≤ 2 MB (`validarXml`); PDF ≤ 10 MB (`validarArchivo`); **por envío** (no por ZIP; revisión 7c,
+    §7): ≤ 60 MB descomprimido contando los sueltos (`MAX_DESCOMPRIMIDO`), ≤ 400 archivos (`MAX_ENTRADAS_ZIP`) y ≤ 1,000 entradas de ZIP
+    contando carpetas y basura (`MAX_ENTRADAS_ZIP_TODAS`), revisado con el índice del ZIP **antes** de inflarlo y otra vez con lo que
+    salió; ZIP dentro de ZIP rechazado; ninguna celda de más de 45,000 caracteres (por archivo, antes de crear nada); 100 facturas
+    nuevas por envío (las demás "Pendiente": volver a subir); a los 4 min ya no se crean archivos (lo que falta queda "Pendiente").
+    Orden: I, luego E, luego P. Todo archivo de Drive creado en la llamada que no quedó en un renglón va a la Papelera (`finally`).
   - `listarFacturasClientes()` → `vistaFacturasClientes` (en caché `FACCLI` por versión de `facturasClientes`, `proyectos`,
     `contratos`, `pagosCobranza`, `anulaciones`).
   - `ligarFacturaCliente({uuid, proyectoFolio, etapas: [{clave, monto?}], sinProyecto, desde})` → `{uuid, lista, vista?}`.
   - `cancelarFacturaCliente(uuid, motivo, desde)` → `{uuid, lista, vista?}` (Vigente → Cancelada; no se borra ni mueve nada).
-- **Internas:** `descomprimir_(blob)` (único uso de `Utilities.unzip`; devuelve `[{nombre, bytes}]`: el servidor de la etapa 1 solo tiene
-  que dar esta función), `carpetaFacturasCli_`, `archivoPrivado_`, `papeleraFacturas_`, `entradasDeZip_`, `contextoFacturasCli_`,
+- **Internas:** `descomprimir_(blob, limite)` (único uso de `Utilities.unzip`; devuelve `[{nombre, bytes}]` y lanza `zipExcedido` si lo
+  que sale pasa de `limite`: el servidor de la etapa 1 solo tiene que dar esta función, §6), `carpetaFacturasCli_`, `archivoPrivado_`,
+  `papeleraFacturas_`, `entradasDeZip_(nombre, bytes, entradas, previos, presupuesto)`, `contextoFacturasCli_`,
   `facturasClientesDelLibro_`, `facturaCliDesdeFila_`, `facturasDeVistaCobranza_`, `facturasCliParaPendientes_`, `colFacCli_`, `jsonDeCelda_`.
 - **Lógica pura (se prueba en Node):** `leerCfdiCliente` (= `leerCfdi` sin cambios + `relacionados` + `pagos` de Pagos 2.0; sin DTD
   ni entidades, solo atributos; errores "pide a quien factura en CONTALINK…" con `textoErrorCfdiCliente`), `validarFacturaCliente`,
-  `tipoArchivoFactura`, `nombreBaseArchivo`, `nombreArchivoFacturaCliente`, `prepararLoteFacturasCliente`, `resultadoRepetida`,
+  `tipoArchivoFactura`, `indiceZip` (directorio central del ZIP sin inflar), `esArchivoDeZip`, `recortarTexto`, `nombreBaseArchivo`,
+  `nombreArchivoFacturaCliente`, `prepararLoteFacturasCliente`, `soltarBytesNoUsados`, `pdfComoSuXml`, `datosFacturaCliente` (las celdas
+  que salen del CFDI, recortadas y con `textoCelda`), `resultadoRepetida`,
   `mensajeImportada`, `totalPagosRep`, `proyectoInicialFactura`, `filaFacturaCliente`, `claveEtapa`, `etapasParaFacturas`,
   `cobranzaParaFacturas`, **`calcularFacturasClientes`** (E, cobrado, REP, REP pendiente), **`facturasPorEtapa`** (contrato §1),
   `normalizarEtapasElegidas`, `armarLigaFactura`, `nombreFiscalNormal`, `sugerirLigaFactura`, `vistaFacturasClientes`,
   `bloqueFacturasDeProyecto`, `itemsFacturasCliPendientes`.
-- **No se tocó** nada de facturas de proveedor (`leerCfdi`, `validarFacturaProveedor`, `FacturasProveedor`, Cuentas por pagar).
+- **No se tocó** nada de facturas de proveedor (`leerCfdi`, `validarFacturaProveedor`, `FacturasProveedor`, Cuentas por pagar). La
+  revisión 7c sí cambió `atributosXml`, que comparten: con XML válido da lo mismo de antes (§7).
 
 ### Interfaz (`web/cotizador/index.html`, `<script id="mod-facturas">`, `window.FACTURAS_CLI`)
 - **Cobranza → resumen → "3 · Facturas de clientes (CFDI)"** (`#cobModFacturas`, tercer módulo de la vista; máximo 3): importar
@@ -172,6 +182,14 @@ cuentan, y una factura ligada a un proyecto anulado queda "Por revisar".
 También se probó que las pruebas fallan si se quita la revisión del emisor, la revisión dentro del candado, la regla de REP, la nota de
 crédito, el filtro de rol de Pendientes, `bootstrap` y `sincronizar`, `exigirCobranza_` o el movimiento de archivos.
 
+`tests/revision7-importar.test.js` (revisión 7c, §7; en `bash tests/todas.sh`): un caso por hallazgo. Se probó que falla con cada uno de
+estos 16 cambios por separado: sin índice antes de inflar, presupuesto por ZIP, sin medir después de inflar, sin soltar bytes, sin
+revisar celdas por archivo, sin Papelera en el `finally`, nombre sin `textoCelda` o sin recortar, sin monedas del REP, sin
+Helgen→Helgen, sin el error en español, decodificar en pasadas, sin UUID de relacionados, PDF de un XML fallido que dice "PDF", y en
+la interfaz el error oculto o sin aviso con la lista. Las pruebas de concepto de la revisión están en `tests/revision7/` (copias que
+ahora comprueban lo corregido; `bash tests/revision7/correr.sh`; `p9` necesita playwright con Chromium y deja sus capturas fuera del
+repositorio).
+
 ## 6. Publicar (con el resto del incremento 7)
 - **Sin permisos nuevos de Google**: `Utilities.unzip` no pide ninguno; `moveTo` y `setTrashed` usan el permiso de Drive que ya
   tiene la API; `privado_` ya usa `UrlFetchApp`.
@@ -180,3 +198,46 @@ crédito, el filtro de rol de Pendientes, `bootstrap` y `sincronizar`, `exigirCo
 - Respaldar el libro de cobranza antes (como siempre; §2 de `CLAUDE.md`).
 - Avisar a cobranza: dónde importar, que los REP pendientes salen en Pendientes y que una cancelación en CONTALINK se marca a mano.
 - **Fase B** (timbrar desde CAPRI) sigue fuera: necesita PAC y CSD.
+
+### Puente de la etapa 1 (servidor en Node)
+Lo que el puente tiene que dar para este módulo (y lo del incremento 7 que usa lo mismo), además de Sheets y `privado_` (UrlFetch a la API
+de permisos de Drive):
+- **`Utilities.unzip(blob)` con tope de salida**, detrás de `descomprimir_(blob, limite)`: devolver `[{nombre, bytes}]` (también las
+  carpetas, con "/") y **cortar al inflar** cuando lo que sale pase de `limite` (p. ej. `zlib.inflateRawSync(datos, {maxOutputLength:
+  lo que queda})`), lanzando un error con `zipExcedido = true`. En Apps Script no se puede: `Utilities.unzip` infla todo y solo después
+  se mide; por eso antes se revisa el índice (`indiceZip`) y un ZIP que miente en él se infla una vez antes de rechazarse. El puente
+  no debe heredar ese hueco.
+- **`File.setTrashed(true)`** (`papeleraFacturas_` y `archivoPrivado_`: lo creado que no quedó en un renglón va a la Papelera).
+- **`File.moveTo(carpeta)`** (al ligar una factura se mueven sus XML y PDF).
+- **`getBlob()` con `getName()`, `getContentType()` y `getBytes()`** (`archivoGasto` de G; el blob de cada entrada de `Utilities.unzip`
+  da `getName()` y `getBytes()`), y `Utilities.newBlob(bytes, mime, nombre)` + `Folder.createFile(blob)` para guardar.
+- **`Utilities.base64EncodeWebSafe(Utilities.computeDigest(MD5, …))`** (`md5Gasto_`, la huella de un gasto de G; mismo formato que
+  Apps Script: base64 con `-` y `_`, sin `=` al final después del `replace`).
+
+## 7. Revisión 7c: ruta de importación (rama `incremento-7-fix-importar`)
+Hallazgos de la revisión independiente (pruebas de concepto en `tests/revision7/`) y su arreglo; prueba: `tests/revision7-importar.test.js`.
+1. **ZIP (bomba y memoria).** Antes los límites se revisaban después de inflar todo y el de 60 MB era por ZIP. Ahora `indiceZip` lee el
+   directorio central sin inflar (entradas, tamaños declarados, ZIP64, descriptor de datos; rechaza índice roto, contraseña, varias
+   partes, método que no sea guardado/deflate, encabezado local que no cuadra, entradas encimadas) y `entradasDeZip_` rechaza sin
+   llamar a `Utilities.unzip` lo que no cabe en lo que le queda **al envío** (60 MB contando los sueltos, 400 archivos, 1,000 entradas).
+   Después de inflar vuelve a medir: si salió más de lo que decía el índice, el ZIP se rechaza entero. La basura del ZIP no se guarda,
+   `soltarBytesNoUsados` suelta al emparejar los bytes de lo que no se va a guardar (XML rechazados, PDF sin su XML, de más o
+   pendientes) y los demás se sueltan al pasar a Drive.
+2. **Un archivo malo ya no tumba el envío.** `datosFacturaCliente` arma (y `prepararLoteFacturasCliente` revisa por archivo, antes del
+   candado y antes de crear nada en Drive) las celdas que salen del CFDI: ninguna de más de 45,000 caracteres (también `pagos (JSON)` y
+   `relacionadas (JSON)`); los textos libres se recortan a los largos del SAT (`LARGO_CFDI_CLI`: nombre 254, serie-folio 70…). Los
+   renglones se arman fuera del candado; adentro solo se escribe. Todo archivo creado en la llamada (`creados`) que no quedó en un
+   renglón va a la Papelera en un `finally`: rechazado, repetido, el candado que no se tomó o una escritura que tronó. El PDF que venía
+   con un XML que no se guardó dice lo mismo que su XML (`pdfComoSuXml`), no "PDF".
+3. **Regla 7.** Todo texto del XML que va a la hoja pasa por `textoCelda` (serie-folio y forma de pago, con apóstrofo siempre). Un
+   complemento de pago solo con pagos y documentos en MXN o USD (su propia `Moneda`, XXX como pide el SAT; se acepta también MXN/USD); el
+   UUID de cada relacionado y de cada documento pagado, bien formado.
+4. **Helgen → Helgen.** Un CFDI cuyo receptor es el RFC de Helgen (Config `EMPRESA_RFC`) no se importa como factura de cliente
+   (I, E ni P), con su mensaje. El lado de gastos lo arregla su propia rama.
+5. **Referencias del XML** (`atributosXml`, compartido con proveedores y gastos): una sola pasada de izquierda a derecha ("&#38;lt;" →
+   "&lt;", no "<"); una referencia más allá de U+10FFFF o a una mitad de par sustituto → "El XML no es válido: trae una referencia a
+   un carácter que no existe (…)" (antes un RangeError en inglés). Con XML válido, lo mismo que antes (comparado con la versión
+   anterior en 20,000 valores al azar).
+6. **Interfaz (`mod-facturas`).** Si actualizar la lista falla, el error se ve (aviso arriba y en el bloque, con "Intentar de nuevo") y
+   lo de antes queda atenuado con "es de la última carga (hora) y puede no estar al día"; con `PERMISO` o `ACCESO` la lista se quita.
+   Importar con éxito o volver a cargar quita el aviso.
