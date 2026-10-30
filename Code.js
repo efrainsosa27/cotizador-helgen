@@ -10994,7 +10994,7 @@ function modProveedores_() {
       subirDocumentoProveedor: subirDocumentoProveedor, sincronizarProveedoresInventario: sincronizarProveedoresInventario },
     // Los proveedores viven en el libro de compras: su versión es la de las órdenes ('oc'), así la vista de una requisición abierta
     // (documentos y CLABE del pago) y la lista de proveedores se actualizan solas en los demás navegadores
-    cambios: { guardarProveedor: ['oc'], subirDocumentoProveedor: ['oc'] },
+    cambios: { guardarProveedor: ['oc'], subirDocumentoProveedor: ['oc'], sincronizarProveedoresInventario: ['oc'] },
     solo: [], publicas: [],
     sincronizar: function (permisos, ctx, algo, r, errores) {
       if (permisos.compras && ctx.comProveedores && algo('oc')) {

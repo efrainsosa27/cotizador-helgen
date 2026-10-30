@@ -7,6 +7,7 @@ const A=require('./arnes')(process.argv[2]||'.',{props:{ROL_COMPRAS:'efrain@helg
  enviados.push(JSON.parse(op.payload));return {codigo:fallaRed?503:200,cuerpo:{ok:!fallaRed,total:enviados.at(-1).proveedores.length}};
 }}]});
 A.P.prepararCapri();
+assert.deepEqual(A.plain(A.correr('CAMBIOS_API.sincronizarProveedoresInventario')),['oc'],'sincronizar es escritura y respeta modo solo lectura del servidor');
 A.falla('obrero','sincronizarProveedoresInventario',[],/compras/i);
 const creado=A.ok('efrain','guardarProveedor',{razonSocial:'Proveedor de prueba',rfc:'EDC200101AB1',contacto:'Contacto',correo:'ventas@example.test',notas:'Interno',idSolicitud:'proveedor1'});
 assert.equal(creado.inventario.ok,true);
