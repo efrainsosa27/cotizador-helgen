@@ -17,6 +17,14 @@ ARG NODE_IMAGE=node:22.23.4-bookworm-slim
 # ---------------------------------------------------------------- dependencias de Node y Chromium
 FROM ${NODE_IMAGE} AS deps
 WORKDIR /app/servidor
+# unzip: @puppeteer/browsers baja Chromium en un ZIP y lo descomprime con el «unzip» del sistema (la imagen slim no lo
+# trae y su dependencia opcional «yauzl» tampoco está: sin esto la construcción falla con "no zip archiver is available").
+# Solo se usa en esta etapa; la imagen final no lo lleva (Utilities.unzip es JavaScript, con zlib).
+# hadolint ignore=DL3008
+RUN set -eu; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends unzip; \
+    rm -rf /var/lib/apt/lists/*
 COPY servidor/package.json servidor/package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 ARG CHROME_VERSION=156.0.8078.47
