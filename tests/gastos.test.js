@@ -92,7 +92,12 @@ assert.throws(() => VC({ version: '4.1' }), /versión 4.0/);
 assert.throws(() => VC({ uuid: 'no-es-uuid' }), /UUID\) del CFDI no es válido/);
 assert.throws(() => VC({ receptor: 'XAXX010101000' }), /está a nombre del RFC XAXX010101000, no de Helgen \(HSE240304PC1\)/);
 assert.throws(() => P.validarCfdiGasto(P.leerCfdi(cfdi()), '', null), /no de Helgen/, 'sin RFC de Helgen no se acepta');
-assert.throws(() => VC({}, { [UUID1]: 'GAS-2026-0009' }), /ya está registrada \(GAS-2026-0009\)/);
+// UUID repetido (revisión del 29/10/2026): el folio solo para Compras y super admin (verFolio); a quien captura, un texto general
+assert.throws(() => P.validarCfdiGasto(P.leerCfdi(cfdi()), HELGEN, { [UUID1]: 'GAS-2026-0009' }, true), /ya está registrada \(GAS-2026-0009\)/);
+assert.throws(() => VC({}, { [UUID1]: 'GAS-2026-0009' }), e => /Ese CFDI ya está registrado en CAPRI \(otro gasto o una factura de proveedor\)/.test(e.message) &&
+  !/GAS-2026-0009/.test(e.message), 'sin verFolio no dice cuál');
+// Helgen a Helgen (emisor = receptor) no es un gasto
+assert.throws(() => VC({ emisor: HELGEN }), /lo emitió Helgen \(HSE240304PC1\) a sí misma/);
 // Reembolso
 const R = d => plain(P.normalizarReembolsoGasto(Object.assign({ fecha: HOY_ISO, metodo: 'transferencia', referencia: 'SPEI 123' }, d), HOY_ISO));
 assert.deepEqual(R({}), { fecha: HOY_ISO, metodo: 'Transferencia', referencia: 'SPEI 123' });
@@ -182,6 +187,8 @@ assert.deepEqual(plain(P.destinatariosGasto('gasto.enviado', info, roles)), [{ q
 assert.deepEqual(plain(P.destinatariosGasto('gasto.aprobado', info, roles)), [{ quien: 'solicitante', para: ['obrero@helgen.tech'] }]);
 assert.deepEqual(plain(P.destinatariosGasto('gasto.rechazado', info, roles)), [{ quien: 'solicitante', para: ['obrero@helgen.tech'] }]);
 assert.deepEqual(plain(P.destinatariosGasto('gasto.reembolsar', info, roles)), [{ quien: 'compras', para: ['pedro@helgen.tech'] }]);
+assert.deepEqual(plain(P.destinatariosGasto('gasto.reembolsar', info, { compras: ['pedro@helgen.tech', 'obrero@helgen.tech'] })),
+  [{ quien: 'compras', para: ['pedro@helgen.tech'] }], 'quien lo capturó no recibe "reembólsalo" aunque sea de Compras');
 for (const tipo of ['gasto.enviado', 'gasto.aprobado', 'gasto.rechazado', 'gasto.reembolsar']) {
   const x = plain(P.contenidoAviso(tipo, tipo === 'gasto.reembolsar' ? 'compras' : 'solicitante', Object.assign({}, info, { nota: 'Pagué $500 en la Pemex' })));
   const todo = JSON.stringify(x);
@@ -418,9 +425,13 @@ assert.deepEqual([fx.moneda, fx.total, fx.subtotal, fx.iva, fx.iva_incluido, fx.
 assert.equal(archivos[fx.xml_id].nombre, rx.folio + ' — CFDI.xml');
 assert.equal(archivos[fx.xml_id].acceso, 'PRIVATE');
 assert(sinMontos(ultimoCorreo(new RegExp(rx.folio))) && !/GASOLINERA/.test(JSON.stringify(ultimoCorreo(new RegExp(rx.folio)))), 'sin el proveedor en el correo');
-assert.equal(ok('obrero', 'archivoGasto', rx.folio, 'xml').mime, 'application/xml');
-falla('obrero', 'guardarGasto', [conXml({ uuid: UUID1 })], new RegExp('ya está registrada \\(' + rx.folio + '\\)'));
-falla('rosa', 'guardarGasto', [conXml({ uuid: UUID1.toLowerCase() })], /ya está registrada/); // otra persona, mismo UUID
+// El XML va como text/plain (revisión del 29/10/2026: abierto como application/xml en la página de CAPRI ejecutaría un <script>)
+assert.equal(ok('obrero', 'archivoGasto', rx.folio, 'xml').mime, 'text/plain');
+// UUID repetido: quien captura recibe un texto general (no el folio de otro registro); Compras (pedro, también captura) ve cuál
+const GENERICO_UUID = /Ese CFDI ya está registrado en CAPRI \(otro gasto o una factura de proveedor\)/;
+assert(!new RegExp(rx.folio).test(falla('obrero', 'guardarGasto', [conXml({ uuid: UUID1 })], GENERICO_UUID).error));
+falla('rosa', 'guardarGasto', [conXml({ uuid: UUID1.toLowerCase() })], GENERICO_UUID); // otra persona, mismo UUID
+falla('pedro', 'guardarGasto', [conXml({ uuid: UUID1 })], new RegExp('ya está registrada \\(' + rx.folio + '\\)'));
 falla('obrero', 'guardarGasto', [conXml({ uuid: UUID2, receptor: 'XAXX010101000' })], /está a nombre del RFC XAXX010101000, no de Helgen/);
 falla('obrero', 'guardarGasto', [conXml({ uuid: UUID2, tipo: 'E' })], /nota de crédito/);
 falla('obrero', 'guardarGasto', [gasto({ xml: { nombre: 'f.xml', datos: PDF } })], /no es un XML/);
@@ -434,7 +445,8 @@ assert.equal(fila(rxu2.folio).uuid, UUID2);
 // El UUID de una factura de proveedor vigente tampoco se puede usar como gasto (se contaría dos veces en el margen)
 correr(`(() => { const h = hojaCompras_(libroCompras_(), 'FacturasProveedor'); const f = HOJAS_COMPRAS.FacturasProveedor.enc.map(() => '');
   f[0] = 'FPR-${ANIO}-0001'; f[1] = 'CFDI'; f[2] = '${UUID3}'; f[29] = 'Vigente'; escribe_(h).appendRow(f); MEMO_ = {}; })()`);
-falla('obrero', 'guardarGasto', [conXml({ uuid: UUID3 })], new RegExp('ya está registrada \\(FPR-' + ANIO + '-0001\\)'));
+falla('obrero', 'guardarGasto', [conXml({ uuid: UUID3 })], GENERICO_UUID);
+falla('pedro', 'guardarGasto', [conXml({ uuid: UUID3 })], new RegExp('ya está registrada \\(FPR-' + ANIO + '-0001\\)'));
 LC().pest.FacturasProveedor.m.pop(); // la factura sembrada no sigue en el libro (no es de una orden)
 
 // ---- Pendientes: por aprobar (Aprobaciones, nunca lo propio) y por reembolsar (Compras) ----

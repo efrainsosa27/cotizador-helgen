@@ -400,8 +400,11 @@ assert(libroAdm.pest.Bitacora.m.some(r => r[2] === 'Excepción de super admin: a
 ok('leo', 'aprobarHoras', [{ correo: 'adri@helgen.tech', semana: PASADA, proyecto: P2 }]);
 // Devolver (con motivo; también una aprobada) → correo a la persona, sin horas, montos ni la nota
 falla('luis', 'devolverHoras', [[{ correo: 'obrero@helgen.tech', semana: ANTEPASADA, proyecto: P1 }], 'no'], /mínimo 5 caracteres/);
+// Una aprobada solo se devuelve con la huella de lo que se vio (revisión del 29/10/2026; la interfaz siempre la manda)
+falla('luis', 'devolverHoras', [[{ correo: 'obrero@helgen.tech', semana: PASADA, proyecto: P1 }], 'Faltó el viernes'], /ábrelas en «Por aprobar»/);
 A.correos.length = 0;
-pa = ok('luis', 'devolverHoras', [{ correo: 'obrero@helgen.tech', semana: ANTEPASADA, proyecto: P1 }, { correo: 'obrero@helgen.tech', semana: PASADA, proyecto: P1 }],
+const paLuis = ok('luis', 'horasPorAprobar');
+pa = ok('luis', 'devolverHoras', [{ correo: 'obrero@helgen.tech', semana: ANTEPASADA, proyecto: P1 }, pedido(parte(paLuis.revisadas, 'obrero@helgen.tech', P1))],
   'Faltó el viernes; $500 de viáticos van aparte');
 assert.equal(A.correos.length, 2, 'un correo por semana devuelta');
 A.correos.forEach(m => {
@@ -508,6 +511,10 @@ s = ok('tania', 'sincronizar', {}, ctxTodo);
 assert(!('nomCostos' in s) && !('nomReporte' in s) && s.horasLideres && s.horasSemana, 'cobranza: líderes y su semana, nunca costos');
 s = ok('luis', 'sincronizar', {}, ctxTodo);
 assert(s.horasAprobar && !('nomCostos' in s) && !('nomReporte' in s));
+// La versión de costosPersonal solo es real para Nómina y super admin (revisión del 29/10/2026): las versiones son de cada quien
+assert.equal(s.versiones.costosPersonal, 0, 'luis no ve cuándo cambia un costo');
+s = ok('nora', 'sincronizar', {}, ctxTodo);
+assert.notEqual(s.versiones.costosPersonal, 0, 'Nómina sí');
 s = ok('nora', 'sincronizar', plain(s.versiones), ctxTodo);
 assert(!s.nomCostos && !s.horasSemana, 'sin cambios no se manda nada');
 

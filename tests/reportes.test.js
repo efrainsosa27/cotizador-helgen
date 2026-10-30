@@ -532,6 +532,8 @@ const esperar = async (k = 30) => { for (let i = 0; i < k; i++) await new Promis
   T.run("REPORTES.ver('margen')"); await esperar();
   h = T.$('vistaRep').innerHTML;
   assert(/Margen por proyecto/.test(h) && /Helgen Energy · MXN/.test(h) && /Por firmar/.test(h) && /Órdenes de compra/.test(h), 'margen pintado');
+  // Incremento 7 (§6.I): cobranza no ve la nómina por omisión y la pantalla lo dice (nominaOculta)
+  assert(/No incluye nómina \(la ven Nómina y el super admin\)/.test(h) && !/y la nómina repartida/.test(h), 'margen sin nómina: lo dice');
   assert(/"Folio","Proyecto","Cliente","Línea de negocio","Contrato","Moneda","Contratado sin IVA","Órdenes de compra","Total costos","Margen","Margen %","Nota"/.test(T.run("REPORTES.csv('margen')")));
   // Contexto de la sincronización: el reporte abierto
   assert.equal(plain(T.run('contextoSync()')).reporte, 'margen');

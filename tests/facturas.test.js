@@ -67,6 +67,7 @@ function cfdi(o){
   falla(()=>ctx.leerCfdi(cfdi({subtotal:'100.00',descuento:'1100.00',tras:'0.00',total:'0.01'})),/descuento es mayor que el subtotal/);
   const l=ctx.leerCfdi(cfdi({local:{tras:'30.00',ret:'5.00'}}));
   assert.deepStrictEqual([l.trasladados,l.retenidos,l.total],[190,5,1185],'ISH y 5 al millar');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(l.locales)),{trasladados:30,retenidos:5},'los locales también aparte (gastos: el ISH es costo, no IVA)');
   falla(()=>ctx.leerCfdi(cfdi({local:{tras:'30.00',ret:'0.00'},total:'1160.00'})),/no cuadra/);
 }
 

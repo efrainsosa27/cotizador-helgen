@@ -138,10 +138,12 @@ const firmados = s => [...Buffer.from(s)].map(x => x > 127 ? x - 256 : x);
   assert.deepEqual([i1.tipoComprobante, i1.uuid, i1.serieFolio, i1.fecha, i1.metodoPago, i1.moneda, i1.total, i1.trasladados, i1.emisor.rfc, i1.receptor.rfc],
     ['I', UU.I1, 'A-101', '2026-10-10', 'PUE', 'MXN', 6960, 960, HELGEN, URE]);
   assert.deepEqual([i1.relacionados, i1.pagos], [[], []]);
-  // leerCfdi no cambia (lo usan las facturas de proveedor y G): mismas llaves, sin relacionados ni pagos
+  // leerCfdi no cambia (lo usan las facturas de proveedor y G): mismas llaves, sin relacionados ni pagos (revisión del 29/10/2026:
+  // + `locales` {trasladados, retenidos}, para que un gasto no cuente el ISH como IVA; los demás campos siguen iguales)
   const base = plain(P.leerCfdi(X.I1));
-  assert.deepEqual(Object.keys(base).sort(), ['descuento', 'emisor', 'fecha', 'fechaTimbrado', 'folio', 'formaPago', 'metodoPago', 'moneda', 'receptor',
-    'retenidos', 'serie', 'serieFolio', 'subtotal', 'tipo', 'tipoComprobante', 'total', 'trasladados', 'usoCfdi', 'uuid', 'version']);
+  assert.deepEqual(Object.keys(base).sort(), ['descuento', 'emisor', 'fecha', 'fechaTimbrado', 'folio', 'formaPago', 'locales', 'metodoPago', 'moneda',
+    'receptor', 'retenidos', 'serie', 'serieFolio', 'subtotal', 'tipo', 'tipoComprobante', 'total', 'trasladados', 'usoCfdi', 'uuid', 'version']);
+  assert.deepEqual(base.locales, { trasladados: 0, retenidos: 0 });
   Object.keys(base).forEach(k => assert.deepEqual(i1[k], base[k], 'leerCfdiCliente = leerCfdi + lo suyo: ' + k));
   assert.equal(P.leerCfdiCliente(X.I2).metodoPago, 'PPD');
   const e1 = plain(P.leerCfdiCliente(X.E1));
