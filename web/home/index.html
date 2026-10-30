@@ -652,7 +652,7 @@
   </section>
 
   <section id="vistaCom" class="oculto">
-    <div id="comVistaLista">
+    <div id="comVistaLista"><div class="modulo"><h2>Catálogo de proveedores</h2><p class="nota">Alta, datos de contacto y expediente para pagos: CSF, carátula bancaria y comprobante de domicilio.</p><button type="button" class="btn" onclick="verProveedores()">Proveedores y documentos →</button></div>
       <div class="modulo">
         <h2>1 · Requisiciones</h2>
         <div class="proy-fila">
@@ -739,7 +739,9 @@
           <button type="button" class="btn btn-sec" onclick="verListaCom()">← Requisiciones</button>
           <button type="button" class="btn" onclick="PROVEEDORES_F.nuevo()">+ Nuevo proveedor</button>
         </div>
-        <h2>1 · Proveedores</h2>
+        <h2>1 · Proveedores y documentos</h2>
+        <p class="nota">Este es el catálogo que se selecciona en órdenes y solicitudes de cotización. Los documentos permanecen privados en Compras; al inventario solo se envían nombre e identificador.</p>
+        <button type="button" id="provSyncInv" class="btn btn-sec" onclick="PROVEEDORES_F.sincronizarInventario()">Sincronizar lista con Inventario</button><span id="provSyncEstado" class="nota" role="status"></span>
         <div class="proy-fila">
           <div><label>Buscar (razón social, RFC, contacto, banco o terminación de la CLABE)</label><input id="provBuscar" autocomplete="off"></div>
           <div style="max-width:240px;min-width:180px"><label>Mostrar</label>
@@ -841,6 +843,8 @@
       <div id="comModOc" class="modulo oculto">
         <h2 id="ocTitulo">2 · Orden de compra</h2>
         <div id="propEstado" class="nota aviso-moneda oculto" style="margin-bottom:10px"></div>
+        <label for="ocProveedorCatalogo">Seleccionar proveedor registrado</label><select id="ocProveedorCatalogo" onchange="seleccionarProveedorOrden()"><option value="">Selecciona del catálogo o captura los datos abajo…</option></select>
+        <p class="nota">El catálogo indica los documentos faltantes. Puedes dar de alta al proveedor sin su expediente completo y completar los documentos después en Compras → Proveedores.</p>
         <div id="comProveedor" class="grid">
           <div><label>Proveedor (razón social) *</label>
             <input id="prvRazon" list="proveedoresList" autocomplete="off" maxlength="150" placeholder="Escribe o elige un proveedor">
@@ -3144,14 +3148,23 @@
 
   // Proveedores (se llenan solos al emitir órdenes, como los clientes)
   function recibirProveedores(lista) {
-    PROVEEDORES = lista || [];
+    PROVEEDORES = (lista || []).filter(p=>p.activo!==false);
+    const seleccionado=$('ocProveedorCatalogo').value;
+    $('ocProveedorCatalogo').innerHTML='<option value="">Selecciona del catálogo o captura los datos abajo…</option>'+PROVEEDORES.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.etiqueta||p.razonSocial)+esc((p.faltan||[]).length?' · documentos faltantes: '+p.faltan.join(', '):' · documentos completos')+'</option>').join('');
+    $('ocProveedorCatalogo').value=seleccionado;
     $('proveedoresList').innerHTML = PROVEEDORES.map(p => '<option value="' + esc(p.etiqueta) + '" label="' +
       esc([p.rfc, p.contacto].filter(Boolean).join(' · ') || 'Proveedor registrado') + '">').join('');
   }
+  function seleccionarProveedorOrden() {
+    const p=PROVEEDORES.find(p=>p.id===$('ocProveedorCatalogo').value);if(!p)return;
+    $('prvRazon').value=p.etiqueta||p.razonSocial;autorrellenarProveedor();
+    if(window.PROVEEDORES_F)PROVEEDORES_F.avisoOrden();
+  }
   function autorrellenarProveedor() {
     const v = $('prvRazon').value.trim().toLowerCase();
-    const p = v && PROVEEDORES.find(x => x.etiqueta.toLowerCase() === v);
-    if (!p) return;
+    const p = v && PROVEEDORES.find(x => String(x.etiqueta||x.razonSocial).toLowerCase() === v || String(x.razonSocial).toLowerCase()===v);
+    if (!p) { $('ocProveedorCatalogo').value=''; return; }
+    $('ocProveedorCatalogo').value=p.id;
     Object.keys(CAMPOS_PROV).forEach(id => $(id).value = p[CAMPOS_PROV[id]] || '');
     if (p.diasCredito !== '' && p.diasCredito != null) { $('ocDias').value = p.diasCredito; condicionesDesdeDias(); }
     if (p.formaPagoHabitual) $('ocFormaPago').value = p.formaPagoHabitual; // F (incremento 5): la habitual del proveedor
@@ -4390,9 +4403,9 @@
         '</tbody></table></div>' +
         '<div class="nota">Quita la marca de lo que no va y cambia el texto si lleva datos internos. La cantidad es la aprobada.</div>' +
         '<div class="grid" style="margin-top:10px">' +
-        '<div><label>Proveedor (opcional)</label><input id="corSolProv" list="corSolProveedores" maxlength="150" autocomplete="off" ' +
-        'placeholder="Escribe o elige un proveedor"><datalist id="corSolProveedores">' + (SOL.proveedores || []).map(p =>
-          '<option value="' + esc(p.etiqueta || p.razonSocial) + '" label="' + esc(p.correo || 'Sin correo') + '">').join('') + '</datalist></div>' +
+        '<div><label>Proveedor del catálogo (opcional)</label><select id="corSolProveedorCatalogo"><option value="">Selecciona proveedor…</option>'+ (SOL.proveedores||[]).filter(p=>p.activo!==false).map(p=>'<option value="'+esc(p.id)+'">'+esc(p.etiqueta||p.razonSocial)+esc((p.faltan||[]).length?' · documentos faltantes':' · documentos completos')+'</option>').join('')+'</select><input id="corSolProv" list="corSolProveedores" maxlength="150" autocomplete="off" ' +
+        'placeholder="Escribe o elige un proveedor"><datalist id="corSolProveedores">' + (SOL.proveedores || []).filter(p=>p.activo!==false).map(p =>
+          '<option value="' + esc(p.etiqueta || p.razonSocial) + '" label="' + esc((p.correo || 'Sin correo')+((p.faltan||[]).length?' · documentos faltantes: '+p.faltan.join(', '):' · documentos completos')) + '">').join('') + '</datalist></div>' +
         '<div><label>Correo del proveedor</label><input id="corSolCorreo" type="email" maxlength="100" autocomplete="off"></div></div>' +
         '<div style="margin-top:10px"><label>Notas para el proveedor (opcional, salen en el PDF)</label>' +
         '<textarea id="corSolNotasProv" rows="2" maxlength="1000"></textarea></div>' +
@@ -4404,6 +4417,7 @@
         $('corSolDesc-' + a.renglon).value = a.descripcion || '';
         $('corSolNotas-' + a.renglon).value = a.notas || '';
       });
+      $('corSolProveedorCatalogo').addEventListener('change',()=>{const p=(SOL.proveedores||[]).find(p=>p.id===$('corSolProveedorCatalogo').value);if(p){$('corSolProv').value=p.etiqueta||p.razonSocial;autollenarProveedor();}});
       $('corSolProv').addEventListener('input', autollenarProveedor);
       $('corSolProv').addEventListener('change', autollenarProveedor);
       $('corSolCorreo').addEventListener('input', () => { if (SOL && SOL.res) ponerLigas('corSol', SOL.res, ligasDe(SOL.res, $('corSolCorreo').value)); });
@@ -5273,8 +5287,7 @@
             '<td><input type="file" id="pfArch-' + k + '" accept="application/pdf,image/jpeg,image/png,image/heic,.heic"></td>' +
             '<td><input type="date" id="pfFecha-' + k + '" max="' + hoy + '"></td></tr>';
         }).join('') + '</tbody></table></div>' +
-        '<div class="nota" style="margin-top:6px">El documento anterior se conserva en Drive. Sin constancia de situación fiscal y carátula bancaria ' +
-          'no se registra un pago. Avisos: comprobante de domicilio con más de 3 meses y constancia con más de 12.</div>' +
+        '<div class="nota" style="margin-top:6px">El documento anterior se conserva en Drive. En transferencias se exige carátula bancaria y, para proveedores nacionales, CSF. Avisos: comprobante de domicilio con más de 3 meses y constancia con más de 12.</div>' +
         '<div class="acciones"><button type="button" id="btnProvGuardar" class="btn" onclick="PROVEEDORES_F.guardar()">' +
           (p ? 'Guardar cambios' : 'Dar de alta') + '</button>' + botonChico('Cerrar', 'PROVEEDORES_F.cerrar()') + '</div>';
       const val = { pfRazon: x.razonSocial, pfRfc: x.rfc, pfContacto: x.contacto, pfCorreo: x.correo, pfTel: x.telefono, pfDireccion: x.direccion,
@@ -5298,6 +5311,10 @@
       if (ok === true && !$('pfBanco').value.trim() && BANCOS[c.slice(0, 3)]) $('pfBanco').value = BANCOS[c.slice(0, 3)];
       const cambio = cambioBanco() && !!($('pfBanco').value.trim() || c || $('pfCuenta').value.trim());
       $('pfBancoAviso').classList.toggle('oculto', !cambio);
+    }
+    function sincronizarInventario() {
+      const b=$('provSyncInv');b.disabled=true;$('provSyncEstado').textContent=' Sincronizando…';
+      google.script.run.withSuccessHandler(r=>{b.disabled=false;$('provSyncEstado').textContent=r.ok?' '+r.total+' proveedores sincronizados.':' Pendiente: '+r.error;}).withFailureHandler(e=>{b.disabled=false;$('provSyncEstado').textContent=' No se sincronizó: '+(e.message||e);}).sincronizarProveedoresInventario();
     }
     function guardar() {
       const b = $('btnProvGuardar');
@@ -5327,6 +5344,7 @@
           listo();
           pintarFicha(r.proveedor);
           cargar();
+          if(r.inventario)$('provSyncEstado').textContent=r.inventario.ok?' Lista de inventario sincronizada.':' Proveedor guardado; sincronización pendiente: '+r.inventario.error;
           aviso('ok', 'Proveedor <b>' + esc(r.proveedor.razonSocial) + '</b> ' + (r.nuevo ? 'dado de alta.' : 'guardado.') +
             ((r.proveedor.avisos || []).length ? '<br><span class="aviso-moneda">' + r.proveedor.avisos.map(esc).join(' ') + '</span>' : ''));
         }).withFailureHandler(err => { listo(); mostrarError(err); }).guardarProveedor(datos);
@@ -5444,7 +5462,7 @@
     if (typeof window.addEventListener === 'function') window.addEventListener('hashchange', () => { if (BOOT) seguirLiga(); });
 
     window.verProveedores = verProveedores;
-    window.PROVEEDORES_F = { cargar: cargar, abrir: abrir, nuevo: nuevo, cerrar: cerrar, guardar: guardar, copiar: copiar, clabeValida: clabeValida };
+    window.PROVEEDORES_F = { cargar: cargar, abrir: abrir, nuevo: nuevo, cerrar: cerrar, guardar: guardar, copiar: copiar, clabeValida: clabeValida, sincronizarInventario: sincronizarInventario, avisoOrden: avisoProveedorOc };
 
     registrarModulo({
       nombre: 'Proveedores',

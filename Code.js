@@ -9611,6 +9611,7 @@ function cadaQuinceMinutos() {
   const r = {};
   try { r.avisos = enviarPendientesPortal_(null); } catch (e) { r.avisos = { error: e.message }; }
   try { r.recepciones = traerRecepcionesPortal(); } catch (e) { r.recepciones = { error: e.message }; }
+  try { r.proveedoresInventario = sincronizarProveedoresInventario_(); } catch (e) { r.proveedoresInventario = { ok: false, error: e.message }; }
   try { r.cache = calentarCache_(); } catch (e) { r.cache = { error: e.message }; }
   try { r.horas = recordatorioHoras_(); } catch (e) { r.horas = { error: e.message }; } // N (incremento 7): viernes, una vez por semana
   try { if (MEMO_.correos && MEMO_.correos.length) enviarCorreosPendientes_(); } catch (e) { console.warn('Correos sin mandar: ' + e.message); }
@@ -10990,7 +10991,7 @@ function modProveedores_() {
   // Solo declaraciones de función y literales: las const de esta sección todavía no existen cuando se llama (arriba)
   return { nombre: 'Proveedores',
     api: { listarProveedores: listarProveedores, getProveedor: getProveedor, guardarProveedor: guardarProveedor,
-      subirDocumentoProveedor: subirDocumentoProveedor },
+      subirDocumentoProveedor: subirDocumentoProveedor, sincronizarProveedoresInventario: sincronizarProveedoresInventario },
     // Los proveedores viven en el libro de compras: su versión es la de las órdenes ('oc'), así la vista de una requisición abierta
     // (documentos y CLABE del pago) y la lista de proveedores se actualizan solas en los demás navegadores
     cambios: { guardarProveedor: ['oc'], subirDocumentoProveedor: ['oc'] },
@@ -11000,6 +11001,58 @@ function modProveedores_() {
         r.comProveedores = intentar_(errores, 'Proveedores', () => listarProveedores(ctx.provFiltro || {}));
       }
     } };
+}
+
+/** Respaldo administrativo local para el despliegue; no se expone en API_FUNCIONES. */
+function respaldarCatalogoProveedores() {
+  const libro=libroComprasSiExiste_();
+  return {ok:true,fecha:new Date().toISOString(),encabezados:HOJAS_COMPRAS.Proveedores.enc,
+    filas:libro?filasDeArea_(hojaCompras_(libro,'Proveedores'),HOJAS_COMPRAS,'Proveedores'):[]};
+}
+
+/** Corrida administrativa local: solo crea proveedores ausentes de OC vigentes; no inventa documentos ni cambia fichas. */
+function prepararProveedoresDeOrdenes(aplicar) {
+  const libro = libroComprasSiExiste_();
+  if (!libro) return { ok: true, candidatos: 0, creados: 0 };
+  return conCandado_(() => {
+    const lista = proveedoresDelLibro_(libro);
+    const pendientes = [];
+    filasDeArea_(hojaCompras_(libro, 'OrdenesCompra'), HOJAS_COMPRAS, 'OrdenesCompra').forEach((r,i)=>{
+      const o=ordenDesdeFila_(r,i+2);
+      if(!o.folio||!o.proveedor||[OC_CANCELADA,ESTADO_ANULADA].includes(o.estado)||esAnulado_(o.folio))return;
+      const p={razonSocial:o.proveedor,rfc:o.rfc,contacto:o.contacto,correo:o.correo,telefono:o.telefono,diasCredito:o.diasCredito};
+      const id=proveedorId(p);
+      if(lista.concat(pendientes).some(x=>x.id===id || (p.rfc&&x.rfc===p.rfc) || ((!x.rfc||!p.rfc)&&textoNormal(x.razonSocial)===textoNormal(p.razonSocial))))return;
+      pendientes.push(Object.assign({id},p));
+    });
+    if(aplicar===true){
+      pendientes.forEach(p=>guardarProveedor_(libro,p));
+      if(pendientes.length){bitacora_(libro,'Completar catálogo de proveedores','',pendientes.length+' proveedor(es) recuperados de órdenes vigentes; documentos pendientes de captura.','',HOJAS_COMPRAS);subirVersiones_(['oc']);}
+      SpreadsheetApp.flush();
+    }
+    return {ok:true,candidatos:pendientes.length,creados:aplicar===true?pendientes.length:0};
+  });
+}
+
+/** Proyección para el inventario: nunca exporta datos fiscales, bancarios ni documentos. */
+function proyeccionProveedoresInventario(lista) {
+  return lista.map(p => ({ id: 'PRV-' + hexDeBytes(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, p.id)).slice(0, 32), nombre: p.razonSocial, activo: p.activo !== false }));
+}
+
+function sincronizarProveedoresInventario() {
+  exigirCompras_();
+  return sincronizarProveedoresInventario_();
+}
+
+function sincronizarProveedoresInventario_() {
+  const cfg = configPortal_();
+  if (!cfg.activo) return { ok: false, error: 'Configura el centro de mando para sincronizar los proveedores.' };
+  const libro = libroComprasSiExiste_();
+  const proveedores = proyeccionProveedoresInventario(libro ? proveedoresDelLibro_(libro) : []);
+  if (proveedores.length > 1000) return { ok: false, error: 'El catálogo supera el límite de 1000 proveedores; requiere paginación.' };
+  const r = llamarPortal_(cfg, 'post', cfg.url + '/api/integracion/cotizador/proveedores',
+    JSON.stringify({ generado_en: new Date().toISOString(), proveedores: proveedores }));
+  return r.ok ? { ok: true, total: proveedores.length } : { ok: false, error: r.error };
 }
 
 /** Formas de pago de una orden de compra (contrato §1). */
@@ -11189,6 +11242,13 @@ function getProveedor(id) {
  * correo proveedor.banco a compras. Devuelve {proveedor (la ficha, como getProveedor), nuevo}.
  */
 function guardarProveedor(p) {
+  const resultado = guardarFichaProveedor_(p);
+  try { resultado.inventario = sincronizarProveedoresInventario_(); }
+  catch (e) { resultado.inventario = { ok: false, error: 'Proveedor guardado; la sincronización de inventario se reintentará en el sondeo.' }; }
+  return resultado;
+}
+
+function guardarFichaProveedor_(p) {
   exigirCompras_();
   const d0 = p || {};
   const ficha = normalizarFichaProveedor(d0);

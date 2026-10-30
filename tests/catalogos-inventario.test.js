@@ -1,0 +1,36 @@
+'use strict';
+const assert=require('assert'),crypto=require('crypto');
+const enviados=[];let fallaRed=false;
+const A=require('./arnes')(process.argv[2]||'.',{props:{ROL_COMPRAS:'efrain@helgen.tech',SUPER_ADMIN:'leo@helgen.tech',PORTAL_URL:'https://drogheda.test',PORTAL_SECRETO:'prueba'},rutas:[{re:/^https:\/\/drogheda.test\/api\/integracion\/cotizador\/proveedores$/,fn:(url,op)=>{
+ const firma=crypto.createHmac('sha256','prueba').update(op.headers['X-Hbox-Tiempo']+'\n'+op.payload).digest('hex');
+ assert.equal(op.headers['X-Hbox-Firma'],'sha256='+firma);
+ enviados.push(JSON.parse(op.payload));return {codigo:fallaRed?503:200,cuerpo:{ok:!fallaRed,total:enviados.at(-1).proveedores.length}};
+}}]});
+A.P.prepararCapri();
+A.falla('obrero','sincronizarProveedoresInventario',[],/compras/i);
+const creado=A.ok('efrain','guardarProveedor',{razonSocial:'Proveedor de prueba',rfc:'EDC200101AB1',contacto:'Contacto',correo:'ventas@example.test',notas:'Interno',idSolicitud:'proveedor1'});
+assert.equal(creado.inventario.ok,true);
+assert.deepEqual(Object.keys(enviados.at(-1).proveedores[0]).sort(),['activo','id','nombre']);
+assert.deepEqual(A.plain(creado.proveedor.faltan),['csf','caratula','domicilio']);
+assert.equal(A.ok('efrain','sincronizarProveedoresInventario').total,1);
+fallaRed=true;
+const editado=A.ok('efrain','guardarProveedor',{id:creado.proveedor.id,razonSocial:'Nombre corregido',rfc:'EDC200101AB1',activo:false,idSolicitud:'proveedor2'});
+assert.equal(editado.inventario.ok,false,'fallo de integración no pierde guardado');
+assert.equal(A.ok('efrain','getProveedor',creado.proveedor.id).razonSocial,'Nombre corregido');
+assert.equal(enviados.at(-1).proveedores[0].activo,false);
+assert.equal(A.P.prepararProveedoresDeOrdenes(false).candidatos,0);
+assert.equal(A.P.respaldarCatalogoProveedores().filas.length,1);
+A.falla('leo','prepararProveedoresDeOrdenes',[true],/No existe|no permitida|desconocida|no está/i);
+// Reproduce orden antigua cuyo proveedor aún no está en el catálogo.
+const libro=A.libros[A.props.COMPRAS_DB_ID];
+const fila=Array(A.correr('HOJAS_COMPRAS.OrdenesCompra.enc.length')).fill('');
+fila[0]='OC-2026-9999';fila[1]=A.HOY_ISO;fila[5]='Proveedor antiguo';fila[6]='ANT200101AB1';fila[28]='Emitida';
+libro.pest.OrdenesCompra.m.push(fila);
+A.correr('MEMO_ = {}');
+assert.equal(A.P.prepararProveedoresDeOrdenes(false).candidatos,1);
+assert.equal(A.P.prepararProveedoresDeOrdenes(true).creados,1);
+A.correr('MEMO_ = {}');
+assert.equal(A.P.prepararProveedoresDeOrdenes(true).creados,0,'corrida repetida no duplica fichas');
+const recuperado=A.ok('efrain','listarProveedores',{estado:'todos'}).proveedores.find(p=>p.razonSocial==='Proveedor antiguo');
+assert.deepEqual(recuperado.faltan,['csf','caratula','domicilio'],'no inventar documentos al recuperar');
+console.log('OK catálogo de proveedores para inventario, autorización, proyección y recuperación idempotente');
