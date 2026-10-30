@@ -1,45 +1,94 @@
 #!/usr/bin/env bash
-# Actualiza CAPRI en el servidor: trae el código (git), instala dependencias, corre las pruebas (sin Google), reinicia y
-# revisa la salud. Si algo falla antes o después del reinicio, regresa solo a la versión anterior.
+# Actualiza CAPRI en el servidor: trae el código (git), construye la imagen nueva (etiqueta = commit), corre las pruebas
+# del servidor DENTRO de esa imagen (sin Google ni red), cambia el contenedor y espera a que quede sano. Si algo falla
+# antes del cambio, no se toca nada; si falla después, regresa solo a la imagen anterior (sigue en el servidor).
 #
-# Uso (en el servidor, como el dueño del repositorio, con sudo para systemctl):
-#   /srv/projects/capri/app/servidor/despliegue/actualizar.sh [rama]      (por omisión: main)
-# Cuándo: fuera de horario (el reinicio deja ~5–15 s sin servicio: la interfaz muestra "CAPRI se está actualizando").
+# Uso (como el dueño del repositorio; si no está en el grupo docker, usa sudo para docker):
+#   servidor/despliegue/actualizar.sh [rama]                 por omisión: main
+#   servidor/despliegue/actualizar.sh --regresar [etiqueta]  a la imagen anterior (o a esa etiqueta = commit corto)
+#   servidor/despliegue/actualizar.sh --estado
+# Cuándo: fuera de horario (el cambio deja ~5–15 s sin servicio: la interfaz muestra "CAPRI se está actualizando").
 set -euo pipefail
 APP=${CAPRI_APP:-/srv/projects/capri/app}
-RAMA=${1:-main}
-SALUD=http://127.0.0.1:8090/salud
-cd "$APP"
-[ -z "$(git status --porcelain)" ] || { echo "✘ Hay cambios sin guardar en $APP: no se actualiza."; exit 1; }
-ANTERIOR=$(git rev-parse HEAD)
+cd "$APP/servidor"
+[ -f .env ] || { echo "Falta servidor/.env: corre primero despliegue/preparar-servidor.sh."; exit 1; }
+if docker info >/dev/null 2>&1; then SUDO=(); else SUDO=(sudo); fi
+dk() { "${SUDO[@]}" docker "$@"; }
+dc() { local v="$1"; shift; "${SUDO[@]}" env CAPRI_VERSION="$v" docker compose "$@"; }
+ACTUAL=$(sed -n 's/^CAPRI_VERSION=//p' .env)
 
-instalar() { (cd servidor && npm ci --omit=dev --no-audit --no-fund >/dev/null); }
-sano() {
-  for _ in $(seq 1 60); do
-    if curl -fsS -m 2 "$SALUD" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s);process.exit(x.ok&&x.trabajadores.trabajadores.every(t=>t.listo)?0:1)})'; then return 0; fi
+sano() {  # espera a que el contenedor corra la etiqueta $1 y su HEALTHCHECK diga healthy (máx. 2 min)
+  local s img
+  for _ in $(seq 1 120); do
+    img=$(dk inspect -f '{{.Config.Image}}' capri 2>/dev/null || true)
+    s=$(dk inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' capri 2>/dev/null || true)
+    if [ "$img" = "capri:$1" ] && [ "$s" = healthy ]; then return 0; fi
+    if [ "$img" = "capri:$1" ] && [ "$s" = unhealthy ]; then return 1; fi
     sleep 1
   done
   return 1
 }
-regresar() {
-  echo "✘ $1: regreso a ${ANTERIOR:0:10}"
-  git checkout --quiet --detach "$ANTERIOR"
-  instalar
-  sudo systemctl restart capri
-  sano && echo "✔ de vuelta en ${ANTERIOR:0:10}" || echo "✘ tampoco arrancó la anterior: journalctl -u capri -n 100"
-  exit 1
+fijar() {  # deja $1 como la versión en servidor/.env (la que usa "docker compose up -d" sin nada más)
+  sed -i "s/^CAPRI_VERSION=.*/CAPRI_VERSION=$1/" .env
 }
+cambiar_a() {  # etiqueta, motivo → contenedor con esa imagen; regresa 0 si quedó sano
+  dc "$1" up -d --no-build --remove-orphans capri && sano "$1"
+}
+estado() {
+  echo "versión en .env: $ACTUAL"
+  dk ps -a --filter name=^capri$ --format 'contenedor: {{.Names}} · {{.Image}} · {{.Status}}'
+  echo "imágenes (la primera es la más nueva):"; dk image ls capri --format '  {{.Tag}}  {{.CreatedSince}}  {{.Size}}'
+}
+podar() {  # se quedan las 5 imágenes más nuevas (y siempre la que corre); las de pruebas, solo la última
+  local n=0 t
+  while read -r t; do
+    n=$((n+1)); [ "$n" -le 5 ] || [ "$t" = "$1" ] || dk image rm "capri:$t" >/dev/null 2>&1 || true
+  done < <(dk image ls capri --format '{{.Tag}}' | grep -v '^<none>$')
+  dk image ls capri-pruebas --format '{{.Tag}}' | grep -v "^$1$" | while read -r t; do dk image rm "capri-pruebas:$t" >/dev/null 2>&1 || true; done
+}
+
+case "${1:-}" in
+  --estado) estado; exit 0 ;;
+  --regresar)
+    DESTINO=${2:-$(dk image ls capri --format '{{.Tag}}' | grep -v -e '^<none>$' -e "^$ACTUAL$" | head -n 1)}
+    [ -n "$DESTINO" ] || { echo "No hay otra imagen de capri en el servidor."; exit 1; }
+    dk image inspect "capri:$DESTINO" >/dev/null 2>&1 || { echo "No existe la imagen capri:$DESTINO (mira: $0 --estado)."; exit 1; }
+    echo "Regreso: capri:$ACTUAL → capri:$DESTINO"
+    if cambiar_a "$DESTINO"; then
+      fijar "$DESTINO"
+      git checkout --quiet --detach "$DESTINO" 2>/dev/null || echo "(el código del repositorio no se movió: $DESTINO no es un commit)"
+      echo "✔ CAPRI en capri:$DESTINO."; exit 0
+    fi
+    echo "✘ capri:$DESTINO no quedó sana; regreso a capri:$ACTUAL"; cambiar_a "$ACTUAL" || true; exit 1
+    ;;
+esac
+
+RAMA=${1:-main}
+[ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "✘ Hay cambios sin guardar en $APP: no se actualiza."; exit 1; }
+ANTERIOR=$(git rev-parse HEAD)
+volver_git() { echo "✘ $1: no se cambió nada; el repositorio regresa a ${ANTERIOR:0:12}."; git checkout --quiet --detach "$ANTERIOR"; exit 1; }
 
 git fetch --quiet origin "$RAMA"
 git checkout --quiet --detach "origin/$RAMA"
-NUEVA=$(git rev-parse HEAD)
-[ "$NUEVA" != "$ANTERIOR" ] || { echo "Ya está en ${NUEVA:0:10}."; exit 0; }
-echo "CAPRI: ${ANTERIOR:0:10} → ${NUEVA:0:10}"
-git --no-pager log --oneline "$ANTERIOR..$NUEVA" | head -20
+NUEVA=$(git rev-parse --short=12 HEAD)
+if [ "$NUEVA" = "$ACTUAL" ] && sano "$ACTUAL"; then echo "Ya está en $NUEVA."; exit 0; fi
+echo "CAPRI: $ACTUAL → $NUEVA"
+git --no-pager log --oneline "$ANTERIOR..HEAD" | head -20
 
-instalar || regresar "npm ci"
-node --check Code.js || regresar "sintaxis de Code.js"
-(cd servidor && node pruebas/todas.js) || regresar "pruebas del servidor"
-sudo systemctl restart capri
-sano || regresar "el servicio no quedó sano"
-echo "✔ CAPRI en ${NUEVA:0:10}. Revisa: journalctl -u capri -f -o cat"
+echo "== Construir y probar capri:$NUEVA (el servicio sigue con la anterior)"
+dk build -f Dockerfile --target pruebas -t "capri-pruebas:$NUEVA" .. || volver_git "no se pudo construir"
+dk run --rm --network none --read-only --tmpfs /tmp:size=256m,mode=1777 "capri-pruebas:$NUEVA" || volver_git "pruebas del servidor"
+dc "$NUEVA" build capri || volver_git "no se pudo construir la imagen final"
+
+echo "== Cambio"
+if cambiar_a "$NUEVA"; then
+  fijar "$NUEVA"
+  podar "$NUEVA"
+  echo "✔ CAPRI en capri:$NUEVA. Registro: docker logs -f capri   ·   regreso: $0 --regresar"
+  exit 0
+fi
+echo "✘ capri:$NUEVA no quedó sana: regreso a capri:$ACTUAL"
+dk logs --tail 40 capri 2>&1 | tail -40 || true
+if cambiar_a "$ACTUAL"; then echo "✔ de vuelta en capri:$ACTUAL"; else echo "✘ tampoco quedó sana capri:$ACTUAL: docker logs capri"; fi
+git checkout --quiet --detach "$ANTERIOR"
+exit 1

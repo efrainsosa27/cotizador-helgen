@@ -6,10 +6,15 @@
 //   node herramientas/autorizar.js --cliente client_secret_XXXX.json --alcances hojas,drive --salida google-facilities.json
 //   node herramientas/autorizar.js --cliente client_secret_XXXX.json --alcances correo      --salida google-facilities-correo.json
 //
-// En el servidor (sin navegador): abrir un túnel desde la Mac y abrir la liga que imprime en el navegador de la Mac:
-//   ssh -L 8765:127.0.0.1:8765 leo@git.helgen.online
+// En el servidor (sin navegador), dentro de la imagen de CAPRI (Node solo existe ahí): túnel desde la Mac y la liga que
+// imprime se abre en el navegador de la Mac, entrando como facilities@ (docs/servidor-google-paso-a-paso.md, paso 7):
+//   ssh -L 8765:127.0.0.1:8765 <usuario>@helgensrvr
+//   docker compose run --rm -p 127.0.0.1:8765:8765 -v /srv/capri/config:/salida capri node herramientas/autorizar.js \
+//     --cliente /salida/cliente-oauth.json --alcances hojas,drive --salida /salida/google-facilities.json --escuchar 0.0.0.0
+// --escuchar 0.0.0.0: dentro del contenedor (Docker publica solo 127.0.0.1:8765 del servidor). La dirección de regreso
+// sigue siendo http://127.0.0.1:8765/oauth (la que acepta Google para una "App de escritorio").
 // El cliente OAuth es de tipo "App de escritorio" en el proyecto de Google Cloud de helgen.tech (pantalla de
-// consentimiento Interna). Ver docs/servidor-etapa-1.md §5.
+// consentimiento Interna).
 'use strict';
 const fs = require('fs');
 const http = require('http');
@@ -26,8 +31,9 @@ const cliente = arg('cliente'), salida = arg('salida');
 const alcances = String(arg('alcances') || 'hojas,drive,correo').split(',').map(x => x.trim()).filter(Boolean);
 const cuenta = arg('cuenta') || 'facilities@helgen.tech';
 const puerto = Number(arg('puerto') || 8765);
+const escuchar = arg('escuchar') || '127.0.0.1';
 if (!cliente || !salida || alcances.some(a => !ALCANCES[a])) {
-  console.error('Uso: autorizar.js --cliente client_secret.json --salida archivo.json [--alcances hojas,drive,correo] [--cuenta facilities@helgen.tech]');
+  console.error('Uso: autorizar.js --cliente client_secret.json --salida archivo.json [--alcances hojas,drive,correo] [--cuenta facilities@helgen.tech] [--escuchar 0.0.0.0]');
   process.exit(2);
 }
 const c = JSON.parse(fs.readFileSync(cliente, 'utf8'));
@@ -58,7 +64,7 @@ const servidor = http.createServer(async (req, res) => {
       refresh_token: tokens.refresh_token, cuenta: correo, alcances, creado: new Date().toISOString() }, null, 1), { mode: 0o600 });
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Listo: ' + salida + ' guardado para ' + correo + '. Puedes cerrar esta ventana.');
-    console.log('✔ Guardado ' + salida + ' (' + alcances.join(', ') + ') para ' + correo + '. Cópialo a /etc/capri/ (root:capri, 640).');
+    console.log('✔ Guardado ' + salida + ' (' + alcances.join(', ') + ') para ' + correo + ', con permisos 600.');
   } catch (e) {
     res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('No se pudo: ' + e.message);
@@ -67,6 +73,6 @@ const servidor = http.createServer(async (req, res) => {
   }
   setTimeout(() => servidor.close(), 200);
 });
-servidor.listen(puerto, '127.0.0.1', () => {
+servidor.listen(puerto, escuchar, () => {
   console.log('Abre esta liga en el navegador (entra como ' + cuenta + '):\n\n' + url + '\n');
 });

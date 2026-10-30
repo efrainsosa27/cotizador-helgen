@@ -12,6 +12,10 @@ const conf = Object.assign({
   sondeoSeg: 60, reconciliarMin: 10, frescuraSeg: 15, driveTtlMs: 60000, correoLimiteDiario: 1500, soloLectura: false,
   limiteBytes: 50 * 1024 * 1024, memoriaTrabajadorMb: 768,
 }, JSON.parse(fs.readFileSync(archivoConf, 'utf8')));
+// En Docker el servicio escucha en todas las interfaces DEL CONTENEDOR (docker-compose.yml publica solo 127.0.0.1:8090 del
+// servidor); el archivo de configuración se queda con 127.0.0.1, lo seguro fuera de un contenedor.
+if (process.env.CAPRI_HOST) conf.host = process.env.CAPRI_HOST;
+if (process.env.CAPRI_PUERTO) conf.puerto = Number(process.env.CAPRI_PUERTO);
 // Zona horaria de Apps Script (appsscript.json): new Date(a, m, d) y getHours() de Code.js dependen de ella
 process.env.TZ = conf.zonaHoraria;
 

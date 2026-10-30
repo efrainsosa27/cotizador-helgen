@@ -1,0 +1,13 @@
+# Contexto de la imagen de CAPRI (servidor/Dockerfile; se construye desde la raíz del repositorio). Lista blanca: solo
+# entra lo que la imagen necesita. Todo lo demás (.git, node_modules, web/, docs/, anterior/, credenciales, .env,
+# capri.json, propiedades…) se queda fuera.
+*
+!Code.js
+!Logo.js
+!tests/arnes.js
+!servidor/package.json
+!servidor/package-lock.json
+!servidor/config.ejemplo.json
+!servidor/src/
+!servidor/herramientas/
+!servidor/pruebas/

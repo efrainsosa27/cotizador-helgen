@@ -1,9 +1,10 @@
 {
   "puerto": 8090,
   "host": "127.0.0.1",
-  "origenes": ["https://cotizador-helgen.cotizador-helgen.workers.dev", "http://127.0.0.1:8788"],
+  "origenes": [
+    "https://cotizador-helgen.cotizador-helgen.workers.dev"
+  ],
   "backend": "google",
-  "codigo": { "dir": "/srv/projects/capri/app" },
   "datos": "/var/lib/capri",
   "zonaHoraria": "America/Mexico_City",
   "cuentaServicio": "facilities@helgen.tech",
@@ -16,8 +17,13 @@
   "frescuraSeg": 15,
   "driveTtlMs": 60000,
   "correoLimiteDiario": 1500,
-  "soloLectura": false,
-  "activadoresFijos": [{ "funcion": "cadaQuinceMinutos", "cadaMinutos": 15 }],
+  "soloLectura": true,
+  "activadoresFijos": [
+    {
+      "funcion": "cadaQuinceMinutos",
+      "cadaMinutos": 15
+    }
+  ],
   "google": {
     "credenciales": "/etc/capri/google-facilities.json",
     "credencialesCorreo": "/etc/capri/google-facilities-correo.json"
@@ -27,5 +33,7 @@
     "formato": "Letter",
     "concurrencia": 2
   },
-  "registro": { "nivel": "info" }
+  "registro": {
+    "nivel": "info"
+  }
 }

@@ -137,7 +137,9 @@ class MotorPdf {
   async navegador() {
     if (!this.nav) {
       this.nav = (async () => {
-        const lanzar = this.lanzar || (async () => require('puppeteer-core').launch({ executablePath: this.ejecutable, headless: true, args: this.args }));
+        // chrome-headless-shell (el de la imagen) va en modo "shell" (puppeteer ≥ 22); un Chromium completo, en headless normal
+        const headless = /headless-shell/.test(String(this.ejecutable || '')) ? 'shell' : true;
+        const lanzar = this.lanzar || (async () => require('puppeteer-core').launch({ executablePath: this.ejecutable, headless, args: this.args }));
         const n = await lanzar();
         if (n.on) n.on('disconnected', () => { this.nav = null; this.metricas.reinicios++; });
         return n;

@@ -318,6 +318,41 @@ caso('privado_: GET y DELETE de permisos de Drive con la credencial del servidor
 });
 
 // ---------------------------------------------------------------- Gmail
+caso('propiedades importar-drive: baja el JSON de Drive como facilities@, quita API_MUDADA, 600, lo elimina sin Papelera; nunca imprime valores', async () => {
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const P = require('../herramientas/propiedades');
+  const ID_P = '1AbCdEfGhIjKlMnOpQrStUvWxYz0123';
+  const auth = new AuthFalso();
+  const exportadas = { SPREADSHEET_ID: 'S1', SESION_SECRETO: 'secreto-muy-secreto', PORTAL_SECRETO: 'otro-secreto', API_MUDADA: 'https://capri.helgen.online', VER_oc: '7' };
+  auth.en('GET', /drive\/v3\/files\/[^/]+$/, p => (p.params.alt === 'media' ? { data: JSON.stringify(exportadas) } : { data: { id: ID_P, name: 'capri-propiedades.json', trashed: false } }));
+  let borrado = null;
+  auth.en('DELETE', /drive\/v3\/files\/[^/]+$/, p => { borrado = p.url; return { status: 204, data: '' }; });
+  const { drive } = require('@googleapis/drive');
+  assert.equal(P.idDeDrive('https://drive.google.com/file/d/' + ID_P + '/view?usp=drivesdk'), ID_P);
+  assert.equal(P.idDeDrive(ID_P), ID_P);
+  const x = await P.bajarDeDrive(drive({ version: 'v3', auth }), ID_P, true);
+  assert(borrado && borrado.includes(ID_P), 'eliminado definitivamente (files.delete, no la Papelera)');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'capri-props-'));
+  const destino = path.join(dir, 'propiedades.json');
+  const r = P.importar(x.propiedades, destino);
+  const escrito = JSON.parse(fs.readFileSync(destino, 'utf8'));
+  assert.equal(escrito.API_MUDADA, undefined, 'el servidor no arranca con API_MUDADA');
+  assert.equal(escrito.SESION_SECRETO, 'secreto-muy-secreto', 'mismo secreto: las sesiones abiertas siguen valiendo');
+  assert.equal(fs.statSync(destino).mode & 0o777, 0o600);
+  assert.equal(r.sinMudada, true);
+  assert(r.faltan.includes('ADMIN_DB_ID'));
+  // Lo que imprime comparar: nunca el valor de un secreto
+  const otro = path.join(dir, 'otro.json');
+  fs.writeFileSync(otro, JSON.stringify(Object.assign({}, escrito, { SESION_SECRETO: 'cambiado', VER_oc: '9' })));
+  const lineas = [];
+  const log = console.log;
+  console.log = t => lineas.push(String(t));
+  try { await P.principal(['comparar', destino, otro]); } finally { console.log = log; }
+  const salida = lineas.join('\n');
+  assert(/SESION_SECRETO \(secreto: distinto\)/.test(salida) && /VER_oc: 7 → 9/.test(salida));
+  assert(!/secreto-muy-secreto|cambiado/.test(salida), 'no imprime secretos');
+});
+
 caso('gmail: MIME con UTF-8 en asunto y nombre, Reply-To, texto + HTML; se manda como facilities@', async () => {
   const mime = armarMime({ para: 'tania@helgen.tech, leo@helgen.tech', asunto: '[CAPRI] Requisición REQ-2026-0005 autorizada', texto: 'Hola, ñandú', html: '<p>Hola, ñandú</p>',
     nombre: 'CAPRI Helgen', responderA: 'efrain@helgen.tech\r\nBcc: intruso@x.com' }, 'facilities@helgen.tech');
