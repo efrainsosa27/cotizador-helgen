@@ -37,6 +37,8 @@ P.exigirDocumentosParaPagar_ = function () {};
 correr(`enviarCorreosPendientes_ = function () { MEMO_.correos = []; }; avisarPortal_ = function () { return ''; };`);
 props.SUPER_ADMIN = 'leo@helgen.tech';
 P.prepararCapri();
+const tarCredito=ok('efrain','guardarTarjeta',{alias:'Crédito pruebas',banco:'Banco',tipo:'Crédito',ultimos4:'1234'}).find(t=>t.tipo==='Crédito').id;
+const tarDebito=ok('efrain','guardarTarjeta',{alias:'Débito pruebas',banco:'Banco',tipo:'Débito',ultimos4:'5678'}).find(t=>t.tipo==='Débito').id;
 
 let nId = 0;
 const id = p => (p || 'x') + (++nId);
@@ -248,7 +250,7 @@ aprobaciones(false);
   const s2 = siempre(false);
   falla('efrain', 'registrarPagoProveedor', [pago(s2.req, { metodo: 'Tarjeta de crédito', referencia: '4111 1111 1111 1111' })],
     /parece un número de tarjeta: nunca lo captures\. Escribe el número de autorización o solo los últimos 4 dígitos de la tarjeta\./);
-  ok('efrain', 'registrarPagoProveedor', pago(s2.req, { metodo: 'Tarjeta de débito', referencia: 'Ticket TC# 7319 0482 3561 8820 4417' }));
+  ok('efrain', 'registrarPagoProveedor', pago(s2.req, { metodo: 'Tarjeta de débito', tarjetaId: tarDebito, referencia: 'Ticket TC# 7319 0482 3561 8820 4417' }));
 }
 
 // ================= 4. Pago neto de lo devuelto sin reponer =================
@@ -307,7 +309,7 @@ aprobaciones(false);
   const v = ok('pedro', 'getRequisicion', s.req);
   assert.deepEqual(plain(v.proveedorPago.faltanPorMetodo).Transferencia, ['caratula'], JSON.stringify(v.proveedorPago));
   falla('efrain', 'registrarPagoProveedor', [pago(s.req)], /Falta la carátula bancaria de GNSS Store Ltd: no se registra un pago por transferencia hasta subirla/, 'PERMISO');
-  assert.equal(pagar(s.req, { metodo: 'Tarjeta de crédito', referencia: 'AUT 482913' }).vista.requisicion.estado, 'Pagada', 'con tarjeta sí se registra');
+  assert.equal(pagar(s.req, { metodo: 'Tarjeta de crédito', tarjetaId: tarCredito, referencia: 'AUT 482913' }).vista.requisicion.estado, 'Pagada', 'con tarjeta sí se registra');
   P.exigirDocumentosParaPagar_ = function () {};
 }
 
@@ -334,7 +336,7 @@ aprobaciones(false);
   aprobaciones(false);
 
   // Teléfono: la tabla de devoluciones de la requisición en Compras va dentro de .tabla-desliza
-  const html = require('fs').readFileSync(require('path').join(dir, 'web/cotizador/index.html'), 'utf8');
+  const html = require('fs').readFileSync(require('path').join(dir, 'web/home/index.html'), 'utf8');
   assert(/'<div class="tabla-desliza"><table style="font-size:12px;margin-top:6px"><thead><tr><th>Folio<\/th><th>Material/.test(html) &&
     /'<\/tbody><\/table><\/div>' : ''\) \+\s*'<div id="rcDevResolver">/.test(html), 'tabla de devoluciones deslizable');
 }
@@ -382,7 +384,7 @@ aprobaciones(false);
 
 // ================= F. Folios en onclick con jsArg =================
 {
-  const html = require('fs').readFileSync(require('path').join(dir, 'web/cotizador/index.html'), 'utf8');
+  const html = require('fs').readFileSync(require('path').join(dir, 'web/home/index.html'), 'utf8');
   const src = (html.match(/<script id="mod-recepcion">([\s\S]*?)<\/script>/) || [])[1] || '';
   assert(src.length > 1000, 'existe mod-recepcion');
   assert(!/\('" \+ esc\(/.test(src) && !/\(\\'' \+ esc\(/.test(src), 'ningún esc(…) entre comillas de un argumento de onclick');

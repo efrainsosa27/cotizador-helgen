@@ -486,7 +486,7 @@ assert.equal(H(LC, 'Contratos').filter(r => r[0] === p2 && r[7] === 'Anulada').l
 // ================= Interfaz: <script id="mod-anular"> con un DOM mínimo =================
 {
   const fs = require('fs'), vm = require('vm'), path = require('path');
-  const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
   const src = html.match(/<script id="mod-anular">([\s\S]*?)<\/script>/)[1];
   assert(/<div id="adminAnulados"><\/div>/.test(html), 'el bloque de Administración existe');
   // Elementos por id; al cambiar innerHTML, los ids que trae se vuelven a crear (como un DOM nuevo)

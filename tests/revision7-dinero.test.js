@@ -285,7 +285,7 @@ const limpiarCache = A => Object.keys(A.cache).forEach(k => delete A.cache[k]);
   const rg = plain(P.resumenGeneralCobranza(d)), mg = plain(P.margenPorProyecto(d));
   assert.deepEqual([rg.totales[0].sinSumar, rg.totales[0].margen, mg.totales[0].sinSumar, mg.totales[0].margen], [2, 2900, 2, 2900],
     'dos proyectos con costos en MXN que no suman; el margen USD solo con lo de USD');
-  const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
   assert(/t\.sinSumar \? ' · ' \+ t\.sinSumar \+ \(t\.sinSumar === 1 \? ' proyecto' : ' proyectos'\) \+ ' con costos en otra moneda \(no suman al margen\)'/.test(html), 'resumen');
   assert(/t\.sinSumar \? ' · ' \+ t\.sinSumar \+ ' con gastos o nómina en otra moneda \(no suman\)'/.test(html), 'reporte de margen');
   console.log('OK 5 · moneda con gastos; costos en otra moneda contados en los totales');
@@ -348,7 +348,7 @@ const limpiarCache = A => Object.keys(A.cache).forEach(k => delete A.cache[k]);
   const costos = libros[props.NOMINA_DB_ID].pest.CostosPersonal.m.slice(1).map(r => [r[0], r[3]]).sort();
   assert.deepEqual(costos, [['ana@helgen.tech', 45000], ['obrero@helgen.tech', 500]]);
   // Interfaz (mod-horas): el error CONFIRMAR abre window.confirm y vuelve a mandar con confirmado; si dice que no, no se guarda
-  const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
   const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
   const llamadas = [], dialogos = { confirmar: false, mensajes: [] }, valores = { nomPersona: 'luis@helgen.tech', nomMes: MES, nomCosto: '45', nomNotas: '' };
   const errores = [];

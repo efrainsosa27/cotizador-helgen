@@ -1,4 +1,4 @@
-// Interfaz (web/cotizador/index.html): corre la capa api-web y el script de la app con un DOM y un fetch simulados.
+// Interfaz (web/home/index.html): corre la capa api-web y el script de la app con un DOM y un fetch simulados.
 // Cubre: si el servidor rechaza el proyecto (codigo PROYECTO), se limpia el campo, se refresca la lista y se avisa;
 // moneda USD (el catálogo no pone precio); pestaña Cobranza solo con permiso; aceptar con confirmación; pago con comprobante;
 // margen en Cobranza; pestaña Compras solo con permiso: requisición → orden precargada (renglones sin costo, tipo de cambio),
@@ -9,7 +9,7 @@
 // separar renglones, recepción en su lugar y cancelar una recepción.
 // Uso: node tests/interfaz.test.js .   (carpeta del proyecto)
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
-const html=fs.readFileSync(path.join(process.argv[2],'web/cotizador/index.html'),'utf8');
+const html=fs.readFileSync(path.join(process.argv[2],'web/home/index.html'),'utf8');
 const scripts=[...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m=>({id:m[1],src:m[2]}));
 const apiWeb=scripts.find(s=>s.id==='api-web').src, app=scripts.find(s=>!s.id).src;
 

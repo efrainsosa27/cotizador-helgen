@@ -392,7 +392,7 @@ assert.equal(ultBit()[2], 'Excepción de super admin: visto bueno a una propuest
 console.log('OK identidad (servidor)');
 
 // ================= Interfaz =================
-const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
 const apiWeb = scripts.find(x => x.id === 'api-web').src, app = scripts.find(x => !x.id).src, modId = scripts.find(x => x.id === 'mod-identidad').src;
 assert(/<h2>CAPRI<\/h2>/.test(html) && /Cotizaciones · Aprobaciones · Pagos · Requisiciones · Inventario/.test(html), 'caja de entrada CAPRI');

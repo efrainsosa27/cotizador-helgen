@@ -433,7 +433,7 @@ assert.deepEqual([v.puedeAceptarAdicional, v.adicionales[0].esquemaEditable, v.a
 filaK[6] = 'Activo';
 
 // ================= 3. Interfaz (app + mod-adicionales, conectada al servidor simulado) =================
-const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
 assert(scripts.some(s => s.id === 'mod-adicionales'), 'existe <script id="mod-adicionales">');
 assert(/<label id="cotAdicionalCaja" class="oculto"/.test(html) && /<input type="checkbox" id="cotAdicional"/.test(html), 'casilla «Adicional», oculta de inicio');

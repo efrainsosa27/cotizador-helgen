@@ -13,7 +13,7 @@ const A = require('./arnes')(dir, { props: {
   ROL_OPERACIONES: 'adri@helgen.tech', SOLO_REQUISICION: 'rosa@helgen.tech, adri@helgen.tech',
   ROL_COBRANZA: 'efrain@helgen.tech', SUPER_ADMIN: 'leo@helgen.tech' } });
 const { ok, plain, props, libros, HOY_ISO, PDF, FOTO } = A;
-const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
 
 // ---- HTML: pestaña y vista ----

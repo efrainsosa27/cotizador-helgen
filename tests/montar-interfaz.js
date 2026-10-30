@@ -1,10 +1,10 @@
-// Monta la interfaz (web/cotizador/index.html) con un DOM y un fetch simulados conectados al servidor simulado del arnés (A.post),
+// Monta la interfaz (web/home/index.html) con un DOM y un fetch simulados conectados al servidor simulado del arnés (A.post),
 // como la sección de interfaz de tests/pagos.test.js. No es una prueba: la usan otras (require('./montar-interfaz')(A, dir)).
 // dialogos.confirmar / dialogos.prompt = lo que responden window.confirm / window.prompt; dialogos.mensajes = lo que preguntaron.
 'use strict';
 module.exports = function (A, dir) {
   const fs = require('fs'), vm = require('vm'), path = require('path');
-  const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
   const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
   function montar(quien, permisos) {
     const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');

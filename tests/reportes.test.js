@@ -464,7 +464,7 @@ assert.deepEqual(plain(correr('CAMBIOS_API.guardarFechasEsperadas')), ['contrato
 
 // ================= 3. Interfaz (mod-reportes sobre la app, conectada al servidor simulado) =================
 const fs = require('fs'), path = require('path'), vm = require('vm');
-const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
 assert(scripts.some(s => s.id === 'mod-reportes'), 'existe <script id="mod-reportes">');
 assert(/<button id="tabRep" class="oculto" onclick="verTab\('rep'\)">Reportes<\/button>/.test(html), 'botón de la pestaña, oculto de inicio');

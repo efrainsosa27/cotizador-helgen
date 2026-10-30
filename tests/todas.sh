@@ -13,7 +13,7 @@ done
 tmp=$(mktemp -d)
 python3 - "$tmp/ui.js" <<'PY'
 import re, sys
-s = open('web/cotizador/index.html', encoding='utf8').read()
+s = open('web/home/index.html', encoding='utf8').read()
 open(sys.argv[1], 'w', encoding='utf8').write('\n;\n'.join(re.findall(r'<script(?: id="[^"]*")?>(.*?)</script>', s, re.S)))
 PY
 if node --check "$tmp/ui.js" 2>"$tmp/err"; then echo "✔ sintaxis de la interfaz"; else echo "✘ sintaxis de la interfaz"; head -8 "$tmp/err"; fallas=1; fi

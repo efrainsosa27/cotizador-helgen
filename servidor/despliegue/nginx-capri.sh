@@ -80,8 +80,8 @@ probar() {
     fi
     prueba "CORS solo para la interfaz de Cloudflare" "access-control-allow-origin: https://cotizador-helgen.cotizador-helgen.workers.dev" \
       "$C -D - -o /dev/null -H '$ORIGEN' -d '{}' https://$HOST/api | tr 'A-Z' 'a-z'"
-    prueba "dominio propio → interfaz" "302 https://$HOST/cotizador/" "$C -o /dev/null -w '%{http_code} %{redirect_url}' https://$HOST/"
-    prueba "interfaz propia disponible" 'CAPRI' "$C https://$HOST/cotizador/"
+    prueba "dominio propio → interfaz" "302 https://$HOST/home/" "$C -o /dev/null -w '%{http_code} %{redirect_url}' https://$HOST/"
+    prueba "interfaz propia disponible" 'CAPRI' "$C https://$HOST/home/"
     prueba "CORS para el dominio propio" "access-control-allow-origin: https://$HOST" \
       "$C -D - -o /dev/null -H 'Origin: https://$HOST' -d '{}' https://$HOST/api | tr 'A-Z' 'a-z'"
     prueba "otro origen → 403 ORIGEN" '"codigo":"ORIGEN"' "$C -H 'Origin: https://malo.example' -d '{}' https://$HOST/api"

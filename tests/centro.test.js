@@ -622,7 +622,7 @@ CM.recepciones = [];
 // ================= Interfaz (módulo mod-centro con la página, DOM y fetch simulados) =================
 (async () => {
   const fs = require('fs'), vm = require('vm'), path = require('path');
-  const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
   const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
   const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
   const token = 'h.' + b64({ email: 'obrero@helgen.tech', given_name: 'Juan', exp: Math.floor(Date.now() / 1000) + 3600 }) + '.f';

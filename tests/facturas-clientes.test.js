@@ -649,7 +649,7 @@ assert.deepEqual([enLista(U(502)).sinLigar, enLista(U(502)).ligada, enLista(U(50
 }
 
 // ================= 3. Interfaz (mod-facturas + mod-pantallas) =================
-const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
 assert(scripts.some(s => s.id === 'mod-facturas'), 'existe <script id="mod-facturas">');
 assert(/<div id="cobModFacturas" class="modulo oculto"><\/div>/.test(html) && /<div id="cobFacturas" class="oculto"><\/div>/.test(html));

@@ -186,7 +186,7 @@ ok('pedro', 'registrarPagoProveedor', { reqFolio: r5, fecha: HOY_ISO, monto: 116
 assert.deepEqual(pend('obrero').items.filter(i => i.folio === r5).map(i => i.tipo + ':' + i.accion), ['recibir:Confirmar que llegó'], 'pagada: ya');
 
 // ======================= Interfaz =======================
-const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
 const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
 const token = 'h.' + b64({ email: 'ana@helgen.tech', given_name: 'Ana', exp: Math.floor(Date.now() / 1000) + 3600 }) + '.f';

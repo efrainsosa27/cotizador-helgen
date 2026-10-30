@@ -404,7 +404,7 @@ const AF = {};
 
 // ================= Interfaz (mod-reportes sobre la app, conectada al servidor simulado) =================
 const vm = require('vm');
-const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
 function montar(quien) {
   const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -495,7 +495,7 @@ const esperar = async (k = 30) => { for (let i = 0; i < k; i++) await new Promis
 
 // Integración (29/10/2026): ningún CSV de la interfaz usa la guarda vieja sin tabulador ni retorno (fórmula al abrir en Excel)
 {
-  const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
   assert.equal((html.match(/\/\^\[=\+\\-@\]\//g) || []).length, 0, 'guarda CSV vieja (sin \\t \\r) en la interfaz');
   assert((html.match(/\/\^\[=\+\\-@\\t\\r\]\//g) || []).length >= 3, 'guarda CSV con \\t \\r en resumen, CxP y reportes');
   console.log('OK guardas CSV');

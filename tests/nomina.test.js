@@ -653,7 +653,7 @@ assert('horas' in correr('cadaQuinceMinutos()'));
 
 // ================= 4. Interfaz (mod-horas sobre la app, conectada al servidor simulado) =================
 const fs = require('fs'), path = require('path'), vm = require('vm');
-const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
 assert(scripts.some(s => s.id === 'mod-horas'), 'existe <script id="mod-horas">');
 assert(/<button id="tabHoras" class="oculto" onclick="verTab\('horas'\)">Horas<span id="cntHoras" class="cuenta oculto"><\/span><\/button>/.test(html));

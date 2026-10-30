@@ -482,7 +482,7 @@ const interfazNomina = (async () => {
   ['text/plain', 'application/octet-stream', 'application/pdf', 'application/octet-stream', 'image/png', 'application/octet-stream']);
 
   // Interfaz (DOM simulado): abrirArchivoServidor + verArchivo (gastos) + verArchivoReq, tal como están en index.html
-  const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
   const ini = html.indexOf('  const TIPOS_EN_PAGINA'), fin = html.indexOf('  const ligaArchivo = (folio, id, texto)');
   assert(ini > 0 && fin > ini, 'encuentra el visor en index.html');
   const verGasto = html.match(/ {4}function verArchivo\(folio, que\) \{[\s\S]*?\n {4}\}\n/)[0];

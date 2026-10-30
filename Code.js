@@ -140,6 +140,8 @@ const API_FUNCIONES = Object.assign({
   registrarPagoProveedor: registrarPagoProveedor,
   cancelarPagoProveedor: cancelarPagoProveedor,
   editarFinanciamientoProveedor: editarFinanciamientoProveedor,
+  listarTarjetas: listarTarjetas,
+  guardarTarjeta: guardarTarjeta,
   cerrarRequisicionCompras: cerrarRequisicionCompras,
   // Facturas de proveedor y cuentas por pagar (solo ROL_COMPRAS; 4.5)
   registrarFacturaProveedor: registrarFacturaProveedor,
@@ -456,6 +458,7 @@ const CAMBIOS_API = Object.assign({
   autorizarRequisicion: ['requisiciones', 'oc'], rechazarRequisicion: ['requisiciones'],
   devolverRequisicion: ['requisiciones'], registrarPagoProveedor: ['pagosProveedores', 'requisiciones', 'oc'],
   editarFinanciamientoProveedor: ['pagosProveedores'],
+  guardarTarjeta: ['pagosProveedores'],
   cancelarPagoProveedor: ['pagosProveedores', 'requisiciones', 'oc'], cerrarRequisicionCompras: ['requisiciones', 'oc'],
   // Una factura con retenciones puede dejar pagada la orden (completarSiCubierta_): también cambian requisiciones y órdenes
   registrarFacturaProveedor: ['facturasProveedor', 'requisiciones', 'oc'], cancelarFacturaProveedor: ['facturasProveedor'],
@@ -2853,6 +2856,7 @@ const OC_EMITIDA = 'Emitida', OC_PAGADA = 'Pagada', OC_RECIBIDA = 'Recibida', OC
 
 /** Estructura del libro de compras (mismo formato que HOJAS_COBRANZA). */
 const HOJAS_COMPRAS = {
+  Tarjetas: { enc: ['id', 'alias', 'banco', 'tipo', 'ultimos4', 'titular', 'activo', 'actualizo', 'actualizado'], numeros: [] },
   OrdenesCompra: {
     enc: ['folio', 'fecha', 'proyecto_folio', 'marca', 'proveedor_id', 'proveedor', 'rfc', 'contacto', 'correo', 'telefono',
       'fecha_entrega', 'lugar_entrega', 'condiciones_pago', 'moneda', 'iva_tasa', 'subtotal', 'iva', 'total', 'moneda_proyecto',
@@ -2915,7 +2919,7 @@ const HOJAS_COMPRAS = {
       'tipo',
       // Revisión del incremento 6: el idSolicitud del envío y la huella de su contenido (un reenvío no duplica el pago aunque se
       // pierda el caché; el mismo id con otros datos se rechaza). Vacías en pagos de antes
-      'id_solicitud', 'huella_solicitud', 'financiamiento (JSON)'],
+      'id_solicitud', 'huella_solicitud', 'financiamiento (JSON)', 'tarjeta (JSON)'],
     numeros: [7, 9, 10],
   },
   Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
@@ -3824,7 +3828,8 @@ function pagoProvDesdeFila_(r, fila) {
     canceladoPor: String(r[18] || ''), fechaCancelacion: fechaTexto_(r[19]), motivoCancelacion: String(r[20] || ''), fila: fila,
     tipo: String(r[21] || ''), // P (incremento 6): Anticipo · Parcial · Liquidación ('' en pagos de antes)
     idSolicitud: String(r[22] || ''), huellaSolicitud: String(r[23] || ''),
-    financiamiento: r[24] ? JSON.parse(String(r[24])) : null, // revisión del incremento 6 (idempotencia)
+    financiamiento: r[24] ? JSON.parse(String(r[24])) : null,
+    tarjeta: r[25] ? JSON.parse(String(r[25])) : null, // revisión del incremento 6 (idempotencia)
   };
 }
 
@@ -3894,7 +3899,7 @@ function vistaRequisicion_(libro, folioReq) {
     // F (incremento 5): para la orden, sin datos bancarios (con forma de pago habitual y documentos que faltan); para el pago,
     // banco, CLABE y documentos del proveedor de la orden (formasPago: las de la orden; metodos: las del pago real)
     proveedores: proveedoresDelLibro_(libro).map(proveedorParaOrden_), proveedorPago: orden ? proveedorDePago_(libro, orden) : null,
-    formasPago: FORMAS_PAGO_OC, ivaTasas: IVA_OC, metodos: METODOS_PAGO, hoy: hoyIso_(),
+    formasPago: FORMAS_PAGO_OC, ivaTasas: IVA_OC, metodos: METODOS_PAGO, tarjetas: listarTarjetas(), hoy: hoyIso_(),
     sitios: sitios_(), receptores: receptores_(),
     avance: avance ? avance.lineas : null, recepcionCompleta: !!avance && avance.completo,
     recepciones: recepcionesDe_(movs, true),
@@ -4064,6 +4069,7 @@ function registrarPagoProveedor(p, motivoExcepcion) {
     const porPagar = totalPorPagarOrden(orden, devueltoSinReponer(movs));
     const pago = normalizarPagoProveedor(d0, { moneda: orden.moneda, total: antes.esperado, pagado: antes.pagado, fechaOrden: orden.fecha,
       hoy: hoyIso_(), totalOrden: orden.total, descontado: porPagar ? porPagar.descontado : 0, porFacturas: antes.porFacturas });
+    const tarjeta = /^Tarjeta/.test(pago.metodo) ? tarjetaParaPago_(d0.tarjetaId, pago.metodo) : null;
     // F (incremento 5): documentos del proveedor (CSF y carátula) o excepción de super admin con motivo (antes de escribir)
     exigirDocumentosParaPagar_(libro, orden, motivoExcepcion, pago.metodo);
 
@@ -4081,7 +4087,7 @@ function registrarPagoProveedor(p, motivoExcepcion) {
     escribe_(hP).appendRow([folio, textoFecha_(pago.fecha), Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'),
       orden.folio, req.folio, req.proyectoFolio, pago.monto, pago.monedaPago, pago.tipoCambio, pago.montoAplicado, orden.moneda,
       pago.metodo, t(pago.referencia), archivo.getId(), archivo.getUrl(), t(VENDEDOR_.email),
-      t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '', tipoPago, t(idSolicitud), t(huella), pago.financiamiento ? t(JSON.stringify(pago.financiamiento)) : '']);
+      t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '', tipoPago, t(idSolicitud), t(huella), pago.financiamiento ? t(JSON.stringify(pago.financiamiento)) : '', tarjeta ? t(JSON.stringify(tarjeta)) : '']);
     olvidarPagosProv_();
     let nuevo = req.estado, retenida = '';
     if (completo) {
@@ -4129,7 +4135,7 @@ function huellaPagoProv_(d, bytes) {
   const t = v => String(v == null ? '' : v).trim();
   const md5 = x => Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, x));
   return md5(JSON.stringify([t(d.reqFolio).toUpperCase(), t(d.ocFolio).toUpperCase(), n(d.monto), t(d.monedaPago).toUpperCase(),
-    n(d.tipoCambio), t(d.metodo), t(d.referencia), t(d.fecha), md5(bytes || [])].concat(d.financiamiento ? [normalizarFinanciamientoProveedor(d.financiamiento)] : []))).replace(/=+$/, '');
+    n(d.tipoCambio), t(d.metodo), t(d.referencia), t(d.fecha), md5(bytes || [])].concat(d.financiamiento ? [normalizarFinanciamientoProveedor(d.financiamiento)] : []).concat(d.tarjetaId ? [t(d.tarjetaId)] : []))).replace(/=+$/, '');
 }
 
 /**
@@ -17878,4 +17884,58 @@ function editarFinanciamientoProveedor(folio, datos) {
     SpreadsheetApp.flush();
     return vistaRequisicion_(libro, p.reqFolio);
   });
+}
+
+
+// Registro operativo de tarjetas: solo identificadores parciales, nunca PAN, CVV, NIP ni imágenes de la tarjeta.
+function normalizarTarjeta(d) {
+  d = d || {};
+  const admitidas = ['id','alias','banco','tipo','ultimos4','titular','activo'];
+  if (Object.keys(d).some(k => admitidas.indexOf(k) < 0)) throw new Error('Solo se admiten los datos del registro: nunca número completo, CVV, NIP ni archivos.');
+  const texto = (v, que) => {
+    const x = String(v || '').trim().replace(/\s+/g, ' ');
+    if (x.length > 100 || pareceNumeroTarjeta(x)) throw new Error(que + ': usa máximo 100 caracteres y nunca el número completo de la tarjeta.');
+    return x;
+  };
+  const alias = texto(d.alias, 'Alias'), banco = texto(d.banco, 'Banco'), titular = texto(d.titular, 'Titular');
+  if (!alias || !banco) throw new Error('Captura alias y banco.');
+  const tipo = String(d.tipo || '');
+  if (['Crédito', 'Débito'].indexOf(tipo) < 0) throw new Error('Elige Crédito o Débito.');
+  const ultimos4 = String(d.ultimos4 || '').trim();
+  if (!/^\d{4}$/.test(ultimos4)) throw new Error('Captura únicamente los últimos 4 dígitos.');
+  return { alias: alias, banco: banco, tipo: tipo, ultimos4: ultimos4, titular: titular, activo: d.activo !== false };
+}
+function listarTarjetas() {
+  exigirCompras_();
+  const libro = libroComprasSiExiste_();
+  if (!libro || !libro.getSheetByName('Tarjetas')) return [];
+  return filasDeArea_(hojaCompras_(libro, 'Tarjetas'), HOJAS_COMPRAS, 'Tarjetas').filter(r => r[0]).map(r => ({
+    id: String(r[0]), alias: String(r[1]), banco: String(r[2]), tipo: String(r[3]), ultimos4: String(r[4]), titular: String(r[5] || ''), activo: String(r[6]) !== 'No' }));
+}
+function guardarTarjeta(datos) {
+  exigirCompras_();
+  const d = normalizarTarjeta(datos), id = String(datos.id || '').trim();
+  return conCandado_(() => {
+    const existentes = listarTarjetas();
+    const previa = id ? existentes.find(t => t.id === id) : null;
+    if (id && !previa) throw new Error('No existe la tarjeta.');
+    const duplicada = existentes.find(t => t.id !== id && t.banco.toLowerCase() === d.banco.toLowerCase() && t.tipo === d.tipo && t.ultimos4 === d.ultimos4);
+    if (duplicada) throw new Error('Esta tarjeta ya está registrada: ' + duplicada.alias + '.');
+    const folio = id || 'TAR-' + Utilities.getUuid();
+    const libro = libroCompras_(), hoja = hojaCompras_(libro, 'Tarjetas');
+    const fila = [folio, d.alias, d.banco, d.tipo, d.ultimos4, d.titular, d.activo ? 'Sí' : 'No', VENDEDOR_.email,
+      Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss')].map(textoCelda);
+    const numeroFila = previa ? filasDeArea_(hoja, HOJAS_COMPRAS, 'Tarjetas').findIndex(r => String(r[0]) === id) + 2 : 0;
+    if (previa) escribe_(hoja).getRange(numeroFila, 1, 1, fila.length).setValues([fila]);
+    else escribe_(hoja).appendRow(fila);
+    bitacora_(libro, previa ? 'Editar tarjeta' : 'Registrar tarjeta', '', folio + ' · ' + d.alias + ' · ' + d.tipo + ' · ' + d.banco + ' · ****' + d.ultimos4 + ' · ' + (d.activo ? 'Activa' : 'Inactiva'), '', HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    return listarTarjetas();
+  });
+}
+function tarjetaParaPago_(id, metodo) {
+  const t = listarTarjetas().find(t => t.id === String(id || '') && t.activo);
+  if (!t) throw new Error('Selecciona una tarjeta activa registrada en Compras → Tarjetas.');
+  if (metodo !== 'Tarjeta de ' + t.tipo.toLowerCase()) throw new Error('La tarjeta seleccionada no corresponde al método de pago.');
+  return { id: t.id, alias: t.alias, banco: t.banco, tipo: t.tipo, ultimos4: t.ultimos4, titular: t.titular };
 }

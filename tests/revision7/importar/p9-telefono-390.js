@@ -1,6 +1,6 @@
 // Copia de la revisión 7c (capri-7rev3/revision/) para la rama incremento-7-fix-importar: antes del arreglo esta prueba de concepto
 // confirmaba el defecto; ahora comprueba lo corregido (la prueba permanente es tests/revision7-importar.test.js). Uso: bash tests/revision7/correr.sh
-// P9 · La interfaz real (web/cotizador/index.html) en Chromium a 390 px, conectada al servidor simulado del arnés (las llamadas a la
+// P9 · La interfaz real (web/home/index.html) en Chromium a 390 px, conectada al servidor simulado del arnés (las llamadas a la
 // API se responden con doPost del arnés). Revisa que ninguna vista nueva (Gastos, Horas, Cobranza con Facturas de clientes y
 // Adicionales) mueva la página de lado, junta los errores de JavaScript y deja capturas en revision/capturas/.
 // También revisa cómo reaccionan los módulos nuevos a codigo 'PERMISO' y 'SESION'.

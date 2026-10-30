@@ -403,7 +403,7 @@ assert.equal(LB.find(r => r[0] === vb.ocFolio)[LB[0].indexOf('forma_pago')], 'Cr
 assert.equal(B.ok('adri', 'getRequisicionOperaciones', rB).orden.formaPago, 'Crédito del proveedor', 'en la orden de aprobaciones');
 
 // ================= Interfaz (mod-proveedores, con DOM simulado) =================
-const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
 const modulo = scripts.find(x => x.id === 'mod-proveedores');
 assert(modulo, 'existe <script id="mod-proveedores">');
@@ -442,6 +442,7 @@ ui.verTab = t => { ui.TAB = t; };
 ui.verListaCom = () => { ui.vistas = 'lista'; };
 ui.verCxp = () => { ui.vistas = 'cxp'; };
 ui.cerrarFormRecepcion = () => {};
+ui.pintarTarjetasPago = () => {}; // selector probado con el registro de tarjetas; aquí se aísla Proveedores
 vm.createContext(ui);
 vm.runInContext('var TAB = "pend", REQC = null, BOOT = true, PERMISOS = { compras: true };', ui);
 vm.runInContext(modulo.src, ui);

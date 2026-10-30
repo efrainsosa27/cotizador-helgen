@@ -105,7 +105,7 @@ const c2 = P.correoConLigas(...CASOS[2]);
 assert(c2.recortado && c2.gmail.length <= 1800 && c2.mailto.length <= 1800 && c2.cuerpo.endsWith('… ver el PDF adjunto.'));
 
 // La interfaz tiene una copia idéntica (rehace las ligas si se cambia el correo)
-const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
 const modCorreos = scripts.find(s => s.id === 'mod-correos').src;
 const sinSangria = s => s.split('\n').map(l => l.trim()).join('\n');

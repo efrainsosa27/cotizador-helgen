@@ -515,7 +515,7 @@ const sinMontos = (texto, que) => assert(!/\$|\d,\d{3}\.\d{2}|\b\d+\.\d{2}\b|PGP
 
 // ================= 5. Interfaz (DOM simulado conectado al servidor simulado) =================
 const fs = require('fs'), vm = require('vm'), path = require('path');
-const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
 function montar(quien, permisos) {
   const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');

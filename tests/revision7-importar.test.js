@@ -349,7 +349,7 @@ const LOCAL = 0x04034b50, CENTRAL = 0x02014b50, FIN = 0x06054b50;
 const A9 = crear();
 A9.ctx.prepararCapri();
 A9.envio([{ nombre: 'A-1.xml', datos: b64(cfdi({ uuid: U(1), folio: '1' })) }]);
-const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script(?: id="([^"]*)")?>([\s\S]*?)<\/script>/g)].map(m => ({ id: m[1], src: m[2] }));
 /** La interfaz (api-web, la app, mod-pantallas y mod-facturas) con un DOM mínimo, conectada al servidor simulado; forzar = {funcion: [codigo, error]}. */
 function montar(quien, forzar) {

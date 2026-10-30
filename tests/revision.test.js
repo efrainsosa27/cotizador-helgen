@@ -76,7 +76,7 @@ ok('', 'solicitarCodigo', 'jesus@helgen.services');
 assert.equal(A.correos.length, n0, 'con la cuota casi agotada, los códigos no la gastan (los avisos van primero)');
 
 // ---- Interfaz: argumentos de onclick que vienen de la hoja (JSON y luego HTML) ----
-const html = fs.readFileSync(path.join(dir, 'web/cotizador/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(dir, 'web/home/index.html'), 'utf8');
 const def = html.match(/const esc = [^\n]+\n[^\n]*\n\s*const jsArg = [^\n]+/)[0];
 const jsArg = new Function(def + '; return jsArg;')();
 const malo = "DEL-1');alert(1);//\"<b>";
