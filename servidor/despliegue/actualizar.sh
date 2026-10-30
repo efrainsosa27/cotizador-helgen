@@ -9,6 +9,14 @@
 #   servidor/despliegue/actualizar.sh --estado
 # Cuándo: fuera de horario (el cambio deja ~5–15 s sin servicio: la interfaz muestra "CAPRI se está actualizando").
 set -euo pipefail
+# Este archivo vive en el repositorio y el git checkout de abajo lo cambia mientras bash lo lee: se corre una copia
+YO=servidor/despliegue/actualizar.sh
+if [ -z "${CAPRI_ACTUALIZAR_COPIA:-}" ]; then
+  COPIA=$(mktemp "${TMPDIR:-/tmp}/capri-actualizar.XXXXXX")
+  cp "$0" "$COPIA"
+  CAPRI_ACTUALIZAR_COPIA="$COPIA" exec bash "$COPIA" "$@"
+fi
+trap 'rm -f "$CAPRI_ACTUALIZAR_COPIA"' EXIT
 APP=${CAPRI_APP:-/srv/projects/capri/app}
 cd "$APP/servidor"
 [ -f .env ] || { echo "Falta servidor/.env: corre primero despliegue/preparar-servidor.sh."; exit 1; }
@@ -50,9 +58,10 @@ podar() {  # se quedan las 5 imágenes más nuevas (y siempre la que corre); las
 case "${1:-}" in
   --estado) estado; exit 0 ;;
   --regresar)
-    DESTINO=${2:-$(dk image ls capri --format '{{.Tag}}' | grep -v -e '^<none>$' -e "^$ACTUAL$" | head -n 1)}
+    # Sin etiqueta: la imagen construida justo antes de la que corre (la lista viene de la más nueva a la más vieja)
+    DESTINO=${2:-$(dk image ls capri --format '{{.Tag}}' | grep -v '^<none>$' | sed -n "/^$ACTUAL$/{n;p;q}")}
     [ -n "$DESTINO" ] || { echo "No hay otra imagen de capri en el servidor."; exit 1; }
-    dk image inspect "capri:$DESTINO" >/dev/null 2>&1 || { echo "No existe la imagen capri:$DESTINO (mira: $0 --estado)."; exit 1; }
+    dk image inspect "capri:$DESTINO" >/dev/null 2>&1 || { echo "No existe la imagen capri:$DESTINO (mira: $YO --estado)."; exit 1; }
     echo "Regreso: capri:$ACTUAL → capri:$DESTINO"
     if cambiar_a "$DESTINO"; then
       fijar "$DESTINO"
@@ -84,11 +93,13 @@ echo "== Cambio"
 if cambiar_a "$NUEVA"; then
   fijar "$NUEVA"
   podar "$NUEVA"
-  echo "✔ CAPRI en capri:$NUEVA. Registro: docker logs -f capri   ·   regreso: $0 --regresar"
+  echo "✔ CAPRI en capri:$NUEVA. Registro: docker logs -f capri   ·   regreso: $YO --regresar"
   exit 0
 fi
 echo "✘ capri:$NUEVA no quedó sana: regreso a capri:$ACTUAL"
 dk logs --tail 40 capri 2>&1 | tail -40 || true
 if cambiar_a "$ACTUAL"; then echo "✔ de vuelta en capri:$ACTUAL"; else echo "✘ tampoco quedó sana capri:$ACTUAL: docker logs capri"; fi
+# La imagen que falló no se queda como candidata para --regresar
+dk image rm "capri:$NUEVA" "capri-pruebas:$NUEVA" >/dev/null 2>&1 || true
 git checkout --quiet --detach "$ANTERIOR"
 exit 1
