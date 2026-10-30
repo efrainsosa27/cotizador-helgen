@@ -410,7 +410,9 @@ assert.equal(A.correos.length, 2, 'un correo por semana devuelta');
 A.correos.forEach(m => {
   assert.equal(m.to, 'obrero@helgen.tech');
   assert(/Te devolvieron horas/.test(m.subject) && /#horas/.test(m.htmlBody), m.subject);
-  assert(!/\$|500|viáticos|Faltó|MXN|\b8 h\b|\b40\b/.test(m.htmlBody + m.body + m.subject), 'sin montos, horas ni la nota: ' + m.body);
+  // Sin la hora del aviso: "Cuándo: … 20:40" hacía fallar \b40\b a cualquier hora terminada en :40 (encontrado el 29/10/2026)
+  const texto = (m.htmlBody + m.body + m.subject).replace(/\b\d{1,2}:\d{2}\b/g, 'HH:MM');
+  assert(!/\$|500|viáticos|Faltó|MXN|\b8 h\b|\b40\b/.test(texto), 'sin montos, horas ni la nota: ' + m.body);
 });
 v = ok('obrero', 'misHoras', PASADA);
 assert.deepEqual(v.bloques.map(b => b.estado + ':' + b.motivo), ['Devuelta:Faltó el viernes; $500 de viáticos van aparte', 'Aprobada:'],

@@ -109,7 +109,10 @@ function celdaApi(celda, zona, formatoActual) {
   }
   if (typeof v === 'number' && isFinite(v)) {
     const cd = { userEnteredValue: { numberValue: v } };
-    return celda.t && celda.p && !formatoActual ? { cd, formato: { type: celda.t, pattern: celda.p } } : { cd };
+    // El formato se manda si la celda no tenía ninguno o si tenía uno de fecha u hora: un número escrito como texto en
+    // una celda de fecha la regresa a formato automático (medido con Apps Script real, caso 49 de casos-escritura.js)
+    const reemplaza = !formatoActual || TIPOS_FECHA[formatoActual.tipo];
+    return celda.t && celda.p && reemplaza ? { cd, formato: { type: celda.t, pattern: celda.p } } : { cd };
   }
   if (typeof v === 'boolean') return { cd: { userEnteredValue: { boolValue: v } } };
   return { cd: { userEnteredValue: { stringValue: String(v) } } };

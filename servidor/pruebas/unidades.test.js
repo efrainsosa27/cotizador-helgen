@@ -11,7 +11,7 @@ const { Candado } = require('../src/nucleo/candado');
 const casos = [];
 const caso = (n, f) => casos.push([n, f]);
 
-caso('interpretar (USER_ENTERED): apóstrofo = texto, fecha ISO = Date (con su formato), "=" y "+…" = fórmula; en "@" texto (la tabla completa: escritura.test.js)', () => {
+caso('interpretar (USER_ENTERED): apóstrofo = texto, fecha ISO = Date (con su formato), "=" = fórmula ("+…" no), en "@" todo texto (la tabla completa: escritura.test.js)', () => {
   assert.deepEqual(M.interpretar("'0012"), { valor: '0012' });
   assert.deepEqual(M.interpretar("'2026-10-20"), { valor: '2026-10-20' });
   const d = M.interpretar('2026-10-20 17:30');
@@ -19,8 +19,10 @@ caso('interpretar (USER_ENTERED): apóstrofo = texto, fecha ISO = Date (con su f
   assert.equal(M.interpretar('2026-10-20').patron, 'yyyy-mm-dd');
   assert.deepEqual(M.interpretar('=A1*2'), { valor: '', formula: '=A1*2' });
   assert.deepEqual([M.interpretar(12.5).valor, M.interpretar(true).valor, M.interpretar(null).valor], [12.5, true, '']);
-  assert.deepEqual(M.interpretar('+52 442'), { valor: '', formula: '=+52 442' }, 'como Sheets: #ERROR! (CLAUDE.md regla 7)');
-  assert.deepEqual(M.interpretar('+52 442', { formato: { tipo: 'TEXT', patron: '@' } }), { valor: '+52 442' }, 'en texto plano no');
+  // Medido con Apps Script real: por setValues un "+" al inicio NO hace fórmula (la regla 7 de CLAUDE.md describe la interfaz)
+  assert.deepEqual(M.interpretar('+52 442'), { valor: '+52 442' }, 'queda texto, no "=+52 442"');
+  assert.deepEqual(M.interpretar('+52 442', { formato: { tipo: 'TEXT', patron: '@' } }), { valor: '+52 442' }, 'en texto plano también');
+  assert.deepEqual(M.interpretar('2026-10-20', { formato: { tipo: 'TEXT', patron: '@' } }), { valor: '2026-10-20' }, 'en "@" la fecha ISO no se convierte');
   assert.deepEqual(M.interpretar('123'), { valor: 123 });
   assert.deepEqual(M.interpretar('123', { formato: { tipo: 'TEXT', patron: '@' } }), { valor: '123' });
 });
@@ -226,8 +228,9 @@ caso('fachada de hojas: rangos A1 abiertos ("A2:A" no incluye el encabezado), se
   assert.throws(() => h.getRange(2, 1, 0, 1), /at least 1/);
   h.appendRow(['C', '2026-10-29', "'0012", '=B4*2']);
   const f = M2.leer(libro.hojas[0], 4, 1, 1, 4)[0];
-  assert(f[1] instanceof Date && f[2] === '0012' && f[3] === '' && libro.hojas[0].formulas['3,3'] === '=B4*2');
-  assert.equal(diario[diario.length - 1].celdas[1].p, 'yyyy-mm-dd', 'la fecha escrita como texto lleva su formato');
+  assert(f[1] === '2026-10-29' && f[2] === '0012' && f[3] === '' && libro.hojas[0].formulas['3,3'] === '=B4*2',
+    'la columna B es "@": la fecha ISO queda texto (medido)');
+  assert.equal(diario[diario.length - 1].celdas[1].p, undefined, 'en "@" no se convierte, así que no hay formato que poner');
   const nueva = ss.insertSheet('Tipo de cambio');
   assert.equal(nueva.getName(), 'Tipo de cambio');
   assert.throws(() => ss.insertSheet('Tipo de cambio'), /Ya existe/);

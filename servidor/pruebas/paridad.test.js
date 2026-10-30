@@ -16,7 +16,12 @@ function tablaDe(m) {
     const x = Array.from({ length: (f || []).length }, (_, j) => {
       const v = f[j];
       if (v === undefined || v === null) return '';
-      return v instanceof Date ? 'Date:' + v.toISOString() : v;
+      // Misma diferencia conocida que en las respuestas (ver sinVersiones): el arnés guarda las marcas de tiempo como
+      // Date y el servidor como texto, porque sabe que la hoja está en "@". Se comparan por su presencia.
+      if (v instanceof Date) return '<marca de tiempo>';
+      if (typeof v === 'string' && /^\d{4}-\d\d-\d\d([ T]\d\d:\d\d(:\d\d)?)?$/.test(v)) return '<marca de tiempo>';
+      if (typeof v === 'string' && /^\d\d\/\d\d\/\d{4}( \d\d:\d\d)?$/.test(v)) return '<marca de tiempo>';
+      return v;
     });
     while (x.length && x[x.length - 1] === '') x.pop();
     return x;
@@ -40,8 +45,21 @@ function tablaDe(m) {
   let distintas = 0;
   // Las versiones son hora + 6 cifras al azar desde el incremento 6 (versionNueva_; solo se comparan por igualdad): aquí se
   // compara que estén las mismas colecciones y cuáles van ocultas (VERSION_OCULTA = 0), no el número
-  const sinVersiones = x => JSON.parse(JSON.stringify(x), (k, v) => (k === 'versiones' && v && typeof v === 'object' && !Array.isArray(v)
-    ? Object.fromEntries(Object.keys(v).sort().map(c => [c, v[c] === 0 ? 0 : typeof v[c]])) : v));
+  const sinVersiones = x => JSON.parse(JSON.stringify(x), (k, v) => {
+    if (k === 'versiones' && v && typeof v === 'object' && !Array.isArray(v)) {
+      return Object.fromEntries(Object.keys(v).sort().map(c => [c, v[c] === 0 ? 0 : typeof v[c]]));
+    }
+    // Diferencia conocida del arnés: su setNumberFormat es un simulacro vacío, así que no sabe que las hojas de compras y
+    // cobranza están en "@" (Code.js las formatea enteras, Code.js §2155) y convierte toda fecha ISO en Date, que además
+    // serializa en UTC ("2026-10-30" para las 20:42 del 29 en México). Apps Script REAL deja el texto tal cual (medido el
+    // 29/10/2026, casos 41–42 de casos-escritura.js) y eso es lo que hace el servidor: aquí el servidor es MÁS fiel que el
+    // arnés. Mientras el arnés no sepa de formatos (pendiente anotado en docs/servidor-etapa-1.md §15), las marcas de
+    // tiempo se comparan solo por su presencia; lo que de verdad las cubre es la tabla medida (casos-escritura.js) y la
+    // corrida de sombra contra Apps Script real.
+    if (typeof v === 'string' && /^\d{4}-\d\d-\d\d([ T]\d\d:\d\d(:\d\d)?)?$/.test(v)) return '<marca de tiempo>';
+    if (typeof v === 'string' && /^\d\d\/\d\d\/\d{4}( \d\d:\d\d)?$/.test(v)) return '<marca de tiempo>';
+    return v;
+  });
   a.pasos.forEach((pa, i) => {
     const pb = b.pasos[i];
     const d = diferencias(sinVersiones(pa.r), sinVersiones(pb.r));

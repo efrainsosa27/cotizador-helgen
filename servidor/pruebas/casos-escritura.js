@@ -13,6 +13,8 @@
 //   regla 7  CLAUDE.md §7 regla 7: "+52…" se lee como fórmula → #ERROR! (por eso existe textoCelda)
 //   Config   Code.js migrarConfig_: repara "+52 …" en Config!B (formato "@") con setValue sin apóstrofo
 //   texto    ayuda de Sheets, formato "Texto sin formato": lo que se escribe queda como texto
+//   medido   CONFIRMADO con Apps Script real el 29/10/2026 (`node herramientas/paridad-escritura.js`, corrida de Leo en
+//            su cuenta): no cambiar sin volver a medir
 //   supuesto lo más probable, sin documento: lo confirma `node herramientas/paridad-escritura.js` con Apps Script real
 'use strict';
 
@@ -29,16 +31,16 @@ const CASOS = [
   { entrada: '  42 ', espera: N(42), fuente: 'supuesto' },
   { entrada: '1,234.56', espera: N(1234.56, 'NUMBER #,##0.00'), fuente: 'API' },
   { entrada: '007', espera: N(7), fuente: 'API', nota: 'pierde los ceros: por eso los códigos van con apóstrofo o en "@"' },
-  { entrada: '012345678901234567', espera: N(12345678901234600), fuente: 'API', nota: 'CLABE sin apóstrofo: 15 cifras' },
+  { entrada: '012345678901234567', espera: T('012345678901234567'), fuente: 'medido', nota: 'largo de una CLABE: más de 15 cifras significativas queda texto' },
   { entrada: "'012345678901234567", espera: T('012345678901234567'), fuente: '§6.2', nota: 'apóstrofo = texto literal' },
   { entrada: '15%', espera: N(0.15, 'PERCENT 0%'), fuente: 'API' },
   { entrada: '12.5%', espera: N(0.125, 'PERCENT 0.00%'), fuente: 'API' },
   { entrada: '$1,160.00', espera: N(1160, 'CURRENCY "$"#,##0.00'), fuente: 'API' },
   { entrada: '1e3', espera: N(1000, 'SCIENTIFIC 0.00E+00'), fuente: 'API' },
-  { entrada: '+5', espera: N(5), fuente: 'supuesto' },
+  { entrada: '+5', espera: T('+5'), fuente: 'medido', nota: 'el "+" al inicio no hace número' },
   { entrada: 'TRUE', espera: B(true), fuente: 'API' },
   { entrada: 'false', espera: B(false), fuente: 'API' },
-  { entrada: 'VERDADERO', espera: B(true), fuente: 'supuesto', nota: 'solo en libros en español' },
+  { entrada: 'VERDADERO', espera: T('VERDADERO'), fuente: 'medido', nota: 'solo TRUE/FALSE en inglés, también en un libro es_MX' },
   { entrada: '2026-10-20', espera: F('2026-10-20 00:00:00', 'DATE yyyy-mm-dd'), fuente: '§6.2' },
   { entrada: '2026-10-20 17:30', espera: F('2026-10-20 17:30:00', 'DATE_TIME yyyy-mm-dd hh:mm'), fuente: '§6.2' },
   { entrada: '2026-10-20 17:30:05', espera: F('2026-10-20 17:30:05', 'DATE_TIME yyyy-mm-dd hh:mm:ss'), fuente: '§6.2', nota: 'Utilities.formatDate(…, "yyyy-MM-dd HH:mm:ss")' },
@@ -47,12 +49,12 @@ const CASOS = [
   { entrada: '20/10/26', espera: F('2026-10-20 00:00:00'), fuente: 'supuesto', nota: 'año de 2 cifras: 00–29 → 20xx' },
   { entrada: '3/4', espera: F('AAAA-04-03 00:00:00'), fuente: 'supuesto', nota: 'sin año: el año en curso' },
   { entrada: '17:30', espera: F('1899-12-30 17:30:00', 'TIME hh:mm'), fuente: 'API', nota: 'hora sola: getValues da una Date del 30/12/1899' },
-  { entrada: '5:30 pm', espera: F('1899-12-30 17:30:00'), fuente: 'supuesto' },
+  { entrada: '5:30 pm', espera: T('5:30 pm'), fuente: 'medido', nota: 'am/pm no se interpreta' },
   { entrada: '2026-02-30', espera: T('2026-02-30'), fuente: 'supuesto', nota: 'fecha que no existe' },
   { entrada: '=A1*2', espera: FX('=A1*2'), fuente: 'API' },
-  { entrada: '+52 442 644 5391', espera: FX('=+52 442 644 5391'), fuente: 'regla 7', nota: 'getValues da "#ERROR!"' },
+  { entrada: '+52 442 644 5391', espera: T('+52 442 644 5391'), fuente: 'medido', nota: 'por esta vía NO es fórmula (la regla 7 de CLAUDE.md supone la interfaz); textoCelda lo manda con apóstrofo igual' },
   { entrada: "'+52 442 644 5391", espera: T('+52 442 644 5391'), fuente: 'regla 7', nota: 'lo que hace textoCelda' },
-  { entrada: '-abc', espera: FX('=-abc'), fuente: 'supuesto', nota: 'mismo mecanismo que la regla 7' },
+  { entrada: '-abc', espera: T('-abc'), fuente: 'medido' },
   { entrada: '-', espera: T('-'), fuente: 'supuesto' },
   { entrada: '@usuario', espera: T('@usuario'), fuente: 'supuesto' },
   { entrada: 'HLG-2026-0001', espera: T('HLG-2026-0001'), fuente: 'API' },
@@ -66,16 +68,16 @@ const CASOS = [
   // ---- celda en texto plano "@" (todas las hojas de cobranza, compras y Administración; Config!B; Catálogo A:C y G:H)
   { entrada: '0012', celda: 'texto', espera: T('0012'), fuente: 'texto', nota: 'Code.js: "01010101" no pierde el cero inicial' },
   { entrada: '123', celda: 'texto', espera: T('123'), fuente: 'texto' },
-  { entrada: '2026-10-20', celda: 'texto', espera: F('2026-10-20 00:00:00', 'DATE yyyy-mm-dd'), fuente: '§6.2', nota: 'la excepción observada' },
-  { entrada: '2026-10-20 17:30:00', celda: 'texto', espera: F('2026-10-20 17:30:00', 'DATE_TIME yyyy-mm-dd hh:mm:ss'), fuente: '§6.2' },
+  { entrada: '2026-10-20', celda: 'texto', espera: T('2026-10-20'), fuente: 'medido', nota: 'en "@" NO se convierte, al revés de lo que dice CLAUDE.md §6.2' },
+  { entrada: '2026-10-20 17:30:00', celda: 'texto', espera: T('2026-10-20 17:30:00'), fuente: 'medido' },
   { entrada: '20/10/2026', celda: 'texto', espera: T('20/10/2026'), fuente: 'supuesto' },
   { entrada: '+52 442 644 5391', celda: 'texto', espera: T('+52 442 644 5391'), fuente: 'Config' },
   { entrada: 'TRUE', celda: 'texto', espera: T('TRUE'), fuente: 'texto' },
-  { entrada: '=A1', celda: 'texto', espera: T('=A1'), fuente: 'supuesto' },
+  { entrada: '=A1', celda: 'texto', espera: FX('=A1'), fuente: 'medido', nota: 'el formato "@" no impide una fórmula' },
   { entrada: "'abc", celda: 'texto', espera: T('abc'), fuente: '§6.2' },
   // ---- celda con formato de fecha (Cotizaciones!B, Catálogo!E): conserva su formato
   { entrada: '2026-10-20 17:30', celda: 'fecha', espera: F('2026-10-20 17:30:00', 'dd/MM/yyyy HH:mm'), fuente: 'API' },
-  { entrada: '123', celda: 'fecha', espera: F('1900-05-02 00:00:00', 'dd/MM/yyyy HH:mm'), fuente: 'API', nota: 'un número en una celda de fecha se lee como fecha' },
+  { entrada: '123', celda: 'fecha', espera: N(123, 'NUMBER 0.###############'), fuente: 'medido', nota: 'un número escrito como texto deja la celda en formato automático' },
 ];
 
 const FORMATO_CELDA = { auto: null, texto: { tipo: 'TEXT', patron: '@' }, fecha: { tipo: 'DATE_TIME', patron: 'dd/MM/yyyy HH:mm' } };

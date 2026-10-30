@@ -90,15 +90,16 @@ caso('fachada: appendRow en una hoja "@" cargada de Sheets (también la fila de 
   const pagos = ss.getSheetByName('Pagos');
   pagos.appendRow(['PAG-2026-0002', '2026-10-20', '+52 442 644 5391', 1160]); // fila 3: la "+1" que vino de Sheets
   pagos.appendRow(['0012', '2026-10-21 17:30:00', '123', '15%']);              // fila 4: más abajo de lo cargado
-  assert.deepEqual(pagos.getRange(3, 1, 1, 3).getValues()[0].map(v => (v instanceof Date ? 'Date' : v)), ['PAG-2026-0002', 'Date', '+52 442 644 5391']);
-  assert.deepEqual(pagos.getRange(4, 1, 1, 3).getValues()[0].map(v => (v instanceof Date ? 'Date' : v)), ['0012', 'Date', '123'],
+  // En "@" nada se convierte (medido): ni la fecha ISO ni el teléfono
+  assert.deepEqual(pagos.getRange(3, 1, 1, 3).getValues()[0].map(v => (v instanceof Date ? 'Date' : v)), ['PAG-2026-0002', '2026-10-20', '+52 442 644 5391']);
+  assert.deepEqual(pagos.getRange(4, 1, 1, 3).getValues()[0].map(v => (v instanceof Date ? 'Date' : v)), ['0012', '2026-10-21 17:30:00', '123'],
     'la fila 4 no vino de Sheets: toma el formato "@" de la última que vino');
   assert.equal(pagos.getRange(4, 4).getValue(), 0.15, 'la columna D no es texto: "15%" es número');
   const cot = ss.getSheetByName('Cotizaciones');
   cot.getRange(2, 1, 1, 8).setValues([['HLG-2026-0009', '2026-10-29 15:30', '16%', '$1,160.00', '+52 442 644 5391', 'TRUE', '17:30', "'0012"]]);
   assert.deepEqual(cot.getRange(2, 1, 1, 8).getValues()[0].map(v => (v instanceof Date ? 'Date' : v)),
-    ['HLG-2026-0009', 'Date', 0.16, 1160, '', true, 'Date', '0012']);
-  assert.equal(cot.getRange(2, 5).getFormula(), '=+52 442 644 5391');
+    ['HLG-2026-0009', 'Date', 0.16, 1160, '+52 442 644 5391', true, 'Date', '0012']);
+  assert.equal(cot.getRange(2, 5).getFormula(), '', 'un "+" al inicio no hace fórmula por esta vía (medido)');
   assert(diario.every(op => op.entrada === 'USER_ENTERED'), 'setValues y appendRow anotan su entrada');
   cot.getRange(3, 1).setFormula('=A2');
   assert.equal(diario[diario.length - 1].entrada, 'RAW');
@@ -109,17 +110,17 @@ caso('fachada: appendRow en una hoja "@" cargada de Sheets (también la fila de 
   const celdas = requests.filter(r => r.updateCells).map(r => r.updateCells.rows[0].values.map(v => v.userEnteredValue || {}));
   const [p3, p4, c2] = celdas;
   assert.deepEqual([p3[0], p3[2], p3[3]], [{ stringValue: 'PAG-2026-0002' }, { stringValue: '+52 442 644 5391' }, { numberValue: 1160 }]);
-  assert.equal(typeof p3[1].numberValue, 'number', 'fecha ISO en "@": Sheets la convierte (§6.2)');
+  assert.deepEqual(p3[1], { stringValue: '2026-10-20' }, 'fecha ISO en "@": queda texto (medido; CLAUDE.md §6.2 decía lo contrario)');
   assert.deepEqual([p4[0], p4[2], p4[3]], [{ stringValue: '0012' }, { stringValue: '123' }, { numberValue: 0.15 }]);
-  assert.deepEqual([c2[2], c2[3], c2[4], c2[5], c2[7]], [{ numberValue: 0.16 }, { numberValue: 1160 }, { formulaValue: '=+52 442 644 5391' }, { boolValue: true }, { stringValue: '0012' }]);
+  assert.deepEqual([c2[2], c2[3], c2[4], c2[5], c2[7]], [{ numberValue: 0.16 }, { numberValue: 1160 }, { stringValue: '+52 442 644 5391' }, { boolValue: true }, { stringValue: '0012' }]);
   assert((c2[6].numberValue - 0.7291666) < 1e-6 && c2[6].numberValue > 0.729, '17:30 = 0.729 del día');
   const formatos = requests.filter(r => r.repeatCell).map(r => {
     const g = r.repeatCell.range, nf = r.repeatCell.cell.userEnteredFormat.numberFormat;
     return g.sheetId + '!' + M.numeroAColumna(g.startColumnIndex + 1) + (g.startRowIndex + 1) + ' ' + nf.type + ' ' + nf.pattern;
   });
-  assert.deepEqual(formatos, [
-    '1!B3 DATE yyyy-mm-dd', '1!B4 DATE_TIME yyyy-mm-dd hh:mm:ss', '1!D4 PERCENT 0%',
-    '2!C2 PERCENT 0%', '2!D2 CURRENCY "$"#,##0.00', '2!G2 TIME hh:mm'], 'B2 ya era fecha: no se toca; los demás, como Sheets');
+  assert.deepEqual(formatos, ['1!D4 PERCENT 0%',
+    '2!C2 PERCENT 0%', '2!D2 CURRENCY "$"#,##0.00', '2!G2 TIME hh:mm'],
+    'B2 ya era fecha: no se toca; B3 y B4 quedaron texto en "@" (no hay formato que poner); los demás, como Sheets');
 });
 
 caso('fachada: el formato "@" que pone Code.js con setNumberFormat (hoja nueva) también protege lo que se escriba después', () => {

@@ -703,6 +703,13 @@ liga (`etapas (JSON)`) se compara por clave **y** nombre de la etapa. Caché: `V
   "Tue Oct 20 2026 00:00:00 GMT-0600…" (pasó en la prueba de Cobranza, 20/10/2026). Fechas sin hora que deben quedar exactas:
   escribirlas con apóstrofo (`textoFecha_`) y leerlas con `fechaIso_`/`fechaTexto_`, que aceptan `Date` o texto. Las simulaciones
   de `tests/cobranza.test.js` (`comoSheets`) reproducen esa conversión.
+- **Matiz medido el 29/10/2026** (Apps Script real, 49 casos, `servidor/herramientas/paridad-escritura.js`): en una celda que
+  **de verdad** tiene formato `@`, Sheets **no** convierte "2026-10-20" (queda texto). La conversión de arriba pasa cuando la
+  celda **no** quedó en `@`: es lo que ocurre con un `appendRow` por debajo del rango formateado (`hojaDeArea_` formatea hasta
+  `getMaxRows()`, así que pasa al crecer la cuadrícula) o en columnas automáticas. Por eso las dos observaciones son ciertas y
+  **el apóstrofo (`textoFecha_`) sigue siendo la única forma segura**. Otro resultado de la misma medición: por `setValues`
+  un "+52 442 644 5391" **no** se vuelve fórmula (queda texto), al contrario de lo que supone la regla 7 — `textoCelda` se
+  queda igual: no cuesta nada y protege la captura en la interfaz.
 
 ### 6.3 PDF (lecciones del conversor HTML→PDF de Google)
 - **No imprime colores de fondo** (`background`): con la banda azul, el logo blanco y el texto blanco desaparecieron.

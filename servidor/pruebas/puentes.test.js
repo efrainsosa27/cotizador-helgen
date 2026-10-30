@@ -37,12 +37,12 @@ caso('Drive, Utilities, Sheets y unzip por el puente (lo que llama el incremento
     assert.deepEqual(u.fechas, ['2026-10-29 15:30', '2026-10-29 15:30:05', '2026-10', '15']);
 
     const h = await correr(B, 'pruebaHojas', 'DB');
-    assert.deepEqual(h.valores, [['a', 1, '', '', ''], ['d', 4, '', '', ''], ['e', 'Date 2026-10-20', '0012', '', '']],
-      'deleteRows(2, 2) quitó b y c; la fecha ISO es Date; el apóstrofo deja texto; las fórmulas valen lo que calcule Sheets');
-    assert.deepEqual(h.formulas, ['=B1*2', '=+52 442'], '"=" y "+…" son fórmulas (como Sheets)');
+    assert.deepEqual(h.valores, [['a', 1, '', '', ''], ['d', 4, '', '', ''], ['e', 'Date 2026-10-20', '0012', '', '+52 442']],
+      'deleteRows(2, 2) quitó b y c; la fecha ISO es Date; el apóstrofo deja texto; "+52 442" queda texto (medido); las fórmulas valen lo que calcule Sheets');
+    assert.deepEqual(h.formulas, ['=B1*2', ''], 'solo "=" hace fórmula; "+52 442" es texto y no tiene fórmula (medido)');
     assert.equal(h.largo, 'Your input contains more than the maximum of 50000 characters in a single cell.');
     assert.equal(h.ultima, 3, 'el texto de 50 001 no se escribió');
-    assert.deepEqual(await correr(B, 'leerHojas', 'DB'), [['a', 1, '', '', ''], ['d', 4, '', '', ''], ['e', 'Date', '0012', '', '']],
+    assert.deepEqual(await correr(B, 'leerHojas', 'DB'), [['a', 1, '', '', ''], ['d', 4, '', '', ''], ['e', 'Date', '0012', '', '+52 442']],
       'confirmado al soltar el candado: otra llamada lo lee del espejo canónico');
     const filas = B.conductor.libros.get('DB').hojas.find(x => x.titulo === 'Cotizaciones').valores;
     assert.equal(filas.length, 3, 'y llegó a "Google" (el backend en memoria) con las filas ya borradas');
