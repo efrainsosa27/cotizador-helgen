@@ -7169,8 +7169,8 @@
   (function () {
     const MAX_ENVIO = 20 * 1024 * 1024; // como MAX_LOTE_FACTURAS del servidor (bytes por envío)
     const MAX_ARCHIVOS = 60;            // como MAX_ARCHIVOS_FACTURAS
-    const est = { lista: null, cargando: false, error: '', vista: 'atender', buscar: '', tipo: '', abierta: '', liga: null,
-      enviando: false, resultados: null, id: nuevoId(), montado: false, resaltar: '', ligando: false };
+    const est = { lista: null, cargando: false, error: '', codigoError: '', cargadaEn: null, vista: 'atender', buscar: '', tipo: '', abierta: '',
+      liga: null, enviando: false, resultados: null, id: nuevoId(), montado: false, resaltar: '', ligando: false };
     const ESTADO_RES = { importada: ['firmado', 'Importada'], pdf: ['firmado', 'PDF'], repetida: ['', 'Ya estaba'],
       rechazada: ['cancelado', 'Rechazada'], pendiente: ['aceptada', 'Pendiente'], ignorada: ['', 'Ignorada'] };
     const puede = () => !!(PERMISOS && PERMISOS.cobranza) && !SOLO_REQ;
@@ -7189,17 +7189,33 @@
 
     function cargar() {
       if (!puede() || est.cargando) return;
-      est.cargando = true; est.error = '';
+      est.cargando = true;
       pintar();
-      llamar('listarFacturasClientes').then(l => { est.cargando = false; recibir(l); },
-        err => { est.cargando = false; est.error = err && err.message ? err.message : String(err); pintar(); });
+      llamar('listarFacturasClientes').then(l => { est.cargando = false; recibir(l); }, falloCarga);
+    }
+    /**
+     * Una carga que falló: el error siempre se ve (arriba y en el bloque) y lo de antes nunca queda como si estuviera al día. Sin
+     * permiso (PERMISO o ACCESO: el servidor ya no le da cobranza) la lista se quita; con otro error se queda marcada "sin actualizar"
+     * con la hora de la última carga buena.
+     */
+    function falloCarga(err) {
+      est.cargando = false;
+      est.error = String((err && err.message) || err || 'Error desconocido.');
+      est.codigoError = (err && err.codigo) || '';
+      if (est.codigoError === 'PERMISO' || est.codigoError === 'ACCESO') {
+        est.lista = null; est.resultados = null; est.abierta = ''; est.liga = null; est.cargadaEn = null;
+      }
+      pintar();
+      aviso('error', 'No se pudieron ' + (est.lista ? 'actualizar' : 'cargar') + ' las facturas de clientes: ' + esc(est.error));
     }
     function recibir(l) {
       if (!puede() || !l) return; // el rol cambió mientras llegaba: no se guarda
-      est.lista = l;
+      est.lista = l; est.error = ''; est.codigoError = ''; est.cargadaEn = new Date();
       if (est.liga && !factura(est.liga.uuid)) { est.liga = null; est.abierta = ''; }
       pintar();
     }
+    const conPunto = s => /[.!?)]$/.test(String(s).trim()) ? String(s).trim() : String(s).trim() + '.';
+    const reintentar = '<a href="#" onclick="FACTURAS_CLI.cargar();return false">Intentar de nuevo</a>';
 
     // ---- Importar (cada ZIP en su envío; los XML y PDF sueltos juntos, hasta 20 MB y 60 archivos por envío) ----
     function armarEnvios(files) {
@@ -7252,7 +7268,7 @@
       }
       est.enviando = false; est.resultados.progreso = '';
       if (!error) { est.id = nuevoId(); if (input) input.value = ''; } // un reintento tras un error usa el mismo envío
-      if (ultima && puede()) est.lista = ultima;
+      if (ultima && puede()) { est.lista = ultima; est.error = ''; est.codigoError = ''; est.cargadaEn = new Date(); } // la lista al día
       pintar();
       const c = cuenta(est.resultados.lista);
       if (error) aviso('error', 'No se terminó de importar: ' + esc(error) + ' Vuelve a subir los archivos: lo que ya se guardó se reconoce solo.');
@@ -7297,13 +7313,17 @@
     function pintarConteos() {
       const l = est.lista;
       if (!l) {
-        $('facConteos').innerHTML = est.error ? '<div class="aviso error" style="display:block">No se pudieron cargar las facturas: ' + esc(est.error) +
-          ' <a href="#" onclick="FACTURAS_CLI.cargar();return false">Intentar de nuevo</a></div>' : '<p class="nota">' + (est.cargando ? 'Cargando…' : '') + '</p>';
+        $('facConteos').innerHTML = est.error && !est.cargando ? '<div class="aviso error" style="display:block">No se pudieron cargar las facturas: ' +
+          esc(conPunto(est.error)) + ' ' + reintentar + '</div>' : '<p class="nota">' + (est.cargando ? 'Cargando…' : '') + '</p>';
         $('facFiltros').innerHTML = '';
         return;
       }
       const c = l.conteos || {}, n = (l.facturas || []).filter(atiende).length;
-      $('facConteos').innerHTML = '<div class="tiles">' + tile('XML sin ligar', c.sinLigar || 0, c.sinLigar > 0) +
+      // Si la última actualización falló, lo de abajo es de antes: se dice y se ve atenuado (nunca pasa por algo al día)
+      const hora = est.cargadaEn && est.cargadaEn.toLocaleTimeString ? est.cargadaEn.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) : '';
+      const viejo = est.error ? '<div class="aviso error" style="display:block">No se pudieron actualizar las facturas: ' + esc(conPunto(est.error)) +
+        ' Lo de abajo es de la última carga' + (hora ? ' (' + esc(hora) + ')' : '') + ' y puede no estar al día. ' + reintentar + '</div>' : '';
+      $('facConteos').innerHTML = viejo + '<div class="tiles"' + (est.error ? ' style="opacity:.55"' : '') + '>' + tile('XML sin ligar', c.sinLigar || 0, c.sinLigar > 0) +
         tile('REP pendientes', c.repPendientes || 0, c.repPendientes > 0) + tile('Por revisar', c.revisar || 0, c.revisar > 0) +
         tile('Importadas', c.facturas || 0) + '</div>';
       const boton = (v, t) => '<button type="button" class="btn' + (est.vista === v ? '' : ' btn-sec') + '" onclick="FACTURAS_CLI.vista(\'' + v + '\')">' + esc(t) + '</button>';
@@ -7329,7 +7349,8 @@
           ? 'Nada por atender: todas las facturas están ligadas y con su REP.' : 'Ninguna factura coincide con los filtros.') + '</p>';
         return;
       }
-      caja.innerHTML = '<div class="tabla-desliza"><table style="font-size:12px"><thead><tr><th>Fecha</th><th>Documento</th><th>Cliente</th>' +
+      caja.innerHTML = '<div class="tabla-desliza"' + (est.error ? ' style="opacity:.55" title="Sin actualizar: la última carga falló"' : '') +
+        '><table style="font-size:12px"><thead><tr><th>Fecha</th><th>Documento</th><th>Cliente</th>' +
         '<th class="num">Total</th><th>Proyecto y etapas</th><th>Estado</th><th></th></tr></thead><tbody>' +
         lista.map(f => filaHtml(f) + (est.abierta === f.uuid ? formLiga(f) : '')).join('') + '</tbody></table></div>' +
         '<div class="nota" style="margin-top:8px">Importes con IVA, en la moneda de cada factura. Una nota de crédito resta de su factura; un ' +
