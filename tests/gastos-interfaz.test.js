@@ -216,6 +216,31 @@ const cfdiXml = `<?xml version="1.0" encoding="UTF-8"?>
   assert.equal(fila(GL).estado, 'Aprobado');
   const ap = U.llamadas.filter(c => c.funcion === 'aprobarGasto');
   assert.deepEqual(ap.map(c => c.args.length), [2, 3], 'repite con el motivo al final');
+  // Registrar el reembolso de lo suyo (revisión del 29/10/2026): el servidor lo niega y la interfaz le pide el motivo y repite
+  U.run('GASTOS.abrirReembolso(' + JSON.stringify(GL) + ')');
+  assert(/Registrar reembolso de GAS-/.test(U.$('gasReembolsoCaja').innerHTML), 'el super admin sí tiene el formulario');
+  U.$('gasReemReferencia').value = 'SPEI 7788';
+  U.$('gasReemComprobante').files = [archivo('spei.pdf', 'application/pdf', PDF)];
+  U.dialogos.mensajes.length = 0;
+  U.dialogos.prompt = 'Viaje urgente: Compras de vacaciones';
+  U.run('GASTOS.reembolsar()');
+  await esperar();
+  assert(U.dialogos.mensajes.some(t => /No puedes registrar el reembolso de tu propio gasto[\s\S]*Motivo de la excepción/.test(t)), U.dialogos.mensajes.join(' | '));
+  const rs = U.llamadas.filter(c => c.funcion === 'reembolsarGasto').map(c => c.args[0]);
+  assert.deepEqual(rs.map(x => [x.folio, x.motivoExcepcion, x.idSolicitud === rs[0].idSolicitud]),
+    [[GL, undefined, true], [GL, 'Viaje urgente: Compras de vacaciones', true]], 'repite con el motivo (mismo idSolicitud)');
+  assert.equal(fila(GL).estado, 'Reembolsado');
+  assert(/Reembolso de <b>GAS-/.test(aviso(U)));
+  // Quien es de Compras no ve el botón de reembolsar lo suyo (pedro también captura)
+  const GP = ok('pedro', 'guardarGasto', { proyectoFolio: p1o.folio, fecha: HOY_ISO, categoria: 'Casetas', concepto: 'Caseta', monto: 90, moneda: 'MXN',
+    ivaIncluido: 'No', ticket: { nombre: 't.jpg', datos: FOTO }, idSolicitud: 'pp1' }).folio;
+  ok('adri', 'aprobarGasto', GP);
+  U = montar('pedro');
+  await esperar();
+  U.run("verTab('gas')");
+  await esperar();
+  const eqP = U.$('gasEquipo').innerHTML;
+  assert(eqP.includes(GP) && !new RegExp('abrirReembolso\\(&quot;' + GP).test(eqP), 'sin botón para lo propio');
 
   // ================= Ventas sin Requisiciones: sin pestaña =================
   U = montar('ana');

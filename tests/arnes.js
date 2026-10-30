@@ -220,8 +220,9 @@ module.exports = function crearArnes(dir, opciones) {
         return { getParents: () => { anota('drive', { que: 'getParents' }); let d = false; return { hasNext: () => !d, next: () => { d = true; return a.padre; } }; },
           moveTo: f => { anota('drive', { que: 'moveTo' }); a.padre = f; }, setSharing: () => a.setSharing(), getId: () => id, getUrl: () => urlArchivo(id),
           getName: () => a.nombre || (a.blob && a.blob.name) || '', setName: n => { anota('drive', { que: 'setName' }); a.nombre = n; },
-          isTrashed: () => !!a.trashed,
-          getBlob: () => ({ getName: () => a.blob.name, getContentType: () => a.blob.mime, getBytes: () => a.blob.bytes }) }; },
+          isTrashed: () => !!a.trashed, setTrashed: v => { anota('drive', { que: 'setTrashed' }); a.trashed = !!v; }, // como Drive: a la Papelera
+          // Como Drive: el blob se llama como el archivo hoy (un setName después de crearlo cuenta; revisión del incremento 7)
+          getBlob: () => ({ getName: () => a.nombre || a.blob.name, getContentType: () => a.blob.mime, getBytes: () => a.blob.bytes }) }; },
       Access: { PRIVATE: 'PRIVATE', DOMAIN: 'DOMAIN' }, Permission: { NONE: 'NONE', VIEW: 'VIEW' } },
   };
   if (op.ctxExtra) Object.assign(ctx, op.ctxExtra);

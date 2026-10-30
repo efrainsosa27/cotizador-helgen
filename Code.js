@@ -646,7 +646,7 @@ const TROZO_CACHE = 30000; // caracteres por entrada (CacheService admite 100 KB
  * caché vacío). No va en las claves de idempotencia (REQ_, OC_, PGP_…: un reintento justo al publicar no debe duplicar), ni en las
  * de la entrada con código (CAPRI_*: bloqueos y códigos vigentes) ni en FOTOCM_ (fotos ya archivadas en Drive).
  */
-const VERSION_CODIGO_CACHE = '2026-10-29d'; // revisión del incremento 7 (dinero): saldo a favor y costos que no suman en el resumen y el margen, facturas por revisar
+const VERSION_CODIGO_CACHE = '2026-10-29t'; // revisiones del incremento 7 (dinero, privacidad e importación): nómina oculta a cobranza por omisión, saldo a favor, facturas por revisar
 function claveNs_(clave) { return clave + '@' + VERSION_CODIGO_CACHE; }
 
 /**
@@ -863,7 +863,7 @@ function bootstrap() {
   const cfg = configLigera_(), cat = catalogoCache_();
   const conPrecios = !solo && (permisos.ventas || permisos.compras || permisos.cobranza);
   const d = {
-    versiones: versiones_(), permisos: permisos, soloRequisicion: solo, usuario: usuarioActual_(), vendedor: VENDEDOR_,
+    versiones: versionesVisibles_(versiones_()), permisos: permisos, soloRequisicion: solo, usuario: usuarioActual_(), vendedor: VENDEDOR_,
     ivaTasa: cfg.ivaTasa, vigenciaDias: cfg.vigenciaDias, marcas: MARCAS, sitios: sitiosDeTexto(cfg.sitios),
     sitiosDetalle: sitiosDetalleDeTexto(cfg.sitios),
     catalogo: conPrecios ? cat.productos : catalogoSinPrecios_(cat.productos), tipoCambio: conPrecios ? cat.tipoCambio : null,
@@ -903,6 +903,22 @@ function getDatosIniciales() {
   return bootstrap();
 }
 
+/** Lo que ven de la versión de costosPersonal quienes no son Nómina ni super admin (siempre la misma: §6.I). */
+const VERSION_OCULTA = 0;
+
+/**
+ * Versiones que se mandan a la interfaz (bootstrap y sincronizar, que también las usa para saber qué cambió). Quien no es Nómina ni
+ * super admin recibe costosPersonal con un valor fijo: si viera la real sabría cuándo Nómina captura un costo (con el resumen de
+ * cobranza abierto, la diferencia del margen en ese momento sería el costo de esa persona). Con el valor fijo nunca le "cambia",
+ * así que nunca vuelve a pedir nada por eso (sin vueltas). La llave sigue ahí; no se cambia el objeto de versiones_().
+ */
+function versionesVisibles_(v) {
+  if (nominaCompleta_()) return v;
+  const r = Object.assign({}, v);
+  if ('costosPersonal' in r) r.costosPersonal = VERSION_OCULTA;
+  return r;
+}
+
 /**
  * Consulta ligera de la interfaz (cada 20 s con la pestaña visible, al cambiar de pestaña y al abrir un buscador de
  * proyectos). vc = versiones que tiene el navegador; ctx = lo que está viendo {cobProyecto, cobResumen, comProyecto, req,
@@ -919,7 +935,8 @@ function sincronizar(vc, ctx) {
   if (permisos.cobranza) intentar_(errores, 'Esquemas', () => esquemasCache_(true)); // revisión 6b: fecha esperada a mano (CxC, flujo)
   intentar_(errores, 'Catálogo', () => catalogoCache_(true));
   if (!solo) intentar_(errores, 'Clientes', () => clientesCache_(true));
-  const v = versiones_(true);
+  // Las que ve esta persona (versionesVisibles_): con ellas se compara, así lo oculto nunca le "cambia"
+  const v = versionesVisibles_(versiones_(true));
   const cambio = c => String(vc[c] == null ? '' : vc[c]) !== String(v[c]);
   const r = { versiones: v, permisos: permisos, soloRequisicion: solo, cambios: COLECCIONES.filter(cambio), errores: errores };
   if (permisos.requisicion || permisos.compras || permisos.operaciones) {
@@ -969,13 +986,13 @@ function sincronizar(vc, ctx) {
   }
   if (permisos.cobranza) {
     if (algo('proyectos', 'contratos')) r.cobProyectos = intentar_(errores, 'Proyectos de cobranza', () => listarProyectosCobranza(''));
-    // Incremento 7: el margen cambia también con adicionales, gastos y nómina (COLECCIONES_MARGEN_7)
+    // Incremento 7: el margen cambia también con adicionales, gastos y (si esta persona la ve) nómina: coleccionesMargen7_
     // (y con facturasClientes: la vista del proyecto trae sus facturas por etapa, módulo C)
-    if (ctx.cobProyecto && algo.apply(null, ['proyectos', 'contratos', 'cotizaciones', 'pagosCobranza', 'oc', 'facturasClientes']
-      .concat(COLECCIONES_MARGEN_7))) {
+    const m7 = coleccionesMargen7_();
+    if (ctx.cobProyecto && algo.apply(null, ['proyectos', 'contratos', 'cotizaciones', 'pagosCobranza', 'oc', 'facturasClientes'].concat(m7))) {
       r.cobranzaProyecto = intentar_(errores, 'Cobranza del proyecto', () => getCobranzaProyecto(ctx.cobProyecto));
     }
-    if (ctx.cobResumen && algo.apply(null, ['proyectos', 'contratos', 'pagosCobranza', 'oc'].concat(COLECCIONES_MARGEN_7))) {
+    if (ctx.cobResumen && algo.apply(null, ['proyectos', 'contratos', 'pagosCobranza', 'oc'].concat(m7))) {
       r.resumen = intentar_(errores, 'Resumen de cobranza', () => resumenCobranzaGeneral());
     }
   }
@@ -2412,8 +2429,10 @@ function margenDeContrato_(contrato, adicionales) {
     monedas[f] = contrato.moneda;
     const ordenes = ordenesDeProyecto_(libroComprasSiExiste_(), contrato.proyectoFolio).filter(ocVigente);
     const extra = costosExtraDeProyectos_(monedas)[f] || [];
-    return margenCompleto(contrato.subtotal, contrato.moneda, costosDeOrdenes(ordenes, contrato.moneda).concat(extra),
+    const m = margenCompleto(contrato.subtotal, contrato.moneda, costosDeOrdenes(ordenes, contrato.moneda).concat(extra),
       adicionalesPorProyecto(adicionales || [])[f]);
+    if (!nominaEnMargen_()) m.nominaOculta = true; // §6.I: la tarjeta dice que no incluye nómina
+    return m;
   } catch (e) {
     return { error: 'No se pudo calcular el margen: ' + e.message };
   }
@@ -2429,7 +2448,8 @@ function margenSinContrato_(proyectoFolio) {
     const ordenes = ordenesDeProyecto_(libroComprasSiExiste_(), proyectoFolio).filter(ocVigente);
     const extra = costosExtraDeProyectos_(() => 'MXN')[f] || []; // sin contrato el proyecto es MXN (monedaDeProyecto_)
     if (!ordenes.length && !extra.length) return null;
-    return { sinContrato: true, costos: (ordenes.length ? costosDeOrdenes(ordenes, 'MXN') : []).concat(extra) };
+    return Object.assign({ sinContrato: true, costos: (ordenes.length ? costosDeOrdenes(ordenes, 'MXN') : []).concat(extra) },
+      nominaEnMargen_() ? {} : { nominaOculta: true }); // §6.I
   } catch (e) {
     return { error: 'No se pudo calcular el costo del proyecto: ' + e.message };
   }
@@ -2468,8 +2488,8 @@ function getCobranzaProyecto(folio) {
 function resumenCobranzaGeneral(soloSiHay) {
   exigirCobranza_();
   // En caché por versiones (contratos, pagos, órdenes y proyectos); soloSiHay = no calcularlo si no está (carga inicial)
-  // Incremento 7: el margen cuenta adicionales, gastos y nómina (con NOMINA_EN_MARGEN = superadmin, quien no la ve tiene su clave)
-  return enCache_('resumenCob' + sufijoNomina_(), ['proyectos', 'contratos', 'pagosCobranza', 'oc'].concat(COLECCIONES_MARGEN_7),
+  // Incremento 7: el margen cuenta adicionales, gastos y nómina (§6.I: sin, solo el monto o completa, cada una con su clave)
+  return enCache_('resumenCob' + sufijoNomina_(), ['proyectos', 'contratos', 'pagosCobranza', 'oc'].concat(coleccionesMargen7_()),
     TTL_CACHE, soloSiHay ? null : resumenCobranzaDeHojas_) || null;
 }
 
@@ -2493,7 +2513,8 @@ function resumenCobranzaDeHojas_() {
   const monedas = {};
   contratos.forEach(c => { monedas[String(c.proyectoFolio).trim().toUpperCase()] = c.moneda; });
   return Object.assign(resumenGeneralCobranza({ contratos: contratos, esquemas: esquemas, pagos: pagos, proyectos: proyectos,
-    ordenes: ordenes, adicionales: adicionales, costosExtra: costosExtraDeProyectos_(monedas) }), { hoy: hoyIso_() });
+    ordenes: ordenes, adicionales: adicionales, costosExtra: costosExtraDeProyectos_(monedas) }), { hoy: hoyIso_() },
+    nominaEnMargen_() ? {} : { nominaOculta: true }); // §6.I: la interfaz dice que no incluye nómina
 }
 
 /**
@@ -6384,11 +6405,12 @@ function leerCfdi(texto) {
   const fecha = String(c.Fecha || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) throw new Error('El CFDI no trae una fecha de emisión válida.');
   const serie = String(c.Serie || '').trim(), folio = String(c.Folio || '').trim();
-  // Impuestos del comprobante más los locales (complemento implocal), que el SAT suma al total aparte
-  const trasladados = redondear(importe(imp.TotalImpuestosTrasladados, 'total de impuestos trasladados', false) +
-    importe(loc.TotaldeTraslados, 'total de impuestos locales trasladados', false));
-  const retenidos = redondear(importe(imp.TotalImpuestosRetenidos, 'total de impuestos retenidos', false) +
-    importe(loc.TotaldeRetenciones, 'total de impuestos locales retenidos', false));
+  // Impuestos del comprobante más los locales (complemento implocal), que el SAT suma al total aparte. Los locales también van
+  // solos en `locales` (incremento 7, gastos: el ISH de un hotel no es IVA, es costo); trasladados y retenidos no cambian
+  const locTras = importe(loc.TotaldeTraslados, 'total de impuestos locales trasladados', false);
+  const locRet = importe(loc.TotaldeRetenciones, 'total de impuestos locales retenidos', false);
+  const trasladados = redondear(importe(imp.TotalImpuestosTrasladados, 'total de impuestos trasladados', false) + locTras);
+  const retenidos = redondear(importe(imp.TotalImpuestosRetenidos, 'total de impuestos retenidos', false) + locRet);
   const subtotal = importe(c.SubTotal, 'subtotal', true), descuento = importe(c.Descuento, 'descuento', false);
   const total = importe(c.Total, 'total', true);
   if (descuento > subtotal) throw new Error('El CFDI no es válido: el descuento es mayor que el subtotal.');
@@ -6405,7 +6427,7 @@ function leerCfdi(texto) {
     usoCfdi: String(rc.UsoCFDI || ''),
     emisor: { rfc: String(em.Rfc || '').toUpperCase().trim(), nombre: String(em.Nombre || '').trim() },
     receptor: { rfc: String(rc.Rfc || '').toUpperCase().trim(), nombre: String(rc.Nombre || '').trim() },
-    trasladados: trasladados, retenidos: retenidos,
+    trasladados: trasladados, retenidos: retenidos, locales: { trasladados: locTras, retenidos: locRet },
     uuid: String(tfd.UUID).toUpperCase().trim(), fechaTimbrado: String(tfd.FechaTimbrado || ''),
   };
 }
@@ -12930,7 +12952,8 @@ const REPORTES_ = {
     fn: () => reporteCxp() },
   flujo: { colecciones: ['proyectos', 'contratos', 'pagosCobranza', 'oc', 'pagosProveedores', 'facturasProveedor', 'requisiciones',
     'anulaciones'], porDia: true, fn: () => reporteFlujo() },
-  // Incremento 7: el margen cuenta adicionales, gastos y nómina (las colecciones de COLECCIONES_MARGEN_7, aquí literales)
+  // Incremento 7: el margen cuenta adicionales, gastos y nómina (todas las de coleccionesMargen7_, con nómina, aquí literales: a
+  // quien no ve la nómina una versión de horas solo le vuelve a mandar las mismas cifras; la de costosPersonal no la ve, §6.I)
   margen: { colecciones: ['proyectos', 'contratos', 'oc', 'anulaciones', 'adicionales', 'gastos', 'horas', 'costosPersonal'], porDia: false,
     fn: () => reporteMargen() },
 };
@@ -12939,7 +12962,7 @@ const REPORTES_ = {
 function reporteEnCache_(tipo, calcular) {
   const def = REPORTES_[tipo];
   const prueba = Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, foliosPrueba_().join(','))).slice(0, 10);
-  // Incremento 7: con NOMINA_EN_MARGEN = superadmin, el margen de quien no ve la nómina es otro (otra clave)
+  // Incremento 7: el margen sin nómina, con solo su monto o completo (§6.I, sufijoNomina_) va cada uno con su clave
   return enCache_('REP_' + tipo + '_' + (def.porDia ? hoyIso_() : '') + '_' + prueba + (tipo === 'margen' ? sufijoNomina_() : ''),
     def.colecciones, TTL_CACHE, calcular);
 }
@@ -12985,7 +13008,7 @@ function reporteMargen() {
     const d = datosReportes_({ cobranza: true, compras: true }), monedas = {};
     (d.contratos || []).forEach(c => { monedas[String(c.proyectoFolio).trim().toUpperCase()] = c.moneda; });
     d.costosExtra = costosExtraDeProyectos_(monedas); // incremento 7: gastos y nómina (d.adicionales ya viene de datosReportes_)
-    return margenPorProyecto(d);
+    return Object.assign(margenPorProyecto(d), nominaEnMargen_() ? {} : { nominaOculta: true }); // §6.I: sin nómina, se dice
   });
 }
 
@@ -14101,7 +14124,8 @@ function siNoGasto(v) {
  * tipoCambio, ivaIncluido}; ctx = {hoy, ivaTasa (Config IVA_TASA), cfdi (de leerCfdi, opcional), monedaProyecto (sin ella no se
  * revisa el tipo de cambio: la validación previa al candado)}. Total = lo que se pagó (y se reembolsa). Sin CFDI: con IVA incluido,
  * subtotal = total / (1 + IVA_TASA) e IVA = total − subtotal; sin IVA, subtotal = total. Con CFDI, moneda, total, subtotal (subtotal −
- * descuento) e IVA (impuestos trasladados) salen del XML y lo capturado se ignora. Tipo de cambio (pesos por dólar, 4 decimales)
+ * descuento + impuestos locales trasladados, como el ISH) e IVA (impuestos trasladados federales) salen del XML y lo capturado se
+ * ignora. Tipo de cambio (pesos por dólar, 4 decimales)
  * obligatorio si la moneda del gasto no es la del proyecto. Devuelve {fecha, categoria, concepto, moneda, ivaIncluido, subtotal, iva,
  * total, tipoCambio ('' si no aplica), monedaProyecto, uuid, rfcEmisor, emisor}.
  */
@@ -14120,8 +14144,11 @@ function normalizarGasto(p, ctx) {
     if (MONEDAS.indexOf(moneda) === -1) throw new Error('El CFDI es en ' + (moneda || '(sin moneda)') + ': los gastos solo pueden ser en MXN o USD.');
     total = redondear(cfdi.total);
     if (!(total > 0)) throw new Error('El total del CFDI debe ser mayor a 0.');
-    subtotal = redondear(Math.max(0, (Number(cfdi.subtotal) || 0) - (Number(cfdi.descuento) || 0)));
-    iva = redondear(Number(cfdi.trasladados) || 0);
+    // Los impuestos locales trasladados (ISH de un hotel, complemento implocal) no son IVA: son costo del gasto y van al subtotal
+    // (lo que cuenta el margen). IVA = solo los trasladados federales. Las retenciones no cambian el costo.
+    const locales = Number((cfdi.locales || {}).trasladados) || 0;
+    subtotal = redondear(Math.max(0, (Number(cfdi.subtotal) || 0) - (Number(cfdi.descuento) || 0)) + locales);
+    iva = redondear(Math.max(0, (Number(cfdi.trasladados) || 0) - locales));
     ivaIncluido = iva > 0;
   } else {
     moneda = String(d.moneda == null || d.moneda === '' ? 'MXN' : d.moneda).trim().toUpperCase();
@@ -14154,10 +14181,12 @@ function normalizarGasto(p, ctx) {
 
 /**
  * Revisa el CFDI de un gasto (de leerCfdi; su salida no cambia): versión 4.0, factura de ingreso (tipo I), UUID válido, a nombre del
- * RFC de Helgen (Config EMPRESA_RFC) y, si se pasa usados ({UUID: folio} de gastos vivos y facturas de proveedor vigentes), que no
- * esté registrado ya. Devuelve el cfdi.
+ * RFC de Helgen (Config EMPRESA_RFC), que no lo emita Helgen misma (sería un ingreso suyo, no un gasto) y, si se pasa usados ({UUID:
+ * folio} de gastos vivos y facturas de proveedor vigentes), que no esté registrado ya. verFolio: el mensaje de UUID repetido dice el
+ * folio que lo tiene (solo Compras y super admin; a quien captura, un texto general: no le enseña registros de otras personas).
+ * Devuelve el cfdi.
  */
-function validarCfdiGasto(cfdi, rfcHelgen, usados) {
+function validarCfdiGasto(cfdi, rfcHelgen, usados, verFolio) {
   const f = cfdi || {};
   if (f.version !== '4.0') throw new Error('El CFDI debe ser versión 4.0.');
   if (f.tipoComprobante === 'E') throw new Error('Es una nota de crédito (CFDI tipo E), no la factura del gasto.');
@@ -14169,8 +14198,15 @@ function validarCfdiGasto(cfdi, rfcHelgen, usados) {
   if (!rfc || receptor !== rfc) {
     throw new Error('El CFDI está a nombre del RFC ' + (receptor || '(sin RFC)') + ', no de Helgen (' + rfc + '): pide la factura a nombre de Helgen.');
   }
+  const emisor = String((f.emisor && f.emisor.rfc) || '').trim().toUpperCase();
+  if (emisor === rfc) {
+    throw new Error('El CFDI lo emitió Helgen (' + rfc + ') a sí misma: no es la factura de un gasto. Adjunta la factura del comercio.');
+  }
   const ya = usados && usados[String(f.uuid).toUpperCase()];
-  if (ya) throw new Error('La factura con folio fiscal ' + f.uuid + ' ya está registrada (' + ya + ').');
+  if (ya) {
+    throw new Error(verFolio ? 'La factura con folio fiscal ' + f.uuid + ' ya está registrada (' + ya + ').'
+      : 'Ese CFDI ya está registrado en CAPRI (otro gasto o una factura de proveedor).');
+  }
   return f;
 }
 
@@ -14243,7 +14279,8 @@ function accionesGasto(g, rol) {
   const enviado = g.estado === GAS_ENVIADO;
   const decide = !!r.aprobaciones && enviado && (!propio || !!r.superadmin); // lo propio solo el super admin, con motivo
   return { propio: propio, puedeCancelar: enviado && propio, puedeAprobar: decide, puedeRechazar: decide,
-    puedeReembolsar: !!r.compras && g.estado === GAS_APROBADO };
+    // Tampoco se registra el reembolso de lo propio (otra persona de Compras; el super admin con motivo)
+    puedeReembolsar: !!r.compras && g.estado === GAS_APROBADO && (!propio || !!r.superadmin) };
 }
 
 /**
@@ -14290,7 +14327,7 @@ function itemsGastoPendientes(gastos, o) {
     let it = null;
     if (g.estado === GAS_ENVIADO && (todos || (roles.aprobaciones && !propio))) {
       it = { tipo: 'gastoAprobar', seccion: 'aprobaciones', titulo: 'Gasto por aprobar', accion: 'Revisar', para: 'Aprobaciones' };
-    } else if (g.estado === GAS_APROBADO && (todos || roles.compras)) {
+    } else if (g.estado === GAS_APROBADO && (todos || (roles.compras && !propio))) { // lo propio lo reembolsa otra persona
       it = { tipo: 'gastoReembolsar', seccion: 'compras', titulo: 'Gasto por reembolsar', accion: 'Reembolsar', para: 'Compras' };
     }
     if (!it) return;
@@ -14320,7 +14357,7 @@ function destinatariosGasto(tipo, info, roles) {
   const i = info || {}, r = roles || {}, sol = i.solicitanteEmail || '';
   if (tipo === 'gasto.enviado') return [{ quien: 'aprobaciones', para: (r.aprobaciones || []).filter(c => c !== sol) }];
   if (tipo === 'gasto.aprobado' || tipo === 'gasto.rechazado') return [{ quien: 'solicitante', para: [sol] }];
-  if (tipo === 'gasto.reembolsar') return [{ quien: 'compras', para: r.compras || [] }];
+  if (tipo === 'gasto.reembolsar') return [{ quien: 'compras', para: (r.compras || []).filter(c => c !== sol) }]; // nunca a sí mismo
   return [];
 }
 
@@ -14511,7 +14548,19 @@ function archivoGasto(folioGasto, que) {
   const id = tipo === 'xml' ? g.xmlId : tipo === 'reembolso' ? g.reembolsoId : g.ticketId;
   if (!id) throw new Error('El gasto ' + g.folio + ' no tiene ' + (tipo === 'xml' ? 'XML' : tipo === 'reembolso' ? 'comprobante de reembolso' : 'ticket') + '.');
   const blob = DriveApp.getFileById(id).getBlob();
-  return { nombre: blob.getName(), mime: blob.getContentType(), datos: Utilities.base64Encode(blob.getBytes()) };
+  return { nombre: blob.getName(), mime: mimeArchivoGasto(tipo, blob.getContentType()), datos: Utilities.base64Encode(blob.getBytes()) };
+}
+
+/**
+ * (Lógica pura) Tipo con que se manda un archivo de gasto a la interfaz. El XML siempre como text/plain: lo sube quien captura y un
+ * XML puede traer un <script> de XHTML que el navegador ejecutaría si lo abriera como application/xml en la página de CAPRI
+ * (revisión del 29/10/2026). Ticket y comprobante: solo los tipos que validarArchivo acepta; cualquier otro, application/octet-stream.
+ * (La interfaz tampoco confía en esto: abrirArchivoServidor solo abre en la página PDF, JPG y PNG.)
+ */
+function mimeArchivoGasto(tipo, mime) {
+  if (tipo === 'xml') return 'text/plain';
+  const m = String(mime || '').toLowerCase().split(';')[0].trim();
+  return ['application/pdf', 'image/jpeg', 'image/png', 'image/heic'].indexOf(m) !== -1 ? m : 'application/octet-stream';
 }
 
 // -- Escrituras --
@@ -14546,6 +14595,74 @@ function uuidsUsados_(libro, filasGastos) {
   return usados;
 }
 
+// Archivos de gastos (regla 17, revisión del 29/10/2026): se crean y se restringen (privado_ = API de Drive por HTTP) ANTES del
+// candado, con un nombre provisional; dentro del candado solo se renombran con el folio (DriveApp). Si lo de adentro falla antes de
+// escribir la fila, o el envío resulta repetido, van a la Papelera: nada queda suelto (ni abierto al dominio: archivoPrivado_).
+
+/** Nombre de un archivo antes de tener folio (se renombra dentro del candado). */
+const PROVISIONAL_GASTO = 'Gasto en captura';
+
+/**
+ * Crea y restringe varios archivos en la carpeta (archivoPrivado_, del módulo C: si no se puede restringir, a la Papelera). specs =
+ * [{bytes, mime, nombre} | null]. Si uno falla, los que ya se crearon van a la Papelera y se lanza el error. Devuelve {lista
+ * (archivos o null, en el orden de specs), ids}.
+ */
+function archivosPrivados_(carpeta, specs) {
+  const lista = [], ids = [];
+  try {
+    specs.forEach(s => {
+      if (!s) { lista.push(null); return; }
+      const a = archivoPrivado_(carpeta, s.bytes, s.mime, s.nombre);
+      lista.push(a); ids.push(a.getId());
+    });
+  } catch (e) {
+    papeleraArchivos_(ids);
+    throw e;
+  }
+  return { lista: lista, ids: ids };
+}
+
+/** Archivos que ya no se usan (envío que falló o repetido): a la Papelera, sin detener nada. */
+function papeleraArchivos_(ids) {
+  (ids || []).forEach(id => {
+    try { DriveApp.getFileById(id).setTrashed(true); } catch (e) { console.warn('No se mandó a la Papelera ' + id + ': ' + e.message); }
+  });
+}
+
+/** Le pone su nombre definitivo (con el folio). Si Drive falla, se queda con el provisional: el registro no se pierde por un nombre. */
+function nombrarArchivo_(archivo, nombre) {
+  try { archivo.setName(nombre); } catch (e) { console.warn('No se renombró ' + archivo.getId() + ' a ' + nombre + ': ' + e.message); }
+}
+
+/** Proyecto de un gasto: existe, no anulado (proyectoParaCompras_) ni Cancelado. */
+function proyectoGasto_(folioProyecto) {
+  const proyecto = proyectoParaCompras_(folioProyecto);
+  if (proyecto.estado === 'Cancelado') throw new Error('El proyecto ' + proyecto.folioVisible + ' está cancelado: no admite gastos.');
+  return proyecto;
+}
+
+/**
+ * Idempotencia de guardarGasto en la hoja: el folio del gasto que ya se registró con ese idSolicitud (null si no hay). Con otra
+ * cuenta o con otro contenido (huella), error.
+ */
+function gastoRepetido_(filas, idSolicitud, yo, huella) {
+  const i = filas.findIndex(x => String(x[colGas_('id_solicitud') - 1] || '') === idSolicitud);
+  if (i === -1) return null;
+  const previo = gastoDesdeFila_(filas[i], i + 2);
+  if (previo.solicitanteEmail !== yo) throw new Error('Este envío ya se registró con otra cuenta. Vuelve a capturar el gasto.');
+  if (previo.huella && previo.huella !== huella) {
+    throw new Error('Este envío ya se registró como ' + previo.folio + ' con otros datos (monto, fecha, concepto o ticket). Si es otro ' +
+      'gasto, vuelve a capturarlo.');
+  }
+  return previo.folio;
+}
+
+/** Respuesta de guardarGasto: {folio, repetido, gasto (la vista del suyo), datos (listarGastos)}. */
+function respuestaGasto_(r, filtro) {
+  const datos = listarGastos(filtro || null);
+  return Object.assign(r, { gasto: datos.mios.find(x => x.folio === r.folio) || null, datos: datos });
+}
+
 /** Datos del aviso por correo de un gasto (sin montos ni concepto). */
 function datosCorreoGasto_(g, nota) {
   return { gasto: g.folio, proyecto: g.proyectoFolio, solicitante: g.solicitanteEmail, solicitanteNombre: g.solicitante,
@@ -14555,9 +14672,10 @@ function datosCorreoGasto_(g, nota) {
 /**
  * Captura un gasto (quien tiene Requisiciones; el gasto es de quien lo manda). p = {proyectoFolio, fecha, categoria, concepto, monto,
  * moneda, tipoCambio, ivaIncluido, ticket: {nombre, datos (base64)} (obligatorio: foto o PDF), xml: {nombre, datos} (opcional),
- * idSolicitud, filtro}. Todo se revisa antes del candado salvo lo que depende de la hoja (proyecto, moneda del proyecto, UUID repetido,
- * idempotencia). El mismo idSolicitud con el mismo contenido regresa el mismo folio (de la hoja, sin depender del caché); con otro
- * contenido se rechaza. Devuelve {folio, repetido, gasto, datos (listarGastos)}.
+ * idSolicitud, filtro}. Todo se revisa antes del candado (también el proyecto: con él se crean la carpeta y los archivos, fuera del
+ * candado) y dentro se vuelve a revisar lo que depende de la hoja (proyecto, moneda del proyecto, UUID repetido, idempotencia). El
+ * mismo idSolicitud con el mismo contenido regresa el mismo folio (de la hoja, sin depender del caché; si ya está, no se crea ningún
+ * archivo); con otro contenido se rechaza. Devuelve {folio, repetido, gasto, datos (listarGastos)}.
  */
 function guardarGasto(p) {
   exigirGastos_();
@@ -14580,49 +14698,56 @@ function guardarGasto(p) {
   const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
   const huella = idSolicitud ? huellaGasto_(d0, ticket, xml) : '';
   const yo = yo_(), t = textoCelda;
+  // Folio del CFDI repetido: solo a Compras y al super admin (a quien captura no se le enseña un registro de otra persona)
+  const verFolio = esCompras_() || esSuperAdmin_();
 
-  const r = conCandado_(() => {
-    const hoja = hojaCompras_(libro, 'Gastos');
-    const filas = filasDeArea_(hoja, HOJAS_COMPRAS, 'Gastos');
-    if (idSolicitud) {
-      const i = filas.findIndex(x => String(x[colGas_('id_solicitud') - 1] || '') === idSolicitud);
-      if (i !== -1) {
-        const previo = gastoDesdeFila_(filas[i], i + 2);
-        if (previo.solicitanteEmail !== yo) throw new Error('Este envío ya se registró con otra cuenta. Vuelve a capturar el gasto.');
-        if (previo.huella && previo.huella !== huella) {
-          throw new Error('Este envío ya se registró como ' + previo.folio + ' con otros datos (monto, fecha, concepto o ticket). Si es otro ' +
-            'gasto, vuelve a capturarlo.');
-        }
-        return { folio: previo.folio, repetido: true };
-      }
-    }
-    const proyecto = proyectoParaCompras_(folioProyecto);
-    if (proyecto.estado === 'Cancelado') throw new Error('El proyecto ' + proyecto.folioVisible + ' está cancelado: no admite gastos.');
-    // Moneda del proyecto: la de su cotización aceptada (sin aceptada, MXN); en una escritura se lee de la hoja (contratosCache_)
-    const monedaProyecto = monedaDeProyecto_(contratosCache_()[proyecto.folio.toUpperCase()] || null).moneda;
-    const g = normalizarGasto(d0, { hoy: hoy, ivaTasa: ivaTasa, cfdi: cfdi, monedaProyecto: monedaProyecto });
-    if (cfdi) validarCfdiGasto(cfdi, rfcHelgen, uuidsUsados_(libro, filas));
-    const folio = siguienteFolio_(PREFIJO_GAS, hoja, 'CONSECUTIVO_GAS_');
-    const carpeta = carpetaGastos_(proyecto.folio);
-    const aTicket = privado_(carpeta.createFile(Utilities.newBlob(ticket, tipoTicket.mime, nombreArchivoReq(folio, 'Ticket', tipoTicket.ext, 1))));
-    const aXml = xml ? privado_(carpeta.createFile(Utilities.newBlob(xml, 'application/xml', nombreArchivoReq(folio, 'CFDI', 'xml', 1)))) : null;
-    const ahora = textoFecha_(ahoraTexto_());
-    escribe_(hoja).appendRow(filaGasto_({
-      folio: folio, fecha: textoFecha_(g.fecha), fecha_registro: ahora, proyecto_folio: proyecto.folio, solicitante_email: t(yo),
-      solicitante_nombre: t(nombreYo_()), categoria: g.categoria, concepto: t(g.concepto), moneda: g.moneda, iva_incluido: g.ivaIncluido ? 'Sí' : 'No',
-      subtotal: g.subtotal, iva: g.iva, total: g.total, tipo_cambio: g.tipoCambio, moneda_proyecto: g.monedaProyecto,
-      ticket_id: aTicket.getId(), ticket_url: aTicket.getUrl(), xml_id: aXml ? aXml.getId() : '', xml_url: aXml ? aXml.getUrl() : '',
-      uuid: g.uuid, rfc_emisor: t(g.rfcEmisor), emisor: t(g.emisor), estado: GAS_ENVIADO, actualizado: ahora,
-      id_solicitud: t(idSolicitud), huella_solicitud: t(huella) })); // la huella (base64url) puede empezar con "-": textoCelda
-    bitacora_(libro, 'Registrar gasto', proyecto.folio, folio + ' · ' + g.categoria + ' · ' + formatoMoneda(g.total) + ' ' + g.moneda +
-      (g.ivaIncluido ? ' (IVA ' + formatoMoneda(g.iva) + ')' : ' sin IVA') + (g.tipoCambio ? ' · TC ' + g.tipoCambio + ' (proyecto en ' + g.monedaProyecto + ')' : '') +
-      (g.uuid ? ' · CFDI ' + g.uuid : '') + ' · ' + g.concepto, '', HOJAS_COMPRAS);
-    notificar_('gasto.enviado', { gasto: folio, proyecto: proyecto.folio, solicitante: yo, solicitanteNombre: nombreYo_(), categoria: g.categoria });
-    SpreadsheetApp.flush();
-    return { folio: folio, repetido: false };
-  });
-  const datos = listarGastos(d0.filtro || null);
-  return Object.assign(r, { gasto: datos.mios.find(x => x.folio === r.folio) || null, datos: datos });
+  // Un reintento del mismo envío se reconoce antes de crear archivos (dentro del candado se vuelve a revisar)
+  const yaEstaba = idSolicitud ? gastoRepetido_(filasSiHay_(libro, HOJAS_COMPRAS, 'Gastos'), idSolicitud, yo, huella) : null;
+  if (yaEstaba) return respuestaGasto_({ folio: yaEstaba, repetido: true }, d0.filtro);
+  const proyecto0 = proyectoGasto_(folioProyecto);
+  // Carpeta y archivos fuera del candado (privado_ es HTTP, regla 17), con nombre provisional
+  const creados = archivosPrivados_(carpetaGastos_(proyecto0.folio), [
+    { bytes: ticket, mime: tipoTicket.mime, nombre: nombreArchivoReq(PROVISIONAL_GASTO, 'Ticket', tipoTicket.ext, 1) },
+    xml ? { bytes: xml, mime: 'application/xml', nombre: nombreArchivoReq(PROVISIONAL_GASTO, 'CFDI', 'xml', 1) } : null]);
+  const aTicket = creados.lista[0], aXml = creados.lista[1];
+
+  let escrito = false, r;
+  try {
+    r = conCandado_(() => {
+      const hoja = hojaCompras_(libro, 'Gastos');
+      const filas = filasDeArea_(hoja, HOJAS_COMPRAS, 'Gastos');
+      const ya = idSolicitud ? gastoRepetido_(filas, idSolicitud, yo, huella) : null; // otro envío igual mientras tanto
+      if (ya) return { folio: ya, repetido: true };
+      const proyecto = proyectoGasto_(folioProyecto); // otra vez, con la hoja al día (pudo cancelarse mientras tanto)
+      // Moneda del proyecto: la de su cotización aceptada (sin aceptada, MXN); en una escritura se lee de la hoja (contratosCache_)
+      const monedaProyecto = monedaDeProyecto_(contratosCache_()[proyecto.folio.toUpperCase()] || null).moneda;
+      const g = normalizarGasto(d0, { hoy: hoy, ivaTasa: ivaTasa, cfdi: cfdi, monedaProyecto: monedaProyecto });
+      if (cfdi) validarCfdiGasto(cfdi, rfcHelgen, uuidsUsados_(libro, filas), verFolio);
+      const folio = siguienteFolio_(PREFIJO_GAS, hoja, 'CONSECUTIVO_GAS_');
+      nombrarArchivo_(aTicket, nombreArchivoReq(folio, 'Ticket', tipoTicket.ext, 1));
+      if (aXml) nombrarArchivo_(aXml, nombreArchivoReq(folio, 'CFDI', 'xml', 1));
+      const ahora = textoFecha_(ahoraTexto_());
+      escribe_(hoja).appendRow(filaGasto_({
+        folio: folio, fecha: textoFecha_(g.fecha), fecha_registro: ahora, proyecto_folio: proyecto.folio, solicitante_email: t(yo),
+        solicitante_nombre: t(nombreYo_()), categoria: g.categoria, concepto: t(g.concepto), moneda: g.moneda, iva_incluido: g.ivaIncluido ? 'Sí' : 'No',
+        subtotal: g.subtotal, iva: g.iva, total: g.total, tipo_cambio: g.tipoCambio, moneda_proyecto: g.monedaProyecto,
+        ticket_id: aTicket.getId(), ticket_url: aTicket.getUrl(), xml_id: aXml ? aXml.getId() : '', xml_url: aXml ? aXml.getUrl() : '',
+        uuid: g.uuid, rfc_emisor: t(g.rfcEmisor), emisor: t(g.emisor), estado: GAS_ENVIADO, actualizado: ahora,
+        id_solicitud: t(idSolicitud), huella_solicitud: t(huella) })); // la huella (base64url) puede empezar con "-": textoCelda
+      escrito = true; // desde aquí la fila apunta a los archivos: ya no se mandan a la Papelera
+      bitacora_(libro, 'Registrar gasto', proyecto.folio, folio + ' · ' + g.categoria + ' · ' + formatoMoneda(g.total) + ' ' + g.moneda +
+        (g.ivaIncluido ? ' (IVA ' + formatoMoneda(g.iva) + ')' : ' sin IVA') + (g.tipoCambio ? ' · TC ' + g.tipoCambio + ' (proyecto en ' + g.monedaProyecto + ')' : '') +
+        (g.uuid ? ' · CFDI ' + g.uuid : '') + ' · ' + g.concepto, '', HOJAS_COMPRAS);
+      notificar_('gasto.enviado', { gasto: folio, proyecto: proyecto.folio, solicitante: yo, solicitanteNombre: nombreYo_(), categoria: g.categoria });
+      SpreadsheetApp.flush();
+      return { folio: folio, repetido: false };
+    });
+  } catch (e) {
+    if (!escrito) papeleraArchivos_(creados.ids);
+    throw e;
+  }
+  if (r.repetido) papeleraArchivos_(creados.ids); // otro envío igual llegó primero: estos archivos sobran
+  return respuestaGasto_(r, d0.filtro);
 }
 
 /** Quien capturó el gasto lo cancela mientras está Enviado (con motivo). Devuelve {folio, datos}. */
@@ -14694,9 +14819,33 @@ function rechazarGasto(folioGasto, motivo, filtro, motivoExcepcion) {
 }
 
 /**
+ * Lo que se revisa antes de registrar un reembolso (fuera del candado, para no crear el comprobante en balde, y otra vez dentro con
+ * la hoja al día): idempotencia (mismo idSolicitud → {repetido}; con otra huella, error), estado Aprobado, fecha no anterior al gasto
+ * y separación de funciones: quien capturó el gasto no registra su propio reembolso (otra persona de Compras; un super admin, con
+ * motivoExcepcion ≥ 10 caracteres). Devuelve {repetido, nuevo, propio}.
+ */
+function revisarReembolsoGasto_(g, x, idSolicitud, huella, motivoExcepcion) {
+  if (idSolicitud && g.reembolsoIdSolicitud === idSolicitud) {
+    if (g.reembolsoHuella && g.reembolsoHuella !== huella) {
+      throw new Error('Este reembolso ya se registró con otros datos (fecha, método, referencia o comprobante).');
+    }
+    return { repetido: true };
+  }
+  const nuevo = transicionGasto(g.estado, 'reembolsar');
+  if (x.fecha < g.fecha) throw new Error('La fecha del reembolso no puede ser anterior a la del gasto (' + g.fecha + ').');
+  const propio = g.solicitanteEmail === yo_();
+  if (propio && !excepcionPosible_(motivoExcepcion)) {
+    throw errorPermiso_('No puedes registrar el reembolso de tu propio gasto: lo registra otra persona de Compras.' + textoExcepcion_());
+  }
+  return { repetido: false, nuevo: nuevo, propio: propio };
+}
+
+/**
  * Compras registra el reembolso de un gasto Aprobado: p = {folio, fecha, metodo, referencia, comprobante: {nombre, datos} (obligatorio),
- * idSolicitud, filtro}. Se reembolsa el total del gasto (en su moneda). Idempotente por la hoja (reembolso_id_solicitud + huella).
- * Devuelve {folio, repetido, datos}.
+ * idSolicitud, filtro, motivoExcepcion}. Se reembolsa el total del gasto (en su moneda). Nunca el propio: lo registra otra persona de
+ * Compras, o un super admin con motivoExcepcion (Bitacora de Administración), como aprobarGasto. Idempotente por la hoja
+ * (reembolso_id_solicitud + huella). El comprobante se crea antes del candado (regla 17) y adentro solo se renombra; si algo falla o
+ * es repetido, a la Papelera. Devuelve {folio, repetido, datos}.
  */
 function reembolsarGasto(p) {
   exigirCompras_();
@@ -14707,26 +14856,41 @@ function reembolsarGasto(p) {
   const libro = libroCompras_();
   const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
   const huella = idSolicitud ? md5Gasto_(JSON.stringify([String(d0.folio || '').trim().toUpperCase(), x.fecha, x.metodo, x.referencia, md5Gasto_(bytes)])) : '';
-  const r = conCandado_(() => {
-    const { hoja, gasto: g } = buscarGasto_(libro, d0.folio);
-    if (idSolicitud && g.reembolsoIdSolicitud === idSolicitud) {
-      if (g.reembolsoHuella && g.reembolsoHuella !== huella) {
-        throw new Error('Este reembolso ya se registró con otros datos (fecha, método, referencia o comprobante).');
-      }
-      return { folio: g.folio, repetido: true };
-    }
-    const nuevo = transicionGasto(g.estado, 'reembolsar');
-    if (x.fecha < g.fecha) throw new Error('La fecha del reembolso no puede ser anterior a la del gasto (' + g.fecha + ').');
-    const archivo = privado_(carpetaGastos_(g.proyectoFolio).createFile(Utilities.newBlob(bytes, tipo.mime, nombreArchivoReq(g.folio, 'Reembolso', tipo.ext, 1))));
-    const ahora = textoFecha_(ahoraTexto_());
-    actualizarGasto_(hoja, g, { estado: nuevo, reembolso_fecha: textoFecha_(x.fecha), reembolso_metodo: x.metodo, reembolso_referencia: x.referencia,
-      reembolso_id: archivo.getId(), reembolso_url: archivo.getUrl(), reembolso_email: yo_(), reembolso_registro: ahora, actualizado: ahora,
-      reembolso_id_solicitud: idSolicitud, reembolso_huella: huella });
-    bitacora_(libro, 'Reembolsar gasto', g.proyectoFolio, g.folio + ' · ' + formatoMoneda(g.total) + ' ' + g.moneda + ' a ' + g.solicitanteEmail +
-      ' · ' + x.metodo + (x.referencia ? ' ' + x.referencia : '') + ' · ' + x.fecha, '', HOJAS_COMPRAS);
-    SpreadsheetApp.flush();
-    return { folio: g.folio, repetido: false };
-  });
+  const motivoExc = d0.motivoExcepcion;
+
+  const g0 = buscarGasto_(libro, d0.folio).gasto;
+  if (revisarReembolsoGasto_(g0, x, idSolicitud, huella, motivoExc).repetido) {
+    return { folio: g0.folio, repetido: true, datos: listarGastos(d0.filtro || null) };
+  }
+  // Comprobante fuera del candado (privado_ es HTTP, regla 17), con nombre provisional
+  const creados = archivosPrivados_(carpetaGastos_(g0.proyectoFolio),
+    [{ bytes: bytes, mime: tipo.mime, nombre: nombreArchivoReq(PROVISIONAL_GASTO, 'Reembolso', tipo.ext, 1) }]);
+  const archivo = creados.lista[0];
+
+  let escrito = false, r;
+  try {
+    r = conCandado_(() => {
+      const { hoja, gasto: g } = buscarGasto_(libro, d0.folio);
+      const v = revisarReembolsoGasto_(g, x, idSolicitud, huella, motivoExc);
+      if (v.repetido) return { folio: g.folio, repetido: true };
+      if (v.propio) excepcionSuperAdmin_('registrar el reembolso de su propio gasto', g.folio, motivoExc); // ya validado: antes de escribir
+      nombrarArchivo_(archivo, nombreArchivoReq(g.folio, 'Reembolso', tipo.ext, 1));
+      const ahora = textoFecha_(ahoraTexto_());
+      actualizarGasto_(hoja, g, { estado: v.nuevo, reembolso_fecha: textoFecha_(x.fecha), reembolso_metodo: x.metodo, reembolso_referencia: x.referencia,
+        reembolso_id: archivo.getId(), reembolso_url: archivo.getUrl(), reembolso_email: yo_(), reembolso_registro: ahora, actualizado: ahora,
+        reembolso_id_solicitud: idSolicitud, reembolso_huella: huella });
+      escrito = true; // desde aquí la fila apunta al comprobante: ya no va a la Papelera
+      bitacora_(libro, 'Reembolsar gasto', g.proyectoFolio, g.folio + ' · ' + formatoMoneda(g.total) + ' ' + g.moneda + ' a ' + g.solicitanteEmail +
+        ' · ' + x.metodo + (x.referencia ? ' ' + x.referencia : '') + ' · ' + x.fecha,
+        v.propio ? 'Excepción de super admin: ' + String(motivoExc).trim() : '', HOJAS_COMPRAS);
+      SpreadsheetApp.flush();
+      return { folio: g.folio, repetido: false };
+    });
+  } catch (e) {
+    if (!escrito) papeleraArchivos_(creados.ids);
+    throw e;
+  }
+  if (r.repetido) papeleraArchivos_(creados.ids);
   return Object.assign(r, { datos: listarGastos(d0.filtro || null) });
 }
 
@@ -15047,6 +15211,7 @@ function revisarHoras_(accion, lista, motivo, motivoExcepcion) {
   const libro = libroNominaSiExiste_();
   if (!libro) throw new Error('Todavía no hay horas capturadas.');
   const yo = yo_(), roles = { aprobaciones: esOperaciones_(), superadmin: esSuperAdmin_() };
+  const desde = inicioRevisadasHoras(hoyIso_()); // lo mismo que enseña «Por aprobar» (vistaPorAprobarHoras)
   conCandado_(() => {
     const hoja = hojaNomina_(libro, 'Horas');
     const bloques = {};
@@ -15060,6 +15225,16 @@ function revisarHoras_(accion, lista, motivo, motivoExcepcion) {
       if (!b) throw new Error('No se encontraron las horas de ' + etiqueta + ': actualiza la lista.');
       const validos = accion === 'aprobar' ? [HORAS_ENVIADA] : [HORAS_ENVIADA, HORAS_APROBADA];
       if (validos.indexOf(b.estado) === -1) throw new Error('Las horas de ' + etiqueta + ' están ' + b.estado.toLowerCase() + ': actualiza la lista.');
+      // Devolver una parte ya Aprobada (cambia el costo de nómina): con la huella de lo que se vio y solo de las semanas que enseña
+      // «Por aprobar»; las anteriores solo un super admin (revisión del 29/10/2026: si no, devolver semanas viejas sin verlas
+      // descubría costos de meses pasados)
+      if (accion === 'devolver' && b.estado === HORAS_APROBADA && !roles.superadmin) {
+        if (!pd.huella) throw new Error('Para devolver horas aprobadas, ábrelas en «Por aprobar» (actualiza la lista) y devuélvelas desde ahí.');
+        if (b.semana < desde) {
+          throw errorPermiso_('Las horas de ' + etiqueta + ' son de hace más de ' + SEMANAS_REVISADAS_HORAS + ' semanas: solo un super admin ' +
+            'devuelve horas aprobadas tan antiguas.');
+        }
+      }
       if (pd.huella && pd.huella !== huellaBloqueHoras(b)) {
         throw new Error('Las horas de ' + etiqueta + ' cambiaron desde que las abriste: actualiza la lista y revísalas otra vez.');
       }
@@ -15141,6 +15316,10 @@ function asignarLider(folio, correo) {
   const texto = String(correo == null ? '' : correo).trim();
   const c = texto ? correoCapri(texto) : '';
   if (texto && !c) throw new Error('El líder debe ser una cuenta @' + DOMINIO_HELGEN + ' o @' + DOMINIO_SERVICIOS + '.');
+  // Nadie se nombra líder a sí mismo (aprobaría horas y, con ellas, movería el margen a voluntad): solo un super admin
+  if (c && c === yo_() && !esSuperAdmin_()) {
+    throw errorPermiso_('No puedes nombrarte líder de un proyecto: lo asigna otra persona (super admin o cobranza).');
+  }
   if (c && !rolesEfectivos(c, contextoRoles_()).activo) {
     throw new Error(c + ' no tiene acceso activo a CAPRI: dale de alta en Administración → Permisos antes de hacerlo líder.');
   }
@@ -15592,6 +15771,11 @@ function normalizarPedidosHoras(lista) {
   });
 }
 
+/** Lunes de la semana más antigua que «Por aprobar» enseña como revisada (y que alguien que no es super admin puede devolver). */
+function inicioRevisadasHoras(hoy) {
+  return sumarDias(lunesDe(hoy), -7 * (SEMANAS_REVISADAS_HORAS - 1));
+}
+
 /**
  * "Por aprobar" de una persona. o = {yo, roles: {aprobaciones, superadmin}, hoy, bloques (todas las partes), proyectos ({folio:
  * proyecto con lider}), nombres}. porAprobar = Enviadas que le tocan (como líder o Aprobaciones) y, a un super admin, también las
@@ -15600,7 +15784,7 @@ function normalizarPedidosHoras(lista) {
  */
 function vistaPorAprobarHoras(o) {
   const x = o || {}, roles = x.roles || {}, nombres = x.nombres || {}, proyectos = x.proyectos || {};
-  const desde = sumarDias(lunesDe(x.hoy), -7 * (SEMANAS_REVISADAS_HORAS - 1));
+  const desde = inicioRevisadasHoras(x.hoy);
   const porAprobar = [], revisadas = [];
   (x.bloques || []).forEach(b => {
     const p = proyectos[b.proyecto] || proyectos[String(b.proyecto).toUpperCase()] || {};
@@ -15993,22 +16177,43 @@ function contenidoAvisoHoras(tipo, x, i, quienHizo) {
 // Contrato: docs/incremento-7.md §1 (lo conecta el integrador). Lo usan la tarjeta de margen de cobranza (margenDeContrato_ /
 // margenSinContrato_), el resumen de cobranza (resumenGeneralCobranza) y Reportes → margen (margenPorProyecto). Nunca se suman MXN
 // y USD: gastos o nómina en otra moneda que el contrato van aparte (sinSumar) y la pantalla dice "Revisar". La nómina llega solo
-// como total por proyecto (costoNominaPorProyecto: nunca por persona); Script Property opcional NOMINA_EN_MARGEN = "superadmin"
-// la deja solo a super admin y Nómina (vacía = la ve cobranza, como dice el spec: "AR and margin: Cobranza").
+// como total por proyecto (costoNominaPorProyecto: nunca por persona).
+// Quién ve la nómina en el margen (revisión independiente del 29/10/2026, decidido por Leo): super admin y Nómina, siempre y completa
+// (monto, horas y horas sin costear). Cobranza NO, salvo que la Script Property NOMINA_EN_MARGEN sea exactamente "cobranza"
+// (sin importar mayúsculas ni espacios); cualquier otro valor, o vacía, = oculta (falla cerrada). Aun así, a cobranza solo le llega
+// el monto (sin horas ni horas sin costear). Por qué: con una persona costeada en un proyecto, o con el resumen abierto mientras
+// Nómina captura, la diferencia del margen es el costo de esa persona (tests/revision7-privacidad.test.js). Cuando está oculta, la
+// tarjeta, el resumen y Reportes → margen traen nominaOculta: true y la interfaz lo dice.
 
-/** Colecciones que cambian el margen además de las de siempre (cachés y sincronización del margen). */
-const COLECCIONES_MARGEN_7 = ['adicionales', 'gastos', 'horas', 'costosPersonal'];
 /** Costos que pueden venir en otra moneda que el contrato (se muestran sin sumar); una orden en otra moneda sigue siendo error. */
 const CONCEPTOS_SIN_SUMAR_7 = ['Gastos', 'Nómina'];
 
-/** ¿Quien llama ve la nómina dentro del margen? (NOMINA_EN_MARGEN = superadmin: solo super admin y Nómina). */
+/** ¿Ve la nómina completa (monto, horas y sin costear) y la versión real de costosPersonal? Super admin y Nómina. */
+function nominaCompleta_() { return !!VENDEDOR_ && (esSuperAdmin_() || tieneRol_('nomina')); }
+
+/** ¿Quien llama ve la nómina dentro del margen? Super admin y Nómina; cobranza solo con NOMINA_EN_MARGEN = cobranza. */
 function nominaEnMargen_() {
-  const p = String(propiedades_().NOMINA_EN_MARGEN || '').trim().toLowerCase();
-  return p !== 'superadmin' || esSuperAdmin_() || tieneRol_('nomina');
+  if (nominaCompleta_()) return true;
+  return String(propiedades_().NOMINA_EN_MARGEN || '').trim().toLowerCase() === 'cobranza';
 }
 
-/** Parte de la clave de caché del margen: vacía cuando todos ven lo mismo (la nómina incluida). */
-function sufijoNomina_() { return nominaEnMargen_() ? '' : '_sinNom'; }
+/** Parte de la clave de caché del margen: completa (''), solo el monto ('_nomMonto') o sin nómina ('_sinNom'). */
+function sufijoNomina_() { return nominaCompleta_() ? '' : nominaEnMargen_() ? '_nomMonto' : '_sinNom'; }
+
+/** Colecciones que cambian el margen de quien llama además de las de siempre (cachés y sincronización): sin nómina, ni horas ni costos. */
+function coleccionesMargen7_() {
+  return ['adicionales', 'gastos'].concat(nominaEnMargen_() ? ['horas', 'costosPersonal'] : []);
+}
+
+/** Nómina por proyecto para el margen de quien llama: completa, solo el monto (cobranza con NOMINA_EN_MARGEN = cobranza) o {}. */
+function nominaParaMargen_() {
+  if (!nominaEnMargen_()) return {};
+  const n = costoNominaDeProyectos_();
+  if (nominaCompleta_()) return n;
+  const r = {};
+  Object.keys(n || {}).forEach(f => { r[f] = (n[f] || []).map(c => ({ concepto: c.concepto, moneda: c.moneda, monto: c.monto })); });
+  return r;
+}
 
 /**
  * (Lógica pura) Une los costos extra por proyecto: gastos (costoGastosPorProyecto) y nómina (costoNominaPorProyecto). Llaves en
@@ -16053,7 +16258,7 @@ function margenCompleto(contrato, moneda, costos, adicional) {
 function costosExtraDeProyectos_(monedas) {
   const lo = libroComprasSiExiste_();
   const gastos = lo && lo.getSheetByName('Gastos') ? gastosDelLibro_(lo) : [];
-  return costosExtraPorProyecto(costoGastosPorProyecto(gastos, monedas), nominaEnMargen_() ? costoNominaDeProyectos_() : {});
+  return costosExtraPorProyecto(costoGastosPorProyecto(gastos, monedas), nominaParaMargen_());
 }
 
 // ---- 6.C Facturas de clientes (incremento 7; no confundir con el 6.C Centro de mando del incremento 4): importar los XML de

@@ -1,7 +1,8 @@
 // Incremento 7 · integración (§6.I): margen = contrato + adicionales − órdenes − gastos − nómina, en la tarjeta de cobranza, el
 // resumen de cobranza y Reportes → margen (las tres cifras iguales); gastos o nómina en otra moneda no se suman («Revisar»);
-// NOMINA_EN_MARGEN = superadmin; cachés y sincronización con las colecciones del incremento 7; y las facturas de clientes con las
-// etapas de las adicionales (cobranzaParaFacturas: antes las leía como etapas del contrato).
+// quién ve la nómina (super admin y Nómina siempre; cobranza solo con NOMINA_EN_MARGEN = cobranza, y sin horas; si no, nominaOculta);
+// cachés y sincronización con las colecciones del incremento 7; y las facturas de clientes con las etapas de las adicionales
+// (cobranzaParaFacturas: antes las leía como etapas del contrato).
 // Los lectores de gastos y de nómina se sustituyen aquí (sus reglas las prueban gastos.test.js y nomina.test.js): lo que se prueba
 // es cómo se juntan. Uso: node tests/integracion7.test.js .
 'use strict';
@@ -95,52 +96,89 @@ P.costoNominaDeProyectos_ = () => { lecturasNomina++; const r = {}; r[pA] = [NO(
 const LCo = () => A.libros[props.COMPRAS_DB_ID];
 if (!LCo() || !LCo().pest.Gastos) P.hojaCompras_(P.libroCompras_(), 'Gastos');
 
-const tarjeta = ok('tania', 'getCobranzaProyecto', pA).margen;
-assert.deepEqual([tarjeta.contrato, tarjeta.adicionales, tarjeta.contratado, tarjeta.totalCostos, tarjeta.margen],
-  [10000, 1000, 11000, 2000, 9000], 'tarjeta de cobranza: contrato + adicional − gastos − nómina');
+// Super admin (leo, también de cobranza): la nómina completa (monto y horas), en las tres cifras
+const tarjeta = ok('leo', 'getCobranzaProyecto', pA).margen;
+assert.deepEqual([tarjeta.contrato, tarjeta.adicionales, tarjeta.contratado, tarjeta.totalCostos, tarjeta.margen, tarjeta.nominaOculta],
+  [10000, 1000, 11000, 2000, 9000, undefined], 'tarjeta: contrato + adicional − gastos − nómina');
 assert.deepEqual(tarjeta.costos.map(c => [c.concepto, c.monto]), [['Órdenes de compra', 0], ['Gastos', 500], ['Nómina', 1500]]);
+assert.deepEqual([tarjeta.costos[2].horas, tarjeta.costos[2].sinCostear], [40, 4], 'super admin: con horas');
 assert.deepEqual(tarjeta.sinSumar, [{ concepto: 'Gastos', moneda: 'USD', monto: 30, cantidad: 1 }], 'el gasto en USD no se suma');
 assert(!/obrero|@helgen/.test(JSON.stringify(tarjeta)), 'la tarjeta no trae personas');
-const sinContrato = ok('tania', 'getCobranzaProyecto', pB).margen;
+const sinContrato = ok('leo', 'getCobranzaProyecto', pB).margen;
 assert.deepEqual([sinContrato.sinContrato, sinContrato.costos.map(c => [c.concepto, c.moneda, c.monto])],
   [true, [['Gastos', 'MXN', 200], ['Nómina', 'MXN', 300]]], 'sin contrato: costos del proyecto aunque no haya órdenes');
-const resumen = ok('tania', 'resumenCobranzaGeneral');
+const resumen = ok('leo', 'resumenCobranzaGeneral');
 const renglon = resumen.proyectos.find(p => p.folio === pA);
-assert.deepEqual([renglon.margenContratado, renglon.costoOc, renglon.margen], [11000, 2000, 9000], 'resumen: la misma cifra');
-const reporte = ok('tania', 'reporteMargen');
+assert.deepEqual([renglon.margenContratado, renglon.costoOc, renglon.margen, resumen.nominaOculta], [11000, 2000, 9000, undefined], 'resumen: la misma cifra');
+const reporte = ok('leo', 'reporteMargen');
 const fila = reporte.proyectos.find(p => p.folio === pA);
-assert.deepEqual([fila.contratado, fila.totalCostos, fila.margen, fila.sinSumar.length], [11000, 2000, 9000, 1], 'Reportes → margen: la misma cifra');
+assert.deepEqual([fila.contratado, fila.totalCostos, fila.margen, fila.sinSumar.length, reporte.nominaOculta], [11000, 2000, 9000, 1, undefined],
+  'Reportes → margen: la misma cifra');
 
-// ================= 3. NOMINA_EN_MARGEN = superadmin =================
-props.NOMINA_EN_MARGEN = 'superadmin';
-const tTania = ok('tania', 'getCobranzaProyecto', pA).margen, tLeo = ok('leo', 'getCobranzaProyecto', pA).margen;
-assert.deepEqual([tTania.margen, tTania.costos.some(c => c.concepto === 'Nómina')], [10500, false], 'cobranza: sin nómina');
-assert.deepEqual([tLeo.margen, tLeo.costos.some(c => c.concepto === 'Nómina')], [9000, true], 'super admin: con nómina');
-// Cada quien su caché (nunca la versión con nómina para quien no la ve, ni al revés)
-assert.equal(ok('tania', 'resumenCobranzaGeneral').proyectos.find(p => p.folio === pA).margen, 10500);
-assert.equal(ok('leo', 'resumenCobranzaGeneral').proyectos.find(p => p.folio === pA).margen, 9000);
-assert.equal(ok('tania', 'resumenCobranzaGeneral').proyectos.find(p => p.folio === pA).margen, 10500, 'otra vez (del caché)');
-assert.equal(ok('tania', 'reporteMargen').proyectos.find(p => p.folio === pA).margen, 10500);
-assert.equal(ok('leo', 'reporteMargen').proyectos.find(p => p.folio === pA).margen, 9000);
+// ================= 3. Quién ve la nómina en el margen (revisión del 29/10/2026, decidido por Leo) =================
+// Por omisión cobranza (tania) NO: margen sin nómina (10,500) y nominaOculta en la tarjeta, el resumen y el reporte
+const sinNomina = quien => {
+  const t = ok(quien, 'getCobranzaProyecto', pA).margen, tb = ok(quien, 'getCobranzaProyecto', pB).margen;
+  const rs = ok(quien, 'resumenCobranzaGeneral'), rp = ok(quien, 'reporteMargen');
+  assert.deepEqual([t.margen, t.costos.some(c => c.concepto === 'Nómina'), t.nominaOculta], [10500, false, true], quien + ': tarjeta sin nómina');
+  assert.deepEqual([tb.costos.map(c => c.concepto), tb.nominaOculta], [['Gastos'], true], quien + ': sin contrato, sin nómina');
+  assert.deepEqual([rs.proyectos.find(p => p.folio === pA).margen, rs.nominaOculta], [10500, true], quien + ': resumen');
+  assert.deepEqual([rp.proyectos.find(p => p.folio === pA).margen, rp.nominaOculta, rp.conceptos.indexOf('Nómina')], [10500, true, -1], quien + ': reporte');
+};
+sinNomina('tania');
+sinNomina('tania'); // otra vez (del caché: cada quien el suyo)
+assert.equal(ok('leo', 'resumenCobranzaGeneral').proyectos.find(p => p.folio === pA).margen, 9000, 'super admin: siempre con nómina');
+// Falla cerrada: cualquier valor que no sea exactamente "cobranza" (sin importar mayúsculas ni espacios) la oculta
+['superadmin', 'nomina', 'super admin', 'si', 'cobranza, nomina', 'cobranzas'].forEach(valor => {
+  props.NOMINA_EN_MARGEN = valor;
+  assert.equal(ok('tania', 'getCobranzaProyecto', pA).margen.margen, 10500, 'NOMINA_EN_MARGEN = "' + valor + '": cobranza sin nómina');
+});
+// NOMINA_EN_MARGEN = cobranza: cobranza ve el monto (9,000), sin horas ni horas sin costear
+props.NOMINA_EN_MARGEN = '  Cobranza ';
+const tTania = ok('tania', 'getCobranzaProyecto', pA).margen, nomTania = tTania.costos.find(c => c.concepto === 'Nómina');
+assert.deepEqual([tTania.margen, nomTania.monto, 'horas' in nomTania, 'sinCostear' in nomTania, tTania.nominaOculta], [9000, 1500, false, false, undefined],
+  'cobranza con la propiedad: el monto, sin horas');
+const rsT = ok('tania', 'resumenCobranzaGeneral'), rpT = ok('tania', 'reporteMargen');
+assert.deepEqual([rsT.proyectos.find(p => p.folio === pA).margen, rsT.nominaOculta, rpT.proyectos.find(p => p.folio === pA).margen, rpT.nominaOculta],
+  [9000, undefined, 9000, undefined]);
+assert(!/"horas"|sinCostear/.test(JSON.stringify([tTania, ok('tania', 'getCobranzaProyecto', pB).margen, rsT, rpT])), 'cobranza nunca recibe horas de nómina');
+// El super admin sigue con las horas (caché aparte del de cobranza)
+assert.deepEqual(ok('leo', 'getCobranzaProyecto', pA).margen.costos.find(c => c.concepto === 'Nómina').horas, 40);
+assert(/"horas":40/.test(JSON.stringify(ok('leo', 'resumenCobranzaGeneral'))), 'el resumen del super admin trae las horas');
 delete props.NOMINA_EN_MARGEN;
-assert.equal(ok('tania', 'getCobranzaProyecto', pA).margen.margen, 9000, 'sin la propiedad: cobranza la ve (el spec)');
+assert.equal(ok('tania', 'getCobranzaProyecto', pA).margen.margen, 10500, 'sin la propiedad: oculta otra vez');
 
 // ================= 4. Cachés y sincronización con las colecciones del incremento 7 =================
 const r0 = ok('tania', 'resumenCobranzaGeneral').proyectos.find(p => p.folio === pA).margen;
 const gastosAntes = P.gastosDelLibro_;
 P.gastosDelLibro_ = () => gastosAntes().concat([{ proyectoFolio: pA, estado: 'Aprobado', moneda: 'MXN', subtotal: 1000, total: 1160 }]);
 assert.equal(ok('tania', 'resumenCobranzaGeneral').proyectos.find(p => p.folio === pA).margen, r0, 'sin subir la versión: del caché');
-const vc = ok('tania', 'sincronizar', {}, {}).versiones;
+const vc = ok('tania', 'sincronizar', {}, {}).versiones, vcLeo = ok('leo', 'sincronizar', {}, {}).versiones;
 P.subirVersiones_(['gastos']);
 const s = ok('tania', 'sincronizar', vc, { cobProyecto: pA, cobResumen: true });
-assert.equal(s.cobranzaProyecto.margen.margen, 8000, 'la vista abierta se vuelve a mandar al cambiar un gasto');
-assert.equal(s.resumen.proyectos.find(p => p.folio === pA).margen, 8000, 'y el resumen');
-assert.equal(ok('tania', 'reporteMargen').proyectos.find(p => p.folio === pA).margen, 8000, 'el reporte toma la versión de gastos');
+assert.equal(s.cobranzaProyecto.margen.margen, 9500, 'la vista abierta se vuelve a mandar al cambiar un gasto (cobranza: sin nómina)');
+assert.equal(s.resumen.proyectos.find(p => p.folio === pA).margen, 9500, 'y el resumen');
+assert.equal(ok('tania', 'reporteMargen').proyectos.find(p => p.folio === pA).margen, 9500, 'el reporte toma la versión de gastos');
+const sLeo = ok('leo', 'sincronizar', vcLeo, { cobProyecto: pA, cobResumen: true });
+assert.deepEqual([sLeo.cobranzaProyecto.margen.margen, sLeo.resumen.proyectos.find(p => p.folio === pA).margen], [8000, 8000], 'super admin: con nómina');
+// coleccionesMargen7_: a quien ve la nómina (leo) horas y costos le vuelven a mandar la vista; a cobranza sin nómina, no (y la
+// versión de costosPersonal ni siquiera le cambia: versionesVisibles_)
 ['horas', 'costosPersonal', 'adicionales'].forEach(col => {
+  const v = ok('leo', 'sincronizar', {}, {}).versiones;
+  P.subirVersiones_([col]);
+  assert(ok('leo', 'sincronizar', v, { cobProyecto: pA, cobResumen: true }).cobranzaProyecto, col + ': la vista abierta se vuelve a mandar');
+});
+['horas', 'costosPersonal'].forEach(col => {
   const v = ok('tania', 'sincronizar', {}, {}).versiones;
   P.subirVersiones_([col]);
-  assert(ok('tania', 'sincronizar', v, { cobProyecto: pA }).cobranzaProyecto, col + ': la vista abierta se vuelve a mandar');
+  const s7 = ok('tania', 'sincronizar', v, { cobProyecto: pA, cobResumen: true });
+  assert(!s7.cobranzaProyecto && !s7.resumen, col + ': cobranza sin nómina no recibe nada');
 });
+{
+  const v = ok('tania', 'sincronizar', {}, {}).versiones;
+  P.subirVersiones_(['adicionales']);
+  assert(ok('tania', 'sincronizar', v, { cobProyecto: pA }).cobranzaProyecto, 'adicionales: a cobranza sí');
+}
 const v2 = ok('tania', 'sincronizar', {}, {}).versiones;
 P.subirVersiones_(['facturasClientes']);
 assert(ok('tania', 'sincronizar', v2, { cobProyecto: pA }).cobranzaProyecto, 'facturasClientes: la vista (con sus facturas) se vuelve a mandar');

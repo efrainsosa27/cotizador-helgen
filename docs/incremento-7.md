@@ -24,7 +24,8 @@ Cada módulo se registra en `MODULOS_` (una línea; el integrador resuelve el ch
 | Pendientes (`itemsPendientes`) | por aprobar · por reembolsar | horas por aprobar (líder) | — | REP pendientes · XML sin ligar |
 | Otro | — | `ROLES_CAPRI`, `NOMBRES_ROLES`, `ENCABEZADOS_PROYECTOS` (`lider_email`) | `ENCABEZADOS_COTIZACIONES` (`tipo`), `guardarCotizacion`, `HOJAS_COBRANZA` (`Adicionales`, `Esquemas.adicional`), `resumenCobranza`/`vistaCobranza_` | `HOJAS_COBRANZA` (`FacturasClientes`), lector de CFDI de cliente |
 
-- **No cambiar la salida de `leerCfdi`** (la usan las facturas de proveedor y G). C agrega una función pura propia
+- **No cambiar la salida de `leerCfdi`** (la usan las facturas de proveedor y G; agregar un campo sí: la revisión del 29/10/2026 agregó
+  `locales`, §5). C agrega una función pura propia
   (`leerCfdiCliente(texto)` = `leerCfdi` + `relacionados: [{uuid, tipoRelacion}]` de `CfdiRelacionados` y, para tipo P,
   `pagos: [{fecha, monto, moneda, documentos: [{uuid, parcialidad, saldoAnterior, pagado, saldoInsoluto, moneda}]}]` del complemento
   `Pagos` 2.0) y textos de error para clientes ("pide a quien factura en CONTALINK…", no "al proveedor").
@@ -128,12 +129,13 @@ facturasPorEtapa(facturas) → { [proyectoFolio]: { [claveEtapa]: [{ uuid, serie
   §6.A, §6.G, §6.N y §6.C quedan una tras otra al final de `Code.js`, y sus módulos de interfaz al final de `index.html`).
 - **Margen (§6.I):** `margenCompleto(contrato, moneda, costos, adicional)` = contrato + adicionales − órdenes − gastos − nómina; gastos
   o nómina en otra moneda van en `sinSumar` ("Revisar"). Lo usan la tarjeta de cobranza, el resumen y Reportes → margen, con la misma
-  cifra (`tests/integracion7.test.js`). `NOMINA_EN_MARGEN = superadmin` (opcional) deja la nómina del margen solo a super admin y Nómina.
+  cifra (`tests/integracion7.test.js`). La nómina del margen es de super admin y Nómina; cobranza solo la ve (el monto, sin horas) con
+  `NOMINA_EN_MARGEN = cobranza` (§5 abajo; antes era al revés: `= superadmin` la ocultaba).
 - **A + C:** `cobranzaParaFacturas` separa las etapas de las adicionales (antes las leía como del contrato) y las agrega con su clave
   `'<HLG>/<orden>'`, la misma que la vista del proyecto.
 - **Sincronización y cachés:** la vista del proyecto de cobranza se vuelve a mandar al cambiar `facturasClientes`, `adicionales`,
-  `gastos`, `horas` o `costosPersonal`; el resumen y el reporte de margen usan esas versiones en su caché. `VERSION_CODIGO_CACHE =
-  2026-10-29s`.
+  `gastos` y, a quien ve la nómina, `horas` o `costosPersonal` (`coleccionesMargen7_()`); el resumen y el reporte de margen usan esas
+  versiones en su caché. `VERSION_CODIGO_CACHE = 2026-10-29t`.
 - Arreglo del incremento 6 (hallazgo de G): la huella del pago parcial se escribe con `textoCelda`.
 
 ## 5. Revisión independiente: dinero, monedas y estados (29/10/2026, rama `incremento-7-fix-dinero`)
@@ -152,4 +154,25 @@ existía); prueba permanente `tests/revision7-dinero.test.js` (cada sección fal
 6. **REP:** el último REP con saldo insoluto ≤ 1.00 cubre la factura (USD cobrada en MXN); un REP o una E sustituidos (04) ya no
    cuentan y el par queda por revisar.
 7. **Nómina:** "45.000" = 45,000; "45.000,50" ambiguo; menos de 1,000 MXN se confirma a mano; menos de 100 en el CSV es error.
-`VERSION_CODIGO_CACHE = 2026-10-29d`.
+`VERSION_CODIGO_CACHE = 2026-10-29t`.
+
+## 6. Revisión independiente: permisos, privacidad y entrada de datos (29/10/2026, rama `incremento-7-fix-privacidad`)
+Reproducciones de los revisores convertidas en `tests/revision7-privacidad.test.js` (fallan con `6b7f14f`, pasan con el arreglo).
+- **Nómina en el margen = oráculo del costo de una persona.** Con la nómina por proyecto en el margen de cobranza: (A) cobranza se
+  nombraba líder, aprobaba la semana de alguien y el margen bajaba exactamente su costo mensual; (B) con el resumen abierto, cada
+  `guardarCostoPersonal` subía `costosPersonal`, `sincronizar` le mandaba el resumen nuevo y la diferencia era el costo; (C) devolver una
+  semana aprobada de hace meses (sin huella ni límite) lo descubría para meses pasados. Arreglo (decidido): `nominaEnMargen_()` = super
+  admin o Nómina; cobranza solo si `NOMINA_EN_MARGEN` es exactamente `cobranza` (falla cerrada) y entonces sin `horas` ni `sinCostear`;
+  `nominaOculta: true` en tarjeta, resumen y reporte (la interfaz lo dice); `coleccionesMargen7_()`; la versión de `costosPersonal` se
+  enmascara (`versionesVisibles_`, bootstrap y sincronizar, también para comparar: sin vueltas); `asignarLider` rechaza nombrarse a sí
+  mismo (salvo super admin); devolver una parte **Aprobada** exige `huella` y solo semanas de la ventana de «Por aprobar»
+  (`SEMANAS_REVISADAS_HORAS`; antes, super admin).
+- **Gastos (G):** `guardarGasto`/`reembolsarGasto` sin HTTP con el candado (regla 17: archivos con `archivoPrivado_` antes, `setName`
+  con el folio adentro); si `privado_` o lo de adentro falla, o el envío resulta repetido, los archivos van a la Papelera; Compras no
+  registra el reembolso de su propio gasto (otra persona de Compras o super admin con `motivoExcepcion`); UUID repetido: a quien captura
+  un texto general, el folio solo a Compras y super admin.
+- **Entrada de datos:** XSS por el XML de un gasto (`verArchivo` lo abría como `application/xml` en el origen de CAPRI): el servidor lo
+  manda como `text/plain` y la interfaz (`abrirArchivoServidor`, también para `verArchivoReq`) solo abre PDF/JPG/PNG con el tipo de su
+  lista blanca y bytes comprobados; el XML se enseña como texto en un `<pre>`, lo demás se descarga. `leerCfdi` agrega `locales`
+  (`{trasladados, retenidos}`; lo demás no cambia): en un gasto el ISH es costo y el IVA solo el federal. Un CFDI de Helgen a Helgen no
+  entra como gasto (el lado de facturas de clientes lo arregla otra rama).

@@ -2080,7 +2080,9 @@
       // Revisión del incremento 7 (dinero): lo pagado de más, aparte (nunca se resta de lo que deben otros proyectos)
       (t.aFavor ? tile('Saldo a favor de clientes', dinero(t.aFavor, t.moneda) + ' · ' + t.conSaldoAFavor + (t.conSaldoAFavor === 1 ? ' proyecto' : ' proyectos')) : '') +
       tile('Margen (sin IVA)', t.margen == null ? '—' : dinero(t.margen, t.moneda) + (t.margenPorcentaje == null ? '' : ' · ' + t.margenPorcentaje + '%'),
-        t.margen != null && t.margen < 0 ? 'negativo' : '') + '</div>').join('')
+        t.margen != null && t.margen < 0 ? 'negativo' : '') + '</div>').join('') +
+      // Incremento 7 (§6.I): el margen de quien no ve la nómina no la incluye, y se dice
+      (RESUMEN.nominaOculta ? '<div class="nota">' + esc(NOTA_SIN_NOMINA) + '</div>' : '')
       : '<span class="nota">Todavía no hay proyectos con cotización aceptada.</span>';
     const lista = filtrarResumenCob();
     $('resLista').innerHTML = lista.length ? lista.map(p => {
@@ -2193,17 +2195,20 @@
 
     // Margen (sin IVA, en la moneda del proyecto): el servidor solo lo manda al rol de cobranza
     const mg = v.margen;
-    // Incremento 7: la nómina dice sus horas (nunca personas); gastos o nómina en otra moneda que el contrato no se suman (Revisar)
+    // Incremento 7: la nómina dice sus horas (nunca personas; a cobranza ni eso: solo el monto); gastos o nómina en otra moneda que el
+    // contrato no se suman (Revisar). Si la nómina no está en el margen de esta persona (nominaOculta), se dice.
     const etiquetaCosto = x => x.concepto + (x.horas != null ? ' (' + x.horas + ' h' + (x.sinCostear ? '; ' + x.sinCostear + ' h sin costear' : '') + ')'
-      : ' (' + x.cantidad + ')');
-    const sinSumar = !mg || !mg.sinSumar ? '' : mg.sinSumar.map(x => '<div class="nota aviso-moneda" style="grid-column:1/-1">Revisar: ' +
-      esc(x.concepto) + ' en ' + esc(x.moneda) + ' por ' + esc(dinero(x.monto, x.moneda)) + ' no se suma (el contrato es en ' + esc(mg.moneda) + ').</div>').join('');
+      : x.concepto === 'Nómina' ? '' : ' (' + x.cantidad + ')');
+    const sinSumar = (!mg || !mg.sinSumar ? '' : mg.sinSumar.map(x => '<div class="nota aviso-moneda" style="grid-column:1/-1">Revisar: ' +
+      esc(x.concepto) + ' en ' + esc(x.moneda) + ' por ' + esc(dinero(x.monto, x.moneda)) + ' no se suma (el contrato es en ' + esc(mg.moneda) + ').</div>').join('')) +
+      (mg && mg.nominaOculta ? '<div class="nota" style="grid-column:1/-1">' + esc(NOTA_SIN_NOMINA) + '</div>' : '');
     $('cobMargen').classList.toggle('oculto', !mg);
     $('cobMargen').innerHTML = !mg ? '' : mg.error ? '<div class="nota aviso-moneda">' + esc(mg.error) + '</div>'
       // Sin cotización aceptada no hay contratado: solo los costos del proyecto (órdenes, gastos y nómina; cada moneda aparte)
       : mg.sinContrato ? '<div class="sat-titulo" style="grid-column:1/-1;margin:0">Costos del proyecto (sin IVA)</div>' +
         mg.costos.map(x => [etiquetaCosto(x), dinero(x.monto, x.moneda)]).concat([['Margen', 'Sin contrato']])
-          .map(([k, x]) => '<div class="tile"><span>' + esc(k) + '</span><b>' + esc(x) + '</b></div>').join('')
+          .map(([k, x]) => '<div class="tile"><span>' + esc(k) + '</span><b>' + esc(x) + '</b></div>').join('') +
+        (mg.nominaOculta ? '<div class="nota" style="grid-column:1/-1">' + esc(NOTA_SIN_NOMINA) + '</div>' : '')
       : '<div class="sat-titulo" style="grid-column:1/-1;margin:0">Margen del proyecto (sin IVA)</div>' +
         (mg.adicionales ? [['Contrato sin IVA', dinero(mg.contrato, mg.moneda)], ['Adicionales sin IVA', dinero(mg.adicionales, mg.moneda)],
           ['Contratado sin IVA', dinero(mg.contratado, mg.moneda)]] : [['Contratado sin IVA', dinero(mg.contratado, mg.moneda)]])
@@ -2731,14 +2736,64 @@
   function abrirOps(folio) {
     google.script.run.withSuccessHandler(pintarOps).withFailureHandler(mostrarError).getRequisicionOperaciones(folio);
   }
+  /** Incremento 7 (§6.I): lo que dice el margen (tarjeta, resumen y Reportes) cuando el servidor no le manda la nómina (nominaOculta). */
+  const NOTA_SIN_NOMINA = 'No incluye nómina (la ven Nómina y el super admin).';
+
+  // ---- Archivos que manda el servidor ({nombre, mime, datos}) sin acceso a Drive (revisión del 29/10/2026) ----
+  // Un blob se abre con el origen de CAPRI: un XML o HTML abierto así ejecuta sus scripts con la sesión de quien lo ve (y con
+  // window.opener). Por eso en la página solo se abren PDF, JPG y PNG, con el tipo tomado de esta lista (nunca del texto que mande el
+  // servidor) y solo si los primeros bytes lo confirman; un XML se enseña como texto escapado (<pre>) y lo demás se descarga.
+  const TIPOS_EN_PAGINA = ['application/pdf', 'image/jpeg', 'image/png'];
+  /** Tipo con que se puede abrir en la página ('' = no se abre aquí). */
+  function tipoEnPagina(mime, bytes) {
+    const i = TIPOS_EN_PAGINA.indexOf(String(mime || '').toLowerCase().split(';')[0].trim());
+    if (i === -1) return '';
+    const b = k => (bytes && bytes[k]) || 0;
+    const ok = i === 0 ? b(0) === 0x25 && b(1) === 0x50 && b(2) === 0x44 && b(3) === 0x46 // %PDF
+      : i === 1 ? b(0) === 0xFF && b(1) === 0xD8 && b(2) === 0xFF : b(0) === 0x89 && b(1) === 0x50 && b(2) === 0x4E && b(3) === 0x47;
+    return ok ? TIPOS_EN_PAGINA[i] : '';
+  }
+  /** Descarga bytes como archivo (application/octet-stream: el navegador nunca lo interpreta en la página). */
+  function descargarBytes(bytes, nombre) {
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+    const x = document.createElement('a');
+    x.href = url; x.download = String(nombre || 'archivo').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 120) || 'archivo';
+    document.body.appendChild(x); x.click(); x.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+  /**
+   * Enseña un archivo del servidor en la pestaña w (abierta antes de la llamada: si no, el navegador la bloquea). PDF, JPG y PNG
+   * (comprobados) en la página; XML como texto en un <pre> (textContent: nunca se interpreta); lo demás, o sin pestaña, se descarga.
+   */
+  function abrirArchivoServidor(w, a) {
+    const bytes = Uint8Array.from(atob(String((a && a.datos) || '')), c => c.charCodeAt(0));
+    const nombre = String((a && a.nombre) || 'archivo');
+    const tipo = tipoEnPagina(a && a.mime, bytes);
+    if (tipo) {
+      const url = URL.createObjectURL(new Blob([bytes], { type: tipo }));
+      if (w) { try { w.opener = null; } catch (e) { /* sin opener */ } w.location = url; } else window.location = url;
+      return;
+    }
+    const esXml = /^(text\/plain|text\/xml|application\/xml)\b/i.test(String((a && a.mime) || '')) || /\.xml$/i.test(nombre);
+    if (esXml && w && w.document) {
+      let texto = '';
+      try { texto = new TextDecoder('utf-8').decode(bytes); } catch (e) { texto = String.fromCharCode.apply(null, Array.from(bytes)); }
+      try { w.opener = null; } catch (e) { /* sin opener */ }
+      w.document.title = nombre;
+      const pre = w.document.createElement('pre');
+      pre.style.whiteSpace = 'pre-wrap'; pre.style.font = '13px monospace';
+      pre.textContent = texto;
+      w.document.body.appendChild(pre);
+      return;
+    }
+    if (w) w.close();
+    descargarBytes(bytes, nombre);
+  }
   /** Archivo de la requisición (cotización) sin acceso a la carpeta de compras: el servidor lo manda y se abre en otra pestaña. */
   function verArchivoReq(folio, id) {
     const w = typeof window.open === 'function' ? window.open('', '_blank') : null; // antes de la llamada: si no, el navegador la bloquea
-    google.script.run.withSuccessHandler(a => {
-      const bytes = Uint8Array.from(atob(a.datos), c => c.charCodeAt(0));
-      const url = URL.createObjectURL(new Blob([bytes], { type: a.mime }));
-      if (w) w.location = url; else window.location = url;
-    }).withFailureHandler(err => { if (w) w.close(); mostrarError(err); }).archivoRequisicion(folio, id);
+    google.script.run.withSuccessHandler(a => abrirArchivoServidor(w, a))
+      .withFailureHandler(err => { if (w) w.close(); mostrarError(err); }).archivoRequisicion(folio, id);
   }
   const ligaArchivo = (folio, id, texto) => '<a href="#" onclick="verArchivoReq(\'' + esc(folio) + '\',\'' + esc(id) + '\');return false">' + esc(texto) + '</a>';
 
@@ -5957,10 +6012,13 @@
               (p.sinSumar ? '<div class="nota aviso-moneda">Revisar: ' + esc(p.sinSumar.map(x => x.concepto + ' ' + dineroTexto(x.monto, x.moneda)).join(', ')) +
                 ' no suma</div>' : '') + '</td><td class="num">' + p.porcentaje + '%</td>') + '</tr>';
       }).join('');
-      return tot + tabla(enc, filas, ';margin-top:10px') + '<div class="nota" style="margin-top:8px">Contratado sin IVA (subtotal de la cotización aceptada ' +
-        'más sus adicionales aceptadas) menos el costo sin IVA de las órdenes de compra no canceladas, los gastos aprobados o reembolsados y la ' +
-        'nómina repartida por horas aprobadas, en la moneda del contrato (lo que está en otra moneda no se suma: "Revisar"). ' +
-        'Los totales son por línea de negocio y moneda, solo de contratos firmados. Fuera: proyectos cancelados, lo anulado y los registros de prueba.</div>';
+      // Incremento 7 (§6.I): sin la nómina para esta persona (nominaOculta), se dice arriba y en la nota
+      return (d.nominaOculta ? '<div class="nota" style="margin-bottom:6px"><b>' + esc(NOTA_SIN_NOMINA) + '</b></div>' : '') +
+        tot + tabla(enc, filas, ';margin-top:10px') + '<div class="nota" style="margin-top:8px">Contratado sin IVA (subtotal de la cotización aceptada ' +
+        'más sus adicionales aceptadas) menos el costo sin IVA de las órdenes de compra no canceladas, los gastos aprobados o reembolsados' +
+        (d.nominaOculta ? '' : ' y la nómina repartida por horas aprobadas') + ', en la moneda del contrato (lo que está en otra moneda no se suma: "Revisar"). ' +
+        'Los totales son por línea de negocio y moneda, solo de contratos firmados. Fuera: proyectos cancelados, lo anulado y los registros de prueba.' +
+        (d.nominaOculta ? ' ' + esc(NOTA_SIN_NOMINA) : '') + '</div>';
     }
     /** Importe con su moneda como texto plano (para notas que luego se escapan). */
     const dineroTexto = (n, m) => (Math.round((Number(n) + Number.EPSILON) * 100) / 100).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -6523,31 +6581,45 @@
       const f = archivoDe('gasReemComprobante');
       if (!f) { mostrarError('Adjunta el comprobante del reembolso (PDF o imagen).'); return; }
       if (f.size > MAX_ARCHIVO) { mostrarError('El comprobante pesa más de 10 MB. Reduce la imagen o el PDF.'); return; }
-      b.disabled = true; b.textContent = 'Subiendo comprobante…';
+      const ocupado = () => { b.disabled = true; b.textContent = 'Subiendo comprobante…'; };
       const listo = () => { b.disabled = false; b.textContent = 'Registrar reembolso'; };
+      ocupado();
       leerArchivo(f).then(datos => {
-        google.script.run.withSuccessHandler(r => {
+        const datosReembolso = { folio: folio, fecha: $('gasReemFecha').value, metodo: $('gasReemMetodo').value,
+          referencia: $('gasReemReferencia').value.trim(), comprobante: { nombre: String(f.name || 'comprobante'), datos: datos },
+          idSolicitud: G.idReembolso, filtro: filtroActual() };
+        const enviar = motivo => google.script.run.withSuccessHandler(r => {
           listo(); cerrarReembolso(); G.idReembolso = nuevoId();
           recibir(r.datos);
           aviso('ok', 'Reembolso de <b>' + esc(r.folio) + '</b> ' + (r.repetido ? 'ya estaba registrado.' : 'registrado.'));
           sincronizarAhora();
-        }).withFailureHandler(err => { listo(); mostrarError(err); }).reembolsarGasto({ folio: folio, fecha: $('gasReemFecha').value,
-          metodo: $('gasReemMetodo').value, referencia: $('gasReemReferencia').value.trim(), comprobante: { nombre: String(f.name || 'comprobante'), datos: datos },
-          idSolicitud: G.idReembolso, filtro: filtroActual() });
+        }).withFailureHandler(err => {
+          listo();
+          // Su propio gasto lo reembolsa otra persona de Compras; un super admin puede hacerlo con motivo (como accionConExcepcion)
+          if (!motivo && err && err.codigo === 'PERMISO' && PERMISOS.superadmin) {
+            const m = window.prompt(err.message + '\n\nMotivo de la excepción (mínimo 10 caracteres; queda en la bitácora):');
+            if (m == null) return;
+            if (m.trim().length < 10) { mostrarError('Escribe el motivo de la excepción (mínimo 10 caracteres).'); return; }
+            ocupado(); enviar(m.trim());
+            return;
+          }
+          mostrarError(err);
+        }).reembolsarGasto(Object.assign({}, datosReembolso, motivo ? { motivoExcepcion: motivo } : {}));
+        enviar('');
       }).catch(err => { listo(); mostrarError(err); });
     }
     function filtrar() {
       G.filtro = { estado: $('gasFiltroEstado').value, buscar: $('gasBuscar').value.trim() };
       cargar();
     }
-    /** Archivo del gasto sin acceso a la carpeta de compras: el servidor lo manda y se abre en otra pestaña. */
+    /**
+     * Archivo del gasto sin acceso a la carpeta de compras: el servidor lo manda y se abre en otra pestaña con abrirArchivoServidor
+     * (PDF, JPG y PNG en la página; el XML como texto; lo demás se descarga: un XML abierto como página correría sus scripts).
+     */
     function verArchivo(folio, que) {
       const w = typeof window.open === 'function' ? window.open('', '_blank') : null; // antes de la llamada: si no, el navegador la bloquea
-      google.script.run.withSuccessHandler(a => {
-        const bytes = Uint8Array.from(atob(a.datos), c => c.charCodeAt(0));
-        const url = URL.createObjectURL(new Blob([bytes], { type: a.mime }));
-        if (w) w.location = url; else window.location = url;
-      }).withFailureHandler(err => { if (w) w.close(); mostrarError(err); }).archivoGasto(folio, que);
+      google.script.run.withSuccessHandler(a => abrirArchivoServidor(w, a))
+        .withFailureHandler(err => { if (w) w.close(); mostrarError(err); }).archivoGasto(folio, que);
     }
     /** Abre Gastos con lo que espera ese folio (Pendientes) o lo busca (liga del correo). */
     function irAGasto(folio, tipo) {
@@ -6938,7 +7010,10 @@
       if (TAB === 'horas' && st.vista === 'lideres') pintar();
       if (typeof COB !== 'undefined' && COB) pintarLiderCob(COB);
     }
+    // Nadie se nombra líder a sí mismo salvo el super admin (el servidor lo rechaza; aquí ni se ofrece, salvo si ya lo es)
+    const yoLider = () => String(typeof window.correoSesion === 'function' ? window.correoSesion() || '' : '').toLowerCase();
     const opcionesLider = actual => '<option value="">Sin líder (aprueba Aprobaciones)</option>' + (st.lideres.candidatos || [])
+      .filter(c => PERMISOS.superadmin || c.correo !== yoLider() || c.correo === actual)
       .map(c => '<option value="' + esc(c.correo) + '"' + (c.correo === actual ? ' selected' : '') + '>' + esc(c.nombre + (c.nombre !== c.correo ? ' · ' + c.correo : '')) + '</option>').join('');
     function htmlLideres() {
       const d = st.lideres;

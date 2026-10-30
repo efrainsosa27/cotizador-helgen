@@ -15,6 +15,9 @@ al Manual del Cotizador (una sección nueva "Horas y nómina", Reglas de oro, Hi
    motivo ≥ 10 caracteres (`excepcionSuperAdmin_`, bitácora de Administración), como en el incremento 4.
 4. **Una parte aprobada no cambia.** Si hay un error, quien podía aprobarla la **devuelve** con motivo (también ya aprobada; en
    "Por aprobar" → "Revisadas en las últimas semanas", 5 semanas). Las horas no se anulan (contrato §0): se devuelven.
+   **Revisión del 29/10/2026:** devolver una parte **Aprobada** exige la `huella` que enseñó «Por aprobar» (la interfaz la manda) y
+   solo de esas semanas (`inicioRevisadasHoras(hoy)` = lunes de hace `SEMANAS_REVISADAS_HORAS − 1` semanas); las anteriores solo un
+   super admin. Antes el servidor no limitaba la antigüedad ni pedía la huella: devolver semanas viejas movía el costo de meses pasados.
 5. **Devolver manda un correo** `horas.devuelta` a la persona (no estaba en el contrato; sin horas, montos ni el texto de la nota:
    "Hay una nota: ábrela en CAPRI"). Uno por persona y semana.
 6. Editar una parte Enviada sin reenviarla la regresa a **Borrador**; una **Devuelta** sigue Devuelta (con su motivo) hasta que se
@@ -49,6 +52,10 @@ al Manual del Cotizador (una sección nueva "Horas y nómina", Reglas de oro, Hi
     Si en un mes un proyecto tiene **una sola persona costeada**, ese número es la parte de esa persona. Si importa, opciones para
     el integrador: no mostrar la nómina en el margen de un proyecto con menos de dos personas costeadas en el mes, o mostrarla solo
     a Nómina y super admin. Este módulo no lo decide: nunca publica nada por persona.
+    **Decidido tras la revisión del 29/10/2026 (`docs/incremento-7.md` §5):** solo Nómina y super admin la ven en el margen; cobranza
+    únicamente con `NOMINA_EN_MARGEN = cobranza` (y solo el monto). Además: **nadie se nombra líder a sí mismo** (`asignarLider`,
+    salvo super admin), y la versión de `costosPersonal` que reciben los demás en bootstrap y sincronizar es fija (`VERSION_OCULTA`):
+    no les avisa cuándo Nómina captura un costo.
 14. **Nómina siempre en MXN:** con un contrato en USD, `margenProyecto` lanza "hay costos en MXN y el contrato es en USD" (el
     margen dice "Revisar"). El integrador decide (convertir con un tipo de cambio o dejarla fuera de los contratos USD).
 15. Leer nunca crea el libro de nómina (`libroNominaSiExiste_`); lo crean `prepararNomina`/`prepararCapri`, la primera semana
@@ -91,8 +98,8 @@ Columnas en `HOJAS_NOMINA` (texto salvo `horas` y `costo`; fechas y mes con apó
 | `guardarSemana({semana, bloques: [{proyecto, horas[7], actividad}], enviar})` | la persona | valida (`normalizarSemanaHoras`, `planSemanaHoras`, proyecto Activo/Cerrado, no anulado) y reescribe su semana; devuelve `misHoras` |
 | `horasPorAprobar()` | líder, Aprobaciones, super admin | partes Enviadas que le tocan (con `huella`, `como`, `propio`) y las revisadas de las últimas 5 semanas. Nunca costos |
 | `aprobarHoras(lista, motivoExcepcion?)` | líder / Aprobaciones / super admin | `lista = [{correo, semana, proyecto, huella}]` (≤ 100) |
-| `devolverHoras(lista, motivo)` | igual | Enviada o Aprobada → Devuelta; correo `horas.devuelta` |
-| `listarLideres()` / `asignarLider(folio, correo)` | super admin, cobranza | proyectos no cancelados con su líder y candidatos activos; `correo` vacío = quitar |
+| `devolverHoras(lista, motivo)` | igual | Enviada o Aprobada → Devuelta; correo `horas.devuelta`. Una Aprobada: con `huella` y de las últimas 5 semanas (antes, solo super admin) |
+| `listarLideres()` / `asignarLider(folio, correo)` | super admin, cobranza | proyectos no cancelados con su líder y candidatos activos; `correo` vacío = quitar; nadie se asigna a sí mismo (salvo super admin) |
 | `listarCostosPersonal()` | Nómina, super admin | costos, personas, meses con horas aprobadas sin costo (6 meses) |
 | `guardarCostoPersonal({correo, mes, costo, notas, quitar})` | Nómina | alta, cambio o baja |
 | `importarCostosPersonal(texto)` | Nómina | CSV con resultado por renglón (Nuevo · Actualizado · Sin cambio · Error · Repetido) |
@@ -205,7 +212,7 @@ Pruebas: `tests/arnes.js` (simulacro `deleteRows`); `tests/permisos.test.js` (su
 
 ## 6. Lo que quedó fuera
 
-- Conectar la nómina al margen (integrador, §3) y la decisión de §0.13.
+- ~~Conectar la nómina al margen (integrador, §3) y la decisión de §0.13.~~ Hecho (integración y revisión del 29/10/2026).
 - "Semana sin horas" (vacaciones, incapacidad) y días festivos en el recordatorio.
 - Recordatorio a líderes con horas sin aprobar (hoy solo Pendientes).
 - Que "Actualizar" en Pendientes también refresque el número de la pestaña Horas (se refresca en la siguiente sincronización).
