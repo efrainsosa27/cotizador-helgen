@@ -712,6 +712,7 @@
         <div id="ocEnviarCaja" class="sat oculto"></div>
       </div>
       <div class="modulo">
+        <details id="fechasCompraRegistro" class="oculto"><summary><b>Solicitudes de excepción de fecha · super admin</b></summary><p class="nota">Compras pide registrar un pago ocurrido antes de la OC. Cada autorización es para esa orden y fecha, con un solo uso.</p><button type="button" class="btn btn-sec" onclick="FECHAS_COMPRA.cargar()">Actualizar solicitudes</button><div id="fechasCompraLista"></div></details>
         <details id="tarjetasRegistro"><summary><b>Tarjetas de crédito y débito</b></summary><p class="nota">Registro para identificar con qué tarjeta se pagó. No captura números completos, CVV, NIP ni fotos de tarjetas.</p>
         <button type="button" class="btn btn-sec" onclick="TARJETAS.cargar()">Actualizar tarjetas</button>
         <div id="tarLista"></div><input type="hidden" id="tarId">
@@ -971,6 +972,7 @@
           <div id="ppProveedor" class="oculto" style="margin-bottom:10px"></div>
           <div class="grid">
             <div><label>Fecha del pago *</label><input id="ppFecha" type="date"></div>
+            <div id="ppExcepcionCaja"><p class="nota">Un pago anterior a la OC requiere solicitud y autorización de super admin. No cambia la fecha de la orden.</p><button type="button" class="btn btn-sec" onclick="solicitarExcepcionFecha()">Solicitar excepción de fecha</button><label for="ppExcepcion">Autorización para la fecha elegida</label><select id="ppExcepcion"></select><div id="ppExcepcionesLista"></div></div>
             <div><label>Monto *</label><input id="ppMonto" type="number" min="0" step="0.01" style="text-align:right" oninput="pintarAplicadoPago()"></div>
             <div><label>Moneda del pago *</label>
               <select id="ppMoneda" onchange="pintarTcPago()"><option value="MXN">MXN</option><option value="USD">USD</option></select></div>
@@ -3079,7 +3081,7 @@
     if (!v.puedeRecibir && FORMS_REC.rcpCom) cerrarFormRecepcion('rcpCom');
     $('rcFormPago').classList.toggle('oculto', !v.puedePagar);
     if (v.puedePagar && cambio) {
-      $('ppFecha').value = v.hoy; $('ppFecha').max = v.hoy; $('ppFecha').min = o.fecha || '';
+      $('ppFecha').value = v.hoy; $('ppFecha').max = v.hoy; $('ppFecha').min = '';
       $('ppMoneda').value = o.moneda; $('ppMetodo').value = 'Transferencia';
       ['ppTc', 'ppRef', 'ppArchivo', 'ppFinanciera', 'ppFinFecha', 'ppFinVence'].forEach(id => $(id).value = ''); $('ppFinDias').value = 90;
       ID_PGP = nuevoId();
@@ -3097,6 +3099,7 @@
     }
     $('ppSaldo').innerHTML = v.puedePagar ? htmlSaldoPago(v) : '';
     if (v.puedePagar) pintarAplicadoPago();
+    pintarExcepcionesFecha(v);
     const sr = v.saldo && v.saldo.vigentes && v.saldo.vigentes.length ? v.saldo : null;
     $('rcSaldoResumen').classList.toggle('oculto', !sr);
     if (sr) $('rcSaldoResumen').innerHTML = 'Pagado <b>' + dinero(sr.pagado, o.moneda) + '</b> de ' + dinero(sr.porFacturas || sr.esperado, o.moneda) +
@@ -3107,7 +3110,7 @@
       esc('Cancelado por ' + p.canceladoPor + ': ' + p.motivoCancelacion) + '"' : '') + '><td><b>' + esc(p.folio) + '</b></td><td>' +
       (p.tipo ? '<span class="chip ' + (p.tipo === 'Liquidación' ? 'firmado' : 'aceptada') + '">' + esc(p.tipo) + '</span>' : '') + '</td><td>' + esc(fechaMx(p.fecha)) +
       '</td><td class="num">' + dinero(p.monto, p.monedaPago) + (p.tipoCambio ? '<div class="nota">TC ' + esc(p.tipoCambio) + ' = ' + dinero(p.montoAplicado, p.monedaOc) + '</div>' : '') +
-      '</td><td>' + esc(p.metodo) + (p.referencia ? '<div class="nota">' + esc(p.referencia) + '</div>' : '') + htmlFinanciamiento(p) + (p.tarjeta ? '<div class="nota">' + esc(p.tarjeta.alias + ' · ' + p.tarjeta.banco + ' · ****' + p.tarjeta.ultimos4) + '</div>' : '') + '</td><td>' + esc(p.estado) + '</td><td>' +
+      '</td><td>' + esc(p.metodo) + (p.referencia ? '<div class="nota">' + esc(p.referencia) + '</div>' : '') + htmlFinanciamiento(p) + (p.excepcionFecha ? '<div class="nota">Excepción de fecha autorizada por ' + esc(p.excepcionFecha.resolvio) + '</div>' : '') + (p.tarjeta ? '<div class="nota">' + esc(p.tarjeta.alias + ' · ' + p.tarjeta.banco + ' · ****' + p.tarjeta.ultimos4) + '</div>' : '') + '</td><td>' + esc(p.estado) + '</td><td>' +
       (p.comprobanteUrl ? '<a href="' + esc(p.comprobanteUrl) + '" target="_blank">Ver</a>' : '') + '</td><td>' +
       (p.estado === 'Vigente' && v.puedeCancelarPago ? '<button type="button" class="quitar" title="Cancelar pago" onclick="cancelarPagoProv(\'' + esc(p.folio) + '\')">×</button>' : '') +
       '</td></tr>').join('') : '<tr><td colspan="8" class="nota">Sin pagos.</td></tr>';
@@ -3509,6 +3512,25 @@
         : queda > 1.0001 ? ' · queda un saldo de ' + dinero(queda, o.moneda) : ' · liquida la orden');
   }
 
+  function pintarExcepcionesFecha(v) {
+    const ex=v.excepcionesFecha||[],antes=$('ppExcepcion').value;
+    $('ppExcepcion').innerHTML='<option value="">Sin excepción</option>'+ex.filter(x=>x.estado==='Autorizada'&&x.fechaPago===$('ppFecha').value).map(x=>'<option value="'+esc(x.id)+'">'+esc(x.fechaPago+' · autorizó '+x.resolvio)+'</option>').join('');
+    if(ex.some(x=>x.id===antes&&x.estado==='Autorizada'&&x.fechaPago===$('ppFecha').value))$('ppExcepcion').value=antes;
+    $('ppExcepcionesLista').innerHTML=ex.map(x=>'<div class="nota"><b>'+esc(x.estado)+' · '+esc(fechaMx(x.fechaPago))+'</b> · '+esc(x.solicito)+' · '+esc(x.motivo)+(PERMISOS.superadmin&&x.estado==='Pendiente'?' <button type="button" class="btn btn-sec" onclick="resolverExcepcionFecha('+jsArg(x.id)+',true)">Autorizar</button> <button type="button" class="btn btn-sec" onclick="resolverExcepcionFecha('+jsArg(x.id)+',false)">Rechazar</button>':'')+'</div>').join('');
+  }
+  function solicitarExcepcionFecha() {
+    if(!REQC||!REQC.orden)return;
+    const fecha=$('ppFecha').value;
+    if(!fecha || fecha>=REQC.orden.fecha){mostrarError('Elige la fecha real del pago, anterior a la orden.');return;}
+    const motivo=window.prompt('Motivo: ¿por qué el material se pagó antes de crear la orden? (10 a 500 caracteres)');if(motivo===null)return;
+    google.script.run.withSuccessHandler(v=>{pintarReqCom(v);aviso('ok','Solicitud enviada. Espera autorización de super admin y selecciónala antes de registrar el pago.');}).withFailureHandler(e=>mostrarError(e.message||String(e))).solicitarExcepcionFechaPago({ocFolio:REQC.orden.folio,fecha,motivo});
+  }
+  function resolverExcepcionFecha(id,autorizar) {
+    const motivo=window.prompt((autorizar?'Motivo de autorización':'Motivo de rechazo')+' de la excepción (10 a 500 caracteres)');if(motivo===null)return;
+    google.script.run.withSuccessHandler(v=>{pintarReqCom(v);if(window.FECHAS_COMPRA)FECHAS_COMPRA.cargar();aviso('ok',autorizar?'Excepción autorizada para un pago de esa orden y fecha.':'Solicitud rechazada.');}).withFailureHandler(e=>mostrarError(e.message||String(e))).resolverExcepcionFechaPago(id,autorizar,motivo);
+  }
+  $('ppFecha').addEventListener('change',()=>{if(REQC)pintarExcepcionesFecha(REQC);});
+
   function pintarTarjetasPago(v) {
     const metodo=$('ppMetodo').value, visible=/^Tarjeta/.test(metodo), sel=$('ppTarjeta'), antes=sel.value;
     $('ppTarjetaCaja').classList.toggle('oculto',!visible);
@@ -3558,7 +3580,7 @@
       // F (incremento 5): sin CSF y carátula del proveedor el servidor lo niega (PERMISO); un super admin puede con motivo
       accionConExcepcion('btnPagoProv', 'registrarPagoProveedor', [{
         reqFolio: folio, fecha: $('ppFecha').value, monto: $('ppMonto').value, monedaPago: $('ppMoneda').value,
-        tipoCambio: $('ppTc').value, metodo: $('ppMetodo').value, referencia: $('ppRef').value, tarjetaId: /^Tarjeta/.test($('ppMetodo').value) ? $('ppTarjeta').value : '',
+        tipoCambio: $('ppTc').value, metodo: $('ppMetodo').value, referencia: $('ppRef').value, excepcionFechaId: $('ppExcepcion').value, tarjetaId: /^Tarjeta/.test($('ppMetodo').value) ? $('ppTarjeta').value : '',
         financiamiento: $('ppMetodo').value === 'Crédito / financiera (proveedor cubierto)' ? {financiera:$('ppFinanciera').value,dias:$('ppFinDias').value,fechaPago:$('ppFinFecha').value,vencimiento:$('ppFinVence').value} : null,
         comprobante: { nombre: archivo.name, datos: datos }, idSolicitud: ID_PGP,
       }], r => {
@@ -7776,6 +7798,13 @@
 })();
 </script>
 
+<script id="mod-fechas-compra">
+(function(){
+ function cargar(){if(!PERMISOS.superadmin)return;google.script.run.withSuccessHandler(lista=>{$('fechasCompraLista').innerHTML=lista.length?lista.map(x=>'<div class="nota"><b>'+esc(x.ocFolio+' · pago '+fechaMx(x.fechaPago))+'</b> · '+esc(x.solicito)+'<p>'+esc(x.motivo)+'</p><button type="button" class="btn btn-sec" onclick="resolverExcepcionFecha('+jsArg(x.id)+',true)">Autorizar</button> <button type="button" class="btn btn-sec" onclick="resolverExcepcionFecha('+jsArg(x.id)+',false)">Rechazar</button> <button type="button" class="btn btn-sec" onclick="abrirReqCom('+jsArg(x.reqFolio)+')">Abrir orden</button></div>').join(''):'<p class="nota">Sin solicitudes pendientes.</p>';}).withFailureHandler(e=>mostrarError(e.message||String(e))).listarSolicitudesFechaPago();}
+ window.FECHAS_COMPRA={cargar};
+ registrarModulo({nombre:'Excepciones de fecha',alPermisos(p){$('fechasCompraRegistro').classList.toggle('oculto',!p.superadmin);},alVerTab(t){if(t==='com')cargar();}});
+})();
+</script>
 </body>
 </html>
 

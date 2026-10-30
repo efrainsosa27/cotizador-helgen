@@ -142,6 +142,9 @@ const API_FUNCIONES = Object.assign({
   editarFinanciamientoProveedor: editarFinanciamientoProveedor,
   listarTarjetas: listarTarjetas,
   guardarTarjeta: guardarTarjeta,
+  solicitarExcepcionFechaPago: solicitarExcepcionFechaPago,
+  resolverExcepcionFechaPago: resolverExcepcionFechaPago,
+  listarSolicitudesFechaPago: listarSolicitudesFechaPago,
   cerrarRequisicionCompras: cerrarRequisicionCompras,
   // Facturas de proveedor y cuentas por pagar (solo ROL_COMPRAS; 4.5)
   registrarFacturaProveedor: registrarFacturaProveedor,
@@ -459,6 +462,8 @@ const CAMBIOS_API = Object.assign({
   devolverRequisicion: ['requisiciones'], registrarPagoProveedor: ['pagosProveedores', 'requisiciones', 'oc'],
   editarFinanciamientoProveedor: ['pagosProveedores'],
   guardarTarjeta: ['pagosProveedores'],
+  solicitarExcepcionFechaPago: ['pagosProveedores'],
+  resolverExcepcionFechaPago: ['pagosProveedores'],
   cancelarPagoProveedor: ['pagosProveedores', 'requisiciones', 'oc'], cerrarRequisicionCompras: ['requisiciones', 'oc'],
   // Una factura con retenciones puede dejar pagada la orden (completarSiCubierta_): también cambian requisiciones y órdenes
   registrarFacturaProveedor: ['facturasProveedor', 'requisiciones', 'oc'], cancelarFacturaProveedor: ['facturasProveedor'],
@@ -2856,6 +2861,7 @@ const OC_EMITIDA = 'Emitida', OC_PAGADA = 'Pagada', OC_RECIBIDA = 'Recibida', OC
 
 /** Estructura del libro de compras (mismo formato que HOJAS_COBRANZA). */
 const HOJAS_COMPRAS = {
+  ExcepcionesFechaPago: { enc: ['id', 'oc_folio', 'fecha_orden', 'fecha_pago', 'motivo', 'solicito', 'solicitado_en', 'estado', 'resolvio', 'resuelto_en', 'nota_resolucion', 'pago_folio'], numeros: [] },
   Tarjetas: { enc: ['id', 'alias', 'banco', 'tipo', 'ultimos4', 'titular', 'activo', 'actualizo', 'actualizado'], numeros: [] },
   OrdenesCompra: {
     enc: ['folio', 'fecha', 'proyecto_folio', 'marca', 'proveedor_id', 'proveedor', 'rfc', 'contacto', 'correo', 'telefono',
@@ -2919,7 +2925,7 @@ const HOJAS_COMPRAS = {
       'tipo',
       // Revisión del incremento 6: el idSolicitud del envío y la huella de su contenido (un reenvío no duplica el pago aunque se
       // pierda el caché; el mismo id con otros datos se rechaza). Vacías en pagos de antes
-      'id_solicitud', 'huella_solicitud', 'financiamiento (JSON)', 'tarjeta (JSON)'],
+      'id_solicitud', 'huella_solicitud', 'financiamiento (JSON)', 'tarjeta (JSON)', 'excepcion_fecha (JSON)'],
     numeros: [7, 9, 10],
   },
   Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
@@ -3829,7 +3835,8 @@ function pagoProvDesdeFila_(r, fila) {
     tipo: String(r[21] || ''), // P (incremento 6): Anticipo · Parcial · Liquidación ('' en pagos de antes)
     idSolicitud: String(r[22] || ''), huellaSolicitud: String(r[23] || ''),
     financiamiento: r[24] ? JSON.parse(String(r[24])) : null,
-    tarjeta: r[25] ? JSON.parse(String(r[25])) : null, // revisión del incremento 6 (idempotencia)
+    tarjeta: r[25] ? JSON.parse(String(r[25])) : null,
+    excepcionFecha: r[26] ? JSON.parse(String(r[26])) : null, // revisión del incremento 6 (idempotencia)
   };
 }
 
@@ -3899,7 +3906,7 @@ function vistaRequisicion_(libro, folioReq) {
     // F (incremento 5): para la orden, sin datos bancarios (con forma de pago habitual y documentos que faltan); para el pago,
     // banco, CLABE y documentos del proveedor de la orden (formasPago: las de la orden; metodos: las del pago real)
     proveedores: proveedoresDelLibro_(libro).map(proveedorParaOrden_), proveedorPago: orden ? proveedorDePago_(libro, orden) : null,
-    formasPago: FORMAS_PAGO_OC, ivaTasas: IVA_OC, metodos: METODOS_PAGO, tarjetas: listarTarjetas(), hoy: hoyIso_(),
+    formasPago: FORMAS_PAGO_OC, ivaTasas: IVA_OC, metodos: METODOS_PAGO, tarjetas: listarTarjetas(), excepcionesFecha: orden ? excepcionesFechaDeOrden_(libro, orden.folio) : [], hoy: hoyIso_(),
     sitios: sitios_(), receptores: receptores_(),
     avance: avance ? avance.lineas : null, recepcionCompleta: !!avance && avance.completo,
     recepciones: recepcionesDe_(movs, true),
@@ -4067,7 +4074,8 @@ function registrarPagoProveedor(p, motivoExcepcion) {
     }
     // Revisión (incremento 5): lo devuelto sin reponer no se paga (p. ej. crédito del proveedor: se recibió y se devolvió antes de pagar)
     const porPagar = totalPorPagarOrden(orden, devueltoSinReponer(movs));
-    const pago = normalizarPagoProveedor(d0, { moneda: orden.moneda, total: antes.esperado, pagado: antes.pagado, fechaOrden: orden.fecha,
+    const excepcionFecha = excepcionFechaParaPago_(libro, d0, orden);
+    const pago = normalizarPagoProveedor(d0, { excepcionFecha: !!excepcionFecha, moneda: orden.moneda, total: antes.esperado, pagado: antes.pagado, fechaOrden: orden.fecha,
       hoy: hoyIso_(), totalOrden: orden.total, descontado: porPagar ? porPagar.descontado : 0, porFacturas: antes.porFacturas });
     const tarjeta = /^Tarjeta/.test(pago.metodo) ? tarjetaParaPago_(d0.tarjetaId, pago.metodo) : null;
     // F (incremento 5): documentos del proveedor (CSF y carátula) o excepción de super admin con motivo (antes de escribir)
@@ -4087,7 +4095,13 @@ function registrarPagoProveedor(p, motivoExcepcion) {
     escribe_(hP).appendRow([folio, textoFecha_(pago.fecha), Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss'),
       orden.folio, req.folio, req.proyectoFolio, pago.monto, pago.monedaPago, pago.tipoCambio, pago.montoAplicado, orden.moneda,
       pago.metodo, t(pago.referencia), archivo.getId(), archivo.getUrl(), t(VENDEDOR_.email),
-      t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '', tipoPago, t(idSolicitud), t(huella), pago.financiamiento ? t(JSON.stringify(pago.financiamiento)) : '', tarjeta ? t(JSON.stringify(tarjeta)) : '']);
+      t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '', tipoPago, t(idSolicitud), t(huella), pago.financiamiento ? t(JSON.stringify(pago.financiamiento)) : '', tarjeta ? t(JSON.stringify(tarjeta)) : '', excepcionFecha ? t(JSON.stringify(excepcionFecha)) : '']);
+    if (excepcionFecha) {
+      const hE = hojaCompras_(libro, 'ExcepcionesFechaPago');
+      escribe_(hE).getRange(excepcionFecha.fila, 8).setValue('Usada');
+      escribe_(hE).getRange(excepcionFecha.fila, 12).setValue(textoCelda(folio));
+      bitacora_(libro, 'Usar excepción de fecha de pago', orden.proyectoFolio, folio + ' · ' + excepcionFecha.id + ' · pago ' + pago.fecha + ' anterior a OC ' + orden.fecha + ' · autorizó ' + excepcionFecha.resolvio, excepcionFecha.motivo, HOJAS_COMPRAS);
+    }
     olvidarPagosProv_();
     let nuevo = req.estado, retenida = '';
     if (completo) {
@@ -4135,7 +4149,7 @@ function huellaPagoProv_(d, bytes) {
   const t = v => String(v == null ? '' : v).trim();
   const md5 = x => Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, x));
   return md5(JSON.stringify([t(d.reqFolio).toUpperCase(), t(d.ocFolio).toUpperCase(), n(d.monto), t(d.monedaPago).toUpperCase(),
-    n(d.tipoCambio), t(d.metodo), t(d.referencia), t(d.fecha), md5(bytes || [])].concat(d.financiamiento ? [normalizarFinanciamientoProveedor(d.financiamiento)] : []).concat(d.tarjetaId ? [t(d.tarjetaId)] : []))).replace(/=+$/, '');
+    n(d.tipoCambio), t(d.metodo), t(d.referencia), t(d.fecha), md5(bytes || [])].concat(d.financiamiento ? [normalizarFinanciamientoProveedor(d.financiamiento)] : []).concat(d.tarjetaId ? [t(d.tarjetaId)] : []).concat(d.excepcionFechaId ? [t(d.excepcionFechaId)] : []))).replace(/=+$/, '');
 }
 
 /**
@@ -5967,7 +5981,7 @@ function normalizarRequisicion(p) {
 function normalizarPagoProveedor(p, orden) {
   const d = p || {};
   const fecha = validarFechaIso(d.fecha, orden.hoy, 'La fecha del pago');
-  if (orden.fechaOrden && fecha < orden.fechaOrden) throw new Error('La fecha del pago no puede ser anterior a la orden (' + orden.fechaOrden + ').');
+  if (orden.fechaOrden && fecha < orden.fechaOrden && !orden.excepcionFecha) throw new Error('La fecha del pago no puede ser anterior a la orden (' + orden.fechaOrden + '). Solicita una excepción y espera la autorización de un super admin.');
   let pago;
   try {
     pago = normalizarPago(Object.assign({}, d, { fecha: fecha, etapaOrden: 1 }), { moneda: orden.moneda, etapas: 1, hoy: orden.hoy,
@@ -17938,4 +17952,73 @@ function tarjetaParaPago_(id, metodo) {
   if (!t) throw new Error('Selecciona una tarjeta activa registrada en Compras → Tarjetas.');
   if (metodo !== 'Tarjeta de ' + t.tipo.toLowerCase()) throw new Error('La tarjeta seleccionada no corresponde al método de pago.');
   return { id: t.id, alias: t.alias, banco: t.banco, tipo: t.tipo, ultimos4: t.ultimos4, titular: t.titular };
+}
+
+
+/** Solicitud y aprobación excepcional: la fecha original de la OC nunca se modifica. */
+function excepcionesFechaDeOrden_(libro, folio) {
+  if (!libro || !libro.getSheetByName('ExcepcionesFechaPago')) return [];
+  return filasDeArea_(hojaCompras_(libro, 'ExcepcionesFechaPago'), HOJAS_COMPRAS, 'ExcepcionesFechaPago').map((r,i) => ({
+    id:String(r[0]||''), ocFolio:String(r[1]||''), fechaOrden:fechaIso_(r[2]), fechaPago:fechaIso_(r[3]), motivo:String(r[4]||''),
+    solicito:String(r[5]||''), solicitadoEn:fechaTexto_(r[6]), estado:String(r[7]||''), resolvio:String(r[8]||''),
+    resueltoEn:fechaTexto_(r[9]), nota:String(r[10]||''), pagoFolio:String(r[11]||''), fila:i+2
+  })).filter(x=>x.id && (!folio || x.ocFolio.toUpperCase()===String(folio).toUpperCase()));
+}
+function motivoExcepcionFecha_(motivo) {
+  const m=String(motivo||'').trim();
+  if(m.length<10 || m.length>500) throw new Error('Explica el motivo de la excepción (10 a 500 caracteres).');
+  return m;
+}
+function solicitarExcepcionFechaPago(datos) {
+  exigirCompras_();
+  const d=datos||{}, fecha=validarFechaIso(d.fecha, hoyIso_(), 'La fecha del pago'), motivo=motivoExcepcionFecha_(d.motivo);
+  return conCandado_(()=>{
+    const libro=libroCompras_(), orden=buscarOrden_(libro,String(d.ocFolio||'').trim()).orden;
+    if(orden.estado!==OC_EMITIDA) throw new Error('La orden no admite pagos nuevos.');
+    if(!orden.fecha || fecha>=orden.fecha) throw new Error('Solo se solicita excepción si el pago ocurrió antes de la orden.');
+    const anterior=excepcionesFechaDeOrden_(libro,orden.folio).find(x=>x.fechaPago===fecha && x.solicito===VENDEDOR_.email && ['Pendiente','Autorizada'].indexOf(x.estado)!==-1);
+    if(anterior){
+      if(anterior.motivo!==motivo) throw new Error('Ya hay una solicitud para esta orden y fecha con otro motivo.');
+      return vistaRequisicion_(libro,orden.reqFolio);
+    }
+    const h=hojaCompras_(libro,'ExcepcionesFechaPago'), id='EFP-'+Utilities.getUuid();
+    escribe_(h).appendRow([id,orden.folio,textoFecha_(orden.fecha),textoFecha_(fecha),textoCelda(motivo),textoCelda(VENDEDOR_.email),ahoraTexto_(),'Pendiente','','','','']);
+    bitacora_(libro,'Solicitar excepción de fecha de pago',orden.proyectoFolio,id+' · '+orden.folio+' · OC '+orden.fecha+' · pago '+fecha,motivo,HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    return vistaRequisicion_(libro,orden.reqFolio);
+  });
+}
+function resolverExcepcionFechaPago(id, autorizar, motivo) {
+  exigirSuperAdmin_();
+  if(typeof autorizar!=='boolean') throw new Error('Indica autorizar o rechazar.');
+  const nota=motivoExcepcionFecha_(motivo);
+  return conCandado_(()=>{
+    const libro=libroCompras_(), h=hojaCompras_(libro,'ExcepcionesFechaPago');
+    const filas=filasDeArea_(h,HOJAS_COMPRAS,'ExcepcionesFechaPago');
+    const i=filas.findIndex(r=>String(r[0])===String(id));
+    if(i<0) throw new Error('No existe la solicitud.');
+    const r=filas[i];
+    if(String(r[7])!=='Pendiente') throw new Error('La solicitud ya fue resuelta.');
+    const orden=buscarOrden_(libro,String(r[1])).orden;
+    if(autorizar && (orden.estado!==OC_EMITIDA || orden.fecha!==fechaIso_(r[2]))) throw new Error('La orden cambió: solicita una nueva revisión.');
+    escribe_(h).getRange(i+2,8,1,4).setValues([[autorizar?'Autorizada':'Rechazada',textoCelda(VENDEDOR_.email),ahoraTexto_(),textoCelda(nota)]]);
+    bitacora_(libro,autorizar?'Autorizar excepción de fecha de pago':'Rechazar excepción de fecha de pago',orden.proyectoFolio,String(id)+' · '+orden.folio+' · pago '+fechaIso_(r[3]),nota,HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    return vistaRequisicion_(libro,orden.reqFolio);
+  });
+}
+function excepcionFechaParaPago_(libro,d,orden) {
+  const fecha=String(d.fecha||'');
+  if(!orden.fecha || fecha>=orden.fecha) return null;
+  const x=excepcionesFechaDeOrden_(libro,orden.folio).find(x=>x.id===String(d.excepcionFechaId||''));
+  if(!x || x.estado!=='Autorizada' || x.fechaPago!==fecha || x.fechaOrden!==orden.fecha || (x.solicito!==VENDEDOR_.email && !esSuperAdmin_()))
+    throw new Error('La fecha del pago es anterior a la orden: solicita una excepción y espera la autorización de un super admin.');
+  if(pagosDeOrden_(libro,orden.folio,true).some(p=>p.excepcionFecha && p.excepcionFecha.id===x.id)) throw new Error('Esta excepción ya se usó en otro pago.');
+  return x;
+}
+
+function listarSolicitudesFechaPago() {
+  exigirSuperAdmin_();
+  const libro=libroComprasSiExiste_();
+  return excepcionesFechaDeOrden_(libro,'').filter(x=>x.estado==='Pendiente').map(x=>Object.assign({},x,{reqFolio:buscarOrden_(libro,x.ocFolio).orden.reqFolio}));
 }
