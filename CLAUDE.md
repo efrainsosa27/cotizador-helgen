@@ -515,6 +515,10 @@ Contrato: `docs/incremento-7.md`; detalle por módulo: `docs/incremento-7-{adici
   admin)". Cachés con `sufijoNomina_` ('' completa, `_nomMonto`, `_sinNom`); `coleccionesMargen7_()` (sin nómina, ni `horas` ni
   `costosPersonal`) en la sincronización de cobranza y el caché del resumen. `versionesVisibles_`: quien no es Nómina ni super admin
   recibe `costosPersonal` = `VERSION_OCULTA` (0) en bootstrap y sincronizar (y con eso se compara: nunca le "cambia").
+- **Revisión (importación), `docs/incremento-7-facturas.md` §7.** `indiceZip` lee el directorio central antes de inflar; `entradasDeZip_` rechaza lo que no cabe **por envío** (60 MB inflados contando los sueltos, 400 archivos, 1,000 entradas) y vuelve
+  a medir después de `Utilities.unzip`. `datosFacturaCliente` / `prepararLoteFacturasCliente` revisan cada archivo fuera del candado (celdas ≤ 45,000 caracteres; textos recortados a `LARGO_CFDI_CLI`);
+  lo creado que no quedó en un renglón va a la Papelera (`creados`, `finally`). Texto del XML con `textoCelda`; REP solo en MXN/USD; un CFDI de Helgen a Helgen (`EMPRESA_RFC`) no entra ni como
+  factura de cliente ni como gasto. `atributosXml` en una pasada y con error en español para referencias imposibles.
 - **Revisión (dinero), `docs/incremento-7.md` §5.** Facturas: `facturasQueImpidenCambiarEsquema` / `errorFacturasLigadasEsquema`
   (puras) y `exigirEsquemaSinFacturasLigadas_` en `guardarEsquema`, `guardarEsquemaAdicional`, `cancelarAdicional` y `marcarAceptada`
   (a Energy); `calcularFacturasClientes` revisa el nombre de la etapa de la liga, usa el saldo insoluto del último REP y no cuenta un

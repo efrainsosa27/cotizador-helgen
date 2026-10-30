@@ -6345,16 +6345,28 @@ function fechaVencimiento(fechaEmision, diasCredito) {
   return sumarDias(fechaEmision, diasCreditoGuardados(diasCredito));
 }
 
-/** Atributos de una etiqueta XML ('Rfc="X" Nombre="Y &amp; Z"') → {Rfc: 'X', Nombre: 'Y & Z'}. */
+/**
+ * Atributos de una etiqueta XML ('Rfc="X" Nombre="Y &amp; Z"') → {Rfc: 'X', Nombre: 'Y & Z'}. Las referencias (&amp; &lt; &gt; &quot;
+ * &apos; &#NN; &#xHH;) se decodifican UNA sola vez y de izquierda a derecha: "&#38;lt;" queda "&lt;" (el texto), no "<". Una
+ * referencia a un carácter que no existe (más allá de U+10FFFF, o una mitad de par sustituto) es un XML inválido: lanza el error en
+ * español, no el RangeError de JavaScript. Para un XML válido el resultado es el mismo de antes (lo usan leerCfdi y leerCfdiCliente).
+ */
 function atributosXml(texto) {
   const r = {};
   const re = /([^\s=\/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+  const NOMBRADAS = { quot: '"', apos: "'", lt: '<', gt: '>', amp: '&' };
+  const referencia = (todo, hex, dec, nombre) => {
+    if (nombre) return NOMBRADAS[nombre];
+    const cp = hex != null ? parseInt(hex, 16) : Number(dec);
+    if (!(cp >= 0 && cp <= 0x10FFFF) || (cp >= 0xD800 && cp <= 0xDFFF)) {
+      throw new Error('El XML no es válido: trae una referencia a un carácter que no existe (' +
+        (todo.length > 16 ? todo.slice(0, 15) + '…' : todo) + ').');
+    }
+    return String.fromCodePoint(cp);
+  };
   let m;
   while ((m = re.exec(texto || ''))) {
-    r[m[1]] = String(m[2] != null ? m[2] : m[3])
-      .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
-      .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
-      .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    r[m[1]] = String(m[2] != null ? m[2] : m[3]).replace(/&(?:#x([0-9a-fA-F]+)|#(\d+)|(quot|apos|lt|gt|amp));/g, referencia);
   }
   return r;
 }
@@ -16286,11 +16298,16 @@ const TIPO_CFDI_TEXTO = { I: 'Factura', E: 'Nota de crédito', P: 'Complemento d
 const FAC_VIGENTE = 'Vigente', FAC_CANCELADA = 'Cancelada';
 const MAX_ARCHIVOS_FACTURAS = 60;               // archivos por envío (un ZIP cuenta como uno)
 const MAX_LOTE_FACTURAS = 20 * 1024 * 1024;      // bytes por envío (la interfaz manda cada ZIP en su propio envío)
-const MAX_ENTRADAS_ZIP = 400;                    // archivos dentro de un ZIP
-const MAX_DESCOMPRIMIDO = 60 * 1024 * 1024;      // lo que puede salir de un ZIP (uno que se infla de más se rechaza)
+// Presupuesto POR ENVÍO (una llamada a importarFacturasClientes), no por ZIP: se revisa con el índice del ZIP ANTES de inflarlo
+// (indiceZip) y otra vez con lo que de verdad salió (descomprimir_), porque el índice puede mentir
+const MAX_ENTRADAS_ZIP = 400;                    // archivos (XML, PDF u otros) dentro de los ZIP de un envío, más los sueltos
+const MAX_ENTRADAS_ZIP_TODAS = 1000;             // entradas de los ZIP de un envío contando carpetas y basura (__MACOSX, .DS_Store)
+const MAX_DESCOMPRIMIDO = 60 * 1024 * 1024;      // bytes de un envío ya descomprimido: los sueltos más todo lo que sale de sus ZIP
 const MAX_XML_LOTE = 100;                        // facturas nuevas por envío; las demás se importan al volver a subir el archivo
 const TIEMPO_MAX_IMPORTAR = 240000;              // ms: después ya no se crean archivos (Apps Script corta a los 6 min)
-const MAX_JSON_CELDA = 45000;                    // una celda de Sheets admite 50 000 caracteres
+const MAX_JSON_CELDA = 45000;                    // ninguna celda pasa de esto (Sheets admite 50 000 caracteres): se revisa por archivo
+// Largo máximo de cada texto del CFDI que va a la hoja (los del SAT con holgura: un XML de CONTALINK nunca los pasa); más largo se recorta
+const LARGO_CFDI_CLI = { nombre: 254, rfc: 20, serieFolio: 70, uuid: 40, clave: 10, fecha: 30, archivo: 120, mensaje: 60 };
 const SUBCARPETA_SIN_PROYECTO = 'Sin proyecto';
 const RELACION_SUSTITUCION = '04';               // c_TipoRelacion 04: sustitución de los CFDI previos
 
@@ -16398,10 +16415,26 @@ function listarFacturasClientes(soloCache) {
 
 /**
  * Lo que interrumpe ZIP: Utilities.unzip detrás de una función pequeña para que el servidor (etapa 1, Node) solo tenga que darla.
- * blob = el ZIP. Devuelve [{nombre (ruta dentro del ZIP), bytes}]. No pide permisos nuevos de Google.
+ * blob = el ZIP; limite = bytes que pueden salir en total (lo que le queda al envío de MAX_DESCOMPRIMIDO). Devuelve [{nombre (ruta
+ * dentro del ZIP), bytes}]; si lo que sale pasa de limite, lanza un error con zipExcedido = true. Única llamada a Utilities.unzip.
+ * En Apps Script Utilities.unzip infla TODO antes de que se pueda medir (aquí se mide después, al copiar cada entrada): por eso
+ * entradasDeZip_ revisa antes el índice del ZIP (indiceZip) y no llama aquí si no cabe. El puente de la etapa 1 debe cortar AL
+ * INFLAR (p. ej. zlib.inflateRawSync con maxOutputLength = lo que queda de limite), así un ZIP que miente en su índice tampoco se
+ * infla entero. No pide permisos nuevos de Google.
  */
-function descomprimir_(blob) {
-  return Utilities.unzip(blob).map(b => ({ nombre: String(b.getName() || ''), bytes: b.getBytes() }));
+function descomprimir_(blob, limite) {
+  const max = limite == null ? Infinity : Math.max(0, Number(limite) || 0);
+  let total = 0;
+  return Utilities.unzip(blob).map(b => {
+    const bytes = b.getBytes();
+    total += bytes ? bytes.length : 0;
+    if (total > max) {
+      const e = new Error('Lo que sale del ZIP pasa del límite del envío.');
+      e.zipExcedido = true;
+      throw e;
+    }
+    return { nombre: String(b.getName() || ''), bytes: bytes };
+  });
 }
 
 /**
@@ -16455,113 +16488,144 @@ function importarFacturasClientes(p) {
   const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
   const rfcHelgen = String(getConfig_().EMPRESA_RFC || '').toUpperCase().trim();
 
-  // 1. Leer los archivos y abrir los ZIP (antes del candado: no dependen de nada guardado)
-  const entradas = [], previos = [];
+  // 1. Leer los archivos y abrir los ZIP (antes del candado: no dependen de nada guardado). El presupuesto de lo descomprimido y de
+  //    los archivos es POR ENVÍO: primero cuentan los XML y PDF sueltos, y cada ZIP (en el orden en que llegó) se abre solo si su
+  //    índice cabe en lo que queda (entradasDeZip_). Los bytes de cada ZIP se sueltan en cuanto se abre.
+  const entradas = [], previos = [], leidos = [];
+  const presupuesto = { bytes: 0, archivos: 0, entradas: 0 };
   let peso = 0;
   archivos.forEach((a, i) => {
     const nombre = String((a && a.nombre) || 'archivo ' + (i + 1)).split(/[\\/]/).pop().slice(0, 120);
     let bytes;
     try { bytes = bytesDeAdjunto_(a, 'No se pudo leer el archivo.'); } catch (e) { bytes = null; }
-    if (!bytes || !bytes.length) { previos.push({ archivo: nombre, tipo: 'Otro', estado: 'rechazada', mensaje: 'No se pudo leer el archivo: vuelve a adjuntarlo.' }); return; }
+    if (!bytes || !bytes.length) { leidos.push({ nombre: nombre, tipo: 'vacio' }); return; }
     peso += bytes.length;
     if (peso > MAX_LOTE_FACTURAS) throw new Error('El envío pesa más de 20 MB: súbelo en partes (un ZIP o unos cuantos XML a la vez).');
     const tipo = tipoArchivoFactura(bytes);
-    if (tipo === 'zip') entradasDeZip_(nombre, bytes, entradas, previos);
-    else if (tipo) entradas.push({ nombre: nombre, base: nombreBaseArchivo(nombre), tipo: tipo, bytes: bytes });
-    else previos.push({ archivo: nombre, tipo: 'Otro', estado: 'rechazada', mensaje: 'No es un XML, un PDF ni un ZIP.' });
+    if (tipo && tipo !== 'zip') { presupuesto.bytes += bytes.length; presupuesto.archivos++; }
+    leidos.push({ nombre: nombre, tipo: tipo, bytes: bytes });
+  });
+  leidos.forEach(l => {
+    if (l.tipo === 'vacio') previos.push({ archivo: l.nombre, tipo: 'Otro', estado: 'rechazada', mensaje: 'No se pudo leer el archivo: vuelve a adjuntarlo.' });
+    else if (l.tipo === 'zip') entradasDeZip_(l.nombre, l.bytes, entradas, previos, presupuesto);
+    else if (l.tipo) entradas.push({ nombre: l.nombre, base: nombreBaseArchivo(l.nombre), tipo: l.tipo, bytes: l.bytes });
+    else previos.push({ archivo: l.nombre, tipo: 'Otro', estado: 'rechazada', mensaje: 'No es un XML, un PDF ni un ZIP.' });
+    l.bytes = null;
   });
 
-  // 2. Revisar y emparejar (lógica pura) contra lo ya importado (se vuelve a revisar dentro del candado)
+  // 2. Revisar y emparejar (lógica pura) contra lo ya importado (se vuelve a revisar dentro del candado). Cada archivo se revisa por su
+  //    cuenta, también que quepa en la hoja (un REP enorme se rechaza solo); después se sueltan los bytes de lo que no se va a guardar
   const libro = libroCobranza_();
   const existentes = {};
   facturasClientesDelLibro_(libro).forEach(f => { existentes[f.uuid] = f; });
   const lote = prepararLoteFacturasCliente(entradas, { rfcHelgen: rfcHelgen, existentes: existentes, idSolicitud: idSolicitud });
+  soltarBytesNoUsados(entradas, lote);
 
-  // 3. Carpetas y archivos, fuera del candado (privado_ es HTTP). Una E o una P cuya factura ya está ligada va directo a ese proyecto
+  // 3. Carpetas, archivos y renglones, fuera del candado (privado_ es HTTP). Una E o una P cuya factura ya está ligada va directo a
+  //    ese proyecto. Cada archivo de Drive que se crea queda en `creados`; los que al final no quedaron en un renglón (rechazados,
+  //    repetidos, el candado que no se pudo tomar, un error adentro) van a la Papelera en el finally: nada queda huérfano en Drive.
   const ahora = () => Date.now() - inicio;
   const anioDe = f => String(f.fecha || hoyIso_()).slice(0, 4);
-  const creados = [];
+  const creados = [], guardados = {};
   const sinTiempo = r => Object.assign(r, { estado: 'pendiente', mensaje: 'No alcanzó el tiempo de este envío: vuelve a subir el archivo ' +
     '(lo que ya se importó se reconoce solo).' });
-  lote.nuevas.forEach(x => {
-    if (x.omitida) return;
-    if (ahora() > TIEMPO_MAX_IMPORTAR) { x.omitida = true; sinTiempo(x.resultado); return; }
-    try {
-      x.proyecto = proyectoInicialFactura(x.f, existentes);
-      const carpeta = carpetaFacturasCli_(x.proyecto, anioDe(x.f));
-      x.xml = archivoPrivado_(carpeta, x.entrada.bytes, 'application/xml', nombreArchivoFacturaCliente(x.f, 'xml'));
-      creados.push(x.xml.getId());
-      if (x.pdf) {
-        x.pdfArchivo = archivoPrivado_(carpeta, x.pdf.bytes, 'application/pdf', nombreArchivoFacturaCliente(x.f, 'pdf'));
-        creados.push(x.pdfArchivo.getId());
-      }
-    } catch (e) {
-      x.omitida = true;
-      Object.assign(x.resultado, { estado: 'rechazada', mensaje: 'No se pudo guardar en Drive: ' + e.message });
-    }
-  });
-  lote.adjuntar.forEach(x => {
-    if (ahora() > TIEMPO_MAX_IMPORTAR) { x.omitida = true; sinTiempo(x.resultado); return; }
-    try {
-      const f = existentes[x.uuid];
-      x.pdfArchivo = archivoPrivado_(carpetaFacturasCli_(f.carpetaProyecto, anioDe(f)), x.pdf.bytes, 'application/pdf',
-        nombreArchivoFacturaCliente({ tipoComprobante: f.tipo, serieFolio: f.serieFolio, uuid: f.uuid, receptor: { nombre: f.receptorNombre } }, 'pdf'));
-    } catch (e) {
-      x.omitida = true;
-      Object.assign(x.resultado, { estado: 'rechazada', mensaje: 'No se pudo guardar el PDF en Drive: ' + e.message });
-    }
-  });
-
-  // 4. Dentro del candado: volver a revisar la hoja (otro envío pudo importar lo mismo) y escribir todo de una vez
-  const sobran = [];
-  conCandado_(() => {
-    const hoja = hojaCobranza_(libro, 'FacturasClientes');
-    const enc = HOJAS_COBRANZA.FacturasClientes.enc;
-    const actuales = {};
-    filasCobranza_(hoja, 'FacturasClientes').forEach((r, i) => {
-      const f = facturaCliDesdeFila_(r, i + 2);
-      if (f.uuid) actuales[f.uuid] = f;
-    });
-    const ahoraTxt = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
-    const filas = [], nuevas = [];
+  const ahoraTxt = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
+  try {
     lote.nuevas.forEach(x => {
       if (x.omitida) return;
-      const ya = actuales[x.f.uuid];
-      if (ya) { // otro envío lo importó mientras tanto
-        Object.assign(x.resultado, resultadoRepetida(ya, idSolicitud));
-        sobran.push(x.xml.getId()); if (x.pdfArchivo) sobran.push(x.pdfArchivo.getId());
-        return;
+      if (ahora() > TIEMPO_MAX_IMPORTAR) { x.omitida = true; sinTiempo(x.resultado); x.entrada.bytes = null; if (x.pdf) x.pdf.bytes = null; return; }
+      try {
+        x.proyecto = proyectoInicialFactura(x.f, existentes);
+        const carpeta = carpetaFacturasCli_(x.proyecto, anioDe(x.f));
+        x.xml = archivoPrivado_(carpeta, x.entrada.bytes, 'application/xml', nombreArchivoFacturaCliente(x.f, 'xml'));
+        x.xmlId = x.xml.getId();
+        creados.push(x.xmlId);
+        if (x.pdf) {
+          x.pdfArchivo = archivoPrivado_(carpeta, x.pdf.bytes, 'application/pdf', nombreArchivoFacturaCliente(x.f, 'pdf'));
+          x.pdfId = x.pdfArchivo.getId();
+          creados.push(x.pdfId);
+        }
+      } catch (e) {
+        x.omitida = true;
+        Object.assign(x.resultado, { estado: 'rechazada', mensaje: 'No se pudo guardar en Drive: ' + e.message });
+      } finally {
+        x.entrada.bytes = null; if (x.pdf) x.pdf.bytes = null; // ya están en Drive (o no se van a guardar)
       }
-      actuales[x.f.uuid] = { uuid: x.f.uuid };
-      filas.push(filaFacturaCliente(x, { ahora: ahoraTxt, idSolicitud: idSolicitud }));
-      nuevas.push(x);
-      Object.assign(x.resultado, { estado: 'importada', mensaje: mensajeImportada(x) });
-    });
-    if (filas.length) escribe_(hoja).getRange(hoja.getLastRow() + 1, 1, filas.length, enc.length).setValues(filas);
-    const pdfs = [];
-    lote.adjuntar.forEach(x => {
       if (x.omitida) return;
-      const f = actuales[x.uuid];
-      if (!f || !f.fila || f.pdfId) {
-        sobran.push(x.pdfArchivo.getId());
-        Object.assign(x.resultado, { estado: 'ignorada', mensaje: 'La factura ya tiene su PDF.' });
-        return;
+      try {
+        x.fila = filaFacturaCliente(x, { ahora: ahoraTxt, idSolicitud: idSolicitud }); // fuera del candado: adentro nada puede fallar por archivo
+      } catch (e) {
+        x.omitida = true;
+        Object.assign(x.resultado, { estado: 'rechazada', mensaje: e.message });
       }
-      escribe_(hoja).getRange(f.fila, colFacCli_('pdf_id'), 1, 2).setValues([[x.pdfArchivo.getId(), x.pdfArchivo.getUrl()]]);
-      f.pdfId = x.pdfArchivo.getId();
-      pdfs.push(x);
-      Object.assign(x.resultado, { estado: 'pdf', mensaje: 'PDF agregado a la factura ' + (f.serieFolio || f.uuid) + ' (ya estaba importada).' });
     });
-    if (nuevas.length || pdfs.length) {
-      const cuenta = t => nuevas.filter(x => x.f.tipoComprobante === t).length;
-      const detalle = [nuevas.length ? nuevas.length + ' nuevas (I ' + cuenta('I') + ', E ' + cuenta('E') + ', P ' + cuenta('P') + '): ' +
-          nuevas.map(x => [x.f.serieFolio, x.f.uuid].filter(Boolean).join(' ')).join(' · ') : '',
-        pdfs.length ? pdfs.length + ' PDF agregados: ' + pdfs.map(x => x.uuid).join(' · ') : ''].filter(Boolean).join(' · ');
-      bitacora_(libro, 'Importar facturas de clientes', '', detalle.length > 4000 ? detalle.slice(0, 3990) + '…' : detalle);
-      SpreadsheetApp.flush();
-    }
-  });
-  papeleraFacturas_(sobran);
+    lote.adjuntar.forEach(x => {
+      if (ahora() > TIEMPO_MAX_IMPORTAR) { x.omitida = true; sinTiempo(x.resultado); x.pdf.bytes = null; return; }
+      try {
+        const f = existentes[x.uuid];
+        x.pdfArchivo = archivoPrivado_(carpetaFacturasCli_(f.carpetaProyecto, anioDe(f)), x.pdf.bytes, 'application/pdf',
+          nombreArchivoFacturaCliente({ tipoComprobante: f.tipo, serieFolio: f.serieFolio, uuid: f.uuid, receptor: { nombre: f.receptorNombre } }, 'pdf'));
+        x.pdfId = x.pdfArchivo.getId();
+        creados.push(x.pdfId);
+      } catch (e) {
+        x.omitida = true;
+        Object.assign(x.resultado, { estado: 'rechazada', mensaje: 'No se pudo guardar el PDF en Drive: ' + e.message });
+      } finally {
+        x.pdf.bytes = null;
+      }
+    });
+
+    // 4. Dentro del candado: volver a revisar la hoja (otro envío pudo importar lo mismo) y escribir todo de una vez. Los renglones ya
+    //    vienen armados y revisados: aquí solo Sheets (y la Bitácora)
+    conCandado_(() => {
+      const hoja = hojaCobranza_(libro, 'FacturasClientes');
+      const enc = HOJAS_COBRANZA.FacturasClientes.enc;
+      const actuales = {};
+      filasCobranza_(hoja, 'FacturasClientes').forEach((r, i) => {
+        const f = facturaCliDesdeFila_(r, i + 2);
+        if (f.uuid) actuales[f.uuid] = f;
+      });
+      const filas = [], nuevas = [];
+      lote.nuevas.forEach(x => {
+        if (x.omitida) return;
+        const ya = actuales[x.f.uuid];
+        if (ya) { Object.assign(x.resultado, resultadoRepetida(ya, idSolicitud)); return; } // otro envío lo importó mientras tanto
+        actuales[x.f.uuid] = { uuid: x.f.uuid };
+        filas.push(x.fila);
+        nuevas.push(x);
+      });
+      if (filas.length) {
+        escribe_(hoja).getRange(hoja.getLastRow() + 1, 1, filas.length, enc.length).setValues(filas);
+        nuevas.forEach(x => {
+          guardados[x.xmlId] = true; if (x.pdfId) guardados[x.pdfId] = true;
+          x.guardada = true;
+          Object.assign(x.resultado, { estado: 'importada', mensaje: mensajeImportada(x) });
+        });
+      }
+      const pdfs = [];
+      lote.adjuntar.forEach(x => {
+        if (x.omitida) return;
+        const f = actuales[x.uuid];
+        if (!f || !f.fila || f.pdfId) { Object.assign(x.resultado, { estado: 'ignorada', mensaje: 'La factura ya tiene su PDF.' }); return; }
+        escribe_(hoja).getRange(f.fila, colFacCli_('pdf_id'), 1, 2).setValues([[x.pdfId, x.pdfArchivo.getUrl()]]);
+        guardados[x.pdfId] = true;
+        f.pdfId = x.pdfId;
+        pdfs.push(x);
+        Object.assign(x.resultado, { estado: 'pdf', mensaje: 'PDF agregado a la factura ' + (f.serieFolio || f.uuid) + ' (ya estaba importada).' });
+      });
+      if (nuevas.length || pdfs.length) {
+        const cuenta = t => nuevas.filter(x => x.f.tipoComprobante === t).length;
+        const detalle = [nuevas.length ? nuevas.length + ' nuevas (I ' + cuenta('I') + ', E ' + cuenta('E') + ', P ' + cuenta('P') + '): ' +
+            nuevas.map(x => [recortarTexto(x.f.serieFolio, LARGO_CFDI_CLI.serieFolio), x.f.uuid].filter(Boolean).join(' ')).join(' · ') : '',
+          pdfs.length ? pdfs.length + ' PDF agregados: ' + pdfs.map(x => x.uuid).join(' · ') : ''].filter(Boolean).join(' · ');
+        bitacora_(libro, 'Importar facturas de clientes', '', detalle.length > 4000 ? detalle.slice(0, 3990) + '…' : detalle);
+        SpreadsheetApp.flush();
+      }
+    });
+  } finally {
+    papeleraFacturas_(creados.filter(id => !guardados[id]));
+  }
+  lote.nuevas.forEach(pdfComoSuXml);
 
   const resultados = previos.concat(lote.resultados);
   const conteo = e => resultados.filter(r => r.estado === e).length;
@@ -16571,38 +16635,79 @@ function importarFacturasClientes(p) {
     lista: vistaFacturasClientes(contextoFacturasCli_(), hoyIso_()) };
 }
 
-/** Abre un ZIP y agrega sus XML y PDF a entradas; lo que no se puede usar va a previos con su motivo. Un ZIP malo no detiene nada. */
-function entradasDeZip_(nombre, bytes, entradas, previos) {
+/**
+ * Abre un ZIP y agrega sus XML y PDF a entradas; lo que no se puede usar va a previos con su motivo. Un ZIP malo no detiene nada.
+ * presupuesto = {bytes, archivos, entradas} que el envío ya ocupa (se actualiza aquí): los límites son por envío, no por ZIP.
+ *  a) ANTES de inflar, con el índice (indiceZip, sin descomprimir nada): cuántos archivos y entradas trae y cuánto dice pesar
+ *     descomprimido; si no cabe en lo que le queda al envío se rechaza sin llamar a Utilities.unzip.
+ *  b) Inflar con descomprimir_ (lo único que llama a Utilities.unzip), con lo que le queda al envío como límite.
+ *  c) DESPUÉS, el tamaño real (el índice puede mentir): si salió más de lo que decía, se rechaza entero y no se usa nada.
+ * Las carpetas, los archivos ocultos, la basura de macOS y lo que no es XML ni PDF no se guardan (sus bytes se sueltan aquí).
+ */
+function entradasDeZip_(nombre, bytes, entradas, previos, presupuesto) {
+  const pres = presupuesto || { bytes: 0, archivos: 0, entradas: 0 };
+  const rechazar = mensaje => previos.push({ archivo: nombre, tipo: 'ZIP', estado: 'rechazada', mensaje: mensaje });
+  const mb = n => Math.round(n / 104857.6) / 10 + ' MB';
+  let indice;
+  try {
+    indice = indiceZip(bytes);
+  } catch (e) {
+    rechazar('No se pudo abrir el ZIP (¿está dañado o tiene contraseña?).');
+    return;
+  }
+  // a) Antes de inflar
+  const utiles = indice.entradas.filter(x => esArchivoDeZip(x.nombre));
+  if (pres.archivos + utiles.length > MAX_ENTRADAS_ZIP) {
+    rechazar('El ZIP trae ' + utiles.length + ' archivos (máximo ' + MAX_ENTRADAS_ZIP + (pres.archivos ? ' por envío y este ya trae ' + pres.archivos : '') +
+      '): descárgalo de CONTALINK por periodos más cortos.');
+    return;
+  }
+  if (pres.entradas + indice.entradas.length > MAX_ENTRADAS_ZIP_TODAS) {
+    rechazar('El ZIP trae ' + indice.entradas.length + ' entradas contando carpetas y archivos ocultos (máximo ' + MAX_ENTRADAS_ZIP_TODAS +
+      ' por envío): descárgalo de CONTALINK por periodos más cortos.');
+    return;
+  }
+  if (pres.bytes + indice.total > MAX_DESCOMPRIMIDO) {
+    rechazar('El ZIP descomprimido pesa más de 60 MB' + (pres.bytes ? ' junto con lo demás de este envío (' + mb(pres.bytes) + ')' : '') +
+      ': divídelo en partes.');
+    return;
+  }
+  if (!utiles.length) { rechazar('El ZIP no trae archivos.'); return; }
+  // b) Inflar
   let contenido;
   try {
-    contenido = descomprimir_(Utilities.newBlob(bytes, 'application/zip', nombre));
+    contenido = descomprimir_(Utilities.newBlob(bytes, 'application/zip', nombre), MAX_DESCOMPRIMIDO - pres.bytes);
   } catch (e) {
-    previos.push({ archivo: nombre, tipo: 'ZIP', estado: 'rechazada', mensaje: 'No se pudo abrir el ZIP (¿está dañado o tiene contraseña?).' });
+    if (e.zipExcedido) {
+      pres.bytes = MAX_DESCOMPRIMIDO; // este envío ya infló todo lo que podía: los ZIP que siguen se rechazan sin abrirse
+      rechazar('El ZIP pesa descomprimido más de lo que dice su índice (' + mb(indice.total) + '): no se usó. Descárgalo otra vez de CONTALINK.');
+    } else {
+      rechazar('No se pudo abrir el ZIP (¿está dañado o tiene contraseña?).');
+    }
     return;
   }
-  // Carpetas, archivos ocultos y la basura de macOS (__MACOSX) no son facturas: se saltan sin avisar
-  const utiles = (contenido || []).filter(x => {
-    const ruta = String(x.nombre || ''), base = ruta.split(/[\\/]/).pop();
-    return base && !/[\\/]$/.test(ruta) && !/(^|[\\/])__MACOSX[\\/]/.test(ruta) && base[0] !== '.';
-  });
-  if (utiles.length > MAX_ENTRADAS_ZIP) {
-    previos.push({ archivo: nombre, tipo: 'ZIP', estado: 'rechazada', mensaje: 'El ZIP trae ' + utiles.length + ' archivos (máximo ' +
-      MAX_ENTRADAS_ZIP + '): descárgalo de CONTALINK por periodos más cortos.' });
+  // c) Después de inflar: lo real contra lo que decía el índice
+  const real = contenido.reduce((s, x) => s + ((x.bytes && x.bytes.length) || 0), 0);
+  pres.bytes += real;
+  pres.entradas += contenido.length;
+  if (real > indice.total || contenido.length > indice.entradas.length) {
+    rechazar('El ZIP no cuadra con su índice (dice ' + indice.entradas.length + ' entradas y ' + mb(indice.total) + '; trae ' + contenido.length +
+      ' y ' + mb(real) + '): no se usó. Descárgalo otra vez de CONTALINK.');
     return;
   }
-  const total = utiles.reduce((s, x) => s + ((x.bytes && x.bytes.length) || 0), 0);
-  if (total > MAX_DESCOMPRIMIDO) {
-    previos.push({ archivo: nombre, tipo: 'ZIP', estado: 'rechazada', mensaje: 'El ZIP descomprimido pesa más de 60 MB: divídelo en partes.' });
-    return;
-  }
-  if (!utiles.length) previos.push({ archivo: nombre, tipo: 'ZIP', estado: 'rechazada', mensaje: 'El ZIP no trae archivos.' });
-  utiles.forEach(x => {
-    const ruta = String(x.nombre), visible = nombre + ' › ' + ruta.slice(0, 160), b = x.bytes || [];
+  const antes = entradas.length + previos.length;
+  contenido.forEach((x, i) => {
+    contenido[i] = null; // lo que no se use no se queda en memoria
+    const ruta = String(x.nombre || '');
+    if (!esArchivoDeZip(ruta)) return; // carpetas, ocultos y __MACOSX: se saltan sin avisar
+    pres.archivos++;
+    const visible = nombre + ' › ' + ruta.slice(0, 160), b = x.bytes || [];
     const tipo = tipoArchivoFactura(b);
     if (tipo === 'zip') previos.push({ archivo: visible, tipo: 'ZIP', estado: 'rechazada', mensaje: 'Un ZIP dentro del ZIP: descomprímelo y sube su contenido.' });
     else if (tipo) entradas.push({ nombre: visible, base: nombreBaseArchivo(ruta), tipo: tipo, bytes: b });
     else previos.push({ archivo: visible, tipo: 'Otro', estado: 'ignorada', mensaje: 'No es XML ni PDF: se ignoró.' });
   });
+  if (entradas.length + previos.length === antes) rechazar('El ZIP no trae archivos.');
 }
 
 /**
@@ -16808,19 +16913,24 @@ function leerCfdiCliente(texto) {
   }
   if (base.tipoComprobante === 'P') {
     if (version === null) throw err('El complemento de pago no trae el complemento Pagos.');
-    if (version !== '2.0') throw err('El complemento de pago es versión ' + (version || '(sin versión)') + ': con CFDI 4.0 debe ser Pagos 2.0.');
+    if (version !== '2.0') throw err('El complemento de pago es versión ' + (recortarTexto(version, 20) || '(sin versión)') + ': con CFDI 4.0 debe ser Pagos 2.0.');
     if (!pagos.length) throw err('El complemento de pago no trae ningún pago.');
   }
   return Object.assign(base, { relacionados: relacionados, pagos: base.tipoComprobante === 'P' ? pagos : [] });
 }
 
-/** Revisa que un CFDI leído con leerCfdiCliente sea de Helgen a un cliente: emisor = RFC de Helgen, 4.0, tipo I, E o P. ctx = {rfcHelgen}. */
+/**
+ * Revisa que un CFDI leído con leerCfdiCliente sea de Helgen a un cliente: emisor = RFC de Helgen y receptor distinto de Helgen, 4.0,
+ * tipo I, E o P, monedas MXN o USD (en un complemento de pago: cada pago y cada documento que paga; su propia Moneda es XXX, como pide
+ * el SAT) y folios fiscales (UUID) bien formados, también los de sus relacionados y los documentos que paga. ctx = {rfcHelgen}.
+ */
 function validarFacturaCliente(f, ctx) {
   const rfcHelgen = String((ctx && ctx.rfcHelgen) || '').toUpperCase().trim();
   if (!rfcHelgen) throw new Error('Falta el RFC de Helgen (EMPRESA_RFC en Config): no se puede revisar quién emitió el XML.');
+  const corto = s => recortarTexto(s, LARGO_CFDI_CLI.mensaje); // lo que viene del XML, en un mensaje: nunca enorme
   if (f.version !== '4.0') throw new Error('El CFDI debe ser versión 4.0. Pide a quien factura en CONTALINK el XML correcto.');
   if (f.emisor.rfc !== rfcHelgen) {
-    throw new Error('Este XML lo emitió ' + (f.emisor.nombre || 'otra empresa') + ' (' + (f.emisor.rfc || 'sin RFC') + '), no Helgen (' +
+    throw new Error('Este XML lo emitió ' + (corto(f.emisor.nombre) || 'otra empresa') + ' (' + (corto(f.emisor.rfc) || 'sin RFC') + '), no Helgen (' +
       rfcHelgen + '): parece la factura de un proveedor. Esas se registran en Compras.');
   }
   const t = f.tipoComprobante;
@@ -16829,10 +16939,31 @@ function validarFacturaCliente(f, ctx) {
       : t === 'N' ? 'Es un recibo de nómina (tipo N): no es una factura a un cliente.'
       : 'El CFDI no es factura (I), nota de crédito (E) ni complemento de pago (P).');
   }
+  // Helgen → Helgen: no es venta a un cliente (no se cuenta como facturado ni se sugiere ligarlo a un proyecto interno)
+  if (f.receptor.rfc === rfcHelgen) {
+    throw new Error('Este CFDI lo emitió Helgen a la misma Helgen (receptor ' + rfcHelgen + '): no es una factura a un cliente y no se ' +
+      'importa. Si se timbró por error, cancélalo en CONTALINK.');
+  }
   if (!UUID_CFDI.test(f.uuid)) throw new Error('El folio fiscal (UUID) del CFDI no es válido.');
-  if (t === 'P') return true;
+  if ((f.relacionados || []).some(r => !UUID_CFDI.test(r.uuid))) {
+    throw new Error('El CFDI trae un CFDI relacionado con un folio fiscal (UUID) no válido. Pide a quien factura en CONTALINK el XML correcto.');
+  }
+  if (t === 'P') {
+    if (['XXX'].concat(MONEDAS).indexOf(f.moneda) === -1) {
+      throw new Error('El complemento de pago dice moneda ' + (corto(f.moneda) || '(sin moneda)') + ' (debe ser XXX). Pide a quien factura en ' +
+        'CONTALINK el XML correcto.');
+    }
+    (f.pagos || []).forEach(p => {
+      if (MONEDAS.indexOf(p.moneda) === -1) throw new Error('El complemento de pago trae un pago en ' + (corto(p.moneda) || '(sin moneda)') + ': CAPRI solo maneja MXN y USD.');
+      (p.documentos || []).forEach(d => {
+        if (!UUID_CFDI.test(d.uuid)) throw new Error('El complemento de pago paga un documento con un folio fiscal (UUID) no válido. Pide a quien factura en CONTALINK el XML correcto.');
+        if (MONEDAS.indexOf(d.moneda) === -1) throw new Error('El complemento de pago paga un documento en ' + (corto(d.moneda) || '(sin moneda)') + ': CAPRI solo maneja MXN y USD.');
+      });
+    });
+    return true;
+  }
   const que = t === 'E' ? 'La nota de crédito' : 'La factura';
-  if (MONEDAS.indexOf(f.moneda) === -1) throw new Error(que + ' es en ' + (f.moneda || '(sin moneda)') + ': CAPRI solo maneja MXN y USD.');
+  if (MONEDAS.indexOf(f.moneda) === -1) throw new Error(que + ' es en ' + (corto(f.moneda) || '(sin moneda)') + ': CAPRI solo maneja MXN y USD.');
   if (!(f.total > 0)) throw new Error(que + ' debe tener un total mayor a 0.');
   if (t === 'I' && METODOS_CFDI.indexOf(f.metodoPago) === -1) throw new Error('El método de pago de la factura debe ser PUE o PPD.');
   if (t === 'E' && f.metodoPago && METODOS_CFDI.indexOf(f.metodoPago) === -1) throw new Error('El método de pago de la nota de crédito no es válido.');
@@ -16848,6 +16979,104 @@ function tipoArchivoFactura(bytes) {
   let i = b(0) === 0xEF && b(1) === 0xBB && b(2) === 0xBF ? 3 : 0;
   while (i < bytes.length && i < 4096 && [0x20, 0x09, 0x0A, 0x0D].indexOf(b(i)) !== -1) i++;
   return b(i) === 0x3C ? 'xml' : '';
+}
+
+/**
+ * Índice de un ZIP sin inflar nada (lógica pura): lee su directorio central y devuelve {entradas: [{nombre, carpeta, tamano (lo que
+ * dice pesar descomprimida), comprimido, metodo}], total (suma de tamano)}. Con esto entradasDeZip_ rechaza un ZIP con demasiadas
+ * entradas o que se inflaría de más ANTES de Utilities.unzip (que lo infla todo de un jalón). También revisa lo que se puede revisar
+ * sin inflar: que cada entrada esté dentro del archivo y no se encime con otra, que su encabezado local diga lo mismo que el índice
+ * (Utilities.unzip puede leer cualquiera de los dos) y que una entrada guardada sin comprimir pese lo que dice. Acepta ZIP64. Lanza si
+ * no se puede leer (sin índice, roto, con contraseña, en varias partes, o con un método que no sea guardado o deflate). bytes = con
+ * o sin signo (como los da Apps Script). Lo que dice el índice puede mentir: después de inflar se vuelve a medir (entradasDeZip_).
+ */
+function indiceZip(bytes) {
+  const n = bytes ? bytes.length : 0;
+  const u8 = k => bytes[k] & 0xFF;
+  const u16 = k => u8(k) | (u8(k + 1) << 8);
+  const u32 = k => (u8(k) | (u8(k + 1) << 8) | (u8(k + 2) << 16)) + u8(k + 3) * 0x1000000;
+  const u64 = k => u32(k) + u32(k + 4) * 0x100000000;
+  const roto = motivo => new Error('El ZIP está dañado (' + motivo + ').');
+  // Fin del directorio central: en los últimos 22 bytes más su comentario (hasta 64 KB)
+  let fin = -1;
+  for (let i = n - 22; i >= 0 && i >= n - 22 - 0xFFFF; i--) {
+    if (u32(i) === 0x06054B50 && i + 22 + u16(i + 20) <= n) { fin = i; break; }
+  }
+  if (fin < 0) throw roto('sin índice');
+  let cuantas = u16(fin + 10), largoCd = u32(fin + 12), inicioCd = u32(fin + 16);
+  if (cuantas === 0xFFFF || largoCd === 0xFFFFFFFF || inicioCd === 0xFFFFFFFF) { // ZIP64
+    const loc = fin - 20;
+    if (loc < 0 || u32(loc) !== 0x07064B50) throw roto('ZIP64 sin localizador');
+    const r = u64(loc + 8);
+    if (r + 56 > n || u32(r) !== 0x06064B50) throw roto('ZIP64 sin índice');
+    if (u32(r + 16) !== 0 || u32(r + 20) !== 0 || u64(r + 24) !== u64(r + 32)) throw new Error('El ZIP viene en varias partes.');
+    cuantas = u64(r + 32); largoCd = u64(r + 40); inicioCd = u64(r + 48);
+  } else if (u16(fin + 4) !== 0 || u16(fin + 6) !== 0 || u16(fin + 8) !== cuantas) {
+    throw new Error('El ZIP viene en varias partes.');
+  }
+  const finCd = inicioCd + largoCd;
+  if (finCd > fin) throw roto('índice fuera del archivo');
+  const entradas = [], tramos = [];
+  let p = inicioCd, total = 0;
+  for (let i = 0; i < cuantas; i++) { // cada entrada ocupa ≥ 46 bytes del índice: el ciclo nunca pasa de n / 46 vueltas
+    if (p + 46 > finCd || u32(p) !== 0x02014B50) throw roto('entrada ' + (i + 1));
+    const banderas = u16(p + 8), metodo = u16(p + 10), ln = u16(p + 28), lx = u16(p + 30), lc = u16(p + 32);
+    let comprimido = u32(p + 20), tamano = u32(p + 24), local = u32(p + 42);
+    if (p + 46 + ln + lx + lc > finCd) throw roto('entrada ' + (i + 1));
+    if (banderas & 1) throw new Error('El ZIP tiene contraseña.');
+    if (metodo !== 0 && metodo !== 8) throw new Error('El ZIP usa una compresión que no se puede abrir (método ' + metodo + ').');
+    if (tamano === 0xFFFFFFFF || comprimido === 0xFFFFFFFF || local === 0xFFFFFFFF) {
+      // ZIP64: los valores van en el campo extra 0x0001, en este orden y solo los que están en 0xFFFFFFFF
+      let q = p + 46 + ln, hallado = false;
+      const finX = q + lx;
+      while (q + 4 <= finX && !hallado) {
+        const id = u16(q), largo = u16(q + 2);
+        if (id === 0x0001) {
+          let k = q + 4;
+          const lee = () => { if (k + 8 > q + 4 + largo) throw roto('ZIP64 incompleto'); const v = u64(k); k += 8; return v; };
+          if (tamano === 0xFFFFFFFF) tamano = lee();
+          if (comprimido === 0xFFFFFFFF) comprimido = lee();
+          if (local === 0xFFFFFFFF) local = lee();
+          hallado = true;
+        }
+        q += 4 + largo;
+      }
+      if (!hallado) throw roto('ZIP64 incompleto');
+    }
+    // Encabezado local: dentro del archivo, mismo método y (si los trae) los mismos tamaños; los datos caben antes del índice
+    if (local + 30 > inicioCd || u32(local) !== 0x04034B50 || u16(local + 8) !== metodo) throw roto('entrada ' + (i + 1));
+    const datos = local + 30 + u16(local + 26) + u16(local + 28);
+    if (datos + comprimido > inicioCd) throw roto('entrada ' + (i + 1));
+    if (!(u16(local + 6) & 8)) { // sin "descriptor de datos" el encabezado local trae los tamaños
+      const cL = u32(local + 18), tL = u32(local + 22);
+      if ((cL !== 0xFFFFFFFF && cL !== comprimido) || (tL !== 0xFFFFFFFF && tL !== tamano)) throw roto('el índice no cuadra con la entrada ' + (i + 1));
+    }
+    if (metodo === 0 && comprimido !== tamano) throw roto('entrada ' + (i + 1));
+    tramos.push([local, datos + comprimido]);
+    const nombre = textoUtf8(Array.prototype.slice.call(bytes, p + 46, p + 46 + ln));
+    entradas.push({ nombre: nombre, carpeta: /[\\/]$/.test(nombre), tamano: tamano, comprimido: comprimido, metodo: metodo });
+    total += tamano;
+    p += 46 + ln + lx + lc;
+  }
+  // Dos entradas que se enciman (una "bomba" que reusa los mismos datos) no salen de ninguna herramienta normal
+  tramos.sort((a, b) => a[0] - b[0]);
+  for (let i = 1; i < tramos.length; i++) if (tramos[i][0] < tramos[i - 1][1]) throw roto('entradas encimadas');
+  return { entradas: entradas, total: total };
+}
+
+/** ¿Una ruta de dentro del ZIP es un archivo que se revisa? No las carpetas, los archivos ocultos (".DS_Store") ni "__MACOSX/". */
+function esArchivoDeZip(ruta) {
+  const r = String(ruta || ''), base = r.split(/[\\/]/).pop();
+  return !!base && !/[\\/]$/.test(r) && !/(^|[\\/])__MACOSX[\\/]/.test(r) && base[0] !== '.';
+}
+
+/** Texto (del XML) a lo más de max caracteres; si se cortó termina en "…" (sin partir un carácter de dos mitades). */
+function recortarTexto(s, max) {
+  const t = String(s == null ? '' : s);
+  if (t.length <= max) return t;
+  let k = Math.max(0, max - 1);
+  if (k > 0 && /[\uD800-\uDBFF]/.test(t[k - 1])) k--;
+  return t.slice(0, k) + '…';
 }
 
 /** "Facturas/2026-10/A-101.XML" → "a-101" (sin carpetas ni extensión, en minúsculas): para emparejar el PDF con su XML. */
@@ -16885,9 +17114,11 @@ function mensajeImportada(x) {
 
 /**
  * Revisa y empareja un envío (lógica pura). entradas = [{nombre, base, tipo: 'xml' | 'pdf', bytes}] (los ZIP ya abiertos);
- * ctx = {rfcHelgen, existentes: {UUID: factura de la hoja}, idSolicitud}. Devuelve {nuevas: [{entrada, f, pdf, resultado}] (I, luego E,
- * luego P, hasta MAX_XML_LOTE; el resto queda 'pendiente'), adjuntar: [{uuid, pdf, resultado}] (PDF de una factura ya importada sin
- * PDF), resultados (uno por archivo, en el orden de entrada; los de nuevas y adjuntar se terminan de llenar al guardar)}.
+ * ctx = {rfcHelgen, existentes: {UUID: factura de la hoja}, idSolicitud}. Devuelve {nuevas: [{entrada, f, datos, pdf, resultado}] (I,
+ * luego E, luego P, hasta MAX_XML_LOTE; el resto queda 'pendiente'), adjuntar: [{uuid, pdf, resultado}] (PDF de una factura ya
+ * importada sin PDF), resultados (uno por archivo, en el orden de entrada; los de nuevas y adjuntar se terminan de llenar al guardar)}.
+ * Cada XML se revisa por su cuenta, también que quepa en la hoja (datosFacturaCliente: ninguna celda de más de MAX_JSON_CELDA): uno
+ * malo queda 'rechazada' con su motivo y los demás siguen, sin que se haya creado nada en Drive.
  */
 function prepararLoteFacturasCliente(entradas, ctx) {
   const c = ctx || {}, existentes = c.existentes || {};
@@ -16900,13 +17131,14 @@ function prepararLoteFacturasCliente(entradas, ctx) {
       validarXml(e.bytes);
       const f = leerCfdiCliente(textoUtf8(e.bytes));
       validarFacturaCliente(f, c);
-      Object.assign(r, { uuid: f.uuid, serieFolio: f.serieFolio, tipoCfdi: f.tipoComprobante, fecha: f.fecha, receptor: f.receptor.nombre,
+      Object.assign(r, { uuid: f.uuid, serieFolio: recortarTexto(f.serieFolio, LARGO_CFDI_CLI.serieFolio), tipoCfdi: f.tipoComprobante, fecha: f.fecha,
+        receptor: recortarTexto(f.receptor.nombre, LARGO_CFDI_CLI.nombre),
         total: f.tipoComprobante === 'P' ? totalPagosRep(f.pagos).total : f.total,
         moneda: f.tipoComprobante === 'P' ? totalPagosRep(f.pagos).moneda : f.moneda });
       const ya = existentes[f.uuid];
       if (ya) { Object.assign(r, resultadoRepetida(ya, c.idSolicitud)); porBase[e.base] = porBase[e.base] || { existente: ya }; return; }
       if (porUuid[f.uuid]) { Object.assign(r, { estado: 'repetida', mensaje: 'Viene dos veces en este envío: se importa una sola.' }); return; }
-      const x = { entrada: e, f: f, pdf: null, resultado: r };
+      const x = { entrada: e, f: f, datos: datosFacturaCliente(f, e.nombre), pdf: null, resultado: r };
       porUuid[f.uuid] = x;
       if (!porBase[e.base]) porBase[e.base] = { nueva: x };
       nuevas.push(x);
@@ -16930,7 +17162,7 @@ function prepararLoteFacturasCliente(entradas, ctx) {
     Object.assign(r, { uuid: uuid, serieFolio: par.nueva ? par.nueva.f.serieFolio : par.existente.serieFolio });
     if (conPdf[uuid] || (par.existente && par.existente.pdfId)) { Object.assign(r, { estado: 'ignorada', mensaje: 'La factura ya tiene su PDF.' }); return; }
     conPdf[uuid] = true;
-    if (par.nueva) { par.nueva.pdf = e; Object.assign(r, { estado: 'pdf', mensaje: 'PDF de ' + (par.nueva.f.serieFolio || uuid) + '.' }); return; }
+    if (par.nueva) { par.nueva.pdf = e; par.nueva.pdfResultado = r; Object.assign(r, { estado: 'pdf', mensaje: 'PDF de ' + (par.nueva.f.serieFolio || uuid) + '.' }); return; }
     if (par.existente.estado === ESTADO_ANULADA) { r.mensaje = 'La factura está anulada.'; return; }
     adjuntar.push({ uuid: uuid, pdf: e, resultado: r });
     Object.assign(r, { estado: 'pdf', mensaje: '' });
@@ -16944,8 +17176,67 @@ function prepararLoteFacturasCliente(entradas, ctx) {
     x.omitida = true;
     Object.assign(x.resultado, { estado: 'pendiente', mensaje: 'Este envío ya trae ' + MAX_XML_LOTE + ' facturas nuevas: vuelve a subir el archivo ' +
       'para importar las que faltan (las ya importadas se reconocen solas).' });
+    pdfComoSuXml(x);
   });
   return { nuevas: nuevas, adjuntar: adjuntar, resultados: resultados };
+}
+
+/**
+ * El PDF que venía con una factura nueva que al final no se guardó (x de prepararLoteFacturasCliente: pendiente, rechazada en Drive,
+ * u otro envío la importó al mismo tiempo) no dice "PDF": dice lo mismo que su XML.
+ */
+function pdfComoSuXml(x) {
+  const r = x && x.pdfResultado;
+  if (!r || x.guardada) return;
+  const e = x.resultado.estado, doc = x.f.serieFolio ? recortarTexto(x.f.serieFolio, LARGO_CFDI_CLI.serieFolio) : x.f.uuid;
+  if (e === 'pendiente') Object.assign(r, { estado: 'pendiente', mensaje: 'Pendiente junto con su XML (' + doc + '): vuelve a subir los dos.' });
+  else if (e === 'rechazada') Object.assign(r, { estado: 'rechazada', mensaje: 'No se guardó: su XML (' + doc + ') no se pudo guardar.' });
+  else Object.assign(r, { estado: 'ignorada', mensaje: 'Su factura ' + doc + ' ya estaba importada: este PDF no se agregó (súbelo solo si le falta).' });
+}
+
+/**
+ * Suelta los bytes de lo que no se va a guardar en Drive (XML rechazados, repetidos o pendientes; PDF sin su XML, de más o de una
+ * factura pendiente): después de emparejar, el envío solo retiene lo que de verdad se va a guardar. entradas y lote = los de
+ * prepararLoteFacturasCliente.
+ */
+function soltarBytesNoUsados(entradas, lote) {
+  const usados = new Set();
+  ((lote && lote.nuevas) || []).forEach(x => { if (!x.omitida) { usados.add(x.entrada); if (x.pdf) usados.add(x.pdf); } });
+  ((lote && lote.adjuntar) || []).forEach(x => usados.add(x.pdf));
+  (entradas || []).forEach(e => { if (!usados.has(e)) e.bytes = null; });
+}
+
+/**
+ * Las celdas de FacturasClientes que salen del CFDI (lógica pura): cada texto recortado a su largo (LARGO_CFDI_CLI) y con textoCelda
+ * (regla 7: nada del XML se lee como fórmula; serie-folio y forma de pago llevan siempre apóstrofo para que "03" siga siendo texto),
+ * los importes y los JSON de relacionadas y pagos. Lanza si alguna celda pasa de MAX_JSON_CELDA: prepararLoteFacturasCliente lo revisa
+ * por archivo ANTES de crear nada en Drive. f = de leerCfdiCliente, ya validado; archivo = nombre del XML en el envío.
+ */
+function datosFacturaCliente(f, archivo) {
+  const t = textoCelda, L = LARGO_CFDI_CLI, rec = recortarTexto;
+  const fijo = s => (s ? "'" + String(s) : ''); // con apóstrofo: Sheets lo deja como texto ("03" no se vuelve 3; nada se lee como fórmula)
+  const relacionadas = (f.relacionados || []).map(r => Object.assign({}, r, { uuid: rec(r.uuid, L.uuid), tipoRelacion: rec(r.tipoRelacion, L.clave) }));
+  const pagos = (f.pagos || []).map(p => Object.assign({}, p, { moneda: rec(p.moneda, L.clave), forma: rec(p.forma, L.clave),
+    documentos: (p.documentos || []).map(d => Object.assign({}, d, { uuid: rec(d.uuid, L.uuid), serieFolio: rec(d.serieFolio, L.serieFolio),
+      moneda: rec(d.moneda, L.clave) })) }));
+  const P = f.tipoComprobante === 'P' ? totalPagosRep(pagos) : null;
+  const celdas = {
+    uuid: t(f.uuid), tipo: t(f.tipoComprobante), serie_folio: fijo(rec(f.serieFolio, L.serieFolio)), fecha: textoFecha_(f.fecha),
+    metodo: t(rec(f.metodoPago, L.clave)), forma: fijo(rec(f.formaPago, L.clave)), moneda: t(rec(P ? P.moneda : f.moneda, L.clave)),
+    subtotal: P ? 0 : f.subtotal, iva: P ? 0 : f.trasladados, total: P ? P.total : f.total, receptor_rfc: t(rec(f.receptor.rfc, L.rfc)),
+    receptor_nombre: t(rec(f.receptor.nombre, L.nombre)), 'relacionadas (JSON)': t(JSON.stringify(relacionadas)), 'pagos (JSON)': t(JSON.stringify(pagos)),
+    descuento: P ? 0 : f.descuento, retenidos: P ? 0 : f.retenidos, fecha_timbrado: t(rec(f.fechaTimbrado, L.fecha)), uso_cfdi: t(rec(f.usoCfdi, L.clave)),
+    archivo_xml: t(String(archivo || '').split(/[\\/›]/).pop().trim().slice(0, L.archivo)),
+  };
+  const que = { 'pagos (JSON)': 'pagos', 'relacionadas (JSON)': 'documentos relacionados' };
+  Object.keys(celdas).forEach(k => {
+    const v = celdas[k];
+    if (typeof v === 'string' && v.length > MAX_JSON_CELDA) {
+      throw new Error('El CFDI trae demasiados ' + (que[k] || 'datos (' + k + ')') + ' para guardarlo: no cabe en una celda de la hoja (' +
+        v.length + ' caracteres; máximo ' + MAX_JSON_CELDA + '). Pide a quien factura en CONTALINK que lo divida en varios CFDI.');
+    }
+  });
+  return celdas;
 }
 
 /** Total y moneda de los pagos de un REP: la suma solo si todos son de la misma moneda (nunca MXN + USD); si no, 0 y 'XXX'. */
@@ -16973,28 +17264,19 @@ function proyectoInicialFactura(f, existentes) {
   return '';
 }
 
-/** Renglón de FacturasClientes para una factura nueva (x de prepararLoteFacturasCliente, ya con sus archivos en Drive). */
+/**
+ * Renglón de FacturasClientes para una factura nueva (x de prepararLoteFacturasCliente, ya con sus archivos en Drive). Lo que sale del
+ * CFDI viene de datosFacturaCliente (recortado, con textoCelda y ya revisado contra MAX_JSON_CELDA); lo demás es de CAPRI.
+ */
 function filaFacturaCliente(x, o) {
-  const f = x.f, t = textoCelda, P = f.tipoComprobante === 'P' ? totalPagosRep(f.pagos) : null;
-  const fijo = s => (s ? "'" + String(s) : ''); // con apóstrofo: Sheets lo deja como texto ("03" no se vuelve 3; nada se lee como fórmula)
-  const json = (v, que) => {
-    const s = JSON.stringify(v || []);
-    if (s.length > MAX_JSON_CELDA) throw new Error('El CFDI trae demasiados ' + que + ' para guardarlo.');
-    return s;
-  };
-  const fila = {
-    uuid: f.uuid, tipo: f.tipoComprobante, serie_folio: fijo(f.serieFolio), fecha: textoFecha_(f.fecha),
-    metodo: t(f.metodoPago), forma: fijo(f.formaPago), moneda: P ? P.moneda : f.moneda, subtotal: P ? 0 : f.subtotal,
-    iva: P ? 0 : f.trasladados, total: P ? P.total : f.total, receptor_rfc: t(f.receptor.rfc), receptor_nombre: t(f.receptor.nombre),
-    proyecto_folio: f.tipoComprobante === 'I' ? '' : x.proyecto || '', 'etapas (JSON)': '[]',
-    'relacionadas (JSON)': json(f.relacionados, 'documentos relacionados'), estado: FAC_VIGENTE, xml_id: x.xml.getId(), xml_url: x.xml.getUrl(),
-    pdf_id: x.pdfArchivo ? x.pdfArchivo.getId() : '', pdf_url: x.pdfArchivo ? x.pdfArchivo.getUrl() : '', registro_email: t(VENDEDOR_.email),
-    registro_nombre: t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), fecha_registro: o.ahora,
-    'pagos (JSON)': json(f.pagos, 'pagos'), descuento: P ? 0 : f.descuento, retenidos: P ? 0 : f.retenidos, fecha_timbrado: t(f.fechaTimbrado),
-    uso_cfdi: t(f.usoCfdi), archivo_xml: t(String(x.entrada.nombre).split(/[\\/›]/).pop().trim().slice(0, 120)), carpeta_proyecto: x.proyecto || '',
-    ligo_email: '', fecha_ligado: '', cancelado_por: '', fecha_cancelacion: '', motivo_cancelacion: '', id_solicitud: t(o.idSolicitud || ''),
-    sin_proyecto: '',
-  };
+  const f = x.f, t = textoCelda;
+  const fila = Object.assign({}, x.datos || datosFacturaCliente(f, x.entrada.nombre), {
+    proyecto_folio: f.tipoComprobante === 'I' ? '' : t(x.proyecto || ''), 'etapas (JSON)': '[]', estado: FAC_VIGENTE,
+    xml_id: x.xml.getId(), xml_url: x.xml.getUrl(), pdf_id: x.pdfArchivo ? x.pdfArchivo.getId() : '', pdf_url: x.pdfArchivo ? x.pdfArchivo.getUrl() : '',
+    registro_email: t(VENDEDOR_.email), registro_nombre: t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), fecha_registro: o.ahora,
+    carpeta_proyecto: t(x.proyecto || ''), ligo_email: '', fecha_ligado: '', cancelado_por: '', fecha_cancelacion: '', motivo_cancelacion: '',
+    id_solicitud: t(o.idSolicitud || ''), sin_proyecto: '',
+  });
   return HOJAS_COBRANZA.FacturasClientes.enc.map(k => fila[k] === undefined ? '' : fila[k]);
 }
 
