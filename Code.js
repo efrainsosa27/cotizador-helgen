@@ -646,7 +646,7 @@ const TROZO_CACHE = 30000; // caracteres por entrada (CacheService admite 100 KB
  * caché vacío). No va en las claves de idempotencia (REQ_, OC_, PGP_…: un reintento justo al publicar no debe duplicar), ni en las
  * de la entrada con código (CAPRI_*: bloqueos y códigos vigentes) ni en FOTOCM_ (fotos ya archivadas en Drive).
  */
-const VERSION_CODIGO_CACHE = '2026-10-29r';
+const VERSION_CODIGO_CACHE = '2026-10-29s'; // incremento 7: margen, adicionales, gastos, horas y facturas cambian la forma de lo que va en caché
 function claveNs_(clave) { return clave + '@' + VERSION_CODIGO_CACHE; }
 
 /**
