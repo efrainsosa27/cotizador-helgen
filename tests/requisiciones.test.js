@@ -418,7 +418,7 @@ assert.deepEqual([!!bP.cob,!!bP.com,!!bP.req],[false,true,true],'pedro: compras 
 assert.deepEqual([!!bA.cob,!!bA.com,!!bA.req,bA.proyectos.length>0,bA.catalogo[0].precio],[false,false,false,true,4100],'ana: solo cotizar');
 assert.deepEqual([bL.soloRequisicion,!!bL.req,!!bL.com,!!bL.cob,bL.clientes.length,bL.proyectos.length,bL.tipoCambio],[true,true,false,false,0,0,null]);
 assert(!/Cliente Secreto|Empresa Oculta|4100|98765/.test(JSON.stringify(bL)),'SOLO_REQUISICION: sin clientes, precios ni montos');
-assert.deepEqual(Object.keys(bE.versiones).sort(),['adicionales','anulaciones','catalogo','contratos','cotizaciones','facturasProveedor','oc','pagosCobranza','pagosProveedores','permisos','proyectos','requisiciones']);
+assert.deepEqual(Object.keys(bE.versiones).sort(),['adicionales','anulaciones','catalogo','contratos','cotizaciones','facturasProveedor','gastos','oc','pagosCobranza','pagosProveedores','permisos','proyectos','requisiciones']);
 // Sin cambios: solo versiones y permisos (ninguna lista)
 let sP=ok('pedro','sincronizar',bP.versiones,{});
 assert.deepEqual([sP.cambios.length,'comRequisiciones' in sP,'reqProyectos' in sP,sP.permisos.compras],[0,false,false,true]);

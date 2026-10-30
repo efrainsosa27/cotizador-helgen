@@ -93,7 +93,8 @@ const MODULOS_ = [modIdentidad_(), modAnular_(), modCorreos_(), modCentroMando_(
   modProveedores_(), // incremento 5: F · Proveedores y forma de pago (§6.F)
   modRecepcion_(), // incremento 5: H · recepción con fotos y devoluciones (§6.H)
   modReportes_(), // incremento 6: R · reportes de CxC y CxP, flujo y margen; fecha esperada por etapa (§6.R)
-  modAdicionales_()]; // incremento 7: A · cotizaciones adicionales de un proyecto con contrato firmado (§6.A, incremento 7)
+  modAdicionales_(), // incremento 7: A · cotizaciones adicionales de un proyecto con contrato firmado (§6.A, incremento 7)
+  modGastos_()]; // incremento 7: G · gastos por proyecto: captura, aprobación y reembolso (§6.G)
 /** Une un campo de todos los módulos: objetos con Object.assign, listas con concat. */
 function deModulos_(campo, inicial) {
   return MODULOS_.reduce((acc, m) => Array.isArray(inicial) ? acc.concat(m[campo] || []) : Object.assign(acc, m[campo] || {}), inicial);
@@ -432,8 +433,9 @@ function sitiosDetalle_() {
 
 // permisos: Permisos y Delegaciones (incremento 4); anulaciones: lo que un super admin anuló (se esconde de listas y totales)
 // adicionales (A, incremento 7): pestaña Adicionales de cobranza (sus etapas están en Esquemas: también sube contratos)
+// gastos (incremento 7, G): gastos por proyecto (pestaña Gastos del libro de compras)
 const COLECCIONES = ['proyectos', 'contratos', 'cotizaciones', 'catalogo', 'requisiciones', 'oc', 'pagosCobranza',
-  'pagosProveedores', 'facturasProveedor', 'permisos', 'anulaciones', 'adicionales'];
+  'pagosProveedores', 'facturasProveedor', 'permisos', 'anulaciones', 'adicionales', 'gastos'];
 
 /** Colecciones que cambia cada función de la API: doPost sube su versión cuando termina bien. */
 const CAMBIOS_API = Object.assign({
@@ -8188,6 +8190,7 @@ function infoDeAviso_(tipo, d, actor, memo) {
     Object.assign(info, { nuevo: correoCapri(d.correo), nuevoNombre: String(d.nombre || '').trim() || nombreDeCorreo_(d.correo) });
   }
   if (tipo === 'proveedor.banco') Object.assign(info, datosAvisoBanco(d)); // F (incremento 5): solo banco y últimos 4 dígitos
+  if (/^gasto\./.test(tipo)) Object.assign(info, datosAvisoGasto(d)); // G (incremento 7): folio, categoría y quién lo capturó
   if (tipo === 'anulado') {
     const folio = String(d.folio || d.oc || '').trim(); // el folio de una orden nunca va en el correo
     info.anuladoFolio = /^OC-/i.test(folio) ? '' : folio;
@@ -8363,6 +8366,7 @@ function destinatariosAviso(tipo, d, info, roles) {
   const sinSol = l => l.filter(c => c !== sol);
   const revisan = i.flujo ? { quien: 'aprobaciones', para: sinSol(ap) } : { quien: 'compras', para: sinSol(co) };
   if (tipo === 'proveedor.banco') return [{ quien: 'compras', para: co }]; // F (incremento 5): cambio de banco de un proveedor
+  if (/^gasto\./.test(tipo)) return destinatariosGasto(tipo, i, r); // G (incremento 7)
   switch (tipo) {
     case 'req.solicitada': return [revisan];
     case 'req.aprobada': return [{ quien: 'compras', para: co }];
@@ -8435,6 +8439,7 @@ function contenidoAviso(tipo, quien, info) {
   const entrega = i.entrega ? ' Entrega esperada: ' + fechaCorreo(i.entrega) + '.' : '';
   const registrar = i.centro ? ' Cuando llegue, se recibe en el centro de mando (inventario del sitio).' : ' Cuando llegue, regístralo en CAPRI.';
   if (tipo === 'proveedor.banco') return contenidoAvisoBanco(x, i, quienHizo); // F (incremento 5): sin nombre del proveedor
+  if (/^gasto\./.test(tipo)) return contenidoAvisoGasto(x, tipo, quien, i, quienHizo); // G (incremento 7): sin montos ni concepto
   switch (tipo) {
     case 'req.solicitada':
       if (quien === 'compras') req(i.reenviada ? 'Corregida, por autorizar' : 'Por autorizar', 'Revisa la requisición y la cotización ' +
@@ -9722,6 +9727,10 @@ function pendientes(todos) {
   if (roles.compras || esSuperAdmin_()) {
     try { o.devoluciones = devolucionesParaPendientes_(); } catch (e) { avisos.push('Devoluciones: ' + e.message); }
   }
+  // G (incremento 7): gastos por aprobar (Aprobaciones) y por reembolsar (Compras)
+  if (roles.aprobaciones || roles.compras || esSuperAdmin_()) {
+    try { o.gastos = gastosParaPendientes_(); } catch (e) { avisos.push('Gastos: ' + e.message); }
+  }
   const base = basePendientes_();
   const mios = itemsPendientes(base, o);
   return { hoy: hoy, todos: verTodos, flujo: o.flujo, items: verTodos ? itemsPendientes(base, Object.assign({}, o, { todos: true })) : mios,
@@ -9936,6 +9945,9 @@ function itemsPendientes(base, o) {
       orden: marcaOrdenable(af.fecha) }, todos ? { para: 'Compras' } : {})));
   }
 
+  // G (incremento 7): gastos por aprobar (Aprobaciones; nunca los propios) y por reembolsar (Compras)
+  itemsGastoPendientes(x.gastos, { yo: yo, roles: roles, todos: todos, hoy: hoy }).forEach(it => items.push(it));
+
   // Facturas que no se anotaron en una orden por pagar (órdenes de antes, sin requisición abierta)
   Object.keys(facturas).forEach(k => facturas[k].forEach(f => {
     if (anotadas[f.folio]) return;
@@ -9961,6 +9973,7 @@ function conteosPendientes(items) {
     if (c[it.seccion] != null) c[it.seccion]++;
     const tab = it.destino === 'cxp' ? 'com' : it.destino;
     if (tab === 'ops' || tab === 'com' || tab === 'req') c[tab]++;
+    else if (tab === 'gas') c.gas = (c.gas || 0) + 1; // G (incremento 7): pestaña Gastos (solo si hay)
   });
   return c;
 }
@@ -9979,7 +9992,7 @@ function modAnular_() {
     api: { previsualizarAnulacion: previsualizarAnulacion, anular: anular, listarAnulados: listarAnulados },
     // Una anulación puede tocar cualquier colección (es rara: se suben todas y los navegadores vuelven a pedir sus listas)
     cambios: { anular: ['anulaciones', 'proyectos', 'contratos', 'cotizaciones', 'requisiciones', 'oc', 'pagosCobranza',
-      'pagosProveedores', 'facturasProveedor', 'adicionales'] }, // adicionales: A (incremento 7)
+      'pagosProveedores', 'facturasProveedor', 'adicionales', 'gastos'] }, // adicionales: A; gastos: G (incremento 7)
     solo: [], publicas: [],
     // La lista de anulados de Administración (solo super admin) se vuelve a mandar cuando alguien anula algo
     sincronizar(permisos, ctx, algo, r, errores) {
@@ -9996,8 +10009,9 @@ const MOTIVO_ANULAR_MIN = 10, MOTIVO_ANULAR_MAX = 500;
 const TIPOS_ANULAR = { cotizacion: 'Cotización', proyecto: 'Proyecto', contrato: 'Contrato', pago: 'Pago de cliente',
   req: 'Requisición', oc: 'Orden de compra', pgp: 'Pago a proveedor', fpr: 'Factura de proveedor', rec: 'Recepción',
   dev: 'Devolución', // incremento 5: solo en cascada (de su orden o su requisición)
-  adicional: 'Adicional' }; // A (incremento 7): solo en cascada (de su cotización, del contrato o del proyecto)
-const PREFIJOS_ANULAR = { PRY: 'proyecto', PAG: 'pago', REQ: 'req', OC: 'oc', PGP: 'pgp', FPR: 'fpr', REC: 'rec' };
+  adicional: 'Adicional', // A (incremento 7): solo en cascada (de su cotización, del contrato o del proyecto)
+  gasto: 'Gasto' }; // G (incremento 7): solo o en cascada de su proyecto
+const PREFIJOS_ANULAR = { PRY: 'proyecto', PAG: 'pago', REQ: 'req', OC: 'oc', PGP: 'pgp', FPR: 'fpr', REC: 'rec', GAS: 'gasto' };
 
 /**
  * (Lógica pura) Qué se quiere anular, a partir de lo que escribió el super admin: {clave (de TIPOS_ANULAR), folio}. El tipo
@@ -10016,7 +10030,7 @@ function folioParaAnular(texto) {
   if (pry.test(s)) return { clave: 'proyecto', folio: folioInterno(s) };
   const m = s.match(/^([A-Z]{2,6})-\d{4}-\d{4,}$/);
   if (!m) {
-    throw new Error('Escribe un folio (HLG-, PRY-, PAG-, REQ-, OC-, PGP-, FPR- o REC-AAAA-NNNN) o «CONTRATO PRY-AAAA-NNNN».');
+    throw new Error('Escribe un folio (HLG-, PRY-, PAG-, REQ-, OC-, PGP-, FPR-, REC- o GAS-AAAA-NNNN) o «CONTRATO PRY-AAAA-NNNN».');
   }
   return { clave: PREFIJOS_ANULAR[m[1]] || 'cotizacion', folio: s };
 }
@@ -10106,7 +10120,7 @@ function datosAnular_() {
   const may = s => String(s || '').trim().toUpperCase();
   const lc = libroCobranzaSiExiste_(), lo = libroComprasSiExiste_();
   const d = { libroCob: lc, libroCom: lo, anulados: anuladosDeHoja_(), cot: [], pry: [], contratos: [], esquemas: [], pagos: [],
-    ordenes: [], reqs: [], pgp: [], fpr: [], movs: [], devs: [], adicionales: [] };
+    ordenes: [], reqs: [], pgp: [], fpr: [], movs: [], devs: [], adicionales: [], gastos: [] };
   db_().getSheetByName('Cotizaciones').getDataRange().getValues().slice(1).forEach((r, i) => {
     if (!String(r[0] || '').trim()) return;
     d.cot.push({ folio: String(r[0]).trim(), fila: i + 2, valores: r, proyectoFolio: may(r[19]), cliente: String(r[2] || ''),
@@ -10156,6 +10170,10 @@ function datosAnular_() {
   // Incremento 5 (revisión): devoluciones DEV-… (se anulan con su orden o su requisición)
   filasSiHay_(lo, HOJAS_COMPRAS, 'Devoluciones').forEach((r, i) => {
     if (String(r[0] || '').trim()) d.devs.push(Object.assign(devDesdeFila_(r, i + 2), { valores: r }));
+  });
+  // G (incremento 7): gastos GAS-… (solos o con su proyecto)
+  filasSiHay_(lo, HOJAS_COMPRAS, 'Gastos').forEach((r, i) => {
+    if (String(r[0] || '').trim()) d.gastos.push(Object.assign(gastoDesdeFila_(r, i + 2), { valores: r }));
   });
   return d;
 }
@@ -10225,6 +10243,7 @@ function planAnulacion_(d, objetivo) {
     d.pagos.filter(x => may(x.proyectoFolio) === f && vivo(x)).forEach(pagoCliente);
     d.reqs.filter(r => may(r.proyectoFolio) === f && vivo(r)).forEach(requisicion);
     d.ordenes.filter(o => may(o.proyectoFolio) === f && vivo(o)).forEach(orden);
+    d.gastos.filter(x => may(x.proyectoFolio) === f && vivo(x)).forEach(gasto); // G (incremento 7)
   }
   function cotizacion(q) {
     const c = q.proyectoFolio ? contratoActivo(q.proyectoFolio) : null;
@@ -10326,6 +10345,13 @@ function planAnulacion_(d, objetivo) {
         x.resolucion, x.reqFolio, x.ocFolio].filter(Boolean).join(' · ') })) return;
     correo(x.reportoEmail);
   }
+  function gasto(x) {
+    // G (incremento 7): el gasto sale de listas, totales y del margen; sus archivos se quedan en Drive (renombrados)
+    if (!agregar({ clave: 'gasto', folio: x.folio, x: x, proyectoFolio: x.proyectoFolio, estado: x.estado,
+      descripcion: [x.folio, x.categoria, x.solicitante, dinero(x.total, x.moneda), fv(x.proyectoFolio)].filter(Boolean).join(' · ') })) return;
+    correo(x.solicitanteEmail, x.revisoEmail, x.reembolsoEmail);
+    archivo(x.ticketId); archivo(x.xmlId); archivo(x.reembolsoId);
+  }
 
   // ---- Raíz ----
   const f = objetivo.folio;
@@ -10348,7 +10374,8 @@ function planAnulacion_(d, objetivo) {
     cotizacion(q);
   } else {
     const fuentes = { pago: [d.pagos, 'el pago', pagoCliente], req: [d.reqs, 'la requisición', requisicion], oc: [d.ordenes, 'la orden de compra', orden],
-      pgp: [d.pgp, 'el pago a proveedor', pagoProveedor], fpr: [d.fpr, 'la factura de proveedor', factura], rec: [recs, 'la recepción', recepcion] };
+      pgp: [d.pgp, 'el pago a proveedor', pagoProveedor], fpr: [d.fpr, 'la factura de proveedor', factura], rec: [recs, 'la recepción', recepcion],
+      gasto: [d.gastos, 'el gasto', gasto] }; // G (incremento 7)
     const [lista, que, fn] = fuentes[objetivo.clave];
     const x = lista.find(y => may(y.folio) === f);
     if (!x) throw new Error('No existe ' + que + ' ' + f + '.');
@@ -10410,6 +10437,9 @@ function planAnulacion_(d, objetivo) {
       plan.efectos.push({ clave: 'info', texto: 'El cobrado, el saldo y el avance por etapa de ' + fv(r.proyectoFolio) + ' se recalculan sin ' + r.folio + '.' });
     } else if (r.clave === 'fpr' && !enPlan('oc', r.x.ocFolio)) {
       plan.efectos.push({ clave: 'info', texto: 'Lo facturado y las cuentas por pagar de ' + r.x.ocFolio + ' se recalculan sin ' + r.folio + '.' });
+    } else if (r.clave === 'gasto' && !enPlan('proyecto', r.proyectoFolio)) { // G (incremento 7)
+      plan.efectos.push({ clave: 'info', texto: 'Los gastos y el margen de ' + fv(r.proyectoFolio) + ' se recalculan sin ' + r.folio +
+        (r.x.estado === GAS_REEMBOLSADO ? '; el reembolso ya pagado no se deshace (solo se corrige el registro).' : '.') });
     }
   });
   if (plan.carpeta) {
@@ -10570,8 +10600,11 @@ function aplicarAnulacion_(d, plan, m) {
       const h = hojaCom('MovimientosInventario');
       (x.movs || []).forEach(f => marcar(h, f.fila, 19, 20, !!f.canceladoPor));
       MEMO_.devs = null;
+    } else if (r.clave === 'gasto') {
+      // G (incremento 7): estado Anulada; quién, cuándo y por qué en cancelado_por… si no se había cancelado antes
+      marcar(hojaCom('Gastos'), x.fila, colGas_('estado'), colGas_('cancelado_por'), !!x.canceladoPor);
     }
-    if (['req', 'oc', 'pgp', 'fpr', 'rec', 'dev'].indexOf(r.clave) !== -1) {
+    if (['req', 'oc', 'pgp', 'fpr', 'rec', 'dev', 'gasto'].indexOf(r.clave) !== -1) {
       bitacora_(d.libroCom, 'Anular ' + r.tipo.toLowerCase(), r.proyectoFolio, r.descripcion + nota(r), m, HOJAS_COMPRAS);
     }
   });
@@ -10646,7 +10679,7 @@ function registrarAnulacion_(libroAdmin, plan, m) {
       : r.clave === 'dev' ? { hoja: 'Devoluciones', fila: x.fila, valores: x.valores,
         movimientos: (x.movs || []).map(f => ({ fila: f.fila, valores: f.valores })) }
       : { hoja: { proyecto: 'Proyectos', cotizacion: 'Cotizaciones', contrato: 'Contratos', pago: 'Pagos', req: 'Requisiciones',
-        oc: 'OrdenesCompra', pgp: 'PagosProveedores', fpr: 'FacturasProveedor', adicional: 'Adicionales' }[r.clave], fila: x.fila, valores: x.valores };
+        oc: 'OrdenesCompra', pgp: 'PagosProveedores', fpr: 'FacturasProveedor', adicional: 'Adicionales', gasto: 'Gastos' }[r.clave], fila: x.fila, valores: x.valores };
     if (r.clave === 'contrato' || r.clave === 'adicional') antes.esquema = (r.esquema || []).map(e => e.valores);
     escribe_(hoja).appendRow([ahora, t(yo), r.tipo, t(r.folio), t(m), jsonCelda(cascada), jsonCelda(antes)]);
   });
@@ -13744,4 +13777,751 @@ function adicionalesPorProyecto(adicionales) {
     x.n++;
   });
   return r;
+}
+
+// ---- 6.G Gastos por proyecto (incremento 7; contrato en docs/incremento-7.md §1 y §2 "G · Gastos") ----
+// Quien tiene Requisiciones (también @helgen.services) captura sus gastos de un proyecto desde el teléfono: proyecto (Activo o
+// Cerrado), fecha (no futura), categoría, concepto, monto, moneda (MXN/USD; tipo de cambio si no es la del proyecto), IVA incluido o
+// no, foto o PDF del ticket (obligatorio) y, opcional, el XML del CFDI (leerCfdi: monto, IVA, emisor y UUID salen del XML; el
+// receptor debe ser el RFC de Helgen; un UUID ya registrado se rechaza). Folio GAS-AAAA-NNNN (CONSECUTIVO_GAS_AAAA, bajo el candado).
+// Estados: Enviado → Aprobado | Rechazado (motivo) → Reembolsado (compras, con comprobante); Enviado → Cancelado (quien lo capturó,
+// motivo); Anulada (módulo E). Aprueba o rechaza Aprobaciones, nunca lo suyo (super admin con motivo: excepcionSuperAdmin_);
+// reembolsa Compras. Ven todos: Aprobaciones, Compras y super admin; quien captura solo ve los suyos. Datos en la pestaña Gastos
+// del libro de compras (privado); archivos en Compras/AAAA/<proyecto>/Gastos/ con privado_. Idempotencia en la hoja (id_solicitud
+// + huella_solicitud; reembolso_id_solicitud + reembolso_huella): un reintento no duplica aunque se pierda el caché. Correos sin
+// montos ni proveedor (gasto.enviado, gasto.aprobado, gasto.rechazado, gasto.reembolsar). Para el margen (integrador):
+// costoGastosPorProyecto(gastos, monedaDeProyecto) y gastosDelLibro_(libro).
+
+function modGastos_() {
+  // Solo declaraciones de función y literales: las const de esta sección todavía no existen cuando se llama (arriba)
+  return { nombre: 'Gastos',
+    api: { listarGastos: listarGastos, guardarGasto: guardarGasto, cancelarGasto: cancelarGasto, aprobarGasto: aprobarGasto,
+      rechazarGasto: rechazarGasto, reembolsarGasto: reembolsarGasto, archivoGasto: archivoGasto },
+    cambios: { guardarGasto: ['gastos'], cancelarGasto: ['gastos'], aprobarGasto: ['gastos'], rechazarGasto: ['gastos'],
+      reembolsarGasto: ['gastos'] },
+    // Quien pide (también @helgen.services) captura y ve los suyos; quien aprueba puede ser una cuenta de solo requisiciones
+    // (Aprobaciones se combina con Solo requisiciones). Reembolsar no: Compras nunca va con Solo requisiciones.
+    solo: ['listarGastos', 'guardarGasto', 'cancelarGasto', 'archivoGasto', 'aprobarGasto', 'rechazarGasto'],
+    publicas: [],
+    // En la carga inicial solo si ya está en caché (si no, la interfaz lo pide al abrir la pestaña)
+    bootstrap: function (permisos, errores) {
+      if (!veGastos_(permisos)) return {};
+      return { gastos: intentar_(errores, 'Gastos', () => listarGastos(null, true)) };
+    },
+    // Con la pestaña cargada (ctx.gastos), se vuelve a mandar cuando cambia algo de lo que usa (con el filtro de esa página)
+    sincronizar: function (permisos, ctx, algo, r, errores) {
+      if (ctx && ctx.gastos && veGastos_(permisos) && algo('gastos', 'proyectos', 'contratos', 'anulaciones', 'permisos')) {
+        r.gastos = intentar_(errores, 'Gastos', () => listarGastos(ctx.gastosFiltro || null));
+      }
+    },
+    preparar: function () {
+      const libro = libroComprasSiExiste_();
+      if (libro) hojaCompras_(libro, 'Gastos');
+      console.log('Gastos: pestaña Gastos ' + (libro ? 'lista.' : 'se crea con el libro de compras.'));
+    } };
+}
+
+/** ¿Ve la pestaña Gastos? (captura con Requisiciones; ve todos con Aprobaciones, Compras o super admin). Solo interfaz. */
+function veGastos_(permisos) {
+  const p = permisos || {};
+  return !!(p.requisicion || p.operaciones || p.compras || p.superadmin);
+}
+
+const PREFIJO_GAS = 'GAS';
+const GAS_ENVIADO = 'Enviado', GAS_APROBADO = 'Aprobado', GAS_RECHAZADO = 'Rechazado', GAS_REEMBOLSADO = 'Reembolsado',
+  GAS_CANCELADO = 'Cancelado';
+const ESTADOS_GASTO = [GAS_ENVIADO, GAS_APROBADO, GAS_RECHAZADO, GAS_REEMBOLSADO, GAS_CANCELADO];
+/** Categorías (contrato §2, en este orden). */
+const CATEGORIAS_GASTO = ['Viáticos', 'Combustible', 'Hospedaje', 'Casetas', 'Herramientas', 'Otros'];
+/** Cómo se le reembolsa a la persona (nunca con tarjeta: se le paga a ella). */
+const METODOS_REEMBOLSO = ['Transferencia', 'Efectivo', 'Cheque'];
+const SUBCARPETA_GASTOS = 'Gastos';
+const MAX_GASTOS_LISTA = 300, MAX_MIS_GASTOS = 200, MAX_PROYECTOS_GASTO = 200;
+/** Transiciones: acción → {de: estados que la admiten, a: estado nuevo}. */
+const TRANSICIONES_GASTO = {
+  aprobar: { de: [GAS_ENVIADO], a: GAS_APROBADO, verbo: 'aprobar' },
+  rechazar: { de: [GAS_ENVIADO], a: GAS_RECHAZADO, verbo: 'rechazar' },
+  reembolsar: { de: [GAS_APROBADO], a: GAS_REEMBOLSADO, verbo: 'reembolsar' },
+  cancelar: { de: [GAS_ENVIADO], a: GAS_CANCELADO, verbo: 'cancelar' },
+};
+
+// Pestaña Gastos del libro de compras (se crea sola, por nombre; nunca se borran filas). Montos sin IVA (subtotal), IVA y total
+// (lo que se pagó y se reembolsa) en la moneda del gasto; tipo_cambio solo si la moneda no es la del proyecto (moneda_proyecto, al
+// capturar). Fechas como texto (textoFecha_). G (incremento 7): se agrega aquí y no en la lista de arriba para no chocar al integrar.
+HOJAS_COMPRAS.Gastos = {
+  enc: ['folio', 'fecha', 'fecha_registro', 'proyecto_folio', 'solicitante_email', 'solicitante_nombre', 'categoria', 'concepto',
+    'moneda', 'iva_incluido', 'subtotal', 'iva', 'total', 'tipo_cambio', 'moneda_proyecto', 'ticket_id', 'ticket_url', 'xml_id',
+    'xml_url', 'uuid', 'rfc_emisor', 'emisor', 'estado', 'motivo', 'reviso_email', 'fecha_revision', 'reembolso_fecha',
+    'reembolso_metodo', 'reembolso_referencia', 'reembolso_id', 'reembolso_url', 'reembolso_email', 'reembolso_registro',
+    'cancelado_por', 'fecha_cancelacion', 'motivo_cancelacion', 'actualizado', 'id_solicitud', 'huella_solicitud',
+    'reembolso_id_solicitud', 'reembolso_huella'],
+  numeros: [11, 12, 13, 14],
+};
+/** Columna (desde 1) de un encabezado de Gastos. */
+const colGas_ = nombre => HOJAS_COMPRAS.Gastos.enc.indexOf(nombre) + 1;
+
+// Avisos por correo (6.B; sin montos, proveedor ni el concepto, que es texto libre). datos = {gasto, proyecto, solicitante (correo),
+// solicitanteNombre, categoria, nota?}:
+//   gasto.enviado → Aprobaciones (menos quien lo capturó) · gasto.aprobado / gasto.rechazado → quien lo capturó ·
+//   gasto.reembolsar → Compras
+EVENTOS_CORREO.push('gasto.enviado', 'gasto.aprobado', 'gasto.rechazado', 'gasto.reembolsar');
+// Pendientes (6.D): por aprobar y por reembolsar dependen de los gastos
+COLECCIONES_PENDIENTES.push('gastos');
+
+// -- Lógica pura (sin servicios de Google; se prueba en Node) --
+
+/** Estado nuevo de un gasto con una acción (aprobar, rechazar, reembolsar, cancelar) o error en español. */
+function transicionGasto(estado, accion) {
+  const t = TRANSICIONES_GASTO[accion];
+  if (!t) throw new Error('Acción no válida para un gasto: ' + accion + '.');
+  const e = String(estado || '');
+  if (t.de.indexOf(e) === -1) {
+    const como = { Enviado: 'enviado (por aprobar)', Aprobado: 'aprobado', Rechazado: 'rechazado', Reembolsado: 'reembolsado',
+      Cancelado: 'cancelado', Anulada: 'anulado' }[e] || (e ? e.toLowerCase() : 'sin estado');
+    throw new Error('El gasto está ' + como + ': no se puede ' + t.verbo + '.');
+  }
+  return t.a;
+}
+
+/** "Sí"/"No" (o true/false) → booleano; null si no se dijo. */
+function siNoGasto(v) {
+  if (v === true || v === false) return v;
+  const t = textoNormal(v);
+  if (['si', 'sí', 'true', '1', 'con iva'].indexOf(t) !== -1) return true;
+  if (['no', 'false', '0', 'sin iva'].indexOf(t) !== -1) return false;
+  return null;
+}
+
+/**
+ * Revisa y calcula un gasto (el servidor nunca confía en los montos del navegador). p = {fecha, categoria, concepto, monto, moneda,
+ * tipoCambio, ivaIncluido}; ctx = {hoy, ivaTasa (Config IVA_TASA), cfdi (de leerCfdi, opcional), monedaProyecto (sin ella no se
+ * revisa el tipo de cambio: la validación previa al candado)}. Total = lo que se pagó (y se reembolsa). Sin CFDI: con IVA incluido,
+ * subtotal = total / (1 + IVA_TASA) e IVA = total − subtotal; sin IVA, subtotal = total. Con CFDI, moneda, total, subtotal (subtotal −
+ * descuento) e IVA (impuestos trasladados) salen del XML y lo capturado se ignora. Tipo de cambio (pesos por dólar, 4 decimales)
+ * obligatorio si la moneda del gasto no es la del proyecto. Devuelve {fecha, categoria, concepto, moneda, ivaIncluido, subtotal, iva,
+ * total, tipoCambio ('' si no aplica), monedaProyecto, uuid, rfcEmisor, emisor}.
+ */
+function normalizarGasto(p, ctx) {
+  const d = p || {}, c = ctx || {};
+  const fecha = validarFechaIso(d.fecha, c.hoy, 'La fecha del gasto');
+  const categoria = CATEGORIAS_GASTO.find(x => textoNormal(x) === textoNormal(d.categoria));
+  if (!categoria) throw new Error('Elige la categoría: ' + CATEGORIAS_GASTO.join(', ') + '.');
+  const concepto = String(d.concepto == null ? '' : d.concepto).trim().replace(/\s+/g, ' ');
+  if (!concepto) throw new Error('Escribe el concepto del gasto (qué se pagó).');
+  if (concepto.length > 200) throw new Error('El concepto debe tener máximo 200 caracteres.');
+  const cfdi = c.cfdi || null;
+  let moneda, total, subtotal, iva, ivaIncluido;
+  if (cfdi) {
+    moneda = String(cfdi.moneda || '').trim().toUpperCase();
+    if (MONEDAS.indexOf(moneda) === -1) throw new Error('El CFDI es en ' + (moneda || '(sin moneda)') + ': los gastos solo pueden ser en MXN o USD.');
+    total = redondear(cfdi.total);
+    if (!(total > 0)) throw new Error('El total del CFDI debe ser mayor a 0.');
+    subtotal = redondear(Math.max(0, (Number(cfdi.subtotal) || 0) - (Number(cfdi.descuento) || 0)));
+    iva = redondear(Number(cfdi.trasladados) || 0);
+    ivaIncluido = iva > 0;
+  } else {
+    moneda = String(d.moneda == null || d.moneda === '' ? 'MXN' : d.moneda).trim().toUpperCase();
+    if (MONEDAS.indexOf(moneda) === -1) throw new Error('Moneda no válida: ' + moneda + '. Usa MXN o USD.');
+    const txt = d.monto, monto = Number(txt);
+    if (txt === '' || txt == null || !isFinite(monto) || monto <= 0) throw new Error('El monto del gasto debe ser mayor a 0.');
+    if (Math.abs(redondear(monto) - monto) > 1e-9) throw new Error('El monto admite máximo 2 decimales.');
+    if (monto > 1e9) throw new Error('El monto del gasto no es válido.');
+    ivaIncluido = siNoGasto(d.ivaIncluido);
+    if (ivaIncluido === null) throw new Error('Indica si el monto incluye IVA (Sí o No).');
+    const tasa = Number(c.ivaTasa);
+    const t = isFinite(tasa) && tasa >= 0 && tasa < 1 ? tasa : 0.16;
+    total = redondear(monto);
+    subtotal = ivaIncluido ? redondear(total / (1 + t)) : total;
+    iva = redondear(total - subtotal);
+  }
+  let tipoCambio = '';
+  const mp = c.monedaProyecto === undefined ? undefined : String(c.monedaProyecto || 'MXN').trim().toUpperCase();
+  if (mp !== undefined && moneda !== mp) {
+    tipoCambio = Number(d.tipoCambio);
+    if (d.tipoCambio === '' || d.tipoCambio == null || !isFinite(tipoCambio) || tipoCambio <= 0 || tipoCambio > 1000) {
+      throw new Error('El proyecto es en ' + mp + ' y el gasto en ' + moneda + ': captura el tipo de cambio del día (pesos por dólar).');
+    }
+    tipoCambio = Math.round(tipoCambio * 10000) / 10000;
+  }
+  return { fecha: fecha, categoria: categoria, concepto: concepto, moneda: moneda, ivaIncluido: ivaIncluido, subtotal: subtotal, iva: iva,
+    total: total, tipoCambio: tipoCambio, monedaProyecto: mp === undefined ? '' : mp,
+    uuid: cfdi ? cfdi.uuid : '', rfcEmisor: cfdi ? cfdi.emisor.rfc : '', emisor: cfdi ? cfdi.emisor.nombre : '' };
+}
+
+/**
+ * Revisa el CFDI de un gasto (de leerCfdi; su salida no cambia): versión 4.0, factura de ingreso (tipo I), UUID válido, a nombre del
+ * RFC de Helgen (Config EMPRESA_RFC) y, si se pasa usados ({UUID: folio} de gastos vivos y facturas de proveedor vigentes), que no
+ * esté registrado ya. Devuelve el cfdi.
+ */
+function validarCfdiGasto(cfdi, rfcHelgen, usados) {
+  const f = cfdi || {};
+  if (f.version !== '4.0') throw new Error('El CFDI debe ser versión 4.0.');
+  if (f.tipoComprobante === 'E') throw new Error('Es una nota de crédito (CFDI tipo E), no la factura del gasto.');
+  if (f.tipoComprobante === 'P') throw new Error('Es un complemento de pago (CFDI tipo P), no la factura del gasto.');
+  if (f.tipoComprobante !== 'I') throw new Error('El CFDI no es una factura de ingreso (tipo I).');
+  if (!UUID_CFDI.test(String(f.uuid || ''))) throw new Error('El folio fiscal (UUID) del CFDI no es válido.');
+  const rfc = String(rfcHelgen || '').trim().toUpperCase();
+  const receptor = String((f.receptor && f.receptor.rfc) || '').trim().toUpperCase();
+  if (!rfc || receptor !== rfc) {
+    throw new Error('El CFDI está a nombre del RFC ' + (receptor || '(sin RFC)') + ', no de Helgen (' + rfc + '): pide la factura a nombre de Helgen.');
+  }
+  const ya = usados && usados[String(f.uuid).toUpperCase()];
+  if (ya) throw new Error('La factura con folio fiscal ' + f.uuid + ' ya está registrada (' + ya + ').');
+  return f;
+}
+
+/**
+ * Lo que hace el reembolso: p = {fecha, metodo, referencia}; fecha no futura; método de METODOS_REEMBOLSO; referencia obligatoria
+ * salvo en efectivo, ≤ 100 caracteres y nunca un número de tarjeta. Devuelve {fecha, metodo, referencia}.
+ */
+function normalizarReembolsoGasto(p, hoy) {
+  const d = p || {};
+  const fecha = validarFechaIso(d.fecha, hoy, 'La fecha del reembolso');
+  const metodo = METODOS_REEMBOLSO.find(m => textoNormal(m) === textoNormal(d.metodo));
+  if (!metodo) throw new Error('Elige cómo se reembolsó: ' + METODOS_REEMBOLSO.join(', ') + '.');
+  const referencia = String(d.referencia == null ? '' : d.referencia).trim().replace(/\s+/g, ' ');
+  if (!referencia && metodo !== 'Efectivo') {
+    throw new Error('Captura la referencia (' + (metodo === 'Cheque' ? 'número de cheque' : 'clave de rastreo o folio') + ').');
+  }
+  if (referencia.length > 100) throw new Error('La referencia debe tener máximo 100 caracteres.');
+  if (pareceNumeroTarjeta(referencia)) {
+    throw new Error('La referencia parece un número de tarjeta: nunca lo captures. Escribe la clave de rastreo o el folio.');
+  }
+  return { fecha: fecha, metodo: metodo, referencia: referencia };
+}
+
+/**
+ * (Contrato §1) Costo de gastos por proyecto para el margen y los reportes. SIN IVA (subtotal), solo Aprobado y Reembolsado (no
+ * Enviado, Rechazado, Cancelado ni Anulada). Cada gasto en la moneda del proyecto si es la suya o si trae tipo de cambio (pesos por
+ * dólar: convertirMoneda); si no se puede convertir, va en su propia moneda (el margen lo marca "Revisar" y no lo suma). Nunca se
+ * suman monedas: un renglón por moneda (la del proyecto primero), con cantidad = número de gastos.
+ * monedaDeProyecto = función (folio → 'MXN'|'USD'), mapa {folio: 'MXN'|'USD'|{moneda}} o texto (todos los proyectos en esa moneda).
+ * Un proyecto sin moneda conocida deja cada gasto en su moneda (nunca se inventa una conversión). Devuelve
+ * {PRY-AAAA-NNNN: [{concepto: 'Gastos', moneda, monto, cantidad}]}.
+ */
+function costoGastosPorProyecto(gastos, monedaDeProyecto) {
+  const may = s => String(s == null ? '' : s).trim().toUpperCase();
+  const monedaDe = folio => {
+    let m = '';
+    if (typeof monedaDeProyecto === 'function') m = monedaDeProyecto(folio);
+    else if (typeof monedaDeProyecto === 'string') m = monedaDeProyecto;
+    else if (monedaDeProyecto && typeof monedaDeProyecto === 'object') {
+      m = Object.prototype.hasOwnProperty.call(monedaDeProyecto, folio) ? monedaDeProyecto[folio] : monedaDeProyecto[may(folio)];
+    }
+    if (m && typeof m === 'object') m = m.moneda;
+    m = may(m);
+    return MONEDAS.indexOf(m) !== -1 ? m : '';
+  };
+  const acc = {};
+  (gastos || []).forEach(g => {
+    if (!g || [GAS_APROBADO, GAS_REEMBOLSADO].indexOf(String(g.estado || '')) === -1) return;
+    const folio = may(g.proyectoFolio);
+    if (!folio) return;
+    const mg = may(g.moneda) || 'MXN', mp = monedaDe(folio), tc = Number(g.tipoCambio);
+    let moneda = mg, cts = aCentavos(Number(g.subtotal) || 0);
+    if (mp && mp !== mg && isFinite(tc) && tc > 0) { moneda = mp; cts = aCentavos(convertirMoneda(cts / 100, mg, mp, tc)); }
+    const p = acc[folio] || (acc[folio] = { moneda: mp, por: {} });
+    const x = p.por[moneda] || (p.por[moneda] = { cts: 0, cantidad: 0 });
+    x.cts += cts; x.cantidad++;
+  });
+  const r = {};
+  Object.keys(acc).forEach(folio => {
+    const p = acc[folio];
+    r[folio] = Object.keys(p.por).sort((a, b) => (a === p.moneda ? -1 : b === p.moneda ? 1 : ordenMonedas(a, b)))
+      .map(m => ({ concepto: 'Gastos', moneda: m, monto: p.por[m].cts / 100, cantidad: p.por[m].cantidad }));
+  });
+  return r;
+}
+
+/** Qué puede hacer quien ve un gasto. rol = {yo, aprobaciones, compras, superadmin}. Solo interfaz: cada función lo revisa. */
+function accionesGasto(g, rol) {
+  const r = rol || {}, propio = String(g.solicitanteEmail || '').toLowerCase() === String(r.yo || '').toLowerCase();
+  const enviado = g.estado === GAS_ENVIADO;
+  const decide = !!r.aprobaciones && enviado && (!propio || !!r.superadmin); // lo propio solo el super admin, con motivo
+  return { propio: propio, puedeCancelar: enviado && propio, puedeAprobar: decide, puedeRechazar: decide,
+    puedeReembolsar: !!r.compras && g.estado === GAS_APROBADO };
+}
+
+/**
+ * Gastos del equipo que pasan el filtro {estado, buscar}. estado: 'porAprobar' (Enviado; sin los propios, salvo el super admin),
+ * 'porReembolsar' (Aprobado), 'pendientes' (los dos), '' (todos) o un estado. buscar: folio, concepto, categoría, quién, proyecto,
+ * emisor o UUID. lista = vistas (gastoParaVista_), más recientes primero.
+ */
+function filtrarGastos(lista, filtro, rol) {
+  const f = filtro || {}, r = rol || {};
+  const estado = String(f.estado || '');
+  const q = textoNormal(f.buscar);
+  return (lista || []).filter(g => {
+    if (estado === 'porAprobar') { if (g.estado !== GAS_ENVIADO || (g.propio && !r.superadmin)) return false; }
+    else if (estado === 'porReembolsar') { if (g.estado !== GAS_APROBADO) return false; }
+    else if (estado === 'pendientes') { if (g.estado !== GAS_ENVIADO && g.estado !== GAS_APROBADO) return false; }
+    else if (estado && g.estado !== estado) return false;
+    return !q || textoNormal([g.folio, g.concepto, g.categoria, g.solicitante, g.solicitanteEmail, g.proyectoVisible, g.proyectoNombre,
+      g.emisor, g.uuid, g.estado].join(' ')).includes(q);
+  });
+}
+
+/** Totales por moneda (lo pagado, con IVA): [{moneda, total, gastos}], MXN primero. Nunca suma monedas distintas. */
+function totalesGastos(lista) {
+  const t = {};
+  (lista || []).forEach(g => {
+    const m = String(g.moneda || 'MXN');
+    const x = t[m] || (t[m] = { moneda: m, cts: 0, gastos: 0 });
+    x.cts += aCentavos(g.total); x.gastos++;
+  });
+  return Object.keys(t).sort(ordenMonedas).map(m => ({ moneda: m, total: t[m].cts / 100, gastos: t[m].gastos }));
+}
+
+/**
+ * Pendientes de gastos (6.D): Enviado → "Gasto por aprobar" (Aprobaciones; nunca los propios) y Aprobado → "Gasto por reembolsar"
+ * (Compras). gastos = gastosParaPendientes_; o = {yo, roles: {aprobaciones, compras}, todos (super admin: los de todos), hoy}. Mismo
+ * formato que itemsPendientes (con orden para acomodarlos); destino 'gas' = pestaña Gastos.
+ */
+function itemsGastoPendientes(gastos, o) {
+  const x = o || {}, roles = x.roles || {}, todos = !!x.todos, yo = String(x.yo || '').toLowerCase(), hoy = String(x.hoy || '');
+  const esFecha = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
+  const items = [];
+  (gastos || []).forEach(g => {
+    const propio = String(g.solicitanteEmail || '').toLowerCase() === yo;
+    let it = null;
+    if (g.estado === GAS_ENVIADO && (todos || (roles.aprobaciones && !propio))) {
+      it = { tipo: 'gastoAprobar', seccion: 'aprobaciones', titulo: 'Gasto por aprobar', accion: 'Revisar', para: 'Aprobaciones' };
+    } else if (g.estado === GAS_APROBADO && (todos || roles.compras)) {
+      it = { tipo: 'gastoReembolsar', seccion: 'compras', titulo: 'Gasto por reembolsar', accion: 'Reembolsar', para: 'Compras' };
+    }
+    if (!it) return;
+    const desde = String(g.desde || '').slice(0, 10);
+    items.push(Object.assign(it, { folio: g.folio, req: '', sitio: '', desde: desde, dias: esFecha(desde) && esFecha(hoy) ? Math.max(0, diasEntre(desde, hoy)) : 0,
+      prioridad: '', urgente: false, destino: 'gas',
+      detalle: [[g.proyectoVisible, g.proyectoNombre].filter(Boolean).join(' · '), g.categoria,
+        (it.tipo === 'gastoAprobar' ? 'capturó ' : 'a ') + (g.solicitante || g.solicitanteEmail),
+        formatoMoneda(g.total) + ' ' + (g.moneda || 'MXN')].filter(Boolean).join(' · '),
+      orden: marcaOrdenable(g.desde) }));
+    if (!todos) delete it.para;
+  });
+  return items;
+}
+
+/** Lo que va en el aviso de un gasto (datos de notificar_ → info de infoDeAviso_): folio, categoría y quién lo capturó. */
+function datosAvisoGasto(d) {
+  const x = d || {};
+  const folio = String(x.gasto == null ? '' : x.gasto).trim().toUpperCase();
+  const correo = correoCapri(x.solicitante);
+  return { folio: /^GAS-\d{4}-\d+$/.test(folio) ? folio : '', categoria: CATEGORIAS_GASTO.find(c => textoNormal(c) === textoNormal(x.categoria)) || '',
+    solicitanteEmail: correo, solicitante: String(x.solicitanteNombre == null ? '' : x.solicitanteNombre).replace(/\s+/g, ' ').trim().slice(0, 80) || correo };
+}
+
+/** A quién va un aviso de gasto (destinatariosAviso). roles = {aprobaciones, compras} (correosConRol_). */
+function destinatariosGasto(tipo, info, roles) {
+  const i = info || {}, r = roles || {}, sol = i.solicitanteEmail || '';
+  if (tipo === 'gasto.enviado') return [{ quien: 'aprobaciones', para: (r.aprobaciones || []).filter(c => c !== sol) }];
+  if (tipo === 'gasto.aprobado' || tipo === 'gasto.rechazado') return [{ quien: 'solicitante', para: [sol] }];
+  if (tipo === 'gasto.reembolsar') return [{ quien: 'compras', para: r.compras || [] }];
+  return [];
+}
+
+/** Texto de un aviso de gasto (contenidoAviso): sin montos, proveedor ni el concepto (texto libre); la nota solo como "hay una nota". */
+function contenidoAvisoGasto(x, tipo, quien, i, quienHizo) {
+  const etiqueta = { 'gasto.enviado': 'Gasto por aprobar', 'gasto.aprobado': 'Gasto aprobado', 'gasto.rechazado': 'Gasto rechazado',
+    'gasto.reembolsar': 'Gasto por reembolsar' }[tipo] || 'Gasto';
+  const capturo = i.solicitante || i.solicitanteEmail || '';
+  x.asunto = '[CAPRI] ' + [i.folio, etiqueta, i.proyectoNombre].filter(Boolean).join(' · ');
+  x.titulo = [i.folio, etiqueta].filter(Boolean).join(' · ');
+  x.que = tipo === 'gasto.enviado' ? (capturo || 'Alguien') + ' capturó un gasto de un proyecto. Revisa el ticket en CAPRI y apruébalo o recházalo.'
+    : tipo === 'gasto.aprobado' ? 'Aprobaron tu gasto. Compras te lo va a reembolsar.'
+    : tipo === 'gasto.rechazado' ? 'Rechazaron tu gasto. El motivo está en CAPRI.'
+    : 'Aprobaciones aprobó un gasto de ' + (capturo || 'una persona del equipo') + '. Cuando se lo pagues, regístralo como reembolsado en ' +
+      'CAPRI con el comprobante.';
+  x.filas = [['Gasto', i.folio], ['Proyecto', [i.proyectoVisible, i.proyectoNombre].filter(Boolean).join(' · ')], ['Categoría', i.categoria],
+    ['Capturó', quien === 'solicitante' ? '' : capturo], ['Lo hizo', i.actorCorreo && i.actorCorreo === i.solicitanteEmail ? '' : quienHizo],
+    ['Cuándo', fechaCorreo(i.fecha)]].filter(f => f && f[1]);
+  x.boton = { texto: i.folio ? 'Abrir ' + i.folio + ' en CAPRI' : 'Abrir CAPRI', url: URL_AVISOS_CAPRI + (i.folio ? '#gas=' + encodeURIComponent(i.folio) : '') };
+  x.nota = i.nota ? NOTA_EN_CAPRI : '';
+  return x;
+}
+
+// -- Lectura --
+
+/** Gasto desde su fila (columnas por nombre). */
+function gastoDesdeFila_(r, fila) {
+  const v = n => r[colGas_(n) - 1];
+  const s = n => String(v(n) == null ? '' : v(n));
+  const tc = v('tipo_cambio');
+  return {
+    folio: s('folio'), fecha: fechaIso_(v('fecha')), fechaRegistro: fechaTexto_(v('fecha_registro')), proyectoFolio: s('proyecto_folio').toUpperCase(),
+    solicitanteEmail: s('solicitante_email').toLowerCase(), solicitante: s('solicitante_nombre') || s('solicitante_email'),
+    categoria: s('categoria'), concepto: s('concepto'), moneda: s('moneda') || 'MXN', ivaIncluido: siNoGasto(v('iva_incluido')) === true,
+    subtotal: Number(v('subtotal')) || 0, iva: Number(v('iva')) || 0, total: Number(v('total')) || 0,
+    tipoCambio: tc === '' || tc == null ? '' : Number(tc), monedaProyecto: s('moneda_proyecto'),
+    ticketId: s('ticket_id'), ticketUrl: s('ticket_url'), xmlId: s('xml_id'), xmlUrl: s('xml_url'), uuid: s('uuid'),
+    rfcEmisor: s('rfc_emisor'), emisor: s('emisor'), estado: s('estado') || GAS_ENVIADO, motivo: s('motivo'),
+    revisoEmail: s('reviso_email').toLowerCase(), fechaRevision: fechaTexto_(v('fecha_revision')),
+    reembolsoFecha: fechaIso_(v('reembolso_fecha')), reembolsoMetodo: s('reembolso_metodo'), reembolsoReferencia: s('reembolso_referencia'),
+    reembolsoId: s('reembolso_id'), reembolsoUrl: s('reembolso_url'), reembolsoEmail: s('reembolso_email').toLowerCase(),
+    reembolsoRegistro: fechaTexto_(v('reembolso_registro')), canceladoPor: s('cancelado_por'), fechaCancelacion: fechaTexto_(v('fecha_cancelacion')),
+    motivoCancelacion: s('motivo_cancelacion'), actualizado: fechaTexto_(v('actualizado')), idSolicitud: s('id_solicitud'),
+    huella: s('huella_solicitud'), reembolsoIdSolicitud: s('reembolso_id_solicitud'), reembolsoHuella: s('reembolso_huella'), fila: fila,
+  };
+}
+
+/** Fila nueva de Gastos con los campos dados por nombre (lo demás vacío). */
+function filaGasto_(campos) {
+  return HOJAS_COMPRAS.Gastos.enc.map(n => (n in campos ? campos[n] : ''));
+}
+
+/**
+ * PARA EL INTEGRADOR: todos los gastos del libro de compras (cualquier estado; costoGastosPorProyecto solo cuenta Aprobado y
+ * Reembolsado), leídos una vez por petición. Sin libro o sin pestaña: [].
+ */
+function gastosDelLibro_(libro) {
+  return filasSiHay_(libro, HOJAS_COMPRAS, 'Gastos').map((r, i) => String(r[0] || '').trim() ? gastoDesdeFila_(r, i + 2) : null).filter(Boolean);
+}
+
+/** Todos los gastos (de la hoja), en caché por la versión de 'gastos'. soloSiHay: solo lo que ya está en caché (si no, null). */
+function baseGastos_(soloSiHay) {
+  const leer = () => gastosDelLibro_(libroComprasSiExiste_()).map(g => { const x = Object.assign({}, g); delete x.huella; delete x.reembolsoHuella; return x; });
+  const v = enCache_('gastosBase', ['gastos'], TTL_CACHE, soloSiHay ? null : leer);
+  return v === undefined ? null : v;
+}
+
+/** Gasto por folio en el libro (o error); lo anulado no se toca. */
+function buscarGasto_(libro, folioGasto) {
+  const folio = String(folioGasto == null ? '' : folioGasto).trim().toUpperCase();
+  if (!libro || !libro.getSheetByName('Gastos')) throw new Error('No existe el gasto ' + folio + '.');
+  const hoja = hojaCompras_(libro, 'Gastos');
+  let g = null;
+  filasDeArea_(hoja, HOJAS_COMPRAS, 'Gastos').forEach((r, i) => {
+    if (String(r[0]).trim().toUpperCase() === folio) g = gastoDesdeFila_(r, i + 2);
+  });
+  if (!g) throw new Error('No existe el gasto ' + folio + '.');
+  if (g.estado === ESTADO_ANULADA || esAnulado_(g.folio)) throw new Error('El gasto ' + g.folio + ' está anulado.');
+  return { hoja: hoja, gasto: g };
+}
+
+/** Escribe campos de un gasto (por nombre de columna; textoCelda en el texto), juntando columnas seguidas en una sola escritura. */
+function actualizarGasto_(hoja, g, campos) {
+  const cols = Object.keys(campos).map(n => ({ c: colGas_(n), v: campos[n] })).filter(x => x.c > 0).sort((a, b) => a.c - b.c);
+  const valor = v => typeof v === 'number' ? v : textoCelda(String(v == null ? '' : v));
+  let i = 0;
+  while (i < cols.length) {
+    let j = i;
+    while (j + 1 < cols.length && cols[j + 1].c === cols[j].c + 1) j++;
+    escribe_(hoja).getRange(g.fila, cols[i].c, 1, j - i + 1).setValues([cols.slice(i, j + 1).map(x => valor(x.v))]);
+    i = j + 1;
+  }
+}
+
+/** Quién ve qué en Gastos (sesión de la petición). */
+function rolGastos_() {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión para continuar.');
+  const ap = esOperaciones_(), co = esCompras_(), sa = esSuperAdmin_();
+  return { yo: yo_(), enviar: esRequisicion_(), aprobaciones: ap, compras: co, superadmin: sa, verTodos: ap || co || sa };
+}
+
+function exigirGastos_() {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión para continuar.');
+  if (!esRequisicion_()) throw errorPermiso_('No tienes permiso para capturar gastos (rol de Requisiciones).');
+}
+
+function exigirAprobarGastos_() {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión para continuar.');
+  if (!esOperaciones_()) throw errorPermiso_('No tienes permiso para aprobar gastos (rol de Aprobaciones).');
+}
+
+/** Lo que la interfaz recibe de un gasto (sin ids de archivos ni idempotencia; los archivos se abren con archivoGasto). */
+function gastoParaVista_(g, rol, proyectos) {
+  const p = proyectos[g.proyectoFolio] || null;
+  return Object.assign({
+    folio: g.folio, fecha: g.fecha, fechaRegistro: g.fechaRegistro, proyectoFolio: g.proyectoFolio,
+    proyectoVisible: p ? p.folioVisible : g.proyectoFolio, proyectoNombre: p ? p.nombre : '', solicitanteEmail: g.solicitanteEmail,
+    solicitante: g.solicitante, categoria: g.categoria, concepto: g.concepto, moneda: g.moneda, ivaIncluido: g.ivaIncluido,
+    subtotal: g.subtotal, iva: g.iva, total: g.total, tipoCambio: g.tipoCambio, monedaProyecto: g.monedaProyecto,
+    conTicket: !!g.ticketId, conXml: !!g.xmlId, uuid: g.uuid, emisor: g.emisor, rfcEmisor: g.rfcEmisor, estado: g.estado,
+    motivo: g.estado === GAS_CANCELADO ? g.motivoCancelacion : g.motivo, reviso: g.revisoEmail ? nombreDeCorreo_(g.revisoEmail) : '',
+    fechaRevision: g.fechaRevision, fechaCancelacion: g.fechaCancelacion,
+    reembolso: g.estado === GAS_REEMBOLSADO ? { fecha: g.reembolsoFecha, metodo: g.reembolsoMetodo, referencia: g.reembolsoReferencia,
+      quien: g.reembolsoEmail ? nombreDeCorreo_(g.reembolsoEmail) : '', conComprobante: !!g.reembolsoId } : null,
+  }, accionesGasto(g, rol));
+}
+
+/** Proyectos para capturar un gasto (Activo y Cerrado, sin anulados), con su moneda (la de la aceptada; sin aceptada, MXN). */
+function proyectosParaGasto_() {
+  const contratos = contratosCache_();
+  return proyectosVisibles_().slice().reverse().filter(p => p.estado !== 'Cancelado').slice(0, MAX_PROYECTOS_GASTO)
+    .map(p => ({ folio: p.folio, clave: p.clave, folioVisible: p.folioVisible, nombre: p.nombre, estado: p.estado,
+      moneda: monedaDeProyecto_(contratos[p.folio.toUpperCase()] || null).moneda }));
+}
+
+/**
+ * Pantalla de Gastos (lectura). filtro = {estado, buscar} para "Gastos del equipo" (Aprobaciones, Compras, super admin); por omisión,
+ * lo pendiente de su rol. Devuelve {hoy, categorias, monedas, metodosReembolso, ivaTasa, puede: {enviar, aprobar, reembolsar,
+ * verTodos}, proyectos (para capturar), mios (los suyos, más recientes primero), equipo: {filtro, gastos, total, totales} | null}.
+ * Quien solo captura nunca recibe gastos de otras personas. soloSiHay (carga inicial): null si los gastos no están en caché.
+ */
+function listarGastos(filtro, soloSiHay) {
+  const rol = rolGastos_();
+  if (!rol.enviar && !rol.verTodos) throw errorPermiso_('No tienes acceso a Gastos.');
+  const base = baseGastos_(soloSiHay);
+  if (base == null) return null;
+  const proyectos = mapaProyectos_();
+  const vivos = base.filter(g => g.estado !== ESTADO_ANULADA && !esAnulado_(g.folio) && !esAnulado_(g.proyectoFolio));
+  const vista = g => gastoParaVista_(g, rol, proyectos);
+  const mios = vivos.filter(g => g.solicitanteEmail === rol.yo).reverse().slice(0, MAX_MIS_GASTOS).map(vista);
+  let equipo = null;
+  if (rol.verTodos) {
+    const f = { estado: String((filtro && filtro.estado) != null ? filtro.estado : (rol.aprobaciones && !rol.compras ? 'porAprobar'
+      : rol.compras && !rol.aprobaciones ? 'porReembolsar' : 'pendientes')), buscar: String((filtro && filtro.buscar) || '').slice(0, 80) };
+    const lista = filtrarGastos(vivos.slice().reverse().map(vista), f, rol);
+    equipo = { filtro: f, gastos: lista.slice(0, MAX_GASTOS_LISTA), total: lista.length, totales: totalesGastos(lista) };
+  }
+  return { hoy: hoyIso_(), categorias: CATEGORIAS_GASTO, monedas: MONEDAS, metodosReembolso: METODOS_REEMBOLSO,
+    ivaTasa: configLigera_().ivaTasa, puede: { enviar: rol.enviar, aprobar: rol.aprobaciones, reembolsar: rol.compras, verTodos: rol.verTodos },
+    proyectos: rol.enviar ? proyectosParaGasto_() : [], mios: mios, equipo: equipo };
+}
+
+/** Gastos que esperan a alguien (Pendientes): Enviado y Aprobado, sin anulados. */
+function gastosParaPendientes_() {
+  const base = baseGastos_(false) || [];
+  const proyectos = mapaProyectos_();
+  return base.filter(g => (g.estado === GAS_ENVIADO || g.estado === GAS_APROBADO) && !esAnulado_(g.folio) && !esAnulado_(g.proyectoFolio))
+    .map(g => {
+      const p = proyectos[g.proyectoFolio] || null;
+      return { folio: g.folio, estado: g.estado, solicitanteEmail: g.solicitanteEmail, solicitante: g.solicitante, categoria: g.categoria,
+        total: g.total, moneda: g.moneda, proyectoVisible: p ? p.folioVisible : g.proyectoFolio, proyectoNombre: p ? p.nombre : '',
+        desde: marcaOrdenable(g.estado === GAS_APROBADO && g.fechaRevision ? g.fechaRevision : g.fechaRegistro) };
+    });
+}
+
+/**
+ * Un archivo del gasto (ticket, xml o reembolso) sin acceso a la carpeta de compras: {nombre, mime, datos (base64)}. Aprobaciones,
+ * Compras y super admin: todos; quien lo capturó: su ticket y su XML.
+ */
+function archivoGasto(folioGasto, que) {
+  const rol = rolGastos_();
+  const libro = libroComprasSiExiste_();
+  if (!libro) throw new Error('No hay gastos.');
+  const { gasto: g } = buscarGasto_(libro, folioGasto);
+  const tipo = que === 'xml' || que === 'reembolso' ? que : 'ticket';
+  const propio = g.solicitanteEmail === rol.yo;
+  if (!(rol.verTodos || (propio && tipo !== 'reembolso'))) throw errorPermiso_('No tienes acceso a ese archivo.');
+  const id = tipo === 'xml' ? g.xmlId : tipo === 'reembolso' ? g.reembolsoId : g.ticketId;
+  if (!id) throw new Error('El gasto ' + g.folio + ' no tiene ' + (tipo === 'xml' ? 'XML' : tipo === 'reembolso' ? 'comprobante de reembolso' : 'ticket') + '.');
+  const blob = DriveApp.getFileById(id).getBlob();
+  return { nombre: blob.getName(), mime: blob.getContentType(), datos: Utilities.base64Encode(blob.getBytes()) };
+}
+
+// -- Escrituras --
+
+/** Compras/AAAA/<folio del proyecto>/Gastos/ (restringidas de arriba abajo). */
+function carpetaGastos_(proyectoFolio) {
+  return privado_(subcarpeta_(carpetaProyectoCompras_(proyectoFolio), SUBCARPETA_GASTOS));
+}
+
+const md5Gasto_ = x => Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, x)).replace(/=+$/, '');
+
+/** Huella del contenido de un envío de gasto (proyecto, fecha, categoría, concepto, montos, moneda y los archivos). */
+function huellaGasto_(d, ticket, xml) {
+  const t = v => String(v == null ? '' : v).trim();
+  const n = v => (v === '' || v == null ? '' : String(Number(v)));
+  return md5Gasto_(JSON.stringify([folioInterno(d.proyectoFolio), t(d.fecha), textoNormal(d.categoria), t(d.concepto), n(d.monto),
+    t(d.moneda).toUpperCase(), n(d.tipoCambio), String(siNoGasto(d.ivaIncluido)), md5Gasto_(ticket || []), xml ? md5Gasto_(xml) : '']));
+}
+
+/** {UUID: folio} de los gastos vivos (Enviado, Aprobado, Reembolsado) y de las facturas de proveedor vigentes. */
+function uuidsUsados_(libro, filasGastos) {
+  const usados = {};
+  (filasGastos || []).forEach((r, i) => {
+    const g = gastoDesdeFila_(r, i + 2);
+    if (g.uuid && [GAS_ENVIADO, GAS_APROBADO, GAS_REEMBOLSADO].indexOf(g.estado) !== -1) usados[g.uuid.toUpperCase()] = g.folio;
+  });
+  if (libro.getSheetByName('FacturasProveedor')) {
+    facturasDelLibro_(libro).forEach(f => {
+      if (f.estado === FPR_VIGENTE && f.uuid) usados[String(f.uuid).toUpperCase()] = usados[String(f.uuid).toUpperCase()] || f.folio;
+    });
+  }
+  return usados;
+}
+
+/** Datos del aviso por correo de un gasto (sin montos ni concepto). */
+function datosCorreoGasto_(g, nota) {
+  return { gasto: g.folio, proyecto: g.proyectoFolio, solicitante: g.solicitanteEmail, solicitanteNombre: g.solicitante,
+    categoria: g.categoria, nota: nota || '' };
+}
+
+/**
+ * Captura un gasto (quien tiene Requisiciones; el gasto es de quien lo manda). p = {proyectoFolio, fecha, categoria, concepto, monto,
+ * moneda, tipoCambio, ivaIncluido, ticket: {nombre, datos (base64)} (obligatorio: foto o PDF), xml: {nombre, datos} (opcional),
+ * idSolicitud, filtro}. Todo se revisa antes del candado salvo lo que depende de la hoja (proyecto, moneda del proyecto, UUID repetido,
+ * idempotencia). El mismo idSolicitud con el mismo contenido regresa el mismo folio (de la hoja, sin depender del caché); con otro
+ * contenido se rechaza. Devuelve {folio, repetido, gasto, datos (listarGastos)}.
+ */
+function guardarGasto(p) {
+  exigirGastos_();
+  const d0 = p || {};
+  const ticket = bytesDeAdjunto_(d0.ticket, 'No se pudo leer el ticket. Vuelve a tomar la foto o a adjuntarlo.');
+  const tipoTicket = validarArchivo(ticket, 'la foto o el PDF del ticket', 'El ticket');
+  let xml = null, cfdi = null, rfcHelgen = '';
+  if (d0.xml && d0.xml.datos) {
+    xml = bytesDeAdjunto_(d0.xml, 'No se pudo leer el XML. Vuelve a adjuntarlo.');
+    validarXml(xml);
+    cfdi = leerCfdi(textoUtf8(xml));
+    rfcHelgen = getConfig_().EMPRESA_RFC;
+    validarCfdiGasto(cfdi, rfcHelgen, null);
+  }
+  const hoy = hoyIso_(), ivaTasa = configLigera_().ivaTasa;
+  normalizarGasto(d0, { hoy: hoy, ivaTasa: ivaTasa, cfdi: cfdi }); // errores de captura sin esperar el candado
+  const folioProyecto = folioInterno(d0.proyectoFolio);
+  if (!folioProyecto) throw new Error('Elige el proyecto del gasto.');
+  const libro = libroCompras_();
+  const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
+  const huella = idSolicitud ? huellaGasto_(d0, ticket, xml) : '';
+  const yo = yo_(), t = textoCelda;
+
+  const r = conCandado_(() => {
+    const hoja = hojaCompras_(libro, 'Gastos');
+    const filas = filasDeArea_(hoja, HOJAS_COMPRAS, 'Gastos');
+    if (idSolicitud) {
+      const i = filas.findIndex(x => String(x[colGas_('id_solicitud') - 1] || '') === idSolicitud);
+      if (i !== -1) {
+        const previo = gastoDesdeFila_(filas[i], i + 2);
+        if (previo.solicitanteEmail !== yo) throw new Error('Este envío ya se registró con otra cuenta. Vuelve a capturar el gasto.');
+        if (previo.huella && previo.huella !== huella) {
+          throw new Error('Este envío ya se registró como ' + previo.folio + ' con otros datos (monto, fecha, concepto o ticket). Si es otro ' +
+            'gasto, vuelve a capturarlo.');
+        }
+        return { folio: previo.folio, repetido: true };
+      }
+    }
+    const proyecto = proyectoParaCompras_(folioProyecto);
+    if (proyecto.estado === 'Cancelado') throw new Error('El proyecto ' + proyecto.folioVisible + ' está cancelado: no admite gastos.');
+    // Moneda del proyecto: la de su cotización aceptada (sin aceptada, MXN); en una escritura se lee de la hoja (contratosCache_)
+    const monedaProyecto = monedaDeProyecto_(contratosCache_()[proyecto.folio.toUpperCase()] || null).moneda;
+    const g = normalizarGasto(d0, { hoy: hoy, ivaTasa: ivaTasa, cfdi: cfdi, monedaProyecto: monedaProyecto });
+    if (cfdi) validarCfdiGasto(cfdi, rfcHelgen, uuidsUsados_(libro, filas));
+    const folio = siguienteFolio_(PREFIJO_GAS, hoja, 'CONSECUTIVO_GAS_');
+    const carpeta = carpetaGastos_(proyecto.folio);
+    const aTicket = privado_(carpeta.createFile(Utilities.newBlob(ticket, tipoTicket.mime, nombreArchivoReq(folio, 'Ticket', tipoTicket.ext, 1))));
+    const aXml = xml ? privado_(carpeta.createFile(Utilities.newBlob(xml, 'application/xml', nombreArchivoReq(folio, 'CFDI', 'xml', 1)))) : null;
+    const ahora = textoFecha_(ahoraTexto_());
+    escribe_(hoja).appendRow(filaGasto_({
+      folio: folio, fecha: textoFecha_(g.fecha), fecha_registro: ahora, proyecto_folio: proyecto.folio, solicitante_email: t(yo),
+      solicitante_nombre: t(nombreYo_()), categoria: g.categoria, concepto: t(g.concepto), moneda: g.moneda, iva_incluido: g.ivaIncluido ? 'Sí' : 'No',
+      subtotal: g.subtotal, iva: g.iva, total: g.total, tipo_cambio: g.tipoCambio, moneda_proyecto: g.monedaProyecto,
+      ticket_id: aTicket.getId(), ticket_url: aTicket.getUrl(), xml_id: aXml ? aXml.getId() : '', xml_url: aXml ? aXml.getUrl() : '',
+      uuid: g.uuid, rfc_emisor: t(g.rfcEmisor), emisor: t(g.emisor), estado: GAS_ENVIADO, actualizado: ahora,
+      id_solicitud: t(idSolicitud), huella_solicitud: t(huella) })); // la huella (base64url) puede empezar con "-": textoCelda
+    bitacora_(libro, 'Registrar gasto', proyecto.folio, folio + ' · ' + g.categoria + ' · ' + formatoMoneda(g.total) + ' ' + g.moneda +
+      (g.ivaIncluido ? ' (IVA ' + formatoMoneda(g.iva) + ')' : ' sin IVA') + (g.tipoCambio ? ' · TC ' + g.tipoCambio + ' (proyecto en ' + g.monedaProyecto + ')' : '') +
+      (g.uuid ? ' · CFDI ' + g.uuid : '') + ' · ' + g.concepto, '', HOJAS_COMPRAS);
+    notificar_('gasto.enviado', { gasto: folio, proyecto: proyecto.folio, solicitante: yo, solicitanteNombre: nombreYo_(), categoria: g.categoria });
+    SpreadsheetApp.flush();
+    return { folio: folio, repetido: false };
+  });
+  const datos = listarGastos(d0.filtro || null);
+  return Object.assign(r, { gasto: datos.mios.find(x => x.folio === r.folio) || null, datos: datos });
+}
+
+/** Quien capturó el gasto lo cancela mientras está Enviado (con motivo). Devuelve {folio, datos}. */
+function cancelarGasto(folioGasto, motivo, filtro) {
+  exigirGastos_();
+  const m = motivoObligatorio_(motivo, 'Escribe el motivo de la cancelación.');
+  const libro = libroCompras_();
+  const folio = conCandado_(() => {
+    const { hoja, gasto: g } = buscarGasto_(libro, folioGasto);
+    if (g.solicitanteEmail !== yo_()) throw errorPermiso_('Solo quien capturó el gasto ' + g.folio + ' lo puede cancelar.');
+    const nuevo = transicionGasto(g.estado, 'cancelar');
+    const ahora = textoFecha_(ahoraTexto_());
+    actualizarGasto_(hoja, g, { estado: nuevo, cancelado_por: yo_(), fecha_cancelacion: ahora, motivo_cancelacion: m, actualizado: ahora });
+    bitacora_(libro, 'Cancelar gasto', g.proyectoFolio, g.folio + ' · ' + formatoMoneda(g.total) + ' ' + g.moneda, m, HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    return g.folio;
+  });
+  return { folio: folio, datos: listarGastos(filtro || null) };
+}
+
+/**
+ * Aprobaciones aprueba un gasto Enviado; nunca el propio, salvo un super admin con motivoExcepcion ≥ 10 caracteres (Bitacora de
+ * Administración). Avisa a quien lo capturó (gasto.aprobado) y a Compras (gasto.reembolsar). Devuelve {folio, datos}.
+ */
+function aprobarGasto(folioGasto, filtro, motivoExcepcion) {
+  exigirAprobarGastos_();
+  const libro = libroCompras_();
+  const folio = conCandado_(() => {
+    const { hoja, gasto: g } = buscarGasto_(libro, folioGasto);
+    const nuevo = transicionGasto(g.estado, 'aprobar');
+    const propio = g.solicitanteEmail === yo_();
+    if (propio && !excepcionPosible_(motivoExcepcion)) {
+      throw errorPermiso_('No puedes aprobar tu propio gasto: lo aprueba otra persona de Aprobaciones.' + textoExcepcion_());
+    }
+    if (propio) excepcionSuperAdmin_('aprobar su propio gasto', g.folio, motivoExcepcion); // ya validado: antes de escribir
+    const ahora = textoFecha_(ahoraTexto_());
+    actualizarGasto_(hoja, g, { estado: nuevo, motivo: '', reviso_email: yo_(), fecha_revision: ahora, actualizado: ahora });
+    bitacora_(libro, 'Aprobar gasto', g.proyectoFolio, g.folio + ' · ' + g.categoria + ' · ' + formatoMoneda(g.total) + ' ' + g.moneda +
+      ' · de ' + g.solicitanteEmail, propio ? 'Excepción de super admin: ' + String(motivoExcepcion).trim() : '', HOJAS_COMPRAS);
+    notificar_('gasto.aprobado', datosCorreoGasto_(g));
+    notificar_('gasto.reembolsar', datosCorreoGasto_(g));
+    SpreadsheetApp.flush();
+    return g.folio;
+  });
+  return { folio: folio, datos: listarGastos(filtro || null) };
+}
+
+/** Aprobaciones rechaza un gasto Enviado con motivo (lo ve quien lo capturó); misma regla que aprobar con lo propio. */
+function rechazarGasto(folioGasto, motivo, filtro, motivoExcepcion) {
+  exigirAprobarGastos_();
+  const m = motivoObligatorio_(motivo, 'Escribe el motivo del rechazo (lo verá quien capturó el gasto).');
+  const libro = libroCompras_();
+  const folio = conCandado_(() => {
+    const { hoja, gasto: g } = buscarGasto_(libro, folioGasto);
+    const nuevo = transicionGasto(g.estado, 'rechazar');
+    const propio = g.solicitanteEmail === yo_();
+    if (propio && !excepcionPosible_(motivoExcepcion)) {
+      throw errorPermiso_('No puedes rechazar tu propio gasto: si ya no va, cancélalo; si no, lo revisa otra persona de Aprobaciones.' + textoExcepcion_());
+    }
+    if (propio) excepcionSuperAdmin_('rechazar su propio gasto', g.folio, motivoExcepcion);
+    const ahora = textoFecha_(ahoraTexto_());
+    actualizarGasto_(hoja, g, { estado: nuevo, motivo: m, reviso_email: yo_(), fecha_revision: ahora, actualizado: ahora });
+    bitacora_(libro, 'Rechazar gasto', g.proyectoFolio, g.folio + ' · ' + formatoMoneda(g.total) + ' ' + g.moneda + ' · de ' + g.solicitanteEmail, m, HOJAS_COMPRAS);
+    notificar_('gasto.rechazado', datosCorreoGasto_(g, m)); // la nota nunca va en el correo (solo "hay una nota")
+    SpreadsheetApp.flush();
+    return g.folio;
+  });
+  return { folio: folio, datos: listarGastos(filtro || null) };
+}
+
+/**
+ * Compras registra el reembolso de un gasto Aprobado: p = {folio, fecha, metodo, referencia, comprobante: {nombre, datos} (obligatorio),
+ * idSolicitud, filtro}. Se reembolsa el total del gasto (en su moneda). Idempotente por la hoja (reembolso_id_solicitud + huella).
+ * Devuelve {folio, repetido, datos}.
+ */
+function reembolsarGasto(p) {
+  exigirCompras_();
+  const d0 = p || {};
+  const bytes = bytesDeAdjunto_(d0.comprobante, 'No se pudo leer el comprobante del reembolso. Vuelve a adjuntarlo.');
+  const tipo = validarArchivo(bytes, 'el comprobante del reembolso', 'El comprobante del reembolso');
+  const x = normalizarReembolsoGasto(d0, hoyIso_());
+  const libro = libroCompras_();
+  const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
+  const huella = idSolicitud ? md5Gasto_(JSON.stringify([String(d0.folio || '').trim().toUpperCase(), x.fecha, x.metodo, x.referencia, md5Gasto_(bytes)])) : '';
+  const r = conCandado_(() => {
+    const { hoja, gasto: g } = buscarGasto_(libro, d0.folio);
+    if (idSolicitud && g.reembolsoIdSolicitud === idSolicitud) {
+      if (g.reembolsoHuella && g.reembolsoHuella !== huella) {
+        throw new Error('Este reembolso ya se registró con otros datos (fecha, método, referencia o comprobante).');
+      }
+      return { folio: g.folio, repetido: true };
+    }
+    const nuevo = transicionGasto(g.estado, 'reembolsar');
+    if (x.fecha < g.fecha) throw new Error('La fecha del reembolso no puede ser anterior a la del gasto (' + g.fecha + ').');
+    const archivo = privado_(carpetaGastos_(g.proyectoFolio).createFile(Utilities.newBlob(bytes, tipo.mime, nombreArchivoReq(g.folio, 'Reembolso', tipo.ext, 1))));
+    const ahora = textoFecha_(ahoraTexto_());
+    actualizarGasto_(hoja, g, { estado: nuevo, reembolso_fecha: textoFecha_(x.fecha), reembolso_metodo: x.metodo, reembolso_referencia: x.referencia,
+      reembolso_id: archivo.getId(), reembolso_url: archivo.getUrl(), reembolso_email: yo_(), reembolso_registro: ahora, actualizado: ahora,
+      reembolso_id_solicitud: idSolicitud, reembolso_huella: huella });
+    bitacora_(libro, 'Reembolsar gasto', g.proyectoFolio, g.folio + ' · ' + formatoMoneda(g.total) + ' ' + g.moneda + ' a ' + g.solicitanteEmail +
+      ' · ' + x.metodo + (x.referencia ? ' ' + x.referencia : '') + ' · ' + x.fecha, '', HOJAS_COMPRAS);
+    SpreadsheetApp.flush();
+    return { folio: g.folio, repetido: false };
+  });
+  return Object.assign(r, { datos: listarGastos(d0.filtro || null) });
 }

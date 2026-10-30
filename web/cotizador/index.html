@@ -195,6 +195,8 @@
   </div>
   <div id="subCompras" class="oculto">
     <button id="tabReq" class="oculto" onclick="verTab('req')">Requisiciones<span id="cntReq" class="cuenta oculto"></span></button>
+    <!-- G (incremento 7): gastos por proyecto (mod-gastos; también @helgen.services y Solo requisiciones) -->
+    <button id="tabGas" class="oculto" onclick="verTab('gas')">Gastos<span id="cntGas" class="cuenta oculto"></span></button>
     <button id="tabOps" class="oculto" onclick="verTab('ops')">Aprobaciones<span id="cntOps" class="cuenta oculto"></span></button>
     <button id="tabCom" class="oculto" onclick="verTab('com')">Compras<span id="cntCom" class="cuenta oculto"></span></button>
   </div>
@@ -260,6 +262,13 @@
 
   <!-- ===== REPORTES (incremento 6 · R): antigüedad de CxC y CxP, flujo de 13 semanas y margen; lo llena mod-reportes ===== -->
   <section id="vistaRep" class="oculto"></section>
+
+  <!-- ===== GASTOS (incremento 7 · G): capturar (teléfono), mis gastos y, para Aprobaciones / Compras, los del equipo; lo llena mod-gastos ===== -->
+  <section id="vistaGas" class="oculto">
+    <div id="gasModForm" class="modulo oculto"></div>
+    <div id="gasModMios" class="modulo oculto"></div>
+    <div id="gasModEquipo" class="modulo oculto"></div>
+  </section>
 
   <!-- ===== ADMINISTRACIÓN (incremento 4): cada módulo llena su bloque ===== -->
   <section id="vistaAdmin" class="oculto">
@@ -4850,7 +4859,7 @@
       caja().innerHTML =
         '<div class="modulo">' +
           '<h2>Anular un registro</h2>' +
-          '<p class="nota">Escribe el folio (HLG-, PRY-, PAG-, REQ-, OC-, PGP-, FPR- o REC-AAAA-NNNN) o, para un contrato, ' +
+          '<p class="nota">Escribe el folio (HLG-, PRY-, PAG-, REQ-, OC-, PGP-, FPR-, REC- o GAS-AAAA-NNNN) o, para un contrato, ' +
           '«CONTRATO PRY-AAAA-NNNN». Antes de confirmar verás todo lo que arrastra. Nada se borra: lo anulado sale de todas las ' +
           'listas y los totales, los archivos se quedan en Drive con «ANULADA — » al inicio y los folios no se vuelven a usar.</p>' +
           '<div class="proy-fila"><div><label for="anuFolio">Folio</label>' +
@@ -6169,6 +6178,419 @@
       // Sin ventas (o solo requisiciones) no hay a qué cotizar: la lista se vacía
       alPermisos(permisos, solo) { if ((solo || !puedeVender()) && PROYECTOS_FIRMADOS.length) recibirFirmados([]); },
       alCobranza(v) { pintar(v); },
+    });
+  })();
+</script>
+<script id="mod-gastos">
+  // Gastos por proyecto (incremento 7, módulo G): pestaña Gastos en el grupo Compras (junto a Requisiciones). Quien tiene Requisiciones
+  // (también @helgen.services y Solo requisiciones) captura sus gastos desde el teléfono: foto del ticket (cámara) o PDF, y opcional el
+  // XML del CFDI (aquí solo se lee para llenar monto, moneda e IVA; el servidor lo vuelve a leer y lo valida). "Mis gastos" = solo los
+  // suyos. Aprobaciones aprueba o rechaza (nunca lo suyo; super admin con motivo: accionConExcepcion) y Compras registra el reembolso
+  // con su comprobante, en "Gastos del equipo". Es solo para dibujar: el servidor revisa rol, montos, estados y archivos en cada
+  // llamada. MXN y USD nunca se suman. No edita el código de las demás pantallas: se engancha con registrarModulo y envuelve
+  // pintarConteos (número de la pestaña) y abrirDestino (Pendientes → Gastos).
+  (function () {
+    GRUPOS.compras.push('gas'); BOTON_TAB.gas = 'tabGas';
+    const MAX_ARCHIVO = 10 * 1024 * 1024;
+    const G = { datos: null, cargando: false, pedido: 0, filtro: null, id: nuevoId(), idReembolso: nuevoId(), reembolso: '', resaltar: '',
+      montado: false, xml: null, rolClave: '' };
+    const CHIP = { Enviado: 'aceptada', Aprobado: 'firmado', Reembolsado: 'firmado', Rechazado: 'cancelado', Cancelado: 'cancelado' };
+    const ESTADO_TXT = { Enviado: 'Enviado · por aprobar', Aprobado: 'Aprobado · por reembolsar', Reembolsado: 'Reembolsado', Rechazado: 'Rechazado',
+      Cancelado: 'Cancelado' };
+    const FILTROS = [['porAprobar', 'Por aprobar'], ['porReembolsar', 'Por reembolsar'], ['pendientes', 'Pendientes (por aprobar y por reembolsar)'],
+      ['', 'Todos'], ['Reembolsado', 'Reembolsados'], ['Rechazado', 'Rechazados'], ['Cancelado', 'Cancelados']];
+    const hoyLocal = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); };
+    const chip = e => '<span class="chip ' + (CHIP[e] || '') + '">' + esc(ESTADO_TXT[e] || e) + '</span>';
+    /** ¿Ve la pestaña? (captura con Requisiciones; ve los del equipo con Aprobaciones, Compras o super admin). */
+    const puede = () => { const p = PERMISOS || {}; return !!(p.requisicion || p.operaciones || (p.compras && !SOLO_REQ) || p.superadmin); };
+    const filtroActual = () => G.filtro ? { estado: G.filtro.estado, buscar: G.filtro.buscar } : null;
+    const archivoDe = id => { const el = $(id); return el && el.files && el.files[0] ? el.files[0] : null; };
+
+    // ---- Datos ----
+    function cargar() {
+      if (!puede()) return;
+      const pedido = ++G.pedido; // gana la última respuesta (p. ej. si cambia el filtro mientras llega otra)
+      G.cargando = true;
+      if (G.montado && !G.datos) $('gasMios').innerHTML = '<p class="nota">Cargando…</p>';
+      google.script.run.withSuccessHandler(d => { if (pedido !== G.pedido) return; G.cargando = false; recibir(d); })
+        .withFailureHandler(err => { if (pedido !== G.pedido) return; G.cargando = false; mostrarError(err); }).listarGastos(filtroActual());
+    }
+    function recibir(d) {
+      if (!d || !puede()) return;
+      G.datos = d;
+      if (d.equipo) G.filtro = { estado: d.equipo.filtro.estado, buscar: d.equipo.filtro.buscar };
+      if (TAB === 'gas') pintar();
+    }
+
+    // ---- Pantalla ----
+    function montar() {
+      if (G.montado) return;
+      G.montado = true;
+      $('gasModForm').innerHTML = '<h2>Nuevo gasto</h2>' +
+        '<p class="nota" style="margin-top:0">Un gasto que pagaste para un proyecto (viáticos, gasolina, hotel, casetas…). Toma la foto del ticket; ' +
+        'si tienes la factura, adjunta también su XML. Lo revisa Aprobaciones y Compras te lo reembolsa.</p>' +
+        '<div class="grid">' +
+          '<div><label for="gasProyecto">Proyecto *</label><input id="gasProyecto" list="gasProyectosList" autocomplete="off" placeholder="Busca por folio, clave o nombre">' +
+            '<datalist id="gasProyectosList"></datalist><div id="gasProyectoInfo" class="nota" style="margin-top:4px"></div></div>' +
+          '<div><label for="gasFecha">Fecha del gasto *</label><input id="gasFecha" type="date"></div>' +
+          '<div><label for="gasCategoria">Categoría *</label><select id="gasCategoria"></select></div>' +
+          '<div><label for="gasConcepto">Concepto *</label><input id="gasConcepto" maxlength="200" placeholder="Ej. Gasolina camioneta a Veracruz"></div>' +
+          '<div><label for="gasMoneda">Moneda *</label><select id="gasMoneda"><option value="MXN">MXN · pesos</option><option value="USD">USD · dólares</option></select></div>' +
+          '<div><label for="gasMonto">Monto pagado *</label><input id="gasMonto" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00"></div>' +
+          '<div><label for="gasIva">¿El monto incluye IVA? *</label><select id="gasIva"><option value="Sí">Sí, incluye IVA</option><option value="No">No (sin IVA)</option></select></div>' +
+          '<div id="gasTcCaja" class="oculto"><label for="gasTc">Tipo de cambio (pesos por dólar) *</label><input id="gasTc" type="number" inputmode="decimal" min="0" step="0.0001">' +
+            '<div id="gasTcNota" class="nota" style="margin-top:4px"></div></div>' +
+        '</div>' +
+        '<div class="grid" style="margin-top:12px">' +
+          '<div><label for="gasTicket">Foto del ticket *</label><input id="gasTicket" type="file" accept="image/*,application/pdf" capture="environment">' +
+            '<div class="nota" style="margin-top:6px"><label for="gasTicketArchivo" style="display:inline">o elige un archivo (foto o PDF):</label></div>' +
+            '<input id="gasTicketArchivo" type="file" accept="image/*,application/pdf"></div>' +
+          '<div><label for="gasXml">XML de la factura (opcional)</label><input id="gasXml" type="file" accept=".xml,text/xml,application/xml">' +
+            '<div id="gasXmlInfo" class="nota" style="margin-top:4px">Con el XML, el monto, la moneda y el IVA salen de la factura.</div></div>' +
+        '</div>' +
+        '<div class="acciones"><button type="button" id="btnGasEnviar" class="btn" onclick="GASTOS.enviar()">Enviar gasto</button>' +
+          '<span class="nota">Máximo 10 MB por archivo.</span></div>';
+      $('gasModMios').innerHTML = '<h2>Mis gastos</h2><div id="gasMiosResumen"></div><div id="gasMios"><p class="nota">Cargando…</p></div>';
+      $('gasModEquipo').innerHTML = '<h2>Gastos del equipo</h2>' +
+        '<div class="proy-fila"><div><label for="gasFiltroEstado">Mostrar</label><select id="gasFiltroEstado" onchange="GASTOS.filtrar()">' +
+          FILTROS.map(([v, t]) => '<option value="' + esc(v) + '">' + esc(t) + '</option>').join('') + '</select></div>' +
+          '<div><label for="gasBuscar">Buscar</label><input id="gasBuscar" autocomplete="off" placeholder="Folio, concepto, persona, proyecto o UUID"></div>' +
+          '<button type="button" class="btn btn-sec" onclick="GASTOS.filtrar()">Buscar</button></div>' +
+        '<div id="gasEquipoTotales" style="margin-top:12px"></div><div id="gasEquipo"></div><div id="gasReembolsoCaja"></div>';
+      $('gasFecha').value = hoyLocal();
+      $('gasIva').value = 'Sí';
+      ['gasProyecto', 'gasMoneda'].forEach(id => { $(id).addEventListener('change', actualizarTc); $(id).addEventListener('input', actualizarTc); });
+      $('gasTicket').addEventListener('change', () => { $('gasTicketArchivo').value = ''; });
+      $('gasTicketArchivo').addEventListener('change', () => { $('gasTicket').value = ''; });
+      $('gasXml').addEventListener('change', leerXml);
+      $('gasBuscar').addEventListener('keydown', e => { if (e.key === 'Enter') filtrar(); });
+    }
+    function pintar() {
+      montar();
+      const d = G.datos;
+      if (!d) return;
+      const p = d.puede || {};
+      $('gasModForm').classList.toggle('oculto', !p.enviar);
+      $('gasModMios').classList.toggle('oculto', !p.enviar && !(d.mios || []).length);
+      $('gasModEquipo').classList.toggle('oculto', !p.verTodos);
+      if (p.enviar) pintarFormDatos();
+      pintarMios();
+      if (p.verTodos) pintarEquipo();
+      if (G.resaltar) resaltar(G.resaltar);
+    }
+    /** Listas del formulario (proyectos con su moneda, categorías); los valores capturados no se tocan. */
+    function pintarFormDatos() {
+      const d = G.datos;
+      $('gasProyectosList').innerHTML = (d.proyectos || []).map(x => '<option value="' + esc(folioVis(x) + ' — ' + x.nombre) + '" label="' +
+        esc(x.moneda + (x.estado !== 'Activo' ? ' · ' + x.estado : '')) + '">').join('');
+      const cat = $('gasCategoria'), antes = cat.value;
+      cat.innerHTML = '<option value="">Elige…</option>' + (d.categorias || []).map(c => '<option>' + esc(c) + '</option>').join('');
+      if (antes) cat.value = antes;
+      if ($('gasFecha').max !== undefined) $('gasFecha').max = d.hoy || hoyLocal();
+      actualizarTc();
+    }
+    function proyectoElegido() {
+      const folio = ($('gasProyecto').value.trim().match(/^PRY-\d{4}-\d{4}/i) || [''])[0].toUpperCase();
+      return (folio && ((G.datos && G.datos.proyectos) || []).find(x => x.folio === folio)) || null;
+    }
+    /** Tipo de cambio solo si la moneda del gasto no es la del proyecto (la de su cotización aceptada; sin aceptada, MXN). */
+    function actualizarTc() {
+      const p = proyectoElegido(), m = $('gasMoneda').value || 'MXN';
+      $('gasProyectoInfo').textContent = p ? 'Moneda del proyecto: ' + p.moneda + (p.estado !== 'Activo' ? ' · ' + p.estado : '') : '';
+      const pide = !!p && p.moneda !== m;
+      $('gasTcCaja').classList.toggle('oculto', !pide);
+      $('gasTcNota').textContent = pide ? 'El proyecto es en ' + p.moneda + ' y el gasto en ' + m + ': escribe el tipo de cambio del día.' : '';
+    }
+
+    function tarjeta(g, extra, botones) {
+      const tc = g.tipoCambio ? ' · TC ' + esc(g.tipoCambio) + ' (proyecto en ' + esc(g.monedaProyecto) + ')' : '';
+      const lineas = [
+        esc(fechaMx(g.fecha)) + ' · <b>' + esc(g.proyectoVisible) + '</b>' + (g.proyectoNombre ? ' — ' + esc(g.proyectoNombre) : ''),
+        esc(g.categoria) + ' · ' + esc(g.concepto),
+        '<b>' + dinero(g.total, g.moneda) + '</b>' + (g.ivaIncluido ? ' (IVA ' + dinero(g.iva, g.moneda) + ')' : ' sin IVA') + tc +
+          (g.conXml ? ' · CFDI' + (g.emisor ? ' de ' + esc(g.emisor) : '') : ''),
+      ].concat(extra || []);
+      if (g.motivo && (g.estado === 'Rechazado' || g.estado === 'Cancelado')) lineas.push('<span class="aviso-moneda">Motivo: ' + esc(g.motivo) + '</span>');
+      if (g.reviso && g.estado !== 'Enviado' && g.estado !== 'Cancelado') lineas.push((g.estado === 'Rechazado' ? 'Rechazó: ' : 'Aprobó: ') + esc(g.reviso));
+      if (g.reembolso) lineas.push('Reembolsado el ' + esc(fechaMx(g.reembolso.fecha)) + ' · ' + esc(g.reembolso.metodo) +
+        (g.reembolso.referencia ? ' ' + esc(g.reembolso.referencia) : '') + (g.reembolso.quien ? ' · ' + esc(g.reembolso.quien) : ''));
+      return '<div class="pend-item" id="gasTarjeta-' + esc(g.folio) + '"><div class="pend-info"><div class="pend-titulo"><b>' + esc(g.folio) + '</b>' + chip(g.estado) +
+        '</div>' + lineas.map(l => '<div class="nota">' + l + '</div>').join('') + '</div>' +
+        (botones ? '<div class="acciones" style="margin:0;flex-direction:column;align-items:stretch">' + botones + '</div>' : '') + '</div>';
+    }
+    const boton = (texto, accion, id, sec) => '<button type="button"' + (id ? ' id="' + esc(id) + '"' : '') + ' class="btn' + (sec ? ' btn-sec' : '') +
+      '" onclick="' + accion + '">' + esc(texto) + '</button>';
+    const ligaArchivo = (g, que, texto) => '<a href="#" onclick="GASTOS.verArchivo(' + jsArg(g.folio) + ',' + jsArg(que) + ');return false">' + esc(texto) + '</a>';
+    /** Totales por moneda (nunca se suman MXN y USD). */
+    function porMoneda(lista) {
+      const t = {};
+      lista.forEach(g => { t[g.moneda] = (t[g.moneda] || 0) + Math.round(Number(g.total) * 100); });
+      return Object.keys(t).sort((a, b) => a === b ? 0 : a === 'MXN' ? -1 : b === 'MXN' ? 1 : a < b ? -1 : 1).map(m => dinero(t[m] / 100, m)).join(' · ');
+    }
+
+    function pintarMios() {
+      const mios = G.datos.mios || [];
+      const enRevision = mios.filter(g => g.estado === 'Enviado'), porReembolsar = mios.filter(g => g.estado === 'Aprobado');
+      $('gasMiosResumen').innerHTML = enRevision.length || porReembolsar.length ? '<div class="tiles">' +
+        (enRevision.length ? '<div class="tile"><span>En revisión (' + enRevision.length + ')</span><b>' + porMoneda(enRevision) + '</b></div>' : '') +
+        (porReembolsar.length ? '<div class="tile"><span>Aprobado, por reembolsarte (' + porReembolsar.length + ')</span><b>' + porMoneda(porReembolsar) + '</b></div>' : '') +
+        '</div>' : '';
+      $('gasMios').innerHTML = mios.length ? mios.map(g => tarjeta(g, [], [
+        g.conTicket ? ligaArchivo(g, 'ticket', 'Ver ticket') : '', g.conXml ? ligaArchivo(g, 'xml', 'Ver XML') : '',
+        g.puedeCancelar ? boton('Cancelar', 'GASTOS.cancelar(' + jsArg(g.folio) + ')', '', true) : ''].filter(Boolean).join(''))).join('')
+        : '<p class="nota">Todavía no has capturado gastos.</p>';
+    }
+
+    function pintarEquipo() {
+      const eq = G.datos.equipo;
+      if (!eq) return;
+      $('gasFiltroEstado').value = eq.filtro.estado;
+      if (document.activeElement !== $('gasBuscar')) $('gasBuscar').value = eq.filtro.buscar || '';
+      $('gasEquipoTotales').innerHTML = eq.totales.length ? '<div class="tiles">' + eq.totales.map(t => '<div class="tile"><span>Total ' + esc(t.moneda) +
+        ' (' + t.gastos + ')</span><b>' + dinero(t.total, t.moneda) + '</b></div>').join('') + '</div>' : '';
+      $('gasEquipo').innerHTML = (eq.gastos.length ? eq.gastos.map(g => tarjeta(g, ['Capturó: ' + esc(g.solicitante) + (g.propio ? ' (tú)' : '')], [
+        g.conTicket ? ligaArchivo(g, 'ticket', 'Ver ticket') : '', g.conXml ? ligaArchivo(g, 'xml', 'Ver XML') : '',
+        g.reembolso && g.reembolso.conComprobante ? ligaArchivo(g, 'reembolso', 'Ver comprobante') : '',
+        g.puedeAprobar ? boton('Aprobar', 'GASTOS.aprobar(' + jsArg(g.folio) + ')', 'btnGasAprobar-' + g.folio) : '',
+        g.puedeRechazar ? boton('Rechazar', 'GASTOS.rechazar(' + jsArg(g.folio) + ')', 'btnGasRechazar-' + g.folio, true) : '',
+        g.puedeReembolsar ? boton('Registrar reembolso', 'GASTOS.abrirReembolso(' + jsArg(g.folio) + ')', '') : ''].filter(Boolean).join(''))).join('')
+        : '<p class="nota">No hay gastos con ese filtro.</p>') +
+        (eq.total > eq.gastos.length ? '<p class="nota">Se muestran los ' + eq.gastos.length + ' más recientes de ' + eq.total + '. Usa la búsqueda.</p>' : '');
+      // El formulario del reembolso se queda abierto mientras su gasto siga por reembolsar
+      if (G.reembolso && !eq.gastos.some(g => g.folio === G.reembolso && g.puedeReembolsar)) cerrarReembolso();
+    }
+    function resaltar(folio) {
+      const t = document.getElementById('gasTarjeta-' + folio);
+      if (!t || !t.classList) return;
+      G.resaltar = '';
+      t.classList.add('resaltado');
+      if (t.scrollIntoView) t.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setTimeout(() => t.classList.remove('resaltado'), 2500);
+    }
+
+    // ---- XML: solo para llenar el formulario (el servidor lo vuelve a leer y valida receptor, tipo y UUID) ----
+    function textoDeBase64(b64) {
+      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      try { return new TextDecoder('utf-8').decode(bytes); } catch (e) { return String.fromCharCode.apply(null, Array.from(bytes)); }
+    }
+    /** Atributos que hacen falta de un CFDI (sin seguir referencias del XML; solo texto). */
+    function leerCfdiTexto(texto) {
+      const etiqueta = nombre => { const m = texto.match(new RegExp('<(?:[\\w.-]+:)?' + nombre + '\\b([^>]*)>')); return m ? m[1] : ''; };
+      const attr = (attrs, n) => { const m = attrs.match(new RegExp('(?:^|\\s)' + n + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\')')); return m ? (m[1] != null ? m[1] : m[2]) : ''; };
+      const c = etiqueta('Comprobante');
+      if (!c) return null;
+      const tras = (texto.match(/TotalImpuestosTrasladados\s*=\s*"([^"]*)"/) || [])[1] || '';
+      return { total: attr(c, 'Total'), moneda: attr(c, 'Moneda').toUpperCase(), fecha: attr(c, 'Fecha').slice(0, 10), tipo: attr(c, 'TipoDeComprobante'),
+        emisor: attr(etiqueta('Emisor'), 'Nombre'), uuid: attr(etiqueta('TimbreFiscalDigital'), 'UUID'), trasladados: tras };
+    }
+    function leerXml() {
+      const f = archivoDe('gasXml');
+      G.xml = null;
+      if (!f) { $('gasXmlInfo').textContent = 'Con el XML, el monto, la moneda y el IVA salen de la factura.'; return; }
+      leerArchivo(f).then(b64 => {
+        const c = leerCfdiTexto(textoDeBase64(b64));
+        if (!c || !Number(c.total)) { $('gasXmlInfo').innerHTML = '<span class="aviso-moneda">No parece el XML de una factura (CFDI). Revisa el archivo.</span>'; return; }
+        G.xml = c;
+        $('gasMonto').value = String(Number(c.total));
+        if (c.moneda === 'MXN' || c.moneda === 'USD') $('gasMoneda').value = c.moneda;
+        $('gasIva').value = Number(c.trasladados) > 0 ? 'Sí' : 'No';
+        if (/^\d{4}-\d{2}-\d{2}$/.test(c.fecha) && c.fecha <= hoyLocal() && !$('gasFecha').value) $('gasFecha').value = c.fecha;
+        actualizarTc();
+        $('gasXmlInfo').innerHTML = 'CFDI' + (c.emisor ? ' de <b>' + esc(c.emisor) + '</b>' : '') + ' · total ' + dinero(Number(c.total), c.moneda || 'MXN') +
+          (c.uuid ? ' · UUID ' + esc(c.uuid) : '') + (c.tipo && c.tipo !== 'I' ? '<br><span class="aviso-moneda">No es una factura de ingreso (tipo ' + esc(c.tipo) +
+          '): no se aceptará.</span>' : '') + '<br>El monto, la moneda y el IVA salen de la factura (debe estar a nombre de Helgen).';
+      }).catch(mostrarError);
+    }
+
+    // ---- Acciones ----
+    /** Foto (comprimida con la de recepción, si está) o PDF del ticket → {nombre, datos, mime}. */
+    function leerTicket(f) {
+      if (/^image\//i.test(f.type || '') && typeof window.comprimirFoto === 'function') return window.comprimirFoto(f);
+      if (f.size > MAX_ARCHIVO) return Promise.reject(new Error('El ticket pesa más de 10 MB. Reduce la imagen o el PDF.'));
+      return leerArchivo(f).then(datos => ({ nombre: String(f.name || 'ticket'), datos: datos, mime: f.type || '' }));
+    }
+    function enviar() {
+      const d = G.datos, b = $('btnGasEnviar');
+      if (!d || !d.puede || !d.puede.enviar || b.disabled) return;
+      const p = proyectoElegido();
+      if (!p) { mostrarError('Elige el proyecto de la lista.'); return; }
+      if (!$('gasCategoria').value) { mostrarError('Elige la categoría.'); return; }
+      if (!$('gasConcepto').value.trim()) { mostrarError('Escribe el concepto del gasto (qué se pagó).'); return; }
+      const ticket = archivoDe('gasTicket') || archivoDe('gasTicketArchivo');
+      if (!ticket) { mostrarError('Toma la foto del ticket o adjunta el PDF.'); return; }
+      const xml = archivoDe('gasXml');
+      if (!xml && !(Number($('gasMonto').value) > 0)) { mostrarError('Escribe el monto pagado.'); return; }
+      if (!$('gasTcCaja').classList.contains('oculto') && !(Number($('gasTc').value) > 0)) { mostrarError('Escribe el tipo de cambio del día (pesos por dólar).'); return; }
+      b.disabled = true; b.textContent = 'Enviando…';
+      const listo = () => { b.disabled = false; b.textContent = 'Enviar gasto'; };
+      Promise.all([leerTicket(ticket), xml ? leerArchivo(xml).then(x => ({ nombre: String(xml.name || 'cfdi.xml'), datos: x })) : null]).then(([t, x]) => {
+        google.script.run.withSuccessHandler(r => {
+          listo();
+          G.id = nuevoId(); // el siguiente gasto es otro envío
+          limpiarForm();
+          recibir(r.datos);
+          const g = r.gasto;
+          aviso('ok', 'Gasto <b>' + esc(r.folio) + '</b> ' + (r.repetido ? 'ya estaba registrado' : 'enviado') +
+            (g ? ' por ' + dinero(g.total, g.moneda) : '') + '. Lo revisa Aprobaciones; cuando lo aprueben, Compras te lo reembolsa.');
+          sincronizarAhora();
+        }).withFailureHandler(err => { listo(); mostrarError(err); }).guardarGasto({
+          proyectoFolio: p.folio, fecha: $('gasFecha').value, categoria: $('gasCategoria').value, concepto: $('gasConcepto').value.trim(),
+          monto: $('gasMonto').value, moneda: $('gasMoneda').value, ivaIncluido: $('gasIva').value,
+          tipoCambio: $('gasTcCaja').classList.contains('oculto') ? '' : $('gasTc').value, ticket: t, xml: x, idSolicitud: G.id, filtro: filtroActual() });
+      }).catch(err => { listo(); mostrarError(err); });
+    }
+    function limpiarForm() {
+      ['gasConcepto', 'gasMonto', 'gasTc', 'gasTicket', 'gasTicketArchivo', 'gasXml'].forEach(id => { $(id).value = ''; });
+      $('gasFecha').value = hoyLocal(); $('gasIva').value = 'Sí'; G.xml = null;
+      $('gasXmlInfo').textContent = 'Con el XML, el monto, la moneda y el IVA salen de la factura.';
+    }
+    function cancelar(folio) {
+      const motivo = window.prompt('Motivo para cancelar el gasto ' + folio + ' (queda registrado; no se borra):');
+      if (motivo == null) return;
+      if (motivo.trim().length < 5) { mostrarError('Escribe el motivo de la cancelación.'); return; }
+      accionCob(null, 'cancelarGasto', [folio, motivo.trim(), filtroActual()], r => { recibir(r.datos); aviso('ok', 'Gasto <b>' + esc(folio) + '</b> cancelado.'); sincronizarAhora(); });
+    }
+    function aprobar(folio) {
+      accionConExcepcion('btnGasAprobar-' + folio, 'aprobarGasto', [folio, filtroActual()], r => {
+        recibir(r.datos); aviso('ok', 'Gasto <b>' + esc(folio) + '</b> aprobado: pasa a Compras para el reembolso.'); sincronizarAhora();
+      });
+    }
+    function rechazar(folio) {
+      const motivo = window.prompt('Motivo para rechazar el gasto ' + folio + ' (lo verá quien lo capturó):');
+      if (motivo == null) return;
+      if (motivo.trim().length < 5) { mostrarError('Escribe el motivo del rechazo.'); return; }
+      accionConExcepcion('btnGasRechazar-' + folio, 'rechazarGasto', [folio, motivo.trim(), filtroActual()], r => {
+        recibir(r.datos); aviso('ok', 'Gasto <b>' + esc(folio) + '</b> rechazado.'); sincronizarAhora();
+      });
+    }
+    function abrirReembolso(folio) {
+      const g = G.datos && G.datos.equipo ? G.datos.equipo.gastos.find(x => x.folio === folio) : null;
+      if (!g || !g.puedeReembolsar) return;
+      if (G.reembolso !== folio) G.idReembolso = nuevoId();
+      G.reembolso = folio;
+      $('gasReembolsoCaja').innerHTML = '<div class="sat" id="gasReembolsoForm"><div class="sat-titulo">Registrar reembolso de ' + esc(folio) + ' · ' +
+        dinero(g.total, g.moneda) + ' a ' + esc(g.solicitante) + '</div><div class="grid">' +
+        '<div><label for="gasReemFecha">Fecha del reembolso *</label><input id="gasReemFecha" type="date"></div>' +
+        '<div><label for="gasReemMetodo">Cómo se pagó *</label><select id="gasReemMetodo">' + (G.datos.metodosReembolso || []).map(m => '<option>' + esc(m) + '</option>').join('') + '</select></div>' +
+        '<div><label for="gasReemReferencia">Referencia (clave de rastreo, folio o cheque)</label><input id="gasReemReferencia" maxlength="100"></div>' +
+        '<div><label for="gasReemComprobante">Comprobante del reembolso *</label><input id="gasReemComprobante" type="file" accept="image/*,application/pdf"></div>' +
+        '</div><div class="acciones"><button type="button" id="btnGasReembolsar" class="btn" onclick="GASTOS.reembolsar()">Registrar reembolso</button>' +
+        '<button type="button" class="btn btn-sec" onclick="GASTOS.cerrarReembolso()">Cancelar</button>' +
+        '<span class="nota">Se reembolsa el total del gasto. Nunca captures un número de tarjeta.</span></div></div>';
+      $('gasReemFecha').value = hoyLocal();
+      $('gasReemMetodo').value = (G.datos.metodosReembolso || ['Transferencia'])[0];
+      const f = document.getElementById('gasReembolsoForm');
+      if (f && f.scrollIntoView) f.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    function cerrarReembolso() { G.reembolso = ''; $('gasReembolsoCaja').innerHTML = ''; }
+    function reembolsar() {
+      const folio = G.reembolso, b = $('btnGasReembolsar');
+      if (!folio || b.disabled) return;
+      const f = archivoDe('gasReemComprobante');
+      if (!f) { mostrarError('Adjunta el comprobante del reembolso (PDF o imagen).'); return; }
+      if (f.size > MAX_ARCHIVO) { mostrarError('El comprobante pesa más de 10 MB. Reduce la imagen o el PDF.'); return; }
+      b.disabled = true; b.textContent = 'Subiendo comprobante…';
+      const listo = () => { b.disabled = false; b.textContent = 'Registrar reembolso'; };
+      leerArchivo(f).then(datos => {
+        google.script.run.withSuccessHandler(r => {
+          listo(); cerrarReembolso(); G.idReembolso = nuevoId();
+          recibir(r.datos);
+          aviso('ok', 'Reembolso de <b>' + esc(r.folio) + '</b> ' + (r.repetido ? 'ya estaba registrado.' : 'registrado.'));
+          sincronizarAhora();
+        }).withFailureHandler(err => { listo(); mostrarError(err); }).reembolsarGasto({ folio: folio, fecha: $('gasReemFecha').value,
+          metodo: $('gasReemMetodo').value, referencia: $('gasReemReferencia').value.trim(), comprobante: { nombre: String(f.name || 'comprobante'), datos: datos },
+          idSolicitud: G.idReembolso, filtro: filtroActual() });
+      }).catch(err => { listo(); mostrarError(err); });
+    }
+    function filtrar() {
+      G.filtro = { estado: $('gasFiltroEstado').value, buscar: $('gasBuscar').value.trim() };
+      cargar();
+    }
+    /** Archivo del gasto sin acceso a la carpeta de compras: el servidor lo manda y se abre en otra pestaña. */
+    function verArchivo(folio, que) {
+      const w = typeof window.open === 'function' ? window.open('', '_blank') : null; // antes de la llamada: si no, el navegador la bloquea
+      google.script.run.withSuccessHandler(a => {
+        const bytes = Uint8Array.from(atob(a.datos), c => c.charCodeAt(0));
+        const url = URL.createObjectURL(new Blob([bytes], { type: a.mime }));
+        if (w) w.location = url; else window.location = url;
+      }).withFailureHandler(err => { if (w) w.close(); mostrarError(err); }).archivoGasto(folio, que);
+    }
+    /** Abre Gastos con lo que espera ese folio (Pendientes) o lo busca (liga del correo). */
+    function irAGasto(folio, tipo) {
+      if (!puede()) { aviso('error', 'Tu cuenta no tiene acceso a Gastos.'); return; }
+      const verTodos = !!(PERMISOS.operaciones || (PERMISOS.compras && !SOLO_REQ) || PERMISOS.superadmin);
+      if (verTodos) G.filtro = tipo === 'gastoAprobar' ? { estado: 'porAprobar', buscar: '' } : tipo === 'gastoReembolsar' ? { estado: 'porReembolsar', buscar: '' }
+        : { estado: '', buscar: folio || '' };
+      G.resaltar = folio || '';
+      const reembolsar = tipo === 'gastoReembolsar' ? folio : '';
+      verTab('gas');
+      const pedido = ++G.pedido;
+      G.cargando = true;
+      google.script.run.withSuccessHandler(d => {
+        if (pedido !== G.pedido) return;
+        G.cargando = false; recibir(d);
+        if (reembolsar) abrirReembolso(reembolsar);
+      }).withFailureHandler(err => { if (pedido === G.pedido) { G.cargando = false; mostrarError(err); } }).listarGastos(filtroActual());
+    }
+
+    // Número de la pestaña Gastos (y del grupo Compras): sale de los conteos de Pendientes (servidor)
+    const pintarConteosBase = window.pintarConteos;
+    if (typeof pintarConteosBase === 'function') {
+      window.pintarConteos = function () {
+        pintarConteosBase.apply(this, arguments);
+        const n = cuentaTab('gas'), poner = (id, x) => { $(id).textContent = x ? String(x) : ''; $(id).classList.toggle('oculto', !x); };
+        poner('cntGas', n);
+        if (n) poner('cntCompras', cuentaTab('req') + cuentaTab('ops') + cuentaTab('com') + n);
+      };
+    }
+    // Pendientes: "Gasto por aprobar" y "Gasto por reembolsar" abren Gastos (destino 'gas')
+    const abrirDestinoBase = window.abrirDestino;
+    if (typeof abrirDestinoBase === 'function') {
+      window.abrirDestino = function (destino, folio, tipo) {
+        if (destino !== 'gas') return abrirDestinoBase.apply(this, arguments);
+        if (!tabVisible('gas')) { aviso('error', 'Tu cuenta no tiene acceso a esa pantalla.'); return; }
+        irAGasto(folio, tipo);
+      };
+    }
+    /** Liga del correo: #gas=GAS-AAAA-NNNN abre Gastos con ese folio. */
+    function seguirLiga() {
+      let h = '';
+      try { h = decodeURIComponent(String((window.location && window.location.hash) || '')).trim(); } catch (e) { return; }
+      const m = h.match(/^#gas=(GAS-\d{4}-\d{3,})$/i);
+      if (!m) return;
+      try { if (window.history && window.history.replaceState) window.history.replaceState(null, '', window.location.pathname + window.location.search); } catch (e) {}
+      irAGasto(m[1].toUpperCase(), '');
+    }
+    if (typeof window.addEventListener === 'function') window.addEventListener('hashchange', () => { if (BOOT) seguirLiga(); });
+
+    window.GASTOS = { cargar: cargar, enviar: enviar, cancelar: cancelar, aprobar: aprobar, rechazar: rechazar, abrirReembolso: abrirReembolso,
+      cerrarReembolso: cerrarReembolso, reembolsar: reembolsar, filtrar: filtrar, verArchivo: verArchivo, irA: irAGasto, leerCfdiTexto: leerCfdiTexto,
+      datos: () => G.datos };
+
+    registrarModulo({
+      nombre: 'Gastos',
+      alBootstrap(d) {
+        if (d && d.gastos) recibir(d.gastos);
+        setTimeout(seguirLiga, 0);
+      },
+      alPermisos(p, solo) {
+        const si = puede();
+        $('tabGas').classList.toggle('oculto', !si);
+        const clave = [p && p.requisicion, p && p.operaciones, p && p.compras, p && p.superadmin, !!solo].join('|');
+        const cambio = G.rolClave && G.rolClave !== clave;
+        G.rolClave = clave;
+        if (!si) { G.datos = null; G.filtro = null; cerrarReembolso(); return; }
+        if (cambio && G.datos && BOOT) { G.filtro = null; cargar(); } // otro rol: otra pantalla (lo que puede y lo que ve)
+      },
+      alVerTab(t) {
+        $('vistaGas').classList.toggle('oculto', t !== 'gas');
+        if (t !== 'gas' || !puede()) return;
+        montar();
+        if (G.datos) pintar(); else if (BOOT && !G.cargando) cargar();
+      },
+      // La sincronización vuelve a mandar la pantalla (con su filtro) cuando cambia un gasto, un proyecto o un rol
+      contexto() { return G.datos && puede() ? { gastos: true, gastosFiltro: filtroActual() } : {}; },
+      alSincronizar(r) { if (r && r.gastos) recibir(r.gastos); },
     });
   })();
 </script>
