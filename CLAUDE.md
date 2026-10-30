@@ -47,6 +47,13 @@ varios pagos por orden, plan de pagos opcional, saldo, saldo a favor) y pestaña
 lecturas a Sheets por petición: 33–71 % menos segundos estimados en lo más usado). Detalle en §4.10, §5, §6.17 y `docs/incremento-6*.md`,
 `docs/rapidez-apps-script.md`.
 
+**CAPRI — incremento 7 (mismo spec, decisiones 6–11; construido el 29/10/2026).** **Gastos** por proyecto `GAS-AAAA-NNNN` (captura en el
+teléfono con foto del ticket, aprueba Aprobaciones, reembolsa Compras), **horas y nómina** (hoja de horas semanal que aprueba el líder
+del proyecto, rol **Nómina** con el costo mensual por persona en un área privada, reparto por horas), **adicionales** (cotización
+"Adicional" en un proyecto con contrato firmado, con su mini-esquema y su cobro) y **facturas de clientes** (CFDI fase A: importar los
+XML o el ZIP que timbra CONTALINK, ligarlos a etapas, REP pendientes). El **margen** queda completo: contrato + adicionales − órdenes −
+gastos − nómina. Detalle en §4.11, §5, §6.18 y `docs/incremento-7*.md`.
+
 ## 2. Datos clave (IDs y URLs)
 
 | Qué | Valor |
@@ -470,6 +477,34 @@ Contrato: `docs/incremento-6.md`; detalle: `docs/incremento-6-pagos.md` y `docs/
 - **Rapidez** (§4.1.1, regla 18): memo por petición (`MEMO_.filas` + `MEMOS_DERIVADOS_`), `escribe_`/`candado_` (anidable),
   versiones con valores únicos sin candado (`versionNueva_`), espacio de caché `VERSION_CODIGO_CACHE` en las claves.
 
+### 4.11 CAPRI — incremento 7 (`Code.js` §6.A, §6.G, §6.N, §6.C e §6.I; interfaz `mod-adicionales`, `mod-gastos`, `mod-horas`, `mod-facturas`)
+Contrato: `docs/incremento-7.md`; detalle por módulo: `docs/incremento-7-{adicionales,gastos,nomina,facturas}.md`.
+- **A · Adicionales.** Cotización con `tipo` "Adicional" (columna W) solo en proyectos con contrato firmado y en su moneda (ventas recibe
+  `proyectosFirmados` aparte; `listarProyectos` no cambió). `aceptarAdicional`, `guardarEsquemaAdicional`, `cancelarAdicional` (cobranza;
+  cancelar solo sin pagos). Etapas en `Esquemas` con la columna `adicional`; `resumenCobranza(c, etapas, pagos, adicionales)` (cuarto
+  argumento opcional: sin él, las cifras de antes) cobra contrato y luego cada adicional; `Pagos.etapa_adicional` apunta a la etapa por
+  su dueño. CxC y flujo incluyen sus etapas. Anular la cotización, el contrato o el proyecto la arrastra (sus pagos se reparten de nuevo).
+- **G · Gastos.** `guardarGasto`, `aprobarGasto`/`rechazarGasto` (Aprobaciones, nunca lo propio; super admin con motivo),
+  `reembolsarGasto` (Compras, con comprobante), `cancelarGasto`, `listarGastos`, `archivoGasto`. Estados Enviado → Aprobado | Rechazado →
+  Reembolsado; Cancelado; Anulada. XML opcional con `leerCfdi` (receptor = RFC de Helgen; UUID único contra gastos y facturas de
+  proveedor). `costoGastosPorProyecto` (sin IVA, Aprobado y Reembolsado). Correos `gasto.*` sin montos; Pendientes.
+- **N · Horas y nómina.** Rol `nomina` (no delegable). `lider_email` en Proyectos (`asignarLider`: super admin o cobranza). `misHoras`,
+  `guardarSemana` (semana ISO, pasos de 0.25 h, ≤ 24 h/día), `horasPorAprobar`, `aprobarHoras`/`devolverHoras` (líder; lo del líder o de
+  proyectos sin líder → Aprobaciones), `guardarCostoPersonal`/`importarCostosPersonal`/`listarCostosPersonal`/`reporteNomina` (Nómina).
+  Área privada **NÓMINA** (`AREA_NOMINA`, `NOMINA_FOLDER_ID`, `NOMINA_DB_ID`, `prepararNomina()`); recordatorio de los viernes desde
+  `cadaQuinceMinutos` (`recordatorioHoras_`). `costoNominaPorProyecto` / `costoNominaDeProyectos_` (total por proyecto en MXN, nunca
+  por persona; horas sin costear aparte).
+- **C · Facturas de clientes.** `importarFacturasClientes` (XML, varios o ZIP de CONTALINK vía `descomprimir_` = `Utilities.unzip`;
+  emisor = RFC de Helgen; CFDI 4.0; I, E y P; UUID único), `ligarFacturaCliente` (proyecto + etapas, o "Sin proyecto" con motivo),
+  `cancelarFacturaCliente`, `listarFacturasClientes`. `leerCfdiCliente` = `leerCfdi` + relacionados + complemento de pagos 2.0. Claves
+  de etapa `claveEtapa`: `'1'`, `'2'`… (contrato) y `'<HLG>/<orden>'` (adicional). `facturasPorEtapa`, REP pendiente (PPD cobrada más
+  allá de sus REP por más de 1.00), Pendientes de cobranza. Archivos en `Cobranza/<año>/<PRY>/Facturas` o `…/Sin proyecto/Facturas`.
+- **I · Integración (margen).** `margenCompleto` (puro): contrato + adicionales − órdenes − gastos − nómina; gastos o nómina en otra
+  moneda van en `sinSumar` ("Revisar"), nunca se suman. `costosExtraPorProyecto`, `costosExtraDeProyectos_`. Lo usan la tarjeta de
+  cobranza (`margenDeContrato_(contrato, adicionales)`, `margenSinContrato_`), el resumen y Reportes → margen (las tres cifras iguales;
+  `tests/integracion7.test.js`). Script Property opcional `NOMINA_EN_MARGEN = superadmin`: la nómina del margen solo para super admin
+  y Nómina (cachés separados con `sufijoNomina_`). `COLECCIONES_MARGEN_7` en cachés y sincronización.
+
 ## 5. Dónde se guardan los datos
 
 **Todo en la carpeta maestra "Cotizador Helgen"** de Mi unidad:
@@ -610,6 +645,15 @@ Sin `PORTAL_SECRETO` el enlace está apagado y todo funciona como antes.
 **Incremento 6 (se crean solas, por nombre).** `PagosProveedores.tipo` (V; vacío en filas viejas = Liquidación), `id_solicitud`,
 `huella_solicitud`; `OrdenesCompra.plan_pago` (JSON `[{concepto, porcentaje}]`); cobranza `Esquemas.fecha_esperada`. Script Property
 opcional `FOLIOS_PRUEBA` (folios separados por coma que los reportes dejan fuera). Caché: claves con `@<VERSION_CODIGO_CACHE>`.
+
+**Incremento 7 (se crean solas, por nombre, salvo el área de Nómina).** Base de datos: `Cotizaciones.tipo` (W), `Proyectos.lider_email`.
+Cobranza: pestañas **`Adicionales`** y **`FacturasClientes`**, `Esquemas.adicional`, `Pagos.etapa_adicional`; Drive
+`Cobranza/AAAA/<PRY>/Facturas/` y `Cobranza/AAAA/Sin proyecto/Facturas/`. Compras: pestaña **`Gastos`** (`GAS-AAAA-NNNN`,
+`CONSECUTIVO_GAS_AAAA`); Drive `Compras/AAAA/<PRY>/Gastos/`. **Área NÓMINA** (la crea `prepararNomina()`/`prepararCapri()` como
+facilities@): carpeta "CAPRI — Nómina" y libro "CAPRI — Nómina y horas" (`NOMINA_FOLDER_ID`, `NOMINA_DB_ID`; pestañas `Horas`,
+`CostosPersonal`, `Bitacora`), restringidos; compartir solo con quien lleve la nómina. Script Properties opcionales:
+`HORAS_SIN_RECORDATORIO`, `NOMINA_EN_MARGEN`; las escribe CAPRI: `HORAS_RECORDATORIO_SEMANA`. Colecciones nuevas: `adicionales`,
+`gastos`, `horas`, `costosPersonal`, `facturasClientes`. Caché: `VERSION_CODIGO_CACHE = 2026-10-29s`.
 
 ## 6. Decisiones tomadas (y por qué)
 
@@ -905,6 +949,17 @@ Spec: "CAPRI — increment 4 spec" (Claude Docs `https://claude.ai/artifact/2kb6
 - Pendientes que quedaron: registrar el reembolso o la nota de crédito de un saldo a favor (hoy solo se ve como pendiente);
   REP por pago parcial de facturas PPD; servidor (etapa 1) con prototipo en la rama `servidor-etapa-1` (`docs/servidor-etapa-1.md`).
 
+### 6.18 CAPRI — incremento 7 (29/10/2026)
+- Leo aceptó las decisiones 6–11 del spec: CFDI fase A (Helgen timbra en **CONTALINK**, su PAC; CAPRI importa los XML), Aprobaciones
+  aprueba gastos y Compras los reembolsa, Nómina en un libro privado, el líder del proyecto aprueba horas, categorías de gastos
+  (Viáticos · Combustible · Hospedaje · Casetas · Herramientas · Otros). Spec: "AR and margin: Cobranza" → cobranza ve el margen con
+  la nómina como total por proyecto (nunca por persona); `NOMINA_EN_MARGEN = superadmin` la oculta si hace falta (con una sola
+  persona costeada en un proyecto, su total equivale a lo que esa persona costó a ese proyecto).
+- Contrato entre módulos (`docs/incremento-7.md`) y cuatro módulos en paralelo, integrados en la rama `incremento-7`. Decisiones de
+  cada módulo en su doc (§0). Integración: el margen completo (§4.11 I), las facturas leen las etapas de las adicionales con las mismas
+  claves que la vista (antes las tomaban como etapas del contrato), la vista de cobranza se vuelve a mandar al cambiar facturas,
+  adicionales, gastos u horas, y la huella del pago parcial (incremento 6) se guarda con `textoCelda` (1 de 64 empezaba con "-").
+
 ## 7. Reglas del proyecto (no romper)
 1. Los totales SIEMPRE se recalculan en el servidor (`normalizarCotizacion`). El navegador solo muestra una vista previa.
 2. Redondeo a 2 decimales por renglón (`redondear`). IVA = subtotal × tasa.
@@ -1044,6 +1099,12 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
   rechaza el cambio, decirlo y anotarlo en §9 como pendiente.
 
 ## 9. Pendientes e ideas
+- **CAPRI — incremento 7: construido e integrado el 29/10/2026 (rama `incremento-7`, sobre `incremento-6-final`), SIN PUBLICAR.**
+  Se publica después de (o junto con) el 5 y el 6: respaldar los libros de compras y cobranza; `clasp push`; **como facilities@,
+  `prepararCapri()`** (crea el área de Nómina y las pestañas nuevas) **antes** de la nueva versión del deployment; `wrangler deploy` el
+  mismo día. Sin permisos nuevos de Google. Leo: dar **Aprobaciones** (gastos) y **Nómina** en Permisos, asignar líderes de proyecto,
+  compartir la carpeta de Nómina solo con quien la lleve. Avisar: ventas (casilla «Adicional»), cobranza (adicionales, facturas de
+  CONTALINK, REP pendientes), todos (Horas los viernes, Gastos con foto del ticket). Manual del Cotizador sin actualizar (lo tiene Efrain).
 - **CAPRI — incremento 6 + rapidez: construido, revisado e integrado el 29/10/2026 (rama `incremento-6-final`, sobre
   `incremento-5`), SIN PUBLICAR.** Se publica **junto con el incremento 5** (o después de él): `clasp push`; como facilities@,
   nueva versión del deployment (no hay permisos nuevos ni función que correr; las columnas se crean solas); `CLOUDFLARE_ACCOUNT_ID=…

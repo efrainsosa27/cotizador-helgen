@@ -122,3 +122,16 @@ facturasPorEtapa(facturas) → { [proyectoFolio]: { [claveEtapa]: [{ uuid, serie
 - Pruebas en `tests/` con el arnés (`tests/arnes.js`; límite de 100 KB del caché incluido); `bash tests/todas.sh` en verde antes de
   cada commit. Cada módulo deja `docs/incremento-7-<modulo>.md` con lo que cambió, decisiones propias y notas de publicación
   (pestañas y columnas que se crean solas; permisos nuevos de Google si los hay: `Utilities.unzip` no pide ninguno).
+
+## 4. Integración (hecha el 29/10/2026, rama `incremento-7`)
+- Los cuatro módulos se unieron en este orden: A, G, N, C (choques de listas compartidas resueltos uniendo los dos lados; las secciones
+  §6.A, §6.G, §6.N y §6.C quedan una tras otra al final de `Code.js`, y sus módulos de interfaz al final de `index.html`).
+- **Margen (§6.I):** `margenCompleto(contrato, moneda, costos, adicional)` = contrato + adicionales − órdenes − gastos − nómina; gastos
+  o nómina en otra moneda van en `sinSumar` ("Revisar"). Lo usan la tarjeta de cobranza, el resumen y Reportes → margen, con la misma
+  cifra (`tests/integracion7.test.js`). `NOMINA_EN_MARGEN = superadmin` (opcional) deja la nómina del margen solo a super admin y Nómina.
+- **A + C:** `cobranzaParaFacturas` separa las etapas de las adicionales (antes las leía como del contrato) y las agrega con su clave
+  `'<HLG>/<orden>'`, la misma que la vista del proyecto.
+- **Sincronización y cachés:** la vista del proyecto de cobranza se vuelve a mandar al cambiar `facturasClientes`, `adicionales`,
+  `gastos`, `horas` o `costosPersonal`; el resumen y el reporte de margen usan esas versiones en su caché. `VERSION_CODIGO_CACHE =
+  2026-10-29s`.
+- Arreglo del incremento 6 (hallazgo de G): la huella del pago parcial se escribe con `textoCelda`.
