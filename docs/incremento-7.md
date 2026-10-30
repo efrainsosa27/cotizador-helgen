@@ -135,3 +135,21 @@ facturasPorEtapa(facturas) → { [proyectoFolio]: { [claveEtapa]: [{ uuid, serie
   `gastos`, `horas` o `costosPersonal`; el resumen y el reporte de margen usan esas versiones en su caché. `VERSION_CODIGO_CACHE =
   2026-10-29s`.
 - Arreglo del incremento 6 (hallazgo de G): la huella del pago parcial se escribe con `textoCelda`.
+
+## 5. Revisión independiente: dinero, monedas y estados (29/10/2026, rama `incremento-7-fix-dinero`)
+Sondas de la revisión en `tests/revision7/` (`bash tests/revision7/correr.sh`; cada una terminaba en error mientras el defecto
+existía); prueba permanente `tests/revision7-dinero.test.js` (cada sección falla con el código de antes).
+1. **Liga de facturas de clientes:** guarda clave y nombre de la etapa; nombre distinto o etapa que ya no existe = "Por revisar"
+   (vistas y Pendientes), sin contar ahí. No se cambia un esquema (contrato tras desbloqueo, adicional, cancelar adicional, aceptada que
+   pasa a Energy) que renumere, renombre o quite una etapa con facturas Vigentes ligadas; agregar al final y cambiar porcentajes sí.
+2. **Mismo CFDI dos veces:** `registrarFacturaProveedor` rechaza dentro del candado un UUID que ya es un gasto vivo.
+3. **`registrarPago`:** idempotencia en la hoja (`Pagos.id_solicitud`, `huella_solicitud`, por nombre, huella con `textoCelda`); el
+   mismo id con otros datos se rechaza; ya no usa el caché (la vista pasaba de 100 KB).
+4. **Resumen de cobranza:** "Por cobrar" solo saldos positivos; saldo a favor aparte (`aFavor`, `conSaldoAFavor`, renglón `aFavor`);
+   la vista previa de Anular una adicional cobrada lo avisa.
+5. **Moneda:** `marcarAceptada` no cambia la moneda con gastos vivos en otra; totales del resumen y del reporte de margen con
+   `sinSumar` (proyectos con gastos o nómina en otra moneda que no suman).
+6. **REP:** el último REP con saldo insoluto ≤ 1.00 cubre la factura (USD cobrada en MXN); un REP o una E sustituidos (04) ya no
+   cuentan y el par queda por revisar.
+7. **Nómina:** "45.000" = 45,000; "45.000,50" ambiguo; menos de 1,000 MXN se confirma a mano; menos de 100 en el CSV es error.
+`VERSION_CODIGO_CACHE = 2026-10-29d`.

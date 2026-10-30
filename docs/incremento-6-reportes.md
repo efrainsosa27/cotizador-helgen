@@ -37,7 +37,7 @@ decisiones 4 y 5. Este archivo es para integrar: al hacer el merge se pasa lo ne
    |---|---|---|---|
    | Proyecto o cotización aceptada de prueba (decisión 4) | fuera | cuenta | **menor** |
    | Contrato desbloqueado con pagos (decisión 5) | cuenta, marcado "Desbloqueado" | "Por firmar": su saldo no entra a "Por cobrar" | **mayor** |
-   | Pago de más dentro de la tolerancia (≤ 1.00) | la etapa que queda negativa no se lista (cuenta 0) | el saldo del proyecto queda negativo y resta | **mayor** (≤ 1.00 por proyecto) |
+   | Pago de más dentro de la tolerancia (≤ 1.00) | la etapa que queda negativa no se lista (cuenta 0) | el saldo del proyecto queda negativo; desde la revisión del incremento 7 (dinero) ya no resta de "Por cobrar" (solo suma saldos positivos; un saldo a favor de más de 1.00 va aparte) | igual |
    | Etapa sin fecha esperada | CxC: "Sin fecha"; flujo: aparte, fuera del neto | (no usa fechas) | igual en CxC |
 
    Iguales en los dos: el saldo de cada proyecto (mismo `resumenCobranza`: la suma de sus etapas es su saldo), proyectos Cancelados

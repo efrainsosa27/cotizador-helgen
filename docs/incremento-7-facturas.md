@@ -16,6 +16,16 @@ Historial, Reglas de oro).
    etapas de las adicionales no quedan dentro de `resumenCobranza`, hay que pasarlas también a `cobranzaParaFacturas` (comentario
    "PUNTO DE INTEGRACIÓN CON A" en `contextoFacturasCli_`). Si alguien renombra o quita etapas (antes de firmar, o tras un desbloqueo),
    la factura queda **"Por revisar"** ("una etapa de la liga ya no existe") y se vuelve a ligar; nunca se reasigna sola.
+   **Revisión del incremento 7 (dinero):** la liga guarda la clave **y el nombre** de cada etapa (`etapas (JSON)`: `{clave, etapa,
+   monto}`); si en esa clave ahora hay una etapa con otro nombre (sin acentos ni mayúsculas), la factura queda "Por revisar" ("La etapa
+   «X» de la liga ya no está… en su lugar ahora está «Y»"), **no cuenta** en esa etapa y sale en Pendientes (antes se pasaba sola a la
+   etapa que heredaba el número). Una liga sin nombre (de antes) solo se revisa por la clave. Además **no se puede** cambiar un esquema
+   que renumere, renombre o quite una etapa con facturas I o E Vigentes ligadas (`facturasQueImpidenCambiarEsquema`,
+   `exigirEsquemaSinFacturasLigadas_`): `guardarEsquema` (antes de firmar o tras un desbloqueo), `guardarEsquemaAdicional`,
+   `cancelarAdicional` y `marcarAceptada` cuando pasa a Helgen Energy y reemplaza el esquema. El error lista las facturas ("A-201 (etapa 1
+   «Pago único» → «Anticipo»)") y dice qué hacer: volver a ligarlas o marcarlas Canceladas. Agregar etapas al final y cambiar porcentajes
+   sí se puede (si una etapa queda con menos monto que lo facturado, su "por facturar" sale negativo y se ve). Una liga que ya estaba por
+   revisar no detiene el cambio. Anular (super admin) no se detiene: lo que deja sin etapa queda "Por revisar".
 2. **Dónde viven los archivos** (`carpeta_proyecto` dice dónde están):
    - ligada: `Cobranza/<año del folio del proyecto>/<PRY-AAAA-NNNN>/Facturas/` (el mismo año que usan los comprobantes de pago);
    - sin ligar: `Cobranza/<año de la fecha del CFDI>/Sin proyecto/Facturas/`;
@@ -31,15 +41,22 @@ Historial, Reglas de oro).
    `04`), en el orden del XML y hasta lo que le queda a cada una; dentro de una factura repartida en varias etapas, **en proporción**. Si
    su factura no está en CAPRI (p. ej. de antes), la E queda "sin ligar" y cobranza la liga a mano a etapas: entonces resta de esas etapas
    y se mide contra **lo ya facturado** (no contra lo que falta). Una E mayor que lo que queda de sus facturas queda "Por revisar".
+   Revisión del incremento 7 (dinero): una E **sustituida** (otra E Vigente la sustituye con `04`) ya no resta.
 5. **Sustitución (`TipoRelacion 04`):** la factura nueva dice a cuál sustituye; la sustituida queda "Por revisar: márcala Cancelada
-   cuando la canceles en CONTALINK". CAPRI no cancela nada sola.
+   cuando la canceles en CONTALINK". CAPRI no cancela nada sola. Revisión del incremento 7 (dinero): con un **REP (P)** o una **nota de
+   crédito (E)** sustituida, la de antes **ya no cuenta** (ni como REP ni como lo que resta; antes un REP corregido de 400 y el de 1,000
+   que sustituía sumaban 1,400 y tapaban un REP pendiente de 600) y **el par** queda "Por revisar" mientras la de antes siga Vigente en
+   CAPRI ("Lo sustituye el REP P-2…" / "Sustituye al REP P-1…, que sigue Vigente"); al marcarla Cancelada se quita. Una factura I
+   sustituida sigue como antes (cuenta y queda por revisar).
 6. **Cobrado por factura:** lo cobrado de cada etapa (de `resumenCobranza`, el mismo reparto de la vista) se reparte entre las facturas
    de esa etapa **de la más vieja a la más nueva** (fecha, serie-folio, UUID), hasta lo facturado de cada una.
 7. **REP pendiente** (`calcularFacturasClientes`, puro): factura **PPD**, ligada, con **cobrado − lo cubierto por sus REP > 1.00**
    (`TOLERANCIA_PAGO`, en la moneda del proyecto). Lo cubierto = suma de `ImpPagado` de los `DoctoRelacionado` de los complementos P
    Vigentes con su UUID (solo en la moneda de la factura). Lo contrario (REP por más de lo cobrado en CAPRI) se marca **"¿falta registrar un
    pago?"** (`repSinCobro`), sin pendiente. Una PUE nunca pide REP. En Pendientes, el REP pendiente cuenta desde el **último pago** del
-   proyecto y es urgente a los 30 días.
+   proyecto y es urgente a los 30 días. Revisión del incremento 7 (dinero): si el **último REP** de la factura (por fecha y parcialidad)
+   deja `ImpSaldoInsoluto` ≤ 1.00, la factura ya tiene sus REP aunque lo cobrado y lo del REP difieran (factura en USD cobrada en MXN:
+   CAPRI y el REP convierten con tipos de cambio distintos); y "¿falta registrar un pago?" no sale si CAPRI ya la tiene cobrada completa.
 8. **Reparto al ligar** (`armarLigaFactura`): sin montos, el total va en el orden del esquema hasta lo que falta facturar de cada etapa
    elegida y la última se queda con el resto; con montos, deben sumar el total y cada etapa no puede pasar lo que le falta (+1.00). En
    ambos casos lo neto de la factura (sin sus notas de crédito) no puede pasar lo que falta facturar de las etapas elegidas (+1.00):
@@ -153,6 +170,8 @@ cuentan, y una factura ligada a un proyecto anulado queda "Por revisar".
 
 ## 5. Pruebas
 `tests/facturas-clientes.test.js` (en `bash tests/todas.sh`):
+0. **Revisión del incremento 7 (dinero):** `tests/revision7-dinero.test.js` §1 (liga por número y nombre, esquemas que la moverían), §6
+   (REP con saldo insoluto en cero) y §8 (REP y nota de crédito sustituidos); sondas de la revisión en `tests/revision7/`.
 1. **Pura:** fixtures de CFDI 4.0 como los de CONTALINK (I PUE, I PPD, E relacionada 01, P Pagos 2.0 con 2 pagos sobre 2 facturas,
    sustitución 04, factura de proveedor, CFDI 3.3, T, N, EUR), `leerCfdi` sin cambios, DTD, Pagos 1.0, textos para clientes, lote (PDF por
    nombre y por UUID, repetidas, orden, límite de 100), cálculo (E proporcional, cobrado de la más vieja a la más nueva, REP, REP

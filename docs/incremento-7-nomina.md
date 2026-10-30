@@ -35,7 +35,11 @@ al Manual del Cotizador (una sección nueva "Horas y nómina", Reglas de oro, Hi
     montos: el libro es privado); se puede quitar. Tope de cordura 5,000,000 MXN. Cualquier correo de CAPRI (también de alguien
     que ya no está en Permisos). CSV: correo, mes, costo[, notas], con o sin encabezado, `,` `;` o tabulador, "45,000.00",
     `$`, mes como AAAA-MM, AAAA/MM, MM/AAAA o la fecha dd/mm/aaaa que deja Excel; hasta 500 renglones; si una persona y mes se
-    repite en el archivo, **gana el último** (el otro sale "Repetido").
+    repite en el archivo, **gana el último** (el otro sale "Repetido"). Revisión del incremento 7 (dinero): "45.000" o "1.250.000"
+    (punto de miles, como en Excel en español, sin coma) son 45,000 y 1,250,000 (antes "45.000" se leía como 45); con punto de miles
+    **y** coma ("45.000,50") es ambiguo y se rechaza ("escribe 45000 o 45,000.00"). Mínimo de cordura: a mano, un costo menor a
+    1,000 MXN se confirma (`confirmado: true`; el servidor responde con `codigo: 'CONFIRMAR'` y la interfaz pregunta con
+    `window.confirm`); en el CSV (no se puede confirmar) un costo menor a 100 MXN es error del renglón.
 12. **Reparto (`costoNominaPorProyecto`)**: el mes es el **del día** (una semana que cruza de mes se parte); en centavos con el
     método del resto mayor (la suma de los proyectos es exactamente el costo de la persona); una fila sin `estado` cuenta como
     aprobada (quien llama ya filtró; con estado, solo `Aprobada`); un costo de un mes sin horas aprobadas **no se reparte** (el

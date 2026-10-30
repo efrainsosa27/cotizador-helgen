@@ -504,6 +504,14 @@ Contrato: `docs/incremento-7.md`; detalle por módulo: `docs/incremento-7-{adici
   cobranza (`margenDeContrato_(contrato, adicionales)`, `margenSinContrato_`), el resumen y Reportes → margen (las tres cifras iguales;
   `tests/integracion7.test.js`). Script Property opcional `NOMINA_EN_MARGEN = superadmin`: la nómina del margen solo para super admin
   y Nómina (cachés separados con `sufijoNomina_`). `COLECCIONES_MARGEN_7` en cachés y sincronización.
+- **Revisión (dinero), `docs/incremento-7.md` §5.** Facturas: `facturasQueImpidenCambiarEsquema` / `errorFacturasLigadasEsquema`
+  (puras) y `exigirEsquemaSinFacturasLigadas_` en `guardarEsquema`, `guardarEsquemaAdicional`, `cancelarAdicional` y `marcarAceptada`
+  (a Energy); `calcularFacturasClientes` revisa el nombre de la etapa de la liga, usa el saldo insoluto del último REP y no cuenta un
+  REP ni una E sustituidos (04). `uuidsDeGastosVivos_` → `validarFacturaProveedor(f, orden, {…, gastos})`. `registrarPago`:
+  `huellaPagoCobranza_`, `pagoCobranzaYaRegistrado_`. `resumenGeneralCobranza`: `aFavor` (renglón) y `aFavor`, `conSaldoAFavor`,
+  `sinSumar` (totales); `margenPorProyecto`: `sinSumar` en los totales. `marcarAceptada`: gastos vivos en otra moneda. Nómina:
+  `importeDeTexto` (punto de miles), `importeAmbiguo`, `normalizarCostoPersonal(p, {sinConfirmar})` con `MIN_COSTO_PERSONAL` (1,000;
+  `codigo 'CONFIRMAR'`) y `MIN_COSTO_PERSONAL_CSV` (100). Anular: la vista previa de una adicional cobrada avisa del saldo a favor.
 
 ## 5. Dónde se guardan los datos
 
@@ -570,7 +578,8 @@ uso (`TIPO_CAMBIO`). Se crean solas (§6.2).
 - `Pagos`: `folio` PAG, `fecha_pago` (AAAA-MM-DD), `fecha_registro`, `proyecto_folio`, `monto`, `moneda_pago`, `tipo_cambio`,
   `monto_aplicado` (en la moneda del proyecto), `moneda_proyecto`, `metodo`, `referencia`, `etapa_orden`, `etapa`,
   `aplicacion (JSON)` (reparto por etapa al registrar), `comprobante_id`, `comprobante_url`, `registro_email`, `registro_nombre`,
-  `estado` (Vigente / Cancelado), `cancelado_por`, `fecha_cancelacion`, `motivo_cancelacion`. Nunca se borran filas.
+  `estado` (Vigente / Cancelado), `cancelado_por`, `fecha_cancelacion`, `motivo_cancelacion`, `etapa_adicional` (incremento 7),
+  `id_solicitud`, `huella_solicitud` (revisión del incremento 7: idempotencia de `registrarPago`). Nunca se borran filas.
 - `Bitacora`: `fecha`, `correo`, `accion`, `proyecto_folio`, `detalle`, `motivo` (aceptar, cambiar aceptada, editar esquema,
   firmar, desbloquear, registrar y cancelar pago).
 
@@ -653,7 +662,9 @@ Cobranza: pestañas **`Adicionales`** y **`FacturasClientes`**, `Esquemas.adicio
 facilities@): carpeta "CAPRI — Nómina" y libro "CAPRI — Nómina y horas" (`NOMINA_FOLDER_ID`, `NOMINA_DB_ID`; pestañas `Horas`,
 `CostosPersonal`, `Bitacora`), restringidos; compartir solo con quien lleve la nómina. Script Properties opcionales:
 `HORAS_SIN_RECORDATORIO`, `NOMINA_EN_MARGEN`; las escribe CAPRI: `HORAS_RECORDATORIO_SEMANA`. Colecciones nuevas: `adicionales`,
-`gastos`, `horas`, `costosPersonal`, `facturasClientes`. Caché: `VERSION_CODIGO_CACHE = 2026-10-29s`.
+`gastos`, `horas`, `costosPersonal`, `facturasClientes`. Revisión (dinero): cobranza `Pagos.id_solicitud` y `Pagos.huella_solicitud`
+(X:Y, se crean solas por nombre; vacías en filas de antes: idempotencia de `registrarPago` en la hoja). En `FacturasClientes`, la
+liga (`etapas (JSON)`) se compara por clave **y** nombre de la etapa. Caché: `VERSION_CODIGO_CACHE = 2026-10-29d`.
 
 ## 6. Decisiones tomadas (y por qué)
 
@@ -959,6 +970,17 @@ Spec: "CAPRI — increment 4 spec" (Claude Docs `https://claude.ai/artifact/2kb6
   cada módulo en su doc (§0). Integración: el margen completo (§4.11 I), las facturas leen las etapas de las adicionales con las mismas
   claves que la vista (antes las tomaban como etapas del contrato), la vista de cobranza se vuelve a mandar al cambiar facturas,
   adicionales, gastos u horas, y la huella del pago parcial (incremento 6) se guarda con `textoCelda` (1 de 64 empezaba con "-").
+- **Revisión independiente (dinero, monedas y estados), arreglada en `incremento-7-fix-dinero`** (`docs/incremento-7.md` §5;
+  sondas en `tests/revision7/`, prueba `tests/revision7-dinero.test.js`). Decisiones: (1) la liga de una factura a una etapa no se
+  mueve nunca sola: nombre distinto o etapa que ya no existe = "Por revisar"; y **se impide** el cambio de esquema que renumere,
+  renombre o quite una etapa ligada (también cancelar una adicional y la aceptada que pasa a Energy); agregar al final y cambiar
+  porcentajes sí (lo mínimo seguro: un porcentaje menor deja "por facturar" negativo, visible); Anular no se detiene. (2) Un UUID es
+  de un solo registro entre gastos vivos y facturas de proveedor, en los dos sentidos. (3) Idempotencia de `registrarPago` en la hoja,
+  sin caché. (4) "Por cobrar" = solo saldos positivos; un saldo a favor de más de 1.00 va aparte (uno dentro de la tolerancia no es ni
+  uno ni otro). (5) Gastos vivos fijan la moneda del proyecto como órdenes y pagos; los totales de margen dicen cuántos proyectos
+  tienen costos que no suman. (6) El último REP con saldo insoluto en cero cubre la factura (tipos de cambio distintos); un REP o
+  una E sustituidos (04) no cuentan y el par queda por revisar. (7) Costos de nómina: punto de miles sin coma = miles; con coma,
+  ambiguo; menos de 1,000 MXN se confirma (CSV: menos de 100 es error).
 
 ## 7. Reglas del proyecto (no romper)
 1. Los totales SIEMPRE se recalculan en el servidor (`normalizarCotizacion`). El navegador solo muestra una vista previa.

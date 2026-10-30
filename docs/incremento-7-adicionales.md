@@ -18,9 +18,14 @@ cotización, Historial, Pendientes).
    se suma a la etapa elegida, como antes.
 3. **Un pago dirigido a una adicional que ya no está** (anulada por un super admin) se reparte desde la primera etapa del contrato.
    Anular una adicional **no anula sus pagos** (un pago puede cubrir contrato y adicional a la vez): siguen vigentes y se vuelven a
-   repartir; la vista previa de Anular lo dice. Anular el contrato o el proyecto sí anula los pagos, como siempre.
+   repartir; la vista previa de Anular lo dice. Anular el contrato o el proyecto sí anula los pagos, como siempre. Revisión del
+   incremento 7 (dinero): si la adicional ya tiene algo cobrado, la vista previa agrega un renglón: "ya tiene $X cobrados: esos pagos se
+   quedan (no se anulan)" y, si lo pagado pasa de lo que queda contratado, "quedará con un saldo a favor del cliente de $Y" (sale aparte
+   en el resumen de cobranza; se registra como nota de crédito o reembolso).
 4. **Mini-esquema por omisión:** una etapa "Pago único" de 100 %. Lo edita el rol de cobranza (1–10 etapas, suma 100 %,
-   `validarEsquema`) **mientras la adicional no tenga pagos aplicados** (ni un pago Vigente dirigido a ella).
+   `validarEsquema`) **mientras la adicional no tenga pagos aplicados** (ni un pago Vigente dirigido a ella). Revisión del incremento 7
+   (dinero): tampoco si el cambio renumera, renombra o quita una etapa con una factura de cliente Vigente ligada (el error la nombra;
+   agregar etapas al final o cambiar porcentajes sí). Ver `docs/incremento-7-facturas.md` §0.1.
 5. **Las reglas de Helgen Energy no aplican a las adicionales** (60/30/10 y "solo el administrador con motivo"): esas reglas protegen
    los términos comerciales del contrato de paneles solares que se firmó; una adicional es trabajo extra que se cotiza aparte
    (normalmente un solo pago) y su esquema lo negocia cobranza. El esquema del contrato Energy sigue igual (probado).
@@ -32,7 +37,8 @@ cotización, Historial, Pendientes).
 7. **Solo una cotización marcada «Adicional» se acepta como adicional**, y una «Adicional» no se puede marcar como la aceptada del
    contrato (`marcarAceptada` la rechaza). Una cotización normal hecha antes de firmar no se convierte en adicional.
 8. **Cancelar:** la fila queda `Cancelada` (con quién, cuándo y el motivo; nunca se borra) y sus etapas salen de `Esquemas` (copia en
-   la Bitácora). La cotización sigue en el proyecto y **se puede volver a aceptar** (fila nueva).
+   la Bitácora). La cotización sigue en el proyecto y **se puede volver a aceptar** (fila nueva). Revisión del incremento 7 (dinero): con
+   una factura de cliente Vigente ligada a sus etapas no se cancela (primero se liga a otra etapa o se marca Cancelada).
 9. **Monedas:** la adicional va en la moneda del contrato (se revisa al cotizar y al aceptar); con adicionales aceptadas, un contrato
    desbloqueado no puede cambiar a otra moneda (como con pagos y órdenes). Si alguien editara una a mano en otra moneda, la vista, el
    resumen y los reportes no la suman (nunca se mezclan); `adicionalesPorProyecto` la cuenta en `revisar`.
@@ -43,6 +49,9 @@ cotización, Historial, Pendientes).
     `marcarAceptada`, solo `Cancelado` lo impide). En un proyecto Cancelado no se acepta, edita ni cancela nada.
 12. **Resumen de cobranza:** "Por cobrar", "Cobrado" y el avance cuentan las adicionales; un contrato "Por firmar" (desbloqueado) con
     adicionales muestra contrato + adicionales en "por firmar" (no suman, como siempre). El margen sigue siendo del contrato.
+    Revisión del incremento 7 (dinero): "Por cobrar" suma **solo saldos positivos**; un proyecto con saldo negativo de más de 1.00 (p. ej.
+    se anuló una adicional ya pagada) va en "Saldo a favor de clientes" (`aFavor` y `conSaldoAFavor` por moneda, `aFavor: true` en el
+    renglón), nunca restado de lo que deben otros proyectos (antes se netteaba y no cuadraba con CxC).
 13. **CSV del resumen:** las dos columnas nuevas ("Adicionales con IVA", "Total contratado con IVA") van **al final**, para no mover las
     de antes.
 14. **CxC y flujo:** las etapas de una adicional salen con `etapa` = "Pago único (adicional HLG-…)" (así el reporte de R se lee sin

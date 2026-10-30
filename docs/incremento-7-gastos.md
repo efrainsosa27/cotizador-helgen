@@ -101,7 +101,9 @@ Ediciones directas (mínimas):
    comprobante (incluye locales como el ISH de un hotel: así el costo sin IVA no los cuenta). La fecha del gasto es la capturada (la
    factura puede ser de días después). Solo tipo I; un CFDI en otra moneda que MXN/USD se rechaza.
 3. **UUID repetido** = en un gasto Enviado, Aprobado o Reembolsado (uno Cancelado, Rechazado o Anulado libera su UUID para capturarlo bien)
-   **o en una factura de proveedor vigente** (la misma factura no puede contar dos veces en el costo del proyecto).
+   **o en una factura de proveedor vigente** (la misma factura no puede contar dos veces en el costo del proyecto). Revisión del
+   incremento 7 (dinero): también al revés: `registrarFacturaProveedor` rechaza, dentro del candado, un CFDI cuyo UUID ya es un gasto
+   vivo (`validarFacturaProveedor` con `ctx.gastos` = `uuidsDeGastosVivos_`).
 4. **Rechazar lo propio** sigue la misma regla que aprobar (Aprobaciones nunca decide sobre lo suyo; super admin con motivo); para lo propio
    está "Cancelar".
 5. **Compras puede reembolsar su propio gasto**: el control es la aprobación (otra persona); el reembolso solo registra el pago con su
