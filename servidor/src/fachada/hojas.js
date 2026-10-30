@@ -167,6 +167,10 @@ function crearSpreadsheetApp(amb) {
     get h() { return M.hojaPorId(libroDe(this.libroId), this.hojaId); }
     getName() { return this.h.titulo; }
     getSheetName() { return this.h.titulo; }
+    setName(nombre) {
+      escribir(this.libroId, { op: 'renombrarHoja', hoja: this.hojaId, titulo: String(nombre) });
+      return this;
+    }
     getSheetId() { return this.hojaId; }
     getIndex() { return this.h.indice + 1; }
     getParent() { return new Libro(this.libroId); }

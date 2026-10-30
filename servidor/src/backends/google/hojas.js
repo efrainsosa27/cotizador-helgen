@@ -187,6 +187,11 @@ function peticionesDeDiario(libro, ops) {
         requests.push({ addSheet: { properties: Object.assign({ sheetId: op.id, title: op.titulo }, op.indice != null ? { index: op.indice } : {}) } });
         tocar(op.id, null, true);
         break;
+      case 'renombrarHoja':
+        requests.push({ updateSheetProperties: { properties: { sheetId: h.id, title: op.titulo }, fields: 'title' } });
+        // Sheets ajusta referencias a la pestaña renombrada: releer también las fórmulas dependientes.
+        copia.hojas.forEach(x => tocar(x.id, null, true));
+        break;
       case 'borrarHoja': requests.push({ deleteSheet: { sheetId: op.hoja } }); cambios.delete(op.hoja); break;
       case 'formatoNumero': {
         asegurarCuadricula(h, op.rango.columnas || op.rango.abierto ? 0 : op.rango.r - 1 + op.rango.nr, op.rango.c - 1 + op.rango.nc);

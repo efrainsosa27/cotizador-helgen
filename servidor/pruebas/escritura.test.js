@@ -103,6 +103,26 @@ function fachada(libro) {
   return { ss: crearSpreadsheetApp(amb).openById(libro.id), diario };
 }
 
+caso('renombrar una pestaña conserva su ID, sus datos y permite escribir con el nombre nuevo', () => {
+  const original = libroDePrueba();
+  const { ss, diario } = fachada(structuredClone(original));
+  const h = ss.getSheetByName('Pagos');
+  assert.equal(h.setName('Compras 2026'), h);
+  assert.equal(ss.getSheetByName('Pagos'), null);
+  assert.equal(ss.getSheetByName('Compras 2026').getSheetId(), 1);
+  assert.equal(h.getRange(2, 1).getValue(), 'PAG-2026-0001');
+  h.appendRow(['PAG-2026-0002']);
+  assert.equal(h.getRange(3, 1).getValue(), 'PAG-2026-0002');
+  assert.throws(() => h.setName('Cotizaciones'), /ya existe/);
+  assert.throws(() => h.setName(''), /vacío/);
+  const { requests, copia } = H.peticionesDeDiario(original, diario);
+  assert.deepEqual(requests.find(r => r.updateSheetProperties), {
+    updateSheetProperties: { properties: { sheetId: 1, title: 'Compras 2026' }, fields: 'title' }
+  });
+  assert.equal(copia.hojas[0].titulo, 'Compras 2026');
+  assert.equal(copia.hojas[0].valores[2][0], 'PAG-2026-0002');
+});
+
 caso('fachada: appendRow en una hoja "@" cargada de Sheets (también la fila de abajo de lo cargado) y setValues en celdas automáticas', () => {
   const original = libroDePrueba();
   const { ss, diario } = fachada(structuredClone(original));

@@ -254,6 +254,14 @@ function aplicar(libro, op) {
       libro.hojas.sort((a, b) => a.indice - b.indice);
       return 0;
     }
+    case 'renombrarHoja': {
+      const h = hojaPorId(libro, op.hoja);
+      if (!op.titulo || libro.hojas.some(x => x.id !== h.id && x.titulo === op.titulo)) {
+        throw new Error('El nombre de la hoja está vacío o ya existe: "' + op.titulo + '".');
+      }
+      h.titulo = op.titulo;
+      return 0;
+    }
     case 'borrarHoja': {
       const k = libro.hojas.findIndex(x => x.id === op.hoja);
       if (k !== -1) libro.hojas.splice(k, 1);
