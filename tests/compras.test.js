@@ -328,7 +328,7 @@ assert.equal(bit().find(b=>b[2]==='Cancelar orden de compra')[5],'El proveedor n
 assert.deepEqual(Object.keys(db.pest).sort(),['Config','Cotizaciones','Proyectos'],'nada de compras en la Base de datos');
 assert(!JSON.stringify(db.pest.Cotizaciones.m).includes('OC-')&&!JSON.stringify(db.pest.Proyectos.m).includes('OC-'));
 assert(db.pest.Config.m.some(x=>x[0]==='TERMINOS_OC'),'Config tiene TERMINOS_OC');
-assert.deepEqual(Object.keys(libros[props.COBRANZA_DB_ID].pest).sort(),['Bitacora','Contratos','Esquemas','Pagos'],'nada de compras en cobranza');
+assert.deepEqual(Object.keys(libros[props.COBRANZA_DB_ID].pest).sort(),['Adicionales','Bitacora','Contratos','Esquemas','Pagos'],'nada de compras en cobranza'); // Adicionales: incremento 7 (A)
 assert(vivos(maestra).every(x=>!/Compras/.test(x.nombre)),'nada de compras en la carpeta maestra');
 carpCom.acceso='DOMAIN'; archivos[LC.id].acceso='DOMAIN'; ctx.prepararCompras();
 assert.deepEqual([carpCom.acceso,archivos[LC.id].acceso],['PRIVATE','PRIVATE'],'prepararCompras repara el acceso');

@@ -197,8 +197,8 @@ const esperar=async(n=10)=>{for(let i=0;i<n;i++) await new Promise(r=>setImmedia
   // CSV: encabezados, números con punto, texto entrecomillado, fórmulas neutralizadas
   const csv=B.run('csvResumenCob(RESUMEN.proyectos)').split('\r\n');
   assert.equal(csv[0].charCodeAt(0),0xFEFF,'BOM para Excel'); assert(csv[0].includes('"Contratado con IVA","Cobrado","Saldo"'));
-  assert.equal(csv[1],'"PRY-2026-0003","Techo","\'=Luis, ""SA""","Helgen","Firmado","MXN",11600.00,5000.00,6600.00,43.1,"Instalación",3480.00,"2026-10-20",2,4850.00,5150.00,51.5');
-  assert(csv[3].endsWith(',0,,,'),'sin margen: celdas vacías'); assert.equal(csv.length,4);
+  assert.equal(csv[1],'"PRY-2026-0003","Techo","\'=Luis, ""SA""","Helgen","Firmado","MXN",11600.00,5000.00,6600.00,43.1,"Instalación",3480.00,"2026-10-20",2,4850.00,5150.00,51.5,0.00,11600.00'); // +2 columnas: incremento 7 (A)
+  assert(/,0,,,,0\.00,[\d.]+$/.test(csv[3]),'sin margen: celdas vacías (y al final adicionales 0 y el total)'); assert.equal(csv.length,4);
   // Desde el resumen se abre cualquier proyecto, también uno sin cotización aceptada (no está en la tabla)
   const nAntes=B.llamadas.filter(c=>c.funcion==='getCobranzaProyecto').length;
   B.$('resProyecto').value='PRY-2026-0001 — Luis — Solar MX — Techo'; B.$('resProyecto').disparar('change'); await esperar();

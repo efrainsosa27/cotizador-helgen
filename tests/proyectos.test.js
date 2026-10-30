@@ -115,7 +115,7 @@ assert.equal(r1.folio,'HLG-2026-0005'); assert.equal(r1.proyectoFolio,'PRY-2026-
 const subCot=c1.hijos.find(h=>h.nombre==='Cotizaciones');
 assert.deepEqual(subCot.archivos.map(a=>a.name),['HLG-2026-0005 - Solar MX.pdf'],'PDF en Cotizaciones del proyecto');
 // Encabezados: solo cambia la fila 1; la fila vieja no se mueve y queda vacía en T
-assert.equal(cot.m[0].length,22); assert.equal(cot.m[0][21],'tipo_cambio'); assert.equal(cot.m[0][19],'proyecto_folio'); assert.equal(cot.m[0][20],'moneda'); assert.deepEqual(cot.m[0].slice(0,19),ENC19);
+assert.equal(cot.m[0].length,23); assert.equal(cot.m[0][22],'tipo'); // tipo: incremento 7 (A) assert.equal(cot.m[0][21],'tipo_cambio'); assert.equal(cot.m[0][19],'proyecto_folio'); assert.equal(cot.m[0][20],'moneda'); assert.deepEqual(cot.m[0].slice(0,19),ENC19);
 assert.deepEqual(cot.m[1],filaVieja,'fila vieja intacta');
 assert.equal(cot.m[2][19],'PRY-2026-0001'); assert.equal(cot.m[2][20],'MXN');
 // Sin proyecto: carpeta del año, columna T vacía

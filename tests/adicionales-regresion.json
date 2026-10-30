@@ -1,0 +1,1596 @@
+{
+ "puras": {
+  "resumen PRY-AAAA-0101": {
+   "moneda": "MXN",
+   "contratado": 11600,
+   "subtotal": 10000,
+   "pagado": 11600.5,
+   "saldo": -0.5,
+   "avance": 100,
+   "etapas": [
+    {
+     "etapa": "Anticipo",
+     "porcentaje": 60,
+     "monto": 6960,
+     "pagado": 6960,
+     "saldo": 0,
+     "avance": 100
+    },
+    {
+     "etapa": "Instalación",
+     "porcentaje": 30,
+     "monto": 3480,
+     "pagado": 3480.5,
+     "saldo": -0.5,
+     "avance": 100
+    },
+    {
+     "etapa": "Encendido del sistema",
+     "porcentaje": 10,
+     "monto": 1160,
+     "pagado": 1160,
+     "saldo": 0,
+     "avance": 100
+    }
+   ]
+  },
+  "resumen PRY-AAAA-0102": {
+   "moneda": "USD",
+   "contratado": 1160.01,
+   "subtotal": 1000.01,
+   "pagado": 400.01,
+   "saldo": 760,
+   "avance": 34.5,
+   "etapas": [
+    {
+     "etapa": "Anticipo",
+     "porcentaje": 33.33,
+     "monto": 386.63,
+     "pagado": 13.26,
+     "saldo": 373.37,
+     "avance": 3.4
+    },
+    {
+     "etapa": "Instalación",
+     "porcentaje": 33.33,
+     "monto": 386.63,
+     "pagado": 0,
+     "saldo": 386.63,
+     "avance": 0
+    },
+    {
+     "etapa": "Cierre",
+     "porcentaje": 33.34,
+     "monto": 386.75,
+     "pagado": 386.75,
+     "saldo": 0,
+     "avance": 100
+    }
+   ]
+  },
+  "resumen PRY-AAAA-0103": {
+   "moneda": "MXN",
+   "contratado": 580,
+   "subtotal": 500,
+   "pagado": 0,
+   "saldo": 580,
+   "avance": 0,
+   "etapas": [
+    {
+     "etapa": "Total",
+     "porcentaje": 100,
+     "monto": 580,
+     "pagado": 0,
+     "saldo": 580,
+     "avance": 0
+    }
+   ]
+  },
+  "resumen PRY-AAAA-0105": {
+   "moneda": "MXN",
+   "contratado": 2320,
+   "subtotal": 2000,
+   "pagado": 300,
+   "saldo": 2020,
+   "avance": 12.9,
+   "etapas": [
+    {
+     "etapa": "Anticipo",
+     "porcentaje": 50,
+     "monto": 1160,
+     "pagado": 0,
+     "saldo": 1160,
+     "avance": 0
+    },
+    {
+     "etapa": "Final",
+     "porcentaje": 50,
+     "monto": 1160,
+     "pagado": 300,
+     "saldo": 860,
+     "avance": 25.9
+    }
+   ]
+  },
+  "resumen 6106 total": {
+   "moneda": "MXN",
+   "contratado": 348,
+   "subtotal": 300,
+   "pagado": 100,
+   "saldo": 248,
+   "avance": 28.7,
+   "etapas": [
+    {
+     "etapa": "Total",
+     "porcentaje": 100,
+     "monto": 348,
+     "pagado": 100,
+     "saldo": 248,
+     "avance": 28.7
+    }
+   ]
+  },
+  "reparto": {
+   "aplicacion": [
+    {
+     "orden": 2,
+     "centavos": 20000
+    },
+    {
+     "orden": 3,
+     "centavos": 10000
+    }
+   ],
+   "sobranteCts": 15000
+  },
+  "resumenGeneral": {
+   "totales": [
+    {
+     "moneda": "MXN",
+     "proyectos": 2,
+     "conSaldo": 1,
+     "contratado": 11948,
+     "cobrado": 11700.5,
+     "porCobrar": 247.5,
+     "avance": 97.9,
+     "contratadoSinIva": 10300,
+     "costoOc": 4000,
+     "margen": 6300,
+     "margenPorcentaje": 61.2,
+     "porFirmar": 2,
+     "montoPorFirmar": 2900
+    },
+    {
+     "moneda": "USD",
+     "proyectos": 1,
+     "conSaldo": 1,
+     "contratado": 1160.01,
+     "cobrado": 400.01,
+     "porCobrar": 760,
+     "avance": 34.5,
+     "contratadoSinIva": 1000.01,
+     "costoOc": 200,
+     "margen": 800.01,
+     "margenPorcentaje": 80,
+     "porFirmar": 0,
+     "montoPorFirmar": 0
+    }
+   ],
+   "proyectos": [
+    {
+     "folio": "PRY-AAAA-0106",
+     "marca": "helgen",
+     "moneda": "MXN",
+     "estadoContrato": "Firmado",
+     "contratado": 348,
+     "subtotal": 300,
+     "pagado": 100,
+     "saldo": 248,
+     "avance": 28.7,
+     "siguienteEtapa": "Total",
+     "siguienteSaldo": 248,
+     "ultimoPago": "2026-09-10",
+     "ordenes": 0,
+     "costoOc": 0,
+     "margen": 300,
+     "margenPorcentaje": 100,
+     "margenError": ""
+    },
+    {
+     "folio": "PRY-AAAA-0101",
+     "marca": "helgen",
+     "moneda": "MXN",
+     "estadoContrato": "Firmado",
+     "contratado": 11600,
+     "subtotal": 10000,
+     "pagado": 11600.5,
+     "saldo": -0.5,
+     "avance": 100,
+     "siguienteEtapa": "",
+     "siguienteSaldo": 0,
+     "ultimoPago": "2026-10-20",
+     "ordenes": 1,
+     "costoOc": 4000,
+     "margen": 6000,
+     "margenPorcentaje": 60,
+     "margenError": ""
+    },
+    {
+     "folio": "PRY-AAAA-0102",
+     "marca": "energy",
+     "moneda": "USD",
+     "estadoContrato": "Firmado",
+     "contratado": 1160.01,
+     "subtotal": 1000.01,
+     "pagado": 400.01,
+     "saldo": 760,
+     "avance": 34.5,
+     "siguienteEtapa": "Anticipo",
+     "siguienteSaldo": 373.37,
+     "ultimoPago": "2026-09-10",
+     "ordenes": 1,
+     "costoOc": 200,
+     "margen": 800.01,
+     "margenPorcentaje": 80,
+     "margenError": ""
+    },
+    {
+     "folio": "PRY-AAAA-0105",
+     "marca": "helgen",
+     "moneda": "MXN",
+     "estadoContrato": "Por firmar",
+     "contratado": 2320,
+     "subtotal": 2000,
+     "pagado": 300,
+     "saldo": 2020,
+     "avance": 12.9,
+     "siguienteEtapa": "Anticipo",
+     "siguienteSaldo": 1160,
+     "ultimoPago": "2026-09-20",
+     "ordenes": 0,
+     "costoOc": 0,
+     "margen": 2000,
+     "margenPorcentaje": 100,
+     "margenError": ""
+    },
+    {
+     "folio": "PRY-AAAA-0103",
+     "marca": "helgen",
+     "moneda": "MXN",
+     "estadoContrato": "Por firmar",
+     "contratado": 580,
+     "subtotal": 500,
+     "pagado": 0,
+     "saldo": 580,
+     "avance": 0,
+     "siguienteEtapa": "Total",
+     "siguienteSaldo": 580,
+     "ultimoPago": "",
+     "ordenes": 0,
+     "costoOc": 0,
+     "margen": 500,
+     "margenPorcentaje": 100,
+     "margenError": ""
+    }
+   ]
+  },
+  "etapasPorCobrar": [
+   {
+    "proyectoFolio": "PRY-AAAA-0102",
+    "marca": "energy",
+    "moneda": "USD",
+    "desbloqueado": false,
+    "orden": 1,
+    "etapa": "Anticipo",
+    "montoEtapa": 386.63,
+    "pagadoEtapa": 13.26,
+    "monto": 373.37,
+    "fecha": "2026-06-15"
+   },
+   {
+    "proyectoFolio": "PRY-AAAA-0102",
+    "marca": "energy",
+    "moneda": "USD",
+    "desbloqueado": false,
+    "orden": 2,
+    "etapa": "Instalación",
+    "montoEtapa": 386.63,
+    "pagadoEtapa": 0,
+    "monto": 386.63,
+    "fecha": "2026-11-20"
+   },
+   {
+    "proyectoFolio": "PRY-AAAA-0105",
+    "marca": "helgen",
+    "moneda": "MXN",
+    "desbloqueado": true,
+    "orden": 1,
+    "etapa": "Anticipo",
+    "montoEtapa": 1160,
+    "pagadoEtapa": 0,
+    "monto": 1160,
+    "fecha": "2026-09-15"
+   },
+   {
+    "proyectoFolio": "PRY-AAAA-0105",
+    "marca": "helgen",
+    "moneda": "MXN",
+    "desbloqueado": true,
+    "orden": 2,
+    "etapa": "Final",
+    "montoEtapa": 1160,
+    "pagadoEtapa": 300,
+    "monto": 860,
+    "fecha": "2027-03-01"
+   },
+   {
+    "proyectoFolio": "PRY-AAAA-0106",
+    "marca": "helgen",
+    "moneda": "MXN",
+    "desbloqueado": false,
+    "orden": 1,
+    "etapa": "Total",
+    "montoEtapa": 348,
+    "pagadoEtapa": 100,
+    "monto": 248,
+    "fecha": ""
+   }
+  ],
+  "cxc": {
+   "totales": [
+    {
+     "moneda": "MXN",
+     "porVencer": 860,
+     "d1a30": 0,
+     "d31a60": 1160,
+     "d61a90": 0,
+     "d90mas": 0,
+     "sinFecha": 248,
+     "vencido": 1160,
+     "total": 2268,
+     "grupos": 2,
+     "partidas": 3
+    },
+    {
+     "moneda": "USD",
+     "porVencer": 386.63,
+     "d1a30": 0,
+     "d31a60": 0,
+     "d61a90": 0,
+     "d90mas": 373.37,
+     "sinFecha": 0,
+     "vencido": 373.37,
+     "total": 760,
+     "grupos": 1,
+     "partidas": 2
+    }
+   ],
+   "grupos": [
+    {
+     "nombreGrupo": "Cliente D",
+     "moneda": "MXN",
+     "vencido": 1160,
+     "total": 2020,
+     "porVencer": 860,
+     "d1a30": 0,
+     "d31a60": 1160,
+     "d61a90": 0,
+     "d90mas": 0,
+     "sinFecha": 0,
+     "detalle": [
+      {
+       "folio": "PRY-AAAA-0105",
+       "vencido": 1160,
+       "total": 2020,
+       "partidas": [
+        {
+         "proyectoFolio": "PRY-AAAA-0105",
+         "marca": "helgen",
+         "moneda": "MXN",
+         "desbloqueado": true,
+         "orden": 1,
+         "etapa": "Anticipo",
+         "montoEtapa": 1160,
+         "pagadoEtapa": 0,
+         "monto": 1160,
+         "fecha": "2026-09-15",
+         "dias": 44,
+         "rango": "d31a60"
+        },
+        {
+         "proyectoFolio": "PRY-AAAA-0105",
+         "marca": "helgen",
+         "moneda": "MXN",
+         "desbloqueado": true,
+         "orden": 2,
+         "etapa": "Final",
+         "montoEtapa": 1160,
+         "pagadoEtapa": 300,
+         "monto": 860,
+         "fecha": "2027-03-01",
+         "dias": -123,
+         "rango": "porVencer"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "nombreGrupo": "Cliente E",
+     "moneda": "MXN",
+     "vencido": 0,
+     "total": 248,
+     "porVencer": 0,
+     "d1a30": 0,
+     "d31a60": 0,
+     "d61a90": 0,
+     "d90mas": 0,
+     "sinFecha": 248,
+     "detalle": [
+      {
+       "folio": "PRY-AAAA-0106",
+       "vencido": 0,
+       "total": 248,
+       "partidas": [
+        {
+         "proyectoFolio": "PRY-AAAA-0106",
+         "marca": "helgen",
+         "moneda": "MXN",
+         "desbloqueado": false,
+         "orden": 1,
+         "etapa": "Total",
+         "montoEtapa": 348,
+         "pagadoEtapa": 100,
+         "monto": 248,
+         "fecha": "",
+         "dias": null,
+         "rango": "sinFecha"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "nombreGrupo": "Cliente B",
+     "moneda": "USD",
+     "vencido": 373.37,
+     "total": 760,
+     "porVencer": 386.63,
+     "d1a30": 0,
+     "d31a60": 0,
+     "d61a90": 0,
+     "d90mas": 373.37,
+     "sinFecha": 0,
+     "detalle": [
+      {
+       "folio": "PRY-AAAA-0102",
+       "vencido": 373.37,
+       "total": 760,
+       "partidas": [
+        {
+         "proyectoFolio": "PRY-AAAA-0102",
+         "marca": "energy",
+         "moneda": "USD",
+         "desbloqueado": false,
+         "orden": 1,
+         "etapa": "Anticipo",
+         "montoEtapa": 386.63,
+         "pagadoEtapa": 13.26,
+         "monto": 373.37,
+         "fecha": "2026-06-15",
+         "dias": 136,
+         "rango": "d90mas"
+        },
+        {
+         "proyectoFolio": "PRY-AAAA-0102",
+         "marca": "energy",
+         "moneda": "USD",
+         "desbloqueado": false,
+         "orden": 2,
+         "etapa": "Instalación",
+         "montoEtapa": 386.63,
+         "pagadoEtapa": 0,
+         "monto": 386.63,
+         "fecha": "2026-11-20",
+         "dias": -22,
+         "rango": "porVencer"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "flujo": [
+   {
+    "moneda": "MXN",
+    "semanas": [
+     {
+      "n": 1,
+      "desde": "2026-10-26",
+      "hasta": "2026-11-01",
+      "etiqueta": "Semana en curso",
+      "parcial": true,
+      "diasRestantes": 4,
+      "cobros": 1160,
+      "pagos": 0,
+      "neto": 1160,
+      "acumulado": 1160,
+      "cobrosVencidos": 1160,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 2,
+      "desde": "2026-11-02",
+      "hasta": "2026-11-08",
+      "etiqueta": "Semana 2",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 1160,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 3,
+      "desde": "2026-11-09",
+      "hasta": "2026-11-15",
+      "etiqueta": "Semana 3",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 1160,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 4,
+      "desde": "2026-11-16",
+      "hasta": "2026-11-22",
+      "etiqueta": "Semana 4",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 1160,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 5,
+      "desde": "2026-11-23",
+      "hasta": "2026-11-29",
+      "etiqueta": "Semana 5",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 1160,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 6,
+      "desde": "2026-11-30",
+      "hasta": "2026-12-06",
+      "etiqueta": "Semana 6",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 1160,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 7,
+      "desde": "2026-12-07",
+      "hasta": "2026-12-13",
+      "etiqueta": "Semana 7",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 1160,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 8,
+      "desde": "2026-12-14",
+      "hasta": "2026-12-20",
+      "etiqueta": "Semana 8",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 1160,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 9,
+      "desde": "2026-12-21",
+      "hasta": "2026-12-27",
+      "etiqueta": "Semana 9",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 1160,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 10,
+      "desde": "2026-12-28",
+      "hasta": "2027-01-03",
+      "etiqueta": "Semana 10",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 1160,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 11,
+      "desde": "2027-01-04",
+      "hasta": "2027-01-10",
+      "etiqueta": "Semana 11",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 1160,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 12,
+      "desde": "2027-01-11",
+      "hasta": "2027-01-17",
+      "etiqueta": "Semana 12",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 1160,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 13,
+      "desde": "2027-01-18",
+      "hasta": "2027-01-24",
+      "etiqueta": "Semana 13",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 1160,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     }
+    ],
+    "sinFecha": {
+     "cobros": 248,
+     "pagos": 0
+    },
+    "despues": {
+     "cobros": 860,
+     "pagos": 0
+    },
+    "totales": {
+     "cobros": 1160,
+     "pagos": 0,
+     "neto": 1160
+    }
+   },
+   {
+    "moneda": "USD",
+    "semanas": [
+     {
+      "n": 1,
+      "desde": "2026-10-26",
+      "hasta": "2026-11-01",
+      "etiqueta": "Semana en curso",
+      "parcial": true,
+      "diasRestantes": 4,
+      "cobros": 373.37,
+      "pagos": 0,
+      "neto": 373.37,
+      "acumulado": 373.37,
+      "cobrosVencidos": 373.37,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 2,
+      "desde": "2026-11-02",
+      "hasta": "2026-11-08",
+      "etiqueta": "Semana 2",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 373.37,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 3,
+      "desde": "2026-11-09",
+      "hasta": "2026-11-15",
+      "etiqueta": "Semana 3",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 373.37,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 4,
+      "desde": "2026-11-16",
+      "hasta": "2026-11-22",
+      "etiqueta": "Semana 4",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 386.63,
+      "pagos": 0,
+      "neto": 386.63,
+      "acumulado": 760,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 5,
+      "desde": "2026-11-23",
+      "hasta": "2026-11-29",
+      "etiqueta": "Semana 5",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 760,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 6,
+      "desde": "2026-11-30",
+      "hasta": "2026-12-06",
+      "etiqueta": "Semana 6",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 760,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 7,
+      "desde": "2026-12-07",
+      "hasta": "2026-12-13",
+      "etiqueta": "Semana 7",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 760,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 8,
+      "desde": "2026-12-14",
+      "hasta": "2026-12-20",
+      "etiqueta": "Semana 8",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 760,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 9,
+      "desde": "2026-12-21",
+      "hasta": "2026-12-27",
+      "etiqueta": "Semana 9",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 760,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 10,
+      "desde": "2026-12-28",
+      "hasta": "2027-01-03",
+      "etiqueta": "Semana 10",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 760,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 11,
+      "desde": "2027-01-04",
+      "hasta": "2027-01-10",
+      "etiqueta": "Semana 11",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 760,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 12,
+      "desde": "2027-01-11",
+      "hasta": "2027-01-17",
+      "etiqueta": "Semana 12",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 760,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     },
+     {
+      "n": 13,
+      "desde": "2027-01-18",
+      "hasta": "2027-01-24",
+      "etiqueta": "Semana 13",
+      "parcial": false,
+      "diasRestantes": 7,
+      "cobros": 0,
+      "pagos": 0,
+      "neto": 0,
+      "acumulado": 760,
+      "cobrosVencidos": 0,
+      "pagosVencidos": 0
+     }
+    ],
+    "sinFecha": {
+     "cobros": 0,
+     "pagos": 0
+    },
+    "despues": {
+     "cobros": 0,
+     "pagos": 0
+    },
+    "totales": {
+     "cobros": 760,
+     "pagos": 0,
+     "neto": 760
+    }
+   }
+  ]
+ },
+ "servidor": {
+  "p1": {
+   "resumen": {
+    "moneda": "MXN",
+    "contratado": 11600,
+    "subtotal": 10000,
+    "pagado": 6500,
+    "saldo": 5100,
+    "avance": 56,
+    "etapas": [
+     {
+      "etapa": "Anticipo",
+      "porcentaje": 40,
+      "monto": 4640,
+      "pagado": 4000,
+      "saldo": 640,
+      "avance": 86.2
+     },
+     {
+      "etapa": "Avance",
+      "porcentaje": 35,
+      "monto": 4060,
+      "pagado": 2500,
+      "saldo": 1560,
+      "avance": 61.6
+     },
+     {
+      "etapa": "Entrega",
+      "porcentaje": 25,
+      "monto": 2900,
+      "pagado": 0,
+      "saldo": 2900,
+      "avance": 0
+     }
+    ]
+   },
+   "esquema": [
+    {
+     "etapa": "Anticipo",
+     "porcentaje": 40
+    },
+    {
+     "etapa": "Avance",
+     "porcentaje": 35
+    },
+    {
+     "etapa": "Entrega",
+     "porcentaje": 25
+    }
+   ],
+   "pagos": [
+    {
+     "monto": 1000,
+     "monedaPago": "MXN",
+     "tipoCambio": "",
+     "montoAplicado": 1000,
+     "monedaProyecto": "MXN",
+     "etapaOrden": 1,
+     "etapa": "Anticipo",
+     "estado": "Vigente"
+    },
+    {
+     "monto": 2500,
+     "monedaPago": "MXN",
+     "tipoCambio": "",
+     "montoAplicado": 2500,
+     "monedaProyecto": "MXN",
+     "etapaOrden": 2,
+     "etapa": "Avance",
+     "estado": "Vigente"
+    },
+    {
+     "monto": 3000,
+     "monedaPago": "MXN",
+     "tipoCambio": "",
+     "montoAplicado": 3000,
+     "monedaProyecto": "MXN",
+     "etapaOrden": 1,
+     "etapa": "Anticipo",
+     "estado": "Vigente"
+    }
+   ],
+   "banderas": {
+    "esquemaEditable": false,
+    "esquemaPideMotivo": false,
+    "puedeAceptar": false,
+    "puedeFirmar": false,
+    "puedePagar": true,
+    "puedeDesbloquear": false,
+    "fechasEditables": true
+   },
+   "esquemasHoja": [
+    [
+     1,
+     "Anticipo",
+     40,
+     4640
+    ],
+    [
+     2,
+     "Avance",
+     35,
+     4060
+    ],
+    [
+     3,
+     "Entrega",
+     25,
+     2900
+    ]
+   ],
+   "aplicaciones": [
+    [
+     3000,
+     3000,
+     1,
+     "Anticipo",
+     "[{\"etapa\":\"Anticipo\",\"orden\":1,\"monto\":3000}]",
+     "Vigente"
+    ],
+    [
+     2500,
+     2500,
+     2,
+     "Avance",
+     "[{\"etapa\":\"Avance\",\"orden\":2,\"monto\":2500}]",
+     "Vigente"
+    ],
+    [
+     1000,
+     1000,
+     1,
+     "Anticipo",
+     "[{\"etapa\":\"Anticipo\",\"orden\":1,\"monto\":1000}]",
+     "Vigente"
+    ]
+   ]
+  },
+  "p2": {
+   "resumen": {
+    "moneda": "USD",
+    "contratado": 2900.64,
+    "subtotal": 2500.55,
+    "pagado": 1986.3,
+    "saldo": 914.34,
+    "avance": 68.5,
+    "etapas": [
+     {
+      "etapa": "Anticipo",
+      "porcentaje": 60,
+      "monto": 1740.38,
+      "pagado": 1696.23,
+      "saldo": 44.15,
+      "avance": 97.5
+     },
+     {
+      "etapa": "Instalación",
+      "porcentaje": 30,
+      "monto": 870.19,
+      "pagado": 0,
+      "saldo": 870.19,
+      "avance": 0
+     },
+     {
+      "etapa": "Encendido del sistema",
+      "porcentaje": 10,
+      "monto": 290.07,
+      "pagado": 290.07,
+      "saldo": 0,
+      "avance": 100
+     }
+    ]
+   },
+   "esquema": [
+    {
+     "etapa": "Anticipo",
+     "porcentaje": 60
+    },
+    {
+     "etapa": "Instalación",
+     "porcentaje": 30
+    },
+    {
+     "etapa": "Encendido del sistema",
+     "porcentaje": 10
+    }
+   ],
+   "pagos": [
+    {
+     "monto": 18000,
+     "monedaPago": "MXN",
+     "tipoCambio": 18.25,
+     "montoAplicado": 986.3,
+     "monedaProyecto": "USD",
+     "etapaOrden": 1,
+     "etapa": "Anticipo",
+     "estado": "Vigente"
+    },
+    {
+     "monto": 1000,
+     "monedaPago": "USD",
+     "tipoCambio": "",
+     "montoAplicado": 1000,
+     "monedaProyecto": "USD",
+     "etapaOrden": 3,
+     "etapa": "Encendido del sistema",
+     "estado": "Vigente"
+    }
+   ],
+   "banderas": {
+    "esquemaEditable": false,
+    "esquemaPideMotivo": false,
+    "puedeAceptar": false,
+    "puedeFirmar": false,
+    "puedePagar": true,
+    "puedeDesbloquear": false,
+    "fechasEditables": true
+   },
+   "esquemasHoja": [
+    [
+     1,
+     "Anticipo",
+     60,
+     1740.38
+    ],
+    [
+     2,
+     "Instalación",
+     30,
+     870.19
+    ],
+    [
+     3,
+     "Encendido del sistema",
+     10,
+     290.07
+    ]
+   ],
+   "aplicaciones": [
+    [
+     1000,
+     1000,
+     3,
+     "Encendido del sistema",
+     "[{\"etapa\":\"Encendido del sistema\",\"orden\":3,\"monto\":290.07},{\"etapa\":\"Anticipo\",\"orden\":1,\"monto\":709.93}]",
+     "Vigente"
+    ],
+    [
+     18000,
+     986.3,
+     1,
+     "Anticipo",
+     "[{\"etapa\":\"Anticipo\",\"orden\":1,\"monto\":986.3}]",
+     "Vigente"
+    ]
+   ]
+  },
+  "p3": {
+   "resumen": {
+    "moneda": "MXN",
+    "contratado": 928,
+    "subtotal": 800,
+    "pagado": 0,
+    "saldo": 928,
+    "avance": 0,
+    "etapas": [
+     {
+      "etapa": "Anticipo",
+      "porcentaje": 60,
+      "monto": 556.8,
+      "pagado": 0,
+      "saldo": 556.8,
+      "avance": 0
+     },
+     {
+      "etapa": "Instalación",
+      "porcentaje": 30,
+      "monto": 278.4,
+      "pagado": 0,
+      "saldo": 278.4,
+      "avance": 0
+     },
+     {
+      "etapa": "Encendido del sistema",
+      "porcentaje": 10,
+      "monto": 92.8,
+      "pagado": 0,
+      "saldo": 92.8,
+      "avance": 0
+     }
+    ]
+   },
+   "esquema": [
+    {
+     "etapa": "Anticipo",
+     "porcentaje": 60
+    },
+    {
+     "etapa": "Instalación",
+     "porcentaje": 30
+    },
+    {
+     "etapa": "Encendido del sistema",
+     "porcentaje": 10
+    }
+   ],
+   "pagos": [],
+   "banderas": {
+    "esquemaEditable": true,
+    "esquemaPideMotivo": false,
+    "puedeAceptar": true,
+    "puedeFirmar": true,
+    "puedePagar": false,
+    "puedeDesbloquear": false,
+    "fechasEditables": true
+   },
+   "esquemasHoja": [
+    [
+     1,
+     "Anticipo",
+     60,
+     556.8
+    ],
+    [
+     2,
+     "Instalación",
+     30,
+     278.4
+    ],
+    [
+     3,
+     "Encendido del sistema",
+     10,
+     92.8
+    ]
+   ],
+   "aplicaciones": []
+  },
+  "p4": {
+   "resumen": {
+    "moneda": "MXN",
+    "contratado": 4060,
+    "subtotal": 3500,
+    "pagado": 4060.5,
+    "saldo": -0.5,
+    "avance": 100,
+    "etapas": [
+     {
+      "etapa": "Anticipo",
+      "porcentaje": 60,
+      "monto": 2436,
+      "pagado": 2436,
+      "saldo": 0,
+      "avance": 100
+     },
+     {
+      "etapa": "Instalación",
+      "porcentaje": 30,
+      "monto": 1218,
+      "pagado": 1218,
+      "saldo": 0,
+      "avance": 100
+     },
+     {
+      "etapa": "Encendido del sistema",
+      "porcentaje": 10,
+      "monto": 406,
+      "pagado": 406.5,
+      "saldo": -0.5,
+      "avance": 100
+     }
+    ]
+   },
+   "esquema": [
+    {
+     "etapa": "Anticipo",
+     "porcentaje": 60
+    },
+    {
+     "etapa": "Instalación",
+     "porcentaje": 30
+    },
+    {
+     "etapa": "Encendido del sistema",
+     "porcentaje": 10
+    }
+   ],
+   "pagos": [
+    {
+     "monto": 3560.5,
+     "monedaPago": "MXN",
+     "tipoCambio": "",
+     "montoAplicado": 3560.5,
+     "monedaProyecto": "MXN",
+     "etapaOrden": 3,
+     "etapa": "Encendido del sistema",
+     "estado": "Vigente"
+    },
+    {
+     "monto": 500,
+     "monedaPago": "MXN",
+     "tipoCambio": "",
+     "montoAplicado": 500,
+     "monedaProyecto": "MXN",
+     "etapaOrden": 1,
+     "etapa": "Anticipo",
+     "estado": "Vigente"
+    },
+    {
+     "monto": 1000,
+     "monedaPago": "MXN",
+     "tipoCambio": "",
+     "montoAplicado": 1000,
+     "monedaProyecto": "MXN",
+     "etapaOrden": 1,
+     "etapa": "Anticipo",
+     "estado": "Cancelado"
+    }
+   ],
+   "banderas": {
+    "esquemaEditable": false,
+    "esquemaPideMotivo": false,
+    "puedeAceptar": false,
+    "puedeFirmar": false,
+    "puedePagar": true,
+    "puedeDesbloquear": false,
+    "fechasEditables": true
+   },
+   "esquemasHoja": [
+    [
+     1,
+     "Anticipo",
+     60,
+     2436
+    ],
+    [
+     2,
+     "Instalación",
+     30,
+     1218
+    ],
+    [
+     3,
+     "Encendido del sistema",
+     10,
+     406
+    ]
+   ],
+   "aplicaciones": [
+    [
+     1000,
+     1000,
+     1,
+     "Anticipo",
+     "[{\"etapa\":\"Anticipo\",\"orden\":1,\"monto\":1000}]",
+     "Cancelado"
+    ],
+    [
+     500,
+     500,
+     1,
+     "Anticipo",
+     "[{\"etapa\":\"Anticipo\",\"orden\":1,\"monto\":500}]",
+     "Vigente"
+    ],
+    [
+     3560.5,
+     3560.5,
+     3,
+     "Encendido del sistema",
+     "[{\"etapa\":\"Encendido del sistema\",\"orden\":3,\"monto\":406},{\"etapa\":\"Anticipo\",\"orden\":1,\"monto\":1936},{\"etapa\":\"Instalación\",\"orden\":2,\"monto\":1218},{\"etapa\":\"Encendido del sistema\",\"orden\":3,\"monto\":0.5}]",
+     "Vigente"
+    ]
+   ]
+  },
+  "resumenGeneral": {
+   "totales": [
+    {
+     "moneda": "MXN",
+     "proyectos": 2,
+     "conSaldo": 1,
+     "contratado": 15660,
+     "cobrado": 10560.5,
+     "porCobrar": 5099.5,
+     "avance": 67.4,
+     "contratadoSinIva": 13500,
+     "costoOc": 0,
+     "margen": 13500,
+     "margenPorcentaje": 100,
+     "porFirmar": 1,
+     "montoPorFirmar": 928
+    },
+    {
+     "moneda": "USD",
+     "proyectos": 1,
+     "conSaldo": 1,
+     "contratado": 2900.64,
+     "cobrado": 1986.3,
+     "porCobrar": 914.34,
+     "avance": 68.5,
+     "contratadoSinIva": 2500.55,
+     "costoOc": 0,
+     "margen": 2500.55,
+     "margenPorcentaje": 100,
+     "porFirmar": 0,
+     "montoPorFirmar": 0
+    }
+   ],
+   "proyectos": [
+    {
+     "marca": "helgen",
+     "moneda": "MXN",
+     "estadoContrato": "Firmado",
+     "contratado": 11600,
+     "subtotal": 10000,
+     "pagado": 6500,
+     "saldo": 5100,
+     "avance": 56,
+     "siguienteEtapa": "Anticipo",
+     "siguienteSaldo": 640,
+     "ordenes": 0,
+     "costoOc": 0,
+     "margen": 10000,
+     "margenPorcentaje": 100,
+     "margenError": "",
+     "p": "p1"
+    },
+    {
+     "marca": "helgen",
+     "moneda": "MXN",
+     "estadoContrato": "Firmado",
+     "contratado": 4060,
+     "subtotal": 3500,
+     "pagado": 4060.5,
+     "saldo": -0.5,
+     "avance": 100,
+     "siguienteEtapa": "",
+     "siguienteSaldo": 0,
+     "ordenes": 0,
+     "costoOc": 0,
+     "margen": 3500,
+     "margenPorcentaje": 100,
+     "margenError": "",
+     "p": "p4"
+    },
+    {
+     "marca": "energy",
+     "moneda": "USD",
+     "estadoContrato": "Firmado",
+     "contratado": 2900.64,
+     "subtotal": 2500.55,
+     "pagado": 1986.3,
+     "saldo": 914.34,
+     "avance": 68.5,
+     "siguienteEtapa": "Anticipo",
+     "siguienteSaldo": 44.15,
+     "ordenes": 0,
+     "costoOc": 0,
+     "margen": 2500.55,
+     "margenPorcentaje": 100,
+     "margenError": "",
+     "p": "p2"
+    },
+    {
+     "marca": "helgen",
+     "moneda": "MXN",
+     "estadoContrato": "Por firmar",
+     "contratado": 928,
+     "subtotal": 800,
+     "pagado": 0,
+     "saldo": 928,
+     "avance": 0,
+     "siguienteEtapa": "Anticipo",
+     "siguienteSaldo": 556.8,
+     "ordenes": 0,
+     "costoOc": 0,
+     "margen": 800,
+     "margenPorcentaje": 100,
+     "margenError": "",
+     "p": "p3"
+    }
+   ]
+  },
+  "cxc": {
+   "totales": [
+    {
+     "moneda": "MXN",
+     "porVencer": 2900,
+     "d1a30": 1560,
+     "d31a60": 640,
+     "d61a90": 0,
+     "d90mas": 0,
+     "sinFecha": 0,
+     "vencido": 2200,
+     "total": 5100,
+     "grupos": 1,
+     "partidas": 3
+    },
+    {
+     "moneda": "USD",
+     "porVencer": 0,
+     "d1a30": 0,
+     "d31a60": 0,
+     "d61a90": 0,
+     "d90mas": 44.15,
+     "sinFecha": 870.19,
+     "vencido": 44.15,
+     "total": 914.34,
+     "grupos": 1,
+     "partidas": 2
+    }
+   ],
+   "grupos": [
+    {
+     "nombreGrupo": "Cliente Uno — Cliente Uno SA",
+     "moneda": "MXN",
+     "vencido": 2200,
+     "total": 5100,
+     "detalle": [
+      {
+       "p": "p1",
+       "total": 5100,
+       "partidas": [
+        {
+         "orden": 1,
+         "etapa": "Anticipo",
+         "montoEtapa": 4640,
+         "pagadoEtapa": 4000,
+         "monto": 640,
+         "dias": 45,
+         "rango": "d31a60"
+        },
+        {
+         "orden": 2,
+         "etapa": "Avance",
+         "montoEtapa": 4060,
+         "pagadoEtapa": 2500,
+         "monto": 1560,
+         "dias": 3,
+         "rango": "d1a30"
+        },
+        {
+         "orden": 3,
+         "etapa": "Entrega",
+         "montoEtapa": 2900,
+         "pagadoEtapa": 0,
+         "monto": 2900,
+         "dias": -20,
+         "rango": "porVencer"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "nombreGrupo": "Cliente Dos — Cliente Dos SA",
+     "moneda": "USD",
+     "vencido": 44.15,
+     "total": 914.34,
+     "detalle": [
+      {
+       "p": "p2",
+       "total": 914.34,
+       "partidas": [
+        {
+         "orden": 1,
+         "etapa": "Anticipo",
+         "montoEtapa": 1740.38,
+         "pagadoEtapa": 1696.23,
+         "monto": 44.15,
+         "dias": 95,
+         "rango": "d90mas"
+        },
+        {
+         "orden": 2,
+         "etapa": "Instalación",
+         "montoEtapa": 870.19,
+         "pagadoEtapa": 0,
+         "monto": 870.19,
+         "dias": null,
+         "rango": "sinFecha"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

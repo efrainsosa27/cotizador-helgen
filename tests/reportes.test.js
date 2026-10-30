@@ -268,7 +268,7 @@ const H = n => LC().pest[n].m;
 // ---- Fecha esperada por etapa ----
 const c1 = cot(p1, UNO, 10000), c1b = cot(p1, UNO, 9000);
 ok('tania', 'marcarAceptada', p1, c1b, true);
-assert.deepEqual(H('Esquemas')[0], ['proyecto_folio', 'orden', 'etapa', 'porcentaje', 'monto', 'fecha_esperada'], 'la columna se crea sola, por nombre');
+assert.deepEqual(H('Esquemas')[0], ['proyecto_folio', 'orden', 'etapa', 'porcentaje', 'monto', 'fecha_esperada', 'adicional'], 'la columna se crea sola, por nombre'); // adicional: incremento 7 (A)
 let v = ok('tania', 'getCobranzaProyecto', p1);
 assert.deepEqual([v.fechasEditables, v.esquema.map(e => e.fechaEsperada).join()], [true, ',,'], 'aceptada sin firmar: editable, sin fechas');
 const ver0 = Number(props.VER_contratos);
