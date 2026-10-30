@@ -2,7 +2,8 @@
   "puerto": 8090,
   "host": "127.0.0.1",
   "origenes": [
-    "https://cotizador-helgen.cotizador-helgen.workers.dev"
+    "https://cotizador-helgen.cotizador-helgen.workers.dev",
+    "https://capri.helgen.online"
   ],
   "backend": "google",
   "datos": "/var/lib/capri",
