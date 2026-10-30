@@ -54,7 +54,7 @@ assert.equal(vp.libro, true);
 const leoV = vp.usuarios.find(u => u.correo === 'leo@helgen.tech');
 assert.deepEqual([leoV.raiz, leoV.enLista, leoV.roles], [true, false, ['superadmin']], 'el raíz aparece aunque no esté en la hoja');
 assert.deepEqual(vp.roles.map(r => r.nombre), ['Ventas', 'Requisiciones', 'Solo requisiciones', 'Aprobaciones', 'Compras', 'Cobranza',
-  'Desbloqueo', 'Super admin']);
+  'Desbloqueo', 'Nómina', 'Super admin']); // Nómina: incremento 7 (N), en la página de Permisos
 assert.deepEqual(vp.sitios.map(s => s.codigo), ['QRO', 'ZLO', 'ESE', 'LZC', 'VER']);
 assert.deepEqual(vp.usuarios.find(u => u.correo === 'jesus@helgen.services').metodo, 'codigo');
 falla('efrain', 'listarUsuarios', [], /Solo un super admin/, 'PERMISO');

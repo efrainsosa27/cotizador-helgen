@@ -177,6 +177,8 @@
     <button id="tabCob" class="oculto" onclick="verTab('cob')">Cobranza</button>
     <!-- R (incremento 6): solo si ve algún reporte (mod-reportes; el servidor revisa el rol de cada uno) -->
     <button id="tabRep" class="oculto" onclick="verTab('rep')">Reportes</button>
+    <!-- N (incremento 7): toda cuenta activa captura sus horas (mod-horas); el número = semanas de horas por aprobar -->
+    <button id="tabHoras" class="oculto" onclick="verTab('horas')">Horas<span id="cntHoras" class="cuenta oculto"></span></button>
     <button id="tabAdmin" class="oculto" onclick="verTab('admin')">Administración</button>
     <a id="lnkInventario" class="nav-externo oculto" href="https://drogheda.helgen.online/" target="_blank" rel="noopener noreferrer"
        title="Se abre en otra pestaña">Inventario (centro de mando) ↗</a>
@@ -269,6 +271,8 @@
     <div id="gasModMios" class="modulo oculto"></div>
     <div id="gasModEquipo" class="modulo oculto"></div>
   </section>
+  <!-- ===== HORAS (incremento 7 · N): mi semana, por aprobar, líderes y nómina; lo llena mod-horas ===== -->
+  <section id="vistaHoras" class="oculto"></section>
 
   <!-- ===== ADMINISTRACIÓN (incremento 4): cada módulo llena su bloque ===== -->
   <section id="vistaAdmin" class="oculto">
@@ -484,6 +488,8 @@
         <div id="cobContrato" class="sat"></div>
         <!-- Margen: contratado sin IVA − órdenes de compra vigentes sin IVA (solo rol de cobranza) -->
         <div id="cobMargen" class="tiles oculto" style="margin-top:14px"></div>
+        <!-- N (incremento 7): líder del proyecto (aprueba sus horas; mod-horas) -->
+        <div id="cobLider" class="oculto"></div>
       </div>
     </div>
 
@@ -4764,9 +4770,10 @@
   }
   /** Abre la pantalla donde se resuelve un pendiente: Aprobaciones, Compras (requisición o cuentas por pagar) o mis requisiciones. */
   function abrirDestino(destino, folio, tipo) {
-    const tab = { ops: 'ops', com: 'com', cxp: 'com', req: 'req' }[destino];
+    const tab = { ops: 'ops', com: 'com', cxp: 'com', req: 'req', horas: 'horas' }[destino];
     if (!tab || !tabVisible(tab)) { aviso('error', 'Tu cuenta no tiene acceso a esa pantalla.'); return; }
-    if (destino === 'ops') { verTab('ops'); abrirOps(folio); }
+    if (destino === 'horas') { if (window.HORAS) HORAS.ver('aprobar'); else verTab('horas'); } // N (incremento 7): horas por aprobar
+    else if (destino === 'ops') { verTab('ops'); abrirOps(folio); }
     else if (destino === 'com') { verTab('com'); abrirReqCom(folio); }
     else if (destino === 'cxp') { verTab('com'); verCxp(); }
     else irAMiReq(folio, tipo);
@@ -6591,6 +6598,545 @@
       // La sincronización vuelve a mandar la pantalla (con su filtro) cuando cambia un gasto, un proyecto o un rol
       contexto() { return G.datos && puede() ? { gastos: true, gastosFiltro: filtroActual() } : {}; },
       alSincronizar(r) { if (r && r.gastos) recibir(r.gastos); },
+    });
+  })();
+</script>
+<script id="mod-horas">
+  // Horas y nómina (incremento 7, módulo N): pestaña Horas con "Mi semana" (todos: captura por día y proyecto en cuartos de hora,
+  // pensada para el teléfono), "Por aprobar" (líder del proyecto, Aprobaciones, super admin), "Líderes" (super admin y cobranza;
+  // también en la vista de Cobranza del proyecto) y "Nómina" (rol Nómina y super admin: costo mensual por persona, CSV y reporte).
+  // Qué se ve sale de horasPermisos (bootstrap y sincronizar); es solo para dibujar: el servidor revisa todo en cada llamada.
+  // Los costos de personas solo llegan a quien tiene Nómina; nada de esto los muestra a nadie más.
+  (function () {
+    GRUPOS.horas = ['horas']; BOTON_TAB.horas = 'tabHoras'; BOTON_GRUPO.horas = 'tabHoras';
+    if (typeof SECCIONES_PEND !== 'undefined') SECCIONES_PEND.push(['horas', 'Horas por aprobar', 'Horas por aprobar']);
+    const DIAS = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+    const DIAS_LARGOS = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
+    const CHIP = { Aprobada: 'firmado', Enviada: 'aceptada', Devuelta: 'cancelado', Borrador: '', 'Sin capturar': '', Nuevo: '' };
+    const st = { vista: 'semana', perm: {}, semana: '', datos: null, bloques: [], sucio: false, pendiente: null, cargando: false,
+      aprobar: null, lideres: null, costos: null, reporte: null, importe: null, rango: { desde: '', hasta: '' }, lidBuscar: '', costoMes: '' };
+    const h2 = n => Math.round(Number(n || 0) * 100) / 100;
+    const horasTxt = n => String(h2(n));
+    const chip = e => '<span class="chip ' + (CHIP[e] || '') + '">' + esc(e) + '</span>';
+    const tabla = (enc, cuerpo) => '<div class="tabla-desliza"><table style="font-size:12px"><thead><tr>' + enc + '</tr></thead><tbody>' + cuerpo + '</tbody></table></div>';
+    const llamar = (funcion, args, alExito, boton) => {
+      const b = boton && $(boton);
+      if (b) { if (b.disabled) return; b.disabled = true; }
+      google.script.run.withSuccessHandler(x => { if (b) b.disabled = false; alExito(x); })
+        .withFailureHandler(err => { if (b) b.disabled = false; mostrarError(err); })[funcion](...args);
+    };
+
+    // Estilos del módulo (la semana cabe en un teléfono: 7 casillas por proyecto)
+    try {
+      const css = document.createElement('style');
+      css.textContent = '.hrs-cab{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.hrs-cab .hrs-sem{flex:1;min-width:180px;text-align:center}' +
+        '.hrs-sub{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}.hrs-bloque{border:1px solid var(--borde);border-radius:8px;padding:10px 12px;margin-top:10px;background:#fff}' +
+        '.hrs-bloque.fija{background:#F7FBFA}.hrs-tit{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.hrs-tit .quitar{margin-left:auto}' +
+        '.hrs-dias,.hrs-tot{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;margin:8px 0}.hrs-dias label{margin:0;text-align:center;font-size:11px}' +
+        '.hrs-dias input{padding:8px 0;text-align:center;font-size:16px;-moz-appearance:textfield;appearance:textfield}' +
+        '.hrs-dias input::-webkit-outer-spin-button,.hrs-dias input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}.hrs-tot{text-align:center;font-size:12px}.hrs-tot b{display:block;font-size:14px;color:var(--azul)}' +
+        '.hrs-exceso b{color:#B91C1C}.hrs-parte{border-top:1px dashed var(--borde);margin-top:10px;padding-top:10px}.hrs-semanas{display:flex;gap:6px;flex-wrap:wrap}.hrs-semanas button{text-align:left}';
+      (document.head || document.body).appendChild(css);
+    } catch (e) { /* sin estilos propios: se ve con los de la página */ }
+
+    // ---- Qué puede ver ----
+    function vistas() {
+      const p = st.perm || {};
+      return [['semana', 'Mi semana', true], ['aprobar', 'Por aprobar', !!p.aprobar], ['lideres', 'Líderes', !!p.lideres], ['nomina', 'Nómina', !!p.nomina]]
+        .filter(x => x[2]);
+    }
+    const puedeVer = v => vistas().some(x => x[0] === v);
+    function cuentaPorAprobar() {
+      try { return typeof PEND !== 'undefined' && PEND && !PEND.todos ? (PEND.items || []).filter(x => x.seccion === 'horas').length : 0; } catch (e) { return 0; }
+    }
+    function pintarCuenta() {
+      const n = cuentaPorAprobar();
+      $('cntHoras').textContent = n ? String(n) : '';
+      $('cntHoras').classList.toggle('oculto', !n);
+    }
+    /** Lo que ya no puede ver se borra de la memoria de la página (cambió su rol). */
+    function aplicar() {
+      const p = st.perm || {};
+      if (!p.aprobar) st.aprobar = null;
+      if (!p.lideres) st.lideres = null;
+      if (!p.nomina) { st.costos = null; st.reporte = null; st.importe = null; }
+      if (!puedeVer(st.vista)) st.vista = 'semana';
+      if (TAB === 'horas') pintar();
+      if (typeof COB !== 'undefined' && COB) pintarLiderCob(COB);
+    }
+
+    // ---- Abrir y cambiar de vista ----
+    function abrir() {
+      if (!puedeVer(st.vista)) st.vista = 'semana';
+      cargarVista(st.vista);
+      pintar();
+    }
+    function ver(v) {
+      if (!puedeVer(v)) return;
+      if (st.vista === 'semana' && v !== 'semana' && st.sucio) leerBloques();
+      st.vista = v;
+      if (TAB !== 'horas') { verTab('horas'); return; }
+      cargarVista(v);
+      pintar();
+      if (BOOT) sincronizarAhora();
+    }
+    function cargarVista(v) {
+      if (v === 'semana' && !st.datos && !st.cargando) cargarSemana(st.semana);
+      if (v === 'aprobar' && !st.aprobar) llamar('horasPorAprobar', [], recibirAprobar);
+      if (v === 'lideres' && !st.lideres) llamar('listarLideres', [], recibirLideres);
+      if (v === 'nomina') {
+        if (!st.costos) llamar('listarCostosPersonal', [], recibirCostos);
+        if (!st.reporte) cargarReporte();
+      }
+    }
+    function pintar() {
+      const caja = $('vistaHoras');
+      const sub = vistas();
+      const botones = sub.length > 1 ? '<div class="hrs-sub">' + sub.map(([k, n]) => '<button type="button" class="btn' + (k === st.vista ? '' : ' btn-sec') +
+        '" onclick="HORAS.ver(\'' + k + '\')">' + esc(n) + (k === 'aprobar' && cuentaPorAprobar() ? ' (' + cuentaPorAprobar() + ')' : '') + '</button>').join('') + '</div>' : '';
+      const cuerpo = st.vista === 'aprobar' ? htmlAprobar() : st.vista === 'lideres' ? htmlLideres() : st.vista === 'nomina' ? htmlNomina() : htmlSemana();
+      caja.innerHTML = botones + cuerpo;
+    }
+
+    // ---- Mi semana ----
+    function cargarSemana(semana) {
+      st.cargando = true;
+      google.script.run.withSuccessHandler(v => { st.cargando = false; recibirSemana(v); })
+        .withFailureHandler(err => { st.cargando = false; mostrarError(err); }).misHoras(semana || '');
+    }
+    function recibirSemana(v) {
+      if (!v) return;
+      st.datos = v; st.semana = v.semana; st.sucio = false; st.pendiente = null;
+      st.bloques = v.bloques.map(b => ({ proyecto: b.proyecto, folioVisible: b.folioVisible, nombre: b.nombre, estado: b.estado, motivo: b.motivo,
+        editable: b.editable, horas: b.horas.map(n => n ? String(n) : ''), actividad: b.actividad, estadoProyecto: b.estadoProyecto }));
+      if (TAB === 'horas' && st.vista === 'semana') pintar();
+    }
+    /** Lo que está escrito en las casillas (antes de repintar, guardar o agregar un proyecto). */
+    function leerBloques() {
+      st.bloques.forEach((b, i) => {
+        if (!b.editable) return;
+        b.horas = DIAS.map((_, d) => { const e = $('hrsH' + i + '_' + d); return e ? String(e.value || '').trim() : b.horas[d]; });
+        const a = $('hrsA' + i);
+        if (a) b.actividad = String(a.value || '');
+      });
+    }
+    const numero = t => { const s = String(t == null ? '' : t).trim().replace(',', '.'); return s === '' ? 0 : Number(s); };
+    function totales() {
+      const dia = [0, 0, 0, 0, 0, 0, 0];
+      st.bloques.forEach(b => b.horas.forEach((t, d) => { const n = numero(t); if (isFinite(n) && n > 0) dia[d] = h2(dia[d] + n); }));
+      return dia;
+    }
+    function htmlTotales() {
+      const dia = totales(), max = (st.datos && st.datos.maxHorasDia) || 24;
+      return '<div class="hrs-tot">' + dia.map((n, d) => '<div class="' + (n > max ? 'hrs-exceso' : '') + '">' + DIAS[d] + '<b>' + horasTxt(n) + '</b></div>').join('') + '</div>' +
+        '<div class="nota" style="text-align:right">Semana: <b>' + horasTxt(dia.reduce((s, n) => s + n, 0)) + ' h</b></div>';
+    }
+    function cambio() {
+      st.sucio = true;
+      leerBloques();
+      const t = $('hrsTotales');
+      if (t) t.innerHTML = htmlTotales();
+    }
+    function htmlSemana() {
+      const v = st.datos;
+      if (!v) return '<div class="modulo"><p class="nota">Cargando tu semana…</p></div>';
+      const presentes = {};
+      st.bloques.forEach(b => { presentes[b.proyecto] = true; });
+      const libres = v.proyectos.filter(p => !presentes[p.folio]);
+      const copiar = v.anterior.filter(b => !presentes[b.proyecto]);
+      const editable = st.bloques.some(b => b.editable) || libres.length;
+      const devuelta = st.bloques.filter(b => b.estado === 'Devuelta');
+      const cards = st.bloques.map((b, i) => {
+        const fija = !b.editable;
+        return '<div class="hrs-bloque' + (fija ? ' fija' : '') + '"><div class="hrs-tit"><b style="white-space:nowrap">' + esc(b.folioVisible) + '</b>' +
+          '<span class="nota">' + esc(b.nombre) + (b.estadoProyecto && b.estadoProyecto !== 'Activo' ? ' · ' + esc(b.estadoProyecto) : '') + '</span>' + chip(b.estado) +
+          (fija ? '' : '<button type="button" class="quitar" title="Quitar de la semana" onclick="HORAS.quitar(' + i + ')">×</button>') + '</div>' +
+          (b.motivo ? '<div class="nota aviso-moneda">Devuelta: ' + esc(b.motivo) + '</div>' : '') +
+          '<div class="hrs-dias">' + DIAS.map((d, j) => '<label title="' + esc(DIAS_LARGOS[j] + ' ' + fechaMx(v.dias[j])) + '">' + d + ' <span class="nota">' +
+            esc(v.dias[j].slice(8, 10)) + '</span><input id="hrsH' + i + '_' + j + '" type="number" inputmode="decimal" min="0" max="24" step="0.25" value="' +
+            esc(b.horas[j]) + '"' + (fija ? ' disabled' : ' oninput="HORAS.cambio()"') + '></label>').join('') + '</div>' +
+          '<input id="hrsA' + i + '" maxlength="300" placeholder="Actividad: qué hiciste en el proyecto" value="' + esc(b.actividad) + '"' +
+            (fija ? ' disabled' : ' oninput="HORAS.cambio()"') + '></div>';
+      }).join('');
+      const agregar = libres.length ? '<div class="proy-fila" style="margin-top:12px"><div><label>Agregar proyecto</label><select id="hrsNuevo">' +
+        '<option value="">Elige un proyecto…</option>' + libres.map(p => '<option value="' + esc(p.folio) + '">' + esc(p.folioVisible + ' — ' + p.nombre +
+          (p.estado !== 'Activo' ? ' (' + p.estado + ')' : '')) + '</option>').join('') + '</select></div>' +
+        '<button type="button" class="btn btn-sec" onclick="HORAS.agregar()">Agregar</button></div>' : '';
+      const semanas = v.recientes.map(r => '<button type="button" class="btn btn-sec" style="padding:6px 10px;font-size:12px" onclick="HORAS.irSemana(\'' + r.semana + '\')">' +
+        'Semana ' + r.numero + ' · ' + esc(r.estado) + (r.total ? ' · ' + horasTxt(r.total) + ' h' : '') + '</button>').join('');
+      return '<div class="modulo"><div class="hrs-cab">' +
+        '<button type="button" class="btn btn-sec" title="Semana anterior" onclick="HORAS.irSemana(\'' + v.semanaAnterior + '\')">‹</button>' +
+        '<div class="hrs-sem"><b>Semana ' + v.numero + '</b> ' + chip(v.estado) + '<div class="nota">' + esc(v.texto) + (v.actual ? ' · esta semana' : '') + '</div></div>' +
+        '<button type="button" class="btn btn-sec" title="Semana siguiente"' + (v.semanaSiguiente ? ' onclick="HORAS.irSemana(\'' + v.semanaSiguiente + '\')"' : ' disabled') + '>›</button></div>' +
+        '<div id="hrsAvisoSync"></div>' +
+        (devuelta.length ? '<div class="aviso error" style="display:block;margin-top:10px">Te devolvieron horas: corrígelas y vuelve a enviar la semana.</div>' : '') +
+        (copiar.length ? '<div class="acciones"><button type="button" class="btn btn-sec" onclick="HORAS.copiar()">Copiar proyectos de la semana pasada (' + copiar.length + ')</button></div>' : '') +
+        (cards || '<p class="nota" style="margin-top:12px">Agrega los proyectos en los que trabajaste y las horas de cada día (en cuartos de hora: 0.25, 0.5, 0.75…).</p>') +
+        agregar + '<div id="hrsTotales">' + htmlTotales() + '</div>' +
+        (editable ? '<div class="acciones"><button type="button" id="btnHrsEnviar" class="btn" onclick="HORAS.guardar(true)">Enviar semana</button>' +
+          '<button type="button" id="btnHrsGuardar" class="btn btn-sec" onclick="HORAS.guardar(false)">Guardar borrador</button>' +
+          '<span class="nota">Máximo 24 h por día. Al enviar, el líder de cada proyecto las aprueba.</span></div>' : '') + '</div>' +
+        '<div class="modulo"><h2>Mis semanas</h2><div class="hrs-semanas">' + semanas + '</div></div>';
+    }
+    function agregar(folio) {
+      leerBloques();
+      const f = folio || ($('hrsNuevo') ? $('hrsNuevo').value : '');
+      const p = st.datos && st.datos.proyectos.find(x => x.folio === f);
+      if (!p) { aviso('error', 'Elige un proyecto para agregarlo a la semana.'); return; }
+      if (st.bloques.some(b => b.proyecto === f)) return;
+      st.bloques.push({ proyecto: p.folio, folioVisible: p.folioVisible, nombre: p.nombre, estado: 'Nuevo', motivo: '', editable: true,
+        horas: ['', '', '', '', '', '', ''], actividad: '', estadoProyecto: p.estado });
+      st.sucio = true;
+      pintar();
+    }
+    function copiar() {
+      leerBloques();
+      (st.datos ? st.datos.anterior : []).forEach(a => {
+        if (st.bloques.some(b => b.proyecto === a.proyecto)) return;
+        st.bloques.push({ proyecto: a.proyecto, folioVisible: a.folioVisible, nombre: a.nombre, estado: 'Nuevo', motivo: '', editable: true,
+          horas: ['', '', '', '', '', '', ''], actividad: a.actividad, estadoProyecto: a.estadoProyecto });
+      });
+      st.sucio = true;
+      pintar();
+    }
+    function quitar(i) {
+      leerBloques();
+      const b = st.bloques[i];
+      if (!b || !b.editable) return;
+      st.bloques.splice(i, 1);
+      st.sucio = true;
+      pintar();
+    }
+    /** Revisión en el navegador (el servidor revisa todo otra vez): cuartos de hora, 24 h por día, actividad. '' si está bien. */
+    function revisar() {
+      const max = (st.datos && st.datos.maxHorasDia) || 24;
+      for (const b of st.bloques) {
+        if (!b.editable) continue;
+        for (let d = 0; d < 7; d++) {
+          const n = numero(b.horas[d]);
+          if (!isFinite(n) || n < 0) return 'Horas no válidas en ' + b.folioVisible + ' (' + DIAS_LARGOS[d] + ').';
+          if (Math.abs(n * 4 - Math.round(n * 4)) > 1e-9) return 'Las horas van en cuartos de hora (0.25, 0.5, 0.75…): revisa ' + b.folioVisible + ' (' + DIAS_LARGOS[d] + ').';
+        }
+        if (b.horas.some(t => numero(t) > 0) && String(b.actividad || '').trim().length < 3) return 'Escribe la actividad de ' + b.folioVisible + ' (qué hiciste en el proyecto).';
+      }
+      const dia = totales(), d = dia.findIndex(n => n > max);
+      return d === -1 ? '' : 'El ' + DIAS_LARGOS[d] + ' suma ' + horasTxt(dia[d]) + ' h: máximo ' + max + ' h al día entre todos tus proyectos.';
+    }
+    function guardar(enviar) {
+      if (!st.datos) return;
+      leerBloques();
+      const error = revisar();
+      if (error) { aviso('error', esc(error)); return; }
+      const bloques = st.bloques.map(b => ({ proyecto: b.proyecto, horas: b.horas.map(numero), actividad: String(b.actividad || '').trim() }));
+      llamar('guardarSemana', [{ semana: st.datos.semana, bloques: bloques, enviar: !!enviar }], v => {
+        recibirSemana(v);
+        aviso('ok', enviar ? 'Semana enviada: el líder de cada proyecto la revisa.' : 'Borrador guardado (todavía no se envía).');
+      }, enviar ? 'btnHrsEnviar' : 'btnHrsGuardar');
+    }
+    function irSemana(s) {
+      if (st.sucio && !window.confirm('Tienes cambios sin guardar en esta semana. ¿Cambiar de semana sin guardarlos?')) return;
+      st.sucio = false; st.datos = null; st.semana = s;
+      pintar();
+      cargarSemana(s);
+    }
+
+    // ---- Por aprobar (líder, Aprobaciones, super admin): solo horas ----
+    function recibirAprobar(d) {
+      if (!d || !(st.perm || {}).aprobar) return;
+      st.aprobar = d;
+      if (TAB === 'horas' && st.vista === 'aprobar') pintar();
+    }
+    const pedido = x => ({ correo: x.correo, semana: x.semana, proyecto: x.proyecto, huella: x.huella });
+    function grupos(lista) {
+      const g = [];
+      lista.forEach((x, i) => {
+        const k = x.correo + '|' + x.semana;
+        let y = g.find(z => z.k === k);
+        if (!y) { y = { k: k, nombre: x.nombre, correo: x.correo, numero: x.numero, texto: x.texto, items: [] }; g.push(y); }
+        y.items.push(i);
+      });
+      return g;
+    }
+    /** Una parte (proyecto de una persona en una semana) como tarjeta: cabe en el teléfono sin deslizar. */
+    function htmlParte(x, i, revisada) {
+      const como = x.como === 'superadmin' ? ' <span class="nota">(como super admin)</span>' : x.propio ? ' <span class="nota">(tuyas: pide motivo)</span>' : '';
+      const chico = 'style="padding:6px 12px;font-size:13px"';
+      return '<div class="hrs-parte"><div class="hrs-tit"><b style="white-space:nowrap">' + esc(x.folioVisible) + '</b><span class="nota">' + esc(x.proyectoNombre) + '</span>' + como +
+        '<b style="margin-left:auto;white-space:nowrap">' + horasTxt(x.total) + ' h</b></div>' +
+        '<div class="hrs-tot">' + x.horas.map((n, d) => '<div>' + DIAS[d] + '<b>' + (n ? horasTxt(n) : '·') + '</b></div>').join('') + '</div>' +
+        '<div class="nota">' + esc(x.actividad) + '</div>' +
+        (revisada ? '<div class="nota" style="margin-top:4px">' + chip(x.estado) + (x.motivo ? ' ' + esc(x.motivo) : '') + '</div>' : '') +
+        '<div class="acciones" style="margin-top:8px">' + (revisada ? '' : '<button type="button" class="btn" ' + chico + ' onclick="HORAS.aprobar([' + i + '])">Aprobar</button>') +
+        '<button type="button" class="btn btn-sec" ' + chico + ' onclick="HORAS.devolver(' + i + ',' + (revisada ? 'true' : 'false') + ')">Devolver</button></div></div>';
+    }
+    function htmlAprobar() {
+      const d = st.aprobar;
+      if (!d) return '<div class="modulo"><p class="nota">Cargando…</p></div>';
+      const porAprobar = grupos(d.porAprobar).map(g => '<div class="hrs-bloque"><div class="hrs-tit"><b>' + esc(g.nombre) + '</b><span class="nota">Semana ' + g.numero + ' · ' +
+        esc(g.texto) + '</span>' + (g.items.length > 1 ? '<button type="button" class="btn" style="margin-left:auto;padding:6px 12px;font-size:13px" onclick="HORAS.aprobar([' +
+        g.items.join(',') + '])">Aprobar todo</button>' : '') + '</div>' + g.items.map(i => htmlParte(d.porAprobar[i], i, false)).join('') + '</div>').join('');
+      const revisadas = d.revisadas.length ? '<div class="modulo"><h2>Revisadas en las últimas semanas</h2><div class="nota">Si aprobaste algo por error, devuélvelo ' +
+        'con el motivo: le llega a la persona para corregirlo.</div>' + grupos(d.revisadas).map(g => '<div class="hrs-bloque fija"><div class="hrs-tit"><b>' + esc(g.nombre) +
+        '</b><span class="nota">Semana ' + g.numero + ' · ' + esc(g.texto) + '</span></div>' + g.items.map(i => htmlParte(d.revisadas[i], i, true)).join('') + '</div>').join('') +
+        '</div>' : '';
+      return '<div class="modulo"><h2>Horas por aprobar</h2><div class="nota">Apruebas las horas de los proyectos donde eres líder; las del líder y las de un ' +
+        'proyecto sin líder, Aprobaciones. Nadie aprueba sus propias horas.</div>' +
+        (porAprobar || '<p class="nota" style="margin-top:12px">No hay horas esperando tu aprobación.</p>') + '</div>' + revisadas;
+    }
+    function aprobar(indices) {
+      const d = st.aprobar;
+      if (!d) return;
+      const lista = indices.map(i => d.porAprobar[i]).filter(Boolean);
+      if (!lista.length) return;
+      let motivo = '';
+      if (lista.some(x => x.propio)) {
+        motivo = window.prompt('Son tus propias horas. Como super admin puedes aprobarlas con un motivo (mínimo 10 caracteres; queda en la bitácora):');
+        if (motivo == null) return;
+      }
+      llamar('aprobarHoras', [lista.map(pedido), motivo], v => { recibirAprobar(v); aviso('ok', lista.length === 1 ? 'Horas aprobadas.' : lista.length + ' partes aprobadas.'); });
+    }
+    function devolver(i, revisada) {
+      const d = st.aprobar, x = d && (revisada ? d.revisadas : d.porAprobar)[i];
+      if (!x) return;
+      const motivo = window.prompt('¿Por qué devuelves las horas de ' + x.nombre + ' en ' + x.folioVisible + '? (le llega para corregirlas)');
+      if (motivo == null) return;
+      if (motivo.trim().length < 5) { mostrarError('Escribe el motivo (mínimo 5 caracteres).'); return; }
+      llamar('devolverHoras', [[pedido(x)], motivo], v => { recibirAprobar(v); aviso('ok', 'Horas devueltas a ' + esc(x.nombre) + '.'); });
+    }
+
+    // ---- Líderes de proyecto (super admin y cobranza) ----
+    function recibirLideres(d) {
+      if (!d || !(st.perm || {}).lideres) return;
+      st.lideres = d;
+      if (TAB === 'horas' && st.vista === 'lideres') pintar();
+      if (typeof COB !== 'undefined' && COB) pintarLiderCob(COB);
+    }
+    const opcionesLider = actual => '<option value="">Sin líder (aprueba Aprobaciones)</option>' + (st.lideres.candidatos || [])
+      .map(c => '<option value="' + esc(c.correo) + '"' + (c.correo === actual ? ' selected' : '') + '>' + esc(c.nombre + (c.nombre !== c.correo ? ' · ' + c.correo : '')) + '</option>').join('');
+    function htmlLideres() {
+      const d = st.lideres;
+      if (!d) return '<div class="modulo"><p class="nota">Cargando…</p></div>';
+      const q = String(st.lidBuscar || '').toLowerCase();
+      const lista = d.proyectos.map((p, i) => [p, i]).filter(([p]) => !q || (p.folioVisible + ' ' + p.nombre + ' ' + p.liderNombre).toLowerCase().indexOf(q) !== -1);
+      return '<div class="modulo"><h2>Líderes de proyecto</h2><div class="nota" style="margin-bottom:8px">El líder aprueba las horas de su proyecto; las suyas las ' +
+        'aprueba Aprobaciones (y también las de un proyecto sin líder).</div>' +
+        '<input id="hrsLidBuscar" placeholder="Buscar por folio, nombre o líder" value="' + esc(st.lidBuscar) + '" oninput="HORAS.buscarLider(this.value)">' +
+        tabla('<th>Proyecto</th><th>Estado</th><th style="min-width:220px">Líder</th><th></th>', lista.map(([p, i]) => '<tr><td><b style="white-space:nowrap">' +
+          esc(p.folioVisible) + '</b><div class="nota">' + esc(p.nombre) + '</div></td><td>' + esc(p.estado) + '</td><td><select id="hrsLid' + i + '">' + opcionesLider(p.lider) +
+          '</select></td><td><button type="button" class="btn btn-sec" style="padding:6px 10px;font-size:12px" onclick="HORAS.asignar(' + i + ')">Guardar</button></td></tr>').join('')) + '</div>';
+    }
+    function asignar(i) {
+      const p = st.lideres && st.lideres.proyectos[i];
+      if (!p) return;
+      llamar('asignarLider', [p.folio, $('hrsLid' + i).value], d => { recibirLideres(d); aviso('ok', 'Líder de <b>' + esc(p.folioVisible) + '</b> guardado.'); });
+    }
+    /** En la vista de Cobranza del proyecto: el líder, con su control (super admin y cobranza). */
+    function pintarLiderCob(v) {
+      const caja = $('cobLider'), p = (st.perm || {});
+      if (!v || !v.proyecto || !p.lideres || v.proyecto.estado === 'Cancelado') { caja.classList.add('oculto'); caja.innerHTML = ''; return; }
+      if (!st.lideres) {
+        caja.classList.add('oculto');
+        if (!st.pidiendoLideres) {
+          st.pidiendoLideres = true;
+          google.script.run.withSuccessHandler(d => { st.pidiendoLideres = false; recibirLideres(d); })
+            .withFailureHandler(() => { st.pidiendoLideres = false; }).listarLideres();
+        }
+        return;
+      }
+      const i = st.lideres.proyectos.findIndex(x => x.folio === v.proyecto.folio);
+      if (i === -1) { caja.classList.add('oculto'); return; }
+      caja.classList.remove('oculto');
+      caja.innerHTML = '<div class="sat" style="margin-top:14px"><div class="sat-titulo">Líder del proyecto (aprueba sus horas)</div><div class="proy-fila"><div>' +
+        '<select id="cobLiderSel">' + opcionesLider(st.lideres.proyectos[i].lider) + '</select></div>' +
+        '<button type="button" id="btnCobLider" class="btn btn-sec" onclick="HORAS.asignarCob()">Guardar líder</button></div></div>';
+    }
+    function asignarCob() {
+      const folio = typeof COB !== 'undefined' && COB ? COB.proyecto.folio : '';
+      if (!folio) return;
+      llamar('asignarLider', [folio, $('cobLiderSel').value], d => { recibirLideres(d); aviso('ok', 'Líder del proyecto guardado.'); }, 'btnCobLider');
+    }
+
+    // ---- Nómina: costo mensual por persona, CSV y reporte (solo rol Nómina y super admin) ----
+    function recibirCostos(d) {
+      if (!d || !(st.perm || {}).nomina) return;
+      st.costos = d;
+      if (!st.costoMes) st.costoMes = d.mesActual;
+      if (TAB === 'horas' && st.vista === 'nomina') pintar();
+    }
+    function cargarReporte() {
+      llamar('reporteNomina', [st.rango.desde, st.rango.hasta], recibirReporte, 'btnNomReporte');
+    }
+    function recibirReporte(d) {
+      if (!d || !(st.perm || {}).nomina) return;
+      st.reporte = d; st.rango = { desde: d.desde, hasta: d.hasta };
+      if (TAB === 'horas' && st.vista === 'nomina') pintar();
+    }
+    function htmlNomina() {
+      const c = st.costos, r = st.reporte;
+      if (!c) return '<div class="modulo"><p class="nota">Cargando…</p></div>';
+      const personas = '<option value="">Elige a la persona…</option>' + c.personas.map(p => '<option value="' + esc(p.correo) + '">' + esc(p.nombre + (p.nombre !== p.correo ? ' · ' + p.correo : '')) + '</option>').join('');
+      const meses = c.costos.map(x => x.mes).filter((m, i, a) => a.indexOf(m) === i);
+      const visibles = c.costos.map((x, i) => [x, i]).filter(([x]) => !st.costoMes || x.mes === st.costoMes);
+      const faltan = c.faltan.length ? '<div class="sat" style="margin-top:12px"><div class="sat-titulo">Sin costo capturado (horas aprobadas que no se pueden costear)</div>' +
+        c.faltan.map((f, i) => '<div class="nota">' + esc(f.nombre) + ' · ' + esc(f.mes) + ' · ' + horasTxt(f.horas) + ' h <a href="#" onclick="HORAS.prellenar(' + i + ');return false">Capturar</a></div>').join('') + '</div>' : '';
+      const imp = st.importe ? '<div class="sat" style="margin-top:12px"><div class="sat-titulo">Resultado del archivo: ' + st.importe.resumen.nuevos + ' nuevos · ' +
+        st.importe.resumen.actualizados + ' actualizados · ' + st.importe.resumen.sinCambio + ' sin cambio · ' + st.importe.resumen.errores + ' con error' +
+        (st.importe.resumen.repetidos ? ' · ' + st.importe.resumen.repetidos + ' repetidos' : '') + '</div>' +
+        tabla('<th>Renglón</th><th>Correo</th><th>Mes</th><th class="num">Costo</th><th>Resultado</th>', st.importe.resultados.map(x => '<tr><td>' + x.fila + '</td><td>' + esc(x.correo) +
+          '</td><td>' + esc(x.mes) + '</td><td class="num">' + (x.costo ? dinero(x.costo, 'MXN') : '') + '</td><td>' + esc(x.resultado) + (x.error ? '<div class="nota aviso-moneda">' +
+          esc(x.error) + '</div>' : '') + '</td></tr>').join('')) + '</div>' : '';
+      const costos = '<div class="modulo"><h2>Costo mensual por persona</h2><div class="nota" style="margin-bottom:8px">Sueldo + carga patronal en MXN, uno por persona y ' +
+        'mes. Se reparte entre los proyectos según las horas aprobadas de ese mes. Solo Nómina y super admin lo ven.</div>' +
+        '<div class="grid"><div><label>Persona *</label><select id="nomPersona">' + personas + '</select></div>' +
+        '<div><label>Mes *</label><input id="nomMes" type="month" value="' + esc(c.mesActual) + '"></div>' +
+        '<div><label>Costo mensual (MXN) *</label><input id="nomCosto" type="number" min="0" step="0.01" inputmode="decimal" style="text-align:right"></div>' +
+        '<div><label>Notas</label><input id="nomNotas" maxlength="200" placeholder="Sueldo + IMSS, aguinaldo…"></div></div>' +
+        '<div class="acciones"><button type="button" id="btnNomGuardar" class="btn" onclick="HORAS.guardarCosto()">Guardar costo</button>' +
+        '<span class="nota">O sube un CSV (correo, mes, costo[, notas]):</span><input id="nomCsv" type="file" accept=".csv,text/csv,text/plain" style="width:auto">' +
+        '<button type="button" id="btnNomCsv" class="btn btn-sec" onclick="HORAS.importar()">Importar CSV</button></div>' + imp + faltan +
+        '<div class="acciones"><label style="margin:0">Mes</label><select id="nomFiltroMes" style="width:auto" onchange="HORAS.filtrarMes(this.value)"><option value="">Todos</option>' +
+        meses.map(m => '<option value="' + esc(m) + '"' + (m === st.costoMes ? ' selected' : '') + '>' + esc(m) + '</option>').join('') + '</select></div>' +
+        (visibles.length ? tabla('<th>Persona</th><th>Mes</th><th class="num">Costo</th><th>Notas</th><th>Capturó</th><th></th>', visibles.map(([x, i]) => '<tr><td>' + esc(x.nombre) +
+          '<div class="nota">' + esc(x.correo) + '</div></td><td>' + esc(x.mes) + '</td><td class="num">' + dinero(x.costo, 'MXN') + '</td><td>' + esc(x.notas) + '</td><td class="nota">' +
+          esc(x.capturo) + '</td><td style="white-space:nowrap"><button type="button" class="quitar" title="Quitar" onclick="HORAS.quitarCosto(' + i + ')">×</button></td></tr>').join(''))
+          : '<p class="nota">No hay costos capturados' + (st.costoMes ? ' de ' + esc(st.costoMes) : '') + '.</p>') + '</div>';
+      return costos + htmlReporte(r);
+    }
+    function htmlReporte(r) {
+      const cab = '<div class="modulo"><h2>Reporte de nómina por proyecto</h2><div class="acciones" style="margin-top:0"><label style="margin:0">Desde</label>' +
+        '<input id="nomDesde" type="month" style="width:auto" value="' + esc(st.rango.desde) + '"><label style="margin:0">Hasta</label>' +
+        '<input id="nomHasta" type="month" style="width:auto" value="' + esc(st.rango.hasta) + '">' +
+        '<button type="button" id="btnNomReporte" class="btn btn-sec" onclick="HORAS.verReporte()">Ver</button>' +
+        '<button type="button" class="btn btn-sec" onclick="HORAS.descargar()"' + (r ? '' : ' disabled') + '>Descargar CSV</button></div>';
+      if (!r) return cab + '<p class="nota">Cargando…</p></div>';
+      const tiles = '<div class="tiles"><div class="tile"><span>Costo repartido</span><b>' + dinero(r.totales.total.monto, 'MXN') + '</b></div>' +
+        '<div class="tile"><span>Horas aprobadas</span><b>' + horasTxt(r.totales.total.horas) + '</b></div>' +
+        '<div class="tile"><span>Horas sin costear</span><b' + (r.totales.total.sinCostear ? ' class="negativo"' : '') + '>' + horasTxt(r.totales.total.sinCostear) + '</b></div>' +
+        '<div class="tile"><span>Por aprobar</span><b>' + horasTxt(r.porAprobar.horas) + ' h</b></div></div>';
+      const celda = x => '<td class="num">' + (x ? dinero(x.monto, 'MXN') + (x.sinCostear ? '<div class="nota aviso-moneda">' + horasTxt(x.sinCostear) + ' h sin costear</div>' : '') : '') + '</td>';
+      const filas = r.proyectos.map(p => '<tr><td style="min-width:180px"><b style="white-space:nowrap">' + esc(p.folioVisible) + '</b><div class="nota">' + esc(p.nombre) +
+        (p.estado && p.estado !== 'Activo' ? ' · ' + esc(p.estado) : '') + '</div></td>' + r.meses.map(m => celda(p.meses[m])).join('') + '<td class="num"><b>' +
+        dinero(p.total.monto, 'MXN') + '</b></td><td class="num">' + horasTxt(p.total.horas) + '</td><td class="num">' + (p.total.sinCostear ? horasTxt(p.total.sinCostear) : '') + '</td></tr>').join('') +
+        '<tr><td><b>Total</b></td>' + r.meses.map(m => celda(r.totales.meses[m])).join('') + '<td class="num"><b>' + dinero(r.totales.total.monto, 'MXN') + '</b></td><td class="num">' +
+        horasTxt(r.totales.total.horas) + '</td><td class="num">' + horasTxt(r.totales.total.sinCostear) + '</td></tr>';
+      const sinC = r.sinCostear.length ? '<div class="sat" style="margin-top:12px"><div class="sat-titulo">Horas aprobadas sin costo del mes (no entran al costo)</div>' +
+        r.sinCostear.map(x => '<div class="nota">' + esc(x.nombre) + ' · ' + esc(x.mes) + ' · ' + horasTxt(x.horas) + ' h</div>').join('') + '</div>' : '';
+      const sinH = r.sinHoras.length ? '<div class="sat" style="margin-top:12px"><div class="sat-titulo">Costos sin horas aprobadas en su mes (no se reparten)</div>' +
+        r.sinHoras.map(x => '<div class="nota">' + esc(x.nombre) + ' · ' + esc(x.mes) + ' · ' + dinero(x.costo, 'MXN') + '</div>').join('') + '</div>' : '';
+      return cab + tiles + (r.proyectos.length ? tabla('<th>Proyecto</th>' + r.meses.map(m => '<th class="num">' + esc(m) + '</th>').join('') +
+        '<th class="num">Total</th><th class="num">Horas</th><th class="num">Sin costear</th>', filas) : '<p class="nota">No hay horas aprobadas en esos meses.</p>') +
+        sinC + sinH + '<div class="nota" style="margin-top:8px">Por persona y mes: costo × horas aprobadas en el proyecto ÷ horas aprobadas de esa persona en el mes. ' +
+        'Un mes sin costo capturado deja sus horas sin costear (no se inventa un costo). Siempre en MXN.</div></div>';
+    }
+    function guardarCosto() {
+      const p = { correo: $('nomPersona').value, mes: $('nomMes').value, costo: $('nomCosto').value, notas: $('nomNotas').value };
+      if (!p.correo) { mostrarError('Elige a la persona.'); return; }
+      llamar('guardarCostoPersonal', [p], d => { recibirCostos(d); st.reporte = null; cargarReporte(); aviso('ok', 'Costo guardado.'); }, 'btnNomGuardar');
+    }
+    function quitarCosto(i) {
+      const x = st.costos && st.costos.costos[i];
+      if (!x || !window.confirm('¿Quitar el costo de ' + x.nombre + ' en ' + x.mes + '?')) return;
+      llamar('guardarCostoPersonal', [{ correo: x.correo, mes: x.mes, quitar: true }], d => { recibirCostos(d); st.reporte = null; cargarReporte(); aviso('ok', 'Costo quitado.'); });
+    }
+    function prellenar(i) {
+      const f = st.costos && st.costos.faltan[i];
+      if (!f) return;
+      $('nomPersona').value = f.correo; $('nomMes').value = f.mes; $('nomCosto').value = '';
+      if ($('nomCosto').focus) $('nomCosto').focus();
+    }
+    function importarTexto(texto) {
+      llamar('importarCostosPersonal', [texto], r => { st.importe = r; recibirCostos(r.vista); st.reporte = null; cargarReporte();
+        aviso(r.resumen.errores ? 'error' : 'ok', 'Archivo importado: ' + r.resumen.nuevos + ' nuevos, ' + r.resumen.actualizados + ' actualizados' +
+          (r.resumen.errores ? ', ' + r.resumen.errores + ' con error (ve el detalle abajo)' : '') + '.'); }, 'btnNomCsv');
+    }
+    function importar() {
+      const f = $('nomCsv').files && $('nomCsv').files[0];
+      if (!f) { mostrarError('Elige el archivo CSV (correo, mes, costo).'); return; }
+      if (f.size > 200000) { mostrarError('El archivo es demasiado grande.'); return; }
+      if (f.text) { f.text().then(importarTexto, mostrarError); return; }
+      const lector = new FileReader();
+      lector.onload = () => importarTexto(String(lector.result || ''));
+      lector.readAsText(f);
+    }
+    function verReporte() {
+      st.rango = { desde: $('nomDesde').value, hasta: $('nomHasta').value };
+      cargarReporte();
+      if (BOOT) sincronizarAhora();
+    }
+    // CSV del reporte (UTF-8 con BOM; texto que empiece con = + - @ va con apóstrofo): por proyecto, un costo por mes
+    const texto = s => { const v = String(s ?? ''); return '"' + (/^[=+\-@\t\r]/.test(v) ? "'" + v : v).replace(/"/g, '""') + '"'; };
+    const num = n => n == null || n === '' ? '' : h2(n).toFixed(2);
+    function csv() {
+      const r = st.reporte;
+      if (!r) return '';
+      const enc = ['Folio', 'Proyecto', 'Estado'].concat(r.meses.map(m => 'Costo ' + m), ['Total MXN', 'Horas aprobadas', 'Horas sin costear']);
+      const filas = r.proyectos.map(p => [texto(p.folioVisible), texto(p.nombre), texto(p.estado)].concat(r.meses.map(m => num(p.meses[m] ? p.meses[m].monto : 0)),
+        [num(p.total.monto), num(p.total.horas), num(p.total.sinCostear)]).join(','));
+      return '﻿' + [enc.map(texto).join(',')].concat(filas).join('\r\n');
+    }
+    function descargar() {
+      if (!st.reporte) return;
+      const url = URL.createObjectURL(new Blob([csv()], { type: 'text/csv;charset=utf-8' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = 'nomina-' + st.reporte.desde + '-a-' + st.reporte.hasta + '.csv';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    window.HORAS = { ver: ver, irSemana: irSemana, cambio: cambio, agregar: agregar, copiar: copiar, quitar: quitar, guardar: guardar, aprobar: aprobar,
+      devolver: devolver, asignar: asignar, asignarCob: asignarCob, actualizarSemana: () => { if (st.pendiente) recibirSemana(st.pendiente); }, buscarLider: q => { st.lidBuscar = q; pintar(); const e = $('hrsLidBuscar'); if (e && e.focus) e.focus(); },
+      guardarCosto: guardarCosto, quitarCosto: quitarCosto, prellenar: prellenar, importar: importar, importarTexto: importarTexto,
+      filtrarMes: m => { st.costoMes = m; pintar(); }, verReporte: verReporte, descargar: descargar, csv: csv, revisar: () => { leerBloques(); return revisar(); },
+      estado: () => st };
+
+    registrarModulo({
+      nombre: 'Horas',
+      alPermisos() { $('tabHoras').classList.remove('oculto'); }, // toda cuenta activa captura sus horas
+      alBootstrap(d) {
+        st.perm = d.horasPermisos || {};
+        aplicar();
+        pintarCuenta();
+        // Liga directa de los correos (#horas)
+        let h = '';
+        try { h = String((window.location && window.location.hash) || ''); } catch (e) { h = ''; }
+        if (/^#horas$/i.test(h)) {
+          try { if (window.history && window.history.replaceState) window.history.replaceState(null, '', window.location.pathname + window.location.search); } catch (e) {}
+          setTimeout(() => verTab('horas'), 0);
+        }
+      },
+      alVerTab(t) {
+        $('vistaHoras').classList.toggle('oculto', t !== 'horas');
+        if (t === 'horas') abrir();
+      },
+      contexto() {
+        if (TAB !== 'horas') return typeof COB !== 'undefined' && COB && (st.perm || {}).lideres ? { horasLideres: true } : {};
+        const c = {};
+        if (st.vista === 'semana' && st.semana) c.horasSemana = st.semana;
+        if (st.vista === 'aprobar') c.horasAprobar = true;
+        if (st.vista === 'lideres') c.horasLideres = true;
+        if (st.vista === 'nomina') { c.nomCostos = true; if (st.reporte) c.nomReporte = { desde: st.rango.desde, hasta: st.rango.hasta }; }
+        return c;
+      },
+      alSincronizar(r) {
+        if (!r) return;
+        if (r.horasPermisos) { st.perm = r.horasPermisos; aplicar(); }
+        if (r.horasSemana && st.datos && r.horasSemana.semana === st.datos.semana) {
+          if (!st.sucio) recibirSemana(r.horasSemana);
+          else {
+            st.pendiente = r.horasSemana;
+            const a = $('hrsAvisoSync');
+            if (a) a.innerHTML = '<div class="nota aviso-moneda" style="margin-top:8px">Tu semana cambió en otra pestaña o la revisaron. ' +
+              '<a href="#" onclick="HORAS.actualizarSemana();return false">Actualizar</a> (se pierde lo que no hayas guardado).</div>';
+          }
+        }
+        if (r.horasAprobar) recibirAprobar(r.horasAprobar);
+        if (r.horasLideres) recibirLideres(r.horasLideres);
+        if (r.nomCostos) recibirCostos(r.nomCostos);
+        if (r.nomReporte) recibirReporte(r.nomReporte);
+        pintarCuenta();
+        if (TAB === 'horas' && st.vista !== 'semana') pintar();
+      },
+      alCobranza(v) { pintarLiderCob(v); },
     });
   })();
 </script>

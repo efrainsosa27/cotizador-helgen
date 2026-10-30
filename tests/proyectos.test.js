@@ -78,7 +78,8 @@ assert.equal(ctx.clientesDesdeFilas([F('Luis','Solar MX','LUSM800101AB1')])[0].i
 const nuevo=(extra)=>({nombre:'Techo solar planta',ubicacion:'Querétaro',cliente:{nombre:'Luis',empresa:'Solar MX',rfc:'LUSM800101AB1'},...extra});
 const p1=ctx.crearProyecto(nuevo({idSolicitud:'p1',vendedor:{email:'impostor@helgen.tech'}}));
 assert.equal(p1.folio,'PRY-2026-0001'); assert.equal(p1.estado,'Activo'); assert.equal(p1.clienteId,'LUSM800101AB1');
-assert.equal(pry.m[0].join(','),'Folio,Fecha,Nombre,Cliente,cliente_id,Ubicación,Estado,carpeta_id,vendedor_email,vendedor_nombre,vendedor_apellido,clave');
+// lider_email (M): incremento 7 (N), líder del proyecto
+assert.equal(pry.m[0].join(','),'Folio,Fecha,Nombre,Cliente,cliente_id,Ubicación,Estado,carpeta_id,vendedor_email,vendedor_nombre,vendedor_apellido,clave,lider_email');
 const f1=pry.m[1];
 assert.deepEqual([f1[0],f1[2],f1[3],f1[4],f1[5],f1[6]],['PRY-2026-0001','Techo solar planta','Luis — Solar MX','LUSM800101AB1','Querétaro','Activo']);
 assert.deepEqual(f1.slice(8,11),['ana@helgen.tech','Ana','López'],'vendedor del servidor');
