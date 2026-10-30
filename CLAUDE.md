@@ -485,12 +485,18 @@ Contrato: `docs/incremento-7.md`; detalle por módulo: `docs/incremento-7-{adici
   argumento opcional: sin él, las cifras de antes) cobra contrato y luego cada adicional; `Pagos.etapa_adicional` apunta a la etapa por
   su dueño. CxC y flujo incluyen sus etapas. Anular la cotización, el contrato o el proyecto la arrastra (sus pagos se reparten de nuevo).
 - **G · Gastos.** `guardarGasto`, `aprobarGasto`/`rechazarGasto` (Aprobaciones, nunca lo propio; super admin con motivo),
-  `reembolsarGasto` (Compras, con comprobante), `cancelarGasto`, `listarGastos`, `archivoGasto`. Estados Enviado → Aprobado | Rechazado →
-  Reembolsado; Cancelado; Anulada. XML opcional con `leerCfdi` (receptor = RFC de Helgen; UUID único contra gastos y facturas de
-  proveedor). `costoGastosPorProyecto` (sin IVA, Aprobado y Reembolsado). Correos `gasto.*` sin montos; Pendientes.
-- **N · Horas y nómina.** Rol `nomina` (no delegable). `lider_email` en Proyectos (`asignarLider`: super admin o cobranza). `misHoras`,
-  `guardarSemana` (semana ISO, pasos de 0.25 h, ≤ 24 h/día), `horasPorAprobar`, `aprobarHoras`/`devolverHoras` (líder; lo del líder o de
-  proyectos sin líder → Aprobaciones), `guardarCostoPersonal`/`importarCostosPersonal`/`listarCostosPersonal`/`reporteNomina` (Nómina).
+  `reembolsarGasto` (Compras, con comprobante; **nunca lo propio**: otra persona de Compras o el super admin con `motivoExcepcion`),
+  `cancelarGasto`, `listarGastos`, `archivoGasto` (el XML siempre como `text/plain`: `mimeArchivoGasto`). Estados Enviado → Aprobado |
+  Rechazado → Reembolsado; Cancelado; Anulada. XML opcional con `leerCfdi` (receptor = RFC de Helgen y emisor distinto de Helgen; UUID
+  único contra gastos y facturas de proveedor; el folio que ya lo tiene solo lo ven Compras y super admin). IVA = traslados federales;
+  los locales (`leerCfdi.locales`, p. ej. ISH) van al subtotal (costo). Archivos creados y restringidos **antes** del candado con nombre
+  provisional y renombrados dentro (`archivosPrivados_`, `nombrarArchivo_`); si algo falla o es repetido, a la Papelera
+  (`papeleraArchivos_`). `costoGastosPorProyecto` (sin IVA, Aprobado y Reembolsado). Correos `gasto.*` sin montos; Pendientes.
+- **N · Horas y nómina.** Rol `nomina` (no delegable). `lider_email` en Proyectos (`asignarLider`: super admin o cobranza; **nadie se
+  nombra a sí mismo** salvo el super admin). `misHoras`, `guardarSemana` (semana ISO, pasos de 0.25 h, ≤ 24 h/día), `horasPorAprobar`,
+  `aprobarHoras`/`devolverHoras` (líder; lo del líder o de proyectos sin líder → Aprobaciones; devolver una **Aprobada** exige la `huella`
+  y solo de las semanas que enseña «Por aprobar», `inicioRevisadasHoras`; las anteriores solo super admin),
+  `guardarCostoPersonal`/`importarCostosPersonal`/`listarCostosPersonal`/`reporteNomina` (Nómina).
   Área privada **NÓMINA** (`AREA_NOMINA`, `NOMINA_FOLDER_ID`, `NOMINA_DB_ID`, `prepararNomina()`); recordatorio de los viernes desde
   `cadaQuinceMinutos` (`recordatorioHoras_`). `costoNominaPorProyecto` / `costoNominaDeProyectos_` (total por proyecto en MXN, nunca
   por persona; horas sin costear aparte).
@@ -502,8 +508,13 @@ Contrato: `docs/incremento-7.md`; detalle por módulo: `docs/incremento-7-{adici
 - **I · Integración (margen).** `margenCompleto` (puro): contrato + adicionales − órdenes − gastos − nómina; gastos o nómina en otra
   moneda van en `sinSumar` ("Revisar"), nunca se suman. `costosExtraPorProyecto`, `costosExtraDeProyectos_`. Lo usan la tarjeta de
   cobranza (`margenDeContrato_(contrato, adicionales)`, `margenSinContrato_`), el resumen y Reportes → margen (las tres cifras iguales;
-  `tests/integracion7.test.js`). Script Property opcional `NOMINA_EN_MARGEN = superadmin`: la nómina del margen solo para super admin
-  y Nómina (cachés separados con `sufijoNomina_`). `COLECCIONES_MARGEN_7` en cachés y sincronización.
+  `tests/integracion7.test.js`). **Nómina en el margen** (revisión del 29/10/2026): super admin y Nómina la ven completa (monto, horas,
+  sin costear; `nominaCompleta_`); cobranza **no**, salvo Script Property `NOMINA_EN_MARGEN` = exactamente `cobranza` (sin importar
+  mayúsculas ni espacios; cualquier otro valor o vacía = oculta: falla cerrada), y aun así solo el monto (`nominaParaMargen_`). Oculta →
+  la tarjeta, el resumen y el reporte traen `nominaOculta: true` y la interfaz dice "No incluye nómina (la ven Nómina y el super
+  admin)". Cachés con `sufijoNomina_` ('' completa, `_nomMonto`, `_sinNom`); `coleccionesMargen7_()` (sin nómina, ni `horas` ni
+  `costosPersonal`) en la sincronización de cobranza y el caché del resumen. `versionesVisibles_`: quien no es Nómina ni super admin
+  recibe `costosPersonal` = `VERSION_OCULTA` (0) en bootstrap y sincronizar (y con eso se compara: nunca le "cambia").
 
 ## 5. Dónde se guardan los datos
 
@@ -652,7 +663,9 @@ Cobranza: pestañas **`Adicionales`** y **`FacturasClientes`**, `Esquemas.adicio
 `CONSECUTIVO_GAS_AAAA`); Drive `Compras/AAAA/<PRY>/Gastos/`. **Área NÓMINA** (la crea `prepararNomina()`/`prepararCapri()` como
 facilities@): carpeta "CAPRI — Nómina" y libro "CAPRI — Nómina y horas" (`NOMINA_FOLDER_ID`, `NOMINA_DB_ID`; pestañas `Horas`,
 `CostosPersonal`, `Bitacora`), restringidos; compartir solo con quien lleve la nómina. Script Properties opcionales:
-`HORAS_SIN_RECORDATORIO`, `NOMINA_EN_MARGEN`; las escribe CAPRI: `HORAS_RECORDATORIO_SEMANA`. Colecciones nuevas: `adicionales`,
+`HORAS_SIN_RECORDATORIO`, `NOMINA_EN_MARGEN` (solo el valor `cobranza` deja a cobranza ver el monto de nómina en el margen; vacía o
+cualquier otro valor = oculta, que es lo de omisión; super admin y Nómina la ven siempre); las escribe CAPRI:
+`HORAS_RECORDATORIO_SEMANA`. Colecciones nuevas: `adicionales`,
 `gastos`, `horas`, `costosPersonal`, `facturasClientes`. Caché: `VERSION_CODIGO_CACHE = 2026-10-29s`.
 
 ## 6. Decisiones tomadas (y por qué)
@@ -952,9 +965,18 @@ Spec: "CAPRI — increment 4 spec" (Claude Docs `https://claude.ai/artifact/2kb6
 ### 6.18 CAPRI — incremento 7 (29/10/2026)
 - Leo aceptó las decisiones 6–11 del spec: CFDI fase A (Helgen timbra en **CONTALINK**, su PAC; CAPRI importa los XML), Aprobaciones
   aprueba gastos y Compras los reembolsa, Nómina en un libro privado, el líder del proyecto aprueba horas, categorías de gastos
-  (Viáticos · Combustible · Hospedaje · Casetas · Herramientas · Otros). Spec: "AR and margin: Cobranza" → cobranza ve el margen con
-  la nómina como total por proyecto (nunca por persona); `NOMINA_EN_MARGEN = superadmin` la oculta si hace falta (con una sola
-  persona costeada en un proyecto, su total equivale a lo que esa persona costó a ese proyecto).
+  (Viáticos · Combustible · Hospedaje · Casetas · Herramientas · Otros). Spec: "AR and margin: Cobranza" → al principio cobranza veía
+  el margen con la nómina como total por proyecto. **Cambiado tras la revisión independiente del 29/10/2026 (decidido):** el total por
+  proyecto era un oráculo del costo de una persona (cobranza se nombraba líder y aprobaba horas; con el resumen abierto, cada costo
+  que capturaba Nómina llegaba como diferencia; devolver semanas viejas descubría meses pasados). Ahora la nómina del margen es solo
+  de super admin y Nómina; cobranza la ve (solo el monto) únicamente con `NOMINA_EN_MARGEN = cobranza`, y la versión de
+  `costosPersonal` se enmascara para todos los demás. Además nadie se nombra líder (salvo super admin) y devolver horas aprobadas
+  pide la huella y solo de las últimas 5 semanas (antes, super admin).
+- Misma revisión, gastos: ninguna llamada HTTP con el candado (archivos fuera, nombre con folio adentro, Papelera si falla); Compras
+  no registra el reembolso de lo suyo (decisión 5 del módulo cambiada); el XML se manda como `text/plain` y la interfaz solo abre en
+  la página PDF/JPG/PNG (`abrirArchivoServidor`, lista blanca; el XML como texto; lo demás se descarga: un XML con `<script>` XHTML
+  corría con la sesión de quien lo abría); el ISH es costo, no IVA (`leerCfdi.locales`); un CFDI de Helgen a Helgen no es gasto; el
+  UUID repetido no le dice a quien captura qué folio lo tiene. Pruebas: `tests/revision7-privacidad.test.js`.
 - Contrato entre módulos (`docs/incremento-7.md`) y cuatro módulos en paralelo, integrados en la rama `incremento-7`. Decisiones de
   cada módulo en su doc (§0). Integración: el margen completo (§4.11 I), las facturas leen las etapas de las adicionales con las mismas
   claves que la vista (antes las tomaban como etapas del contrato), la vista de cobranza se vuelve a mandar al cambiar facturas,
@@ -1102,8 +1124,9 @@ CLAUDE.md es para Claude (detalle técnico); el manual explica lo mismo para qui
 - **CAPRI — incremento 7: construido e integrado el 29/10/2026 (rama `incremento-7`, sobre `incremento-6-final`), SIN PUBLICAR.**
   Se publica después de (o junto con) el 5 y el 6: respaldar los libros de compras y cobranza; `clasp push`; **como facilities@,
   `prepararCapri()`** (crea el área de Nómina y las pestañas nuevas) **antes** de la nueva versión del deployment; `wrangler deploy` el
-  mismo día. Sin permisos nuevos de Google. Leo: dar **Aprobaciones** (gastos) y **Nómina** en Permisos, asignar líderes de proyecto,
-  compartir la carpeta de Nómina solo con quien la lleve. Avisar: ventas (casilla «Adicional»), cobranza (adicionales, facturas de
+  mismo día. Sin permisos nuevos de Google. Leo: dar **Aprobaciones** (gastos) y **Nómina** en Permisos, asignar líderes de proyecto
+  (cobranza también, pero nunca a sí misma), compartir la carpeta de Nómina solo con quien la lleve. La nómina en el margen de
+  cobranza queda **oculta**; solo si Leo lo decide, `NOMINA_EN_MARGEN = cobranza` (§6.18, revisión del 29/10/2026). Avisar: ventas (casilla «Adicional»), cobranza (adicionales, facturas de
   CONTALINK, REP pendientes), todos (Horas los viernes, Gastos con foto del ticket). Manual del Cotizador sin actualizar (lo tiene Efrain).
 - **CAPRI — incremento 6 + rapidez: construido, revisado e integrado el 29/10/2026 (rama `incremento-6-final`, sobre
   `incremento-5`), SIN PUBLICAR.** Se publica **junto con el incremento 5** (o después de él): `clasp push`; como facilities@,

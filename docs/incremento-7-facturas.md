@@ -99,7 +99,7 @@ XML sin timbre o que no cuadra ("pide a quien factura en CONTALINK el XML correc
 - **Internas:** `descomprimir_(blob)` (único uso de `Utilities.unzip`; devuelve `[{nombre, bytes}]`: el servidor de la etapa 1 solo tiene
   que dar esta función), `carpetaFacturasCli_`, `archivoPrivado_`, `papeleraFacturas_`, `entradasDeZip_`, `contextoFacturasCli_`,
   `facturasClientesDelLibro_`, `facturaCliDesdeFila_`, `facturasDeVistaCobranza_`, `facturasCliParaPendientes_`, `colFacCli_`, `jsonDeCelda_`.
-- **Lógica pura (se prueba en Node):** `leerCfdiCliente` (= `leerCfdi` sin cambios + `relacionados` + `pagos` de Pagos 2.0; sin DTD
+- **Lógica pura (se prueba en Node):** `leerCfdiCliente` (= `leerCfdi` sin cambios —desde la revisión del 29/10/2026 trae también `locales`— + `relacionados` + `pagos` de Pagos 2.0; sin DTD
   ni entidades, solo atributos; errores "pide a quien factura en CONTALINK…" con `textoErrorCfdiCliente`), `validarFacturaCliente`,
   `tipoArchivoFactura`, `nombreBaseArchivo`, `nombreArchivoFacturaCliente`, `prepararLoteFacturasCliente`, `resultadoRepetida`,
   `mensajeImportada`, `totalPagosRep`, `proyectoInicialFactura`, `filaFacturaCliente`, `claveEtapa`, `etapasParaFacturas`,

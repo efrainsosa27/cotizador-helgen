@@ -13,21 +13,26 @@ Requisiciones, Tareas frecuentes, Reglas de oro, Historial, Pendientes).
    monto pagado, moneda MXN/USD (tipo de cambio obligatorio si no es la del proyecto), "¿el monto incluye IVA?" Sí/No, **foto o PDF del
    ticket obligatorio** (cámara del teléfono con `capture="environment"`, o un archivo; la foto se reduce con `comprimirFoto` de
    recepción) y, opcional, el **XML del CFDI**. Folio `GAS-AAAA-NNNN` (`CONSECUTIVO_GAS_AAAA`, bajo el candado).
-2. **CFDI opcional** (`leerCfdi` sin cambios): con XML, **moneda, total, subtotal e IVA salen del CFDI** (lo capturado se ignora); el CFDI
-   debe ser 4.0, de ingreso (tipo I), con UUID válido y **a nombre del RFC de Helgen** (`Config EMPRESA_RFC`); un UUID ya registrado en
-   otro gasto vivo o en una factura de proveedor vigente se rechaza. La interfaz lee el XML para **prellenar** monto, moneda e IVA y
+2. **CFDI opcional** (`leerCfdi`; desde la revisión del 29/10/2026 con el campo nuevo `locales`, decisión 2): con XML, **moneda, total, subtotal e IVA salen del CFDI** (lo capturado se ignora); el CFDI
+   debe ser 4.0, de ingreso (tipo I), con UUID válido, **a nombre del RFC de Helgen** (`Config EMPRESA_RFC`) y **no emitido por Helgen**
+   (Helgen → Helgen no es un gasto; revisión del 29/10/2026); un UUID ya registrado en otro gasto vivo o en una factura de proveedor
+   vigente se rechaza (a quien captura con un texto general, "Ese CFDI ya está registrado en CAPRI (otro gasto o una factura de
+   proveedor)"; el folio que lo tiene solo lo ven Compras y super admin). La interfaz lee el XML para **prellenar** monto, moneda e IVA y
    mostrar emisor y UUID (el servidor lo vuelve a leer y valida).
 3. **Estados:** `Enviado → Aprobado | Rechazado (motivo) → Reembolsado`; `Enviado → Cancelado` (quien lo capturó, con motivo); `Anulada`
    (Anular, módulo E). Aprueba o rechaza **Aprobaciones**, nunca lo suyo (un super admin sí, con motivo ≥ 10 → Bitacora de Administración,
    `excepcionSuperAdmin_`); reembolsa **Compras** con fecha, método (Transferencia · Efectivo · Cheque), referencia y **comprobante
-   obligatorio**.
+   obligatorio**, nunca lo suyo (otra persona de Compras; un super admin con motivo, decisión 5).
 4. **Quién ve qué:** quien captura ve solo **"Mis gastos"** (con sus montos, motivo y reembolso); **"Gastos del equipo"** (todos, con filtro
    y totales por moneda) solo Aprobaciones, Compras y super admin. Los archivos se abren sin acceso a Drive (`archivoGasto`, como
-   `archivoRequisicion`).
+   `archivoRequisicion`): PDF, JPG y PNG en otra pestaña; el XML como texto (el servidor lo manda como `text/plain`, `mimeArchivoGasto`,
+   y la interfaz solo abre en la página los tipos de su lista blanca, `abrirArchivoServidor`: un XML con un `<script>` XHTML corría con
+   la sesión de quien lo abría); lo demás se descarga.
 5. **Correos** (`notificar_`, sin montos, proveedor ni el concepto): `gasto.enviado` → Aprobaciones (menos quien lo capturó),
-   `gasto.aprobado` y `gasto.rechazado` → quien lo capturó (el motivo solo como "Hay una nota"), `gasto.reembolsar` → Compras. Botón
+   `gasto.aprobado` y `gasto.rechazado` → quien lo capturó (el motivo solo como "Hay una nota"), `gasto.reembolsar` → Compras (menos
+   quien lo capturó). Botón
    `…/cotizador/#gas=GAS-AAAA-NNNN`.
-6. **Pendientes:** "Gasto por aprobar" (Aprobaciones; nunca los propios) y "Gasto por reembolsar" (Compras), con monto; abren Gastos
+6. **Pendientes:** "Gasto por aprobar" (Aprobaciones; nunca los propios) y "Gasto por reembolsar" (Compras; nunca los propios), con monto; abren Gastos
    (destino `gas`) con el filtro de lo que espera; número en la pestaña Gastos (`conteos.gas`).
 7. **Anular:** `GAS-` es un folio anulable (solo o en cascada de su proyecto); queda `Anulada`, sus archivos con "ANULADA — " y sale de
    listas, totales, Pendientes y del costo del margen.
@@ -54,8 +59,8 @@ Requisiciones, Tareas frecuentes, Reglas de oro, Historial, Pendientes).
 | `guardarGasto(p)` *(API)* | `p = {proyectoFolio, fecha, categoria, concepto, monto, moneda, tipoCambio, ivaIncluido, ticket: {nombre, datos}, xml?: {nombre, datos}, idSolicitud, filtro}` → `{folio, repetido, gasto, datos}`. Revisa todo antes del candado salvo proyecto, moneda del proyecto, UUID repetido e idempotencia |
 | `cancelarGasto(folio, motivo, filtro)` *(API)* | Quien lo capturó, Enviado, motivo ≥ 5 |
 | `aprobarGasto(folio, filtro, motivoExcepcion)` / `rechazarGasto(folio, motivo, filtro, motivoExcepcion)` *(API)* | Aprobaciones; lo propio solo super admin con motivo (la interfaz usa `accionConExcepcion`, que agrega el motivo al final) |
-| `reembolsarGasto(p)` *(API)* | Compras; `p = {folio, fecha, metodo, referencia, comprobante, idSolicitud, filtro}` |
-| `archivoGasto(folio, que)` *(API)* | `que` = `ticket` · `xml` · `reembolso` → `{nombre, mime, datos}`. Aprobaciones/Compras/super admin: todos; quien lo capturó: su ticket y su XML |
+| `reembolsarGasto(p)` *(API)* | Compras, nunca lo propio; `p = {folio, fecha, metodo, referencia, comprobante, idSolicitud, filtro, motivoExcepcion?}` (super admin con lo suyo: motivo ≥ 10, la interfaz lo pide y repite) |
+| `archivoGasto(folio, que)` *(API)* | `que` = `ticket` · `xml` · `reembolso` → `{nombre, mime, datos}` (XML siempre `text/plain`; un tipo desconocido, `application/octet-stream`: `mimeArchivoGasto`). Aprobaciones/Compras/super admin: todos; quien lo capturó: su ticket y su XML |
 | `gastosDelLibro_(libro)` | **Para el integrador:** todos los gastos (cualquier estado) del libro |
 | `gastosParaPendientes_()` | Enviados y Aprobados (sin anulados) para Pendientes |
 | Internas | `baseGastos_` (caché por la versión de `gastos`), `buscarGasto_`, `gastoDesdeFila_`, `filaGasto_`, `actualizarGasto_` (columnas por nombre, juntas las seguidas), `gastoParaVista_` (sin ids de archivos ni idempotencia), `proyectosParaGasto_`, `rolGastos_`, `exigirGastos_`, `exigirAprobarGastos_`, `veGastos_`, `carpetaGastos_`, `huellaGasto_`, `md5Gasto_`, `uuidsUsados_`, `datosCorreoGasto_` |
@@ -97,17 +102,22 @@ Ediciones directas (mínimas):
 1. **"IVA incluido: No" = el gasto no lleva IVA** (subtotal = total), no "sumarle IVA": el monto es siempre **lo que se pagó** (lo que dice el
    ticket y lo que se reembolsa). Con "Sí", subtotal = total / (1 + `IVA_TASA` de Config, hoy 16 %). Un ticket con 8 % (frontera) sin XML
    queda con el subtotal un poco bajo; con el XML es exacto.
-2. **Con XML el CFDI manda**: total, moneda y `subtotal = SubTotal − Descuento`; la columna `iva` guarda los impuestos trasladados del
-   comprobante (incluye locales como el ISH de un hotel: así el costo sin IVA no los cuenta). La fecha del gasto es la capturada (la
-   factura puede ser de días después). Solo tipo I; un CFDI en otra moneda que MXN/USD se rechaza.
+2. **Con XML el CFDI manda**: total, moneda y `subtotal = SubTotal − Descuento + impuestos locales trasladados`; la columna `iva` guarda
+   solo los impuestos trasladados **federales**. **Cambiado en la revisión del 29/10/2026:** antes `iva` incluía los locales (el ISH de
+   un hotel) y el costo sin IVA del margen no los contaba; el ISH no es IVA ni se acredita, es costo. `leerCfdi` agrega `locales:
+   {trasladados, retenidos}` (sus demás campos no cambian: los usan las facturas de proveedor). Las retenciones no cambian el costo.
+   La fecha del gasto es la capturada (la factura puede ser de días después). Solo tipo I; un CFDI en otra moneda que MXN/USD se
+   rechaza; uno de Helgen a Helgen (emisor = receptor) también.
 3. **UUID repetido** = en un gasto Enviado, Aprobado o Reembolsado (uno Cancelado, Rechazado o Anulado libera su UUID para capturarlo bien)
    **o en una factura de proveedor vigente** (la misma factura no puede contar dos veces en el costo del proyecto).
 4. **Rechazar lo propio** sigue la misma regla que aprobar (Aprobaciones nunca decide sobre lo suyo; super admin con motivo); para lo propio
    está "Cancelar".
-5. **Compras puede reembolsar su propio gasto**: el control es la aprobación (otra persona); el reembolso solo registra el pago con su
-   comprobante. Se reembolsa **el total del gasto en su moneda** (no se captura otro monto); la referencia es obligatoria salvo en efectivo
-   y nunca un número de tarjeta; la fecha no es futura ni anterior al gasto. El reembolso y la cancelación **no mandan correo** (no están
-   en el contrato).
+5. **Compras no registra el reembolso de su propio gasto** (cambiado en la revisión del 29/10/2026; antes sí podía: la misma persona
+   cobraba y registraba que se le pagó). Lo registra otra persona de Compras o un super admin con motivo ≥ 10 caracteres
+   (`excepcionSuperAdmin_`, bitácora de Administración, como al aprobar); la interfaz no le enseña el botón ni el pendiente y, a un
+   super admin, le pide el motivo y repite. Se reembolsa **el total del gasto en su moneda** (no se captura otro monto); la referencia es
+   obligatoria salvo en efectivo y nunca un número de tarjeta; la fecha no es futura ni anterior al gasto. El reembolso y la cancelación
+   **no mandan correo** (no están en el contrato).
 6. **Quien capturó** abre su ticket y su XML, **no** el comprobante del reembolso (ve fecha, método y referencia). Aprobaciones y Compras
    abren todo.
 7. **Moneda del proyecto para quien pide:** la lista de proyectos del formulario trae la moneda (la de la aceptada; sin aceptada, MXN) para
@@ -122,8 +132,11 @@ Ediciones directas (mínimas):
 11. **El concepto no va en los correos** (texto libre: puede traer montos o el nombre del comercio); sí la categoría, de una lista fija.
 12. **Idempotencia solo en la hoja** (sin caché): se lee Gastos de todos modos dentro del candado (UUID, folio), así que no cuesta más y
     sobrevive a un caché vacío o al cambio de `VERSION_CODIGO_CACHE`. El mismo id con otro contenido se rechaza; con otra cuenta, también.
-13. **Archivos dentro del candado**, como en el pago a proveedor: el nombre lleva el folio. `privado_` (permisos de Drive por su API) corre
-    ahí, igual que en todo el código; no hay llamadas al centro de mando ni correos dentro.
+13. **Archivos fuera del candado** (cambiado en la revisión del 29/10/2026, regla 17: `privado_` es HTTP a la API de Drive). Ticket, XML y
+    comprobante se crean y se restringen **antes** del candado con `archivoPrivado_` (si no se pueden restringir, a la Papelera) y un
+    nombre provisional ("Gasto en captura — …"); dentro, con el folio ya asignado, solo se renombran (`setName`). Si lo de adentro falla
+    antes de escribir la fila, o el envío resulta repetido, van a la Papelera (`papeleraArchivos_`): nunca queda un archivo suelto ni
+    abierto al dominio. Un reintento del mismo envío se reconoce antes de crear nada.
 
 ## 5. Pruebas
 
@@ -144,6 +157,9 @@ Ediciones directas (mínimas):
   traen `gastos`), `tests/pantallas.test.js` (quien pide ya tiene barra en Compras: Requisiciones · Gastos; la regla "una pantalla, sin
   barra" sigue probada con Administración).
 - `bash tests/todas.sh`: **28 pruebas ✔ + sintaxis de la interfaz** (antes 26).
+- Revisión del 29/10/2026: `tests/revision7-privacidad.test.js` (sin HTTP en el candado, Papelera si algo falla, reembolso propio, UUID
+  sin folio para quien captura, XML como texto, ISH como costo, Helgen → Helgen) y casos nuevos en `gastos.test.js` y
+  `gastos-interfaz.test.js` (el super admin reembolsa lo suyo con motivo; Compras no ve el botón de lo suyo).
 - Tiempos estimados con el perfil (pesos de `tests/perfil.js`): `guardarGasto` con foto ≈ 13 s (≈ 7 s con el candado: carpeta y archivo
   privados), `aprobarGasto` ≈ 8 s, `reembolsarGasto` ≈ 11 s, `listarGastos` ≈ 2 s con caché (4 s en frío), Pendientes de Aprobaciones ≈ 3 s.
 
