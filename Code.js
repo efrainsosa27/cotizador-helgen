@@ -967,10 +967,11 @@ function sincronizar(vc, ctx) {
   }
   if (permisos.cobranza) {
     if (algo('proyectos', 'contratos')) r.cobProyectos = intentar_(errores, 'Proyectos de cobranza', () => listarProyectosCobranza(''));
-    if (ctx.cobProyecto && algo('proyectos', 'contratos', 'cotizaciones', 'pagosCobranza', 'oc')) {
+    // Incremento 7: el margen cambia también con adicionales, gastos y nómina (COLECCIONES_MARGEN_7)
+    if (ctx.cobProyecto && algo.apply(null, ['proyectos', 'contratos', 'cotizaciones', 'pagosCobranza', 'oc'].concat(COLECCIONES_MARGEN_7))) {
       r.cobranzaProyecto = intentar_(errores, 'Cobranza del proyecto', () => getCobranzaProyecto(ctx.cobProyecto));
     }
-    if (ctx.cobResumen && algo('proyectos', 'contratos', 'pagosCobranza', 'oc')) {
+    if (ctx.cobResumen && algo.apply(null, ['proyectos', 'contratos', 'pagosCobranza', 'oc'].concat(COLECCIONES_MARGEN_7))) {
       r.resumen = intentar_(errores, 'Resumen de cobranza', () => resumenCobranzaGeneral());
     }
   }
@@ -2372,32 +2373,43 @@ function vistaCobranza_(libro, proyecto) {
     // R (incremento 6): fechas esperadas de cobro (esquema[i].fechaEsperada): con aceptada o firmado, no en un proyecto cancelado
     fechasEditables: !!c && d.etapas.length > 0 && proyecto.estado !== 'Cancelado',
     // Solo llega al rol de cobranza (vistaCobranza_ se llama después de exigirCobranza_)
-    margen: c ? margenDeContrato_(c) : margenSinContrato_(proyecto.folio),
+    margen: c ? margenDeContrato_(c, d.adicionales) : margenSinContrato_(proyecto.folio),
     metodos: METODOS_COBRO,
     hoy: hoyIso_(),
   }, vistaAdicionales_(proyecto, d, resumen, cotizaciones)); // A (incremento 7): adicionales, por aceptar y sus permisos
 }
 
 /**
- * Margen del proyecto: contratado sin IVA − costos (fase 3: órdenes de compra vigentes; fase 4: nómina y horas se
- * agregan a la lista de costos). Si algo no cuadra (p. ej. una orden en otra moneda), {error} y la vista carga igual.
+ * Margen del proyecto (incremento 7): contratado sin IVA (contrato + adicionales aceptadas) − órdenes de compra vigentes − gastos
+ * aprobados − nómina repartida (margenCompleto, §6.I). adicionales = las del proyecto (datosCobranza_). Si algo no cuadra (p. ej.
+ * una orden en otra moneda), {error} y la vista carga igual.
  */
-function margenDeContrato_(contrato) {
+function margenDeContrato_(contrato, adicionales) {
   try {
+    const f = String(contrato.proyectoFolio).trim().toUpperCase(), monedas = {};
+    monedas[f] = contrato.moneda;
     const ordenes = ordenesDeProyecto_(libroComprasSiExiste_(), contrato.proyectoFolio).filter(ocVigente);
-    return margenProyecto(contrato.subtotal, contrato.moneda, costosDeOrdenes(ordenes, contrato.moneda));
+    const extra = costosExtraDeProyectos_(monedas)[f] || [];
+    return margenCompleto(contrato.subtotal, contrato.moneda, costosDeOrdenes(ordenes, contrato.moneda).concat(extra),
+      adicionalesPorProyecto(adicionales || [])[f]);
   } catch (e) {
     return { error: 'No se pudo calcular el margen: ' + e.message };
   }
 }
 
-/** Sin cotización aceptada no hay margen: solo el costo de las órdenes de compra vigentes, por moneda. null si no hay. */
+/**
+ * Sin cotización aceptada no hay margen: solo los costos del proyecto por moneda (órdenes de compra vigentes y, desde el incremento
+ * 7, gastos aprobados y nómina). null si no hay ninguno.
+ */
 function margenSinContrato_(proyectoFolio) {
   try {
+    const f = String(proyectoFolio).trim().toUpperCase();
     const ordenes = ordenesDeProyecto_(libroComprasSiExiste_(), proyectoFolio).filter(ocVigente);
-    return ordenes.length ? { sinContrato: true, costos: costosDeOrdenes(ordenes, 'MXN') } : null;
+    const extra = costosExtraDeProyectos_(() => 'MXN')[f] || []; // sin contrato el proyecto es MXN (monedaDeProyecto_)
+    if (!ordenes.length && !extra.length) return null;
+    return { sinContrato: true, costos: (ordenes.length ? costosDeOrdenes(ordenes, 'MXN') : []).concat(extra) };
   } catch (e) {
-    return { error: 'No se pudo calcular el costo de las órdenes: ' + e.message };
+    return { error: 'No se pudo calcular el costo del proyecto: ' + e.message };
   }
 }
 
@@ -2434,8 +2446,9 @@ function getCobranzaProyecto(folio) {
 function resumenCobranzaGeneral(soloSiHay) {
   exigirCobranza_();
   // En caché por versiones (contratos, pagos, órdenes y proyectos); soloSiHay = no calcularlo si no está (carga inicial)
-  return enCache_('resumenCob', ['proyectos', 'contratos', 'pagosCobranza', 'oc'], TTL_CACHE,
-    soloSiHay ? null : resumenCobranzaDeHojas_) || null;
+  // Incremento 7: el margen cuenta adicionales, gastos y nómina (con NOMINA_EN_MARGEN = superadmin, quien no la ve tiene su clave)
+  return enCache_('resumenCob' + sufijoNomina_(), ['proyectos', 'contratos', 'pagosCobranza', 'oc'].concat(COLECCIONES_MARGEN_7),
+    TTL_CACHE, soloSiHay ? null : resumenCobranzaDeHojas_) || null;
 }
 
 function resumenCobranzaDeHojas_() {
@@ -2455,8 +2468,10 @@ function resumenCobranzaDeHojas_() {
     ? filasDeArea_(hojaCompras_(libroCompras, 'OrdenesCompra'), HOJAS_COMPRAS, 'OrdenesCompra')
       .map((r, i) => String(r[0] || '').trim() ? ordenDesdeFila_(r, i + 2) : null).filter(o => o && o.estado !== ESTADO_ANULADA)
     : [];
+  const monedas = {};
+  contratos.forEach(c => { monedas[String(c.proyectoFolio).trim().toUpperCase()] = c.moneda; });
   return Object.assign(resumenGeneralCobranza({ contratos: contratos, esquemas: esquemas, pagos: pagos, proyectos: proyectos,
-    ordenes: ordenes, adicionales: adicionales }), { hoy: hoyIso_() });
+    ordenes: ordenes, adicionales: adicionales, costosExtra: costosExtraDeProyectos_(monedas) }), { hoy: hoyIso_() });
 }
 
 /**
@@ -5541,7 +5556,9 @@ function margenProyecto(contratado, moneda, costos) {
     if (c.moneda !== moneda) {
       throw new Error('hay costos en ' + c.moneda + ' y el contrato es en ' + moneda + ' (no se suman monedas distintas).');
     }
-    return { concepto: c.concepto, moneda: c.moneda, monto: redondear(c.monto), cantidad: c.cantidad || 0 };
+    const x = { concepto: c.concepto, moneda: c.moneda, monto: redondear(c.monto), cantidad: c.cantidad || 0 };
+    if (c.horas != null) { x.horas = c.horas; x.sinCostear = c.sinCostear || 0; } // incremento 7 (N): horas de la nómina, sin personas
+    return x;
   });
   const contratadoCts = aCentavos(contratado);
   const costosCts = lista.reduce((s, c) => s + aCentavos(c.monto), 0);
@@ -5572,7 +5589,8 @@ function costosDeOrdenes(ordenes, monedaContrato) {
  * Resumen de cobranza de todos los proyectos. d = {contratos, esquemas: [{proyectoFolio, orden, etapa, porcentaje, adicional}], pagos,
  * proyectos, ordenes, adicionales (A, incremento 7: filas Aceptadas de la pestaña Adicionales; opcional)}. Con adicionales, cada
  * renglón y cada total traen además adicionales (con IVA) y total (contrato + adicionales); el saldo, lo cobrado y el avance ya
- * cuentan sus etapas. El margen sigue siendo el del contrato (lo conecta el integrador).
+ * cuentan sus etapas. Integración del incremento 7: el margen es el de margenCompleto (contrato + adicionales − órdenes − d.costosExtra
+ * [folio]: gastos y nómina; opcional); lo que está en otra moneda no se suma y va en sinSumar (la pantalla dice "Revisar").
  * Los proyectos Cancelados no aparecen. Un renglón por contrato: "Firmado" o "Por firmar" (aceptada sin
  * firmar: se muestra pero no suma a los totales). Pagado y saldo salen de resumenCobranza (lo mismo que la vista del proyecto);
  * margen = contratado sin IVA − órdenes de compra no canceladas. Totales por moneda, solo de contratos firmados: nunca se suman
@@ -5610,7 +5628,10 @@ function resumenGeneralCobranza(d) {
     const ocs = (ordenes[folio] || []).filter(ocVigente); // ni canceladas ni anuladas
     let margen = null, margenError = '';
     try {
-      margen = margenProyecto(c.subtotal, c.moneda, costosDeOrdenes(ocs, c.moneda));
+      // Incremento 7: + adicionales aceptadas, − gastos y nómina (d.costosExtra); sin esos campos, igual que antes
+      const extra = (d.costosExtra || {})[folio] || [];
+      const adic = conAdic ? adicionalesPorProyecto(adicionales[folio] || [])[folio] : null;
+      margen = margenCompleto(c.subtotal, c.moneda, costosDeOrdenes(ocs, c.moneda).concat(extra), adic);
     } catch (e) {
       margenError = e.message;
     }
@@ -5622,7 +5643,10 @@ function resumenGeneralCobranza(d) {
       siguienteEtapa: siguiente ? etiquetaEtapaCobranza(siguiente) : '', siguienteSaldo: siguiente ? siguiente.saldo : 0, ultimoPago: ultimoPago,
       ordenes: ocs.length, costoOc: margen ? margen.totalCostos : null, margen: margen ? margen.margen : null,
       margenPorcentaje: margen ? margen.porcentaje : null, margenError: margenError,
-    }, conAdic ? { adicionales: r.adicionales, nAdicionales: r.nAdicionales, total: r.total } : {}));
+    }, conAdic ? { adicionales: r.adicionales, nAdicionales: r.nAdicionales, total: r.total } : {},
+    // Incremento 7: contratado sin IVA del margen (con adicionales), costos por concepto y lo que no se sumó (otra moneda)
+    margen && (margen.adicionales || d.costosExtra) ? { margenContratado: margen.contratado, costos: margen.costos } : {},
+    margen && margen.sinSumar ? { sinSumar: margen.sinSumar } : {}));
   });
   // Saldos de monedas distintas no se comparan entre sí: primero por moneda (MXN, USD), luego del mayor saldo al menor
   renglones.sort((a, b) => (a.estadoContrato === b.estadoContrato ? 0 : a.estadoContrato === 'Firmado' ? -1 : 1) ||
@@ -5639,7 +5663,7 @@ function resumenGeneralCobranza(d) {
     if (aCentavos(x.saldo) > 0) t.conSaldo++;
     t.contratado += aCentavos(x.contratado); t.cobrado += aCentavos(x.pagado); t.porCobrar += aCentavos(x.saldo);
     t.adicionales += aCentavos(x.adicionales || 0);
-    t.contratadoSinIva += aCentavos(x.subtotal);
+    t.contratadoSinIva += aCentavos(x.margenContratado != null ? x.margenContratado : x.subtotal); // incremento 7: con adicionales
     if (x.margenError) t.margenError = true; else t.costoOc += aCentavos(x.costoOc);
   });
   const totales = Object.keys(tot).sort().map(k => {
@@ -12769,14 +12793,18 @@ const REPORTES_ = {
     fn: () => reporteCxp() },
   flujo: { colecciones: ['proyectos', 'contratos', 'pagosCobranza', 'oc', 'pagosProveedores', 'facturasProveedor', 'requisiciones',
     'anulaciones'], porDia: true, fn: () => reporteFlujo() },
-  margen: { colecciones: ['proyectos', 'contratos', 'oc', 'anulaciones'], porDia: false, fn: () => reporteMargen() },
+  // Incremento 7: el margen cuenta adicionales, gastos y nómina (las colecciones de COLECCIONES_MARGEN_7, aquí literales)
+  margen: { colecciones: ['proyectos', 'contratos', 'oc', 'anulaciones', 'adicionales', 'gastos', 'horas', 'costosPersonal'], porDia: false,
+    fn: () => reporteMargen() },
 };
 
 /** Valor del reporte en caché (por versión de sus colecciones, por día si depende de él y por la lista de pruebas) o calcularlo. */
 function reporteEnCache_(tipo, calcular) {
   const def = REPORTES_[tipo];
   const prueba = Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, foliosPrueba_().join(','))).slice(0, 10);
-  return enCache_('REP_' + tipo + '_' + (def.porDia ? hoyIso_() : '') + '_' + prueba, def.colecciones, TTL_CACHE, calcular);
+  // Incremento 7: con NOMINA_EN_MARGEN = superadmin, el margen de quien no ve la nómina es otro (otra clave)
+  return enCache_('REP_' + tipo + '_' + (def.porDia ? hoyIso_() : '') + '_' + prueba + (tipo === 'margen' ? sufijoNomina_() : ''),
+    def.colecciones, TTL_CACHE, calcular);
 }
 
 /**
@@ -12816,7 +12844,12 @@ function reporteFlujo() {
 /** Margen por proyecto (cobranza y super admin): contratado sin IVA − órdenes de compra no canceladas, por línea de negocio. */
 function reporteMargen() {
   exigirReporte_('margen');
-  return reporteEnCache_('margen', () => margenPorProyecto(datosReportes_({ cobranza: true, compras: true })));
+  return reporteEnCache_('margen', () => {
+    const d = datosReportes_({ cobranza: true, compras: true }), monedas = {};
+    (d.contratos || []).forEach(c => { monedas[String(c.proyectoFolio).trim().toUpperCase()] = c.moneda; });
+    d.costosExtra = costosExtraDeProyectos_(monedas); // incremento 7: gastos y nómina (d.adicionales ya viene de datosReportes_)
+    return margenPorProyecto(d);
+  });
 }
 
 /**
@@ -13408,6 +13441,7 @@ function flujoSemanal(d) {
 function margenPorProyecto(d) {
   const may = s => String(s || '').trim().toUpperCase();
   const prueba = d.prueba || FOLIOS_PRUEBA_REPORTES, extra = d.costosExtra || {};
+  const adicPorProyecto = adicionalesPorProyecto(d.adicionales || []); // incremento 7 (A): {} sin adicionales
   const proyectos = {}, ordenes = {};
   (d.proyectos || []).forEach(p => { proyectos[may(p.folio)] = p; });
   (d.ordenes || []).filter(ocVigente).forEach(o => { (ordenes[may(o.proyectoFolio)] = ordenes[may(o.proyectoFolio)] || []).push(o); });
@@ -13419,14 +13453,17 @@ function margenPorProyecto(d) {
     const ocs = ordenes[folio] || [];
     const costos = costosDeOrdenes(ocs, c.moneda).concat(extra[folio] || extra[p.folio] || []);
     costos.forEach(x => { if (conceptos.indexOf(x.concepto) === -1) conceptos.push(x.concepto); });
+    // Incremento 7: + adicionales aceptadas (d.adicionales, de datosReportes_); gastos o nómina en otra moneda no se suman (sinSumar)
+    const adic = adicPorProyecto[folio] || adicPorProyecto[may(p.folio)] || null;
     let m = null, error = '';
-    try { m = margenProyecto(c.subtotal, c.moneda, costos); } catch (e) { error = e.message; }
-    filas.push({ folio: p.folio, folioVisible: p.folioVisible || p.folio, nombre: p.nombre || '', cliente: p.cliente || '',
+    try { m = margenCompleto(c.subtotal, c.moneda, costos, adic); } catch (e) { error = e.message; }
+    filas.push(Object.assign({ folio: p.folio, folioVisible: p.folioVisible || p.folio, nombre: p.nombre || '', cliente: p.cliente || '',
       estadoProyecto: p.estado, marca: c.marca, moneda: c.moneda, estadoContrato: c.estado === ESTADO_FIRMADO ? 'Firmado' : 'Por firmar',
-      cotizacion: c.cotizacion, contratado: redondear(c.subtotal),
+      cotizacion: c.cotizacion, contratado: m ? m.contratado : redondear(c.subtotal),
       costos: m ? m.costos : costos.map(x => ({ concepto: x.concepto, moneda: x.moneda, monto: redondear(x.monto), cantidad: x.cantidad || 0 })),
       totalCostos: m ? m.totalCostos : null, margen: m ? m.margen : null, porcentaje: m ? m.porcentaje : null, margenError: error,
-      ordenes: ocs.length });
+      ordenes: ocs.length }, m && m.adicionales ? { contrato: m.contrato, adicionales: m.adicionales } : {},
+      m && m.sinSumar ? { sinSumar: m.sinSumar } : {}));
   });
   const marcas = ['helgen', 'energy'];
   const ordenMarca = (a, b) => (marcas.indexOf(a) === -1 ? 9 : marcas.indexOf(a)) - (marcas.indexOf(b) === -1 ? 9 : marcas.indexOf(b));
@@ -15769,4 +15806,71 @@ function contenidoAvisoHoras(tipo, x, i, quienHizo) {
   }
   x.filas = x.filas.filter(f => f && f[1]);
   return x;
+}
+
+// ---- 6.I Integración del incremento 7: margen = contrato + adicionales − órdenes − gastos − nómina ----
+// Contrato: docs/incremento-7.md §1 (lo conecta el integrador). Lo usan la tarjeta de margen de cobranza (margenDeContrato_ /
+// margenSinContrato_), el resumen de cobranza (resumenGeneralCobranza) y Reportes → margen (margenPorProyecto). Nunca se suman MXN
+// y USD: gastos o nómina en otra moneda que el contrato van aparte (sinSumar) y la pantalla dice "Revisar". La nómina llega solo
+// como total por proyecto (costoNominaPorProyecto: nunca por persona); Script Property opcional NOMINA_EN_MARGEN = "superadmin"
+// la deja solo a super admin y Nómina (vacía = la ve cobranza, como dice el spec: "AR and margin: Cobranza").
+
+/** Colecciones que cambian el margen además de las de siempre (cachés y sincronización del margen). */
+const COLECCIONES_MARGEN_7 = ['adicionales', 'gastos', 'horas', 'costosPersonal'];
+/** Costos que pueden venir en otra moneda que el contrato (se muestran sin sumar); una orden en otra moneda sigue siendo error. */
+const CONCEPTOS_SIN_SUMAR_7 = ['Gastos', 'Nómina'];
+
+/** ¿Quien llama ve la nómina dentro del margen? (NOMINA_EN_MARGEN = superadmin: solo super admin y Nómina). */
+function nominaEnMargen_() {
+  const p = String(propiedades_().NOMINA_EN_MARGEN || '').trim().toLowerCase();
+  return p !== 'superadmin' || esSuperAdmin_() || tieneRol_('nomina');
+}
+
+/** Parte de la clave de caché del margen: vacía cuando todos ven lo mismo (la nómina incluida). */
+function sufijoNomina_() { return nominaEnMargen_() ? '' : '_sinNom'; }
+
+/**
+ * (Lógica pura) Une los costos extra por proyecto: gastos (costoGastosPorProyecto) y nómina (costoNominaPorProyecto). Llaves en
+ * mayúsculas (folio interno); cada valor = [{concepto, moneda, monto, cantidad?, horas?, sinCostear?}].
+ */
+function costosExtraPorProyecto(gastos, nomina) {
+  const r = {};
+  [gastos || {}, nomina || {}].forEach(m => Object.keys(m).forEach(f => {
+    const k = String(f || '').trim().toUpperCase();
+    if (k) r[k] = (r[k] || []).concat(m[f] || []);
+  }));
+  return r;
+}
+
+/**
+ * (Lógica pura) Margen de un proyecto con lo del incremento 7. contrato = subtotal del contrato (sin IVA); adicional =
+ * adicionalesPorProyecto(...)[folio] ({subtotal, moneda, revisar?}) o null; costos = órdenes + gastos + nómina. Lo que es Gastos o
+ * Nómina en otra moneda no se suma (sinSumar). Devuelve lo de margenProyecto + contrato y adicionales (sin IVA); una adicional en
+ * otra moneda (no debería existir: A lo revisa al aceptar) es error, como una orden en otra moneda.
+ */
+function margenCompleto(contrato, moneda, costos, adicional) {
+  if (adicional && (adicional.revisar || (adicional.moneda && adicional.moneda !== moneda))) {
+    throw new Error('hay una adicional en otra moneda que el contrato (no se suman monedas distintas).');
+  }
+  const adicCts = adicional ? aCentavos(adicional.subtotal) : 0;
+  const sumar = [], sinSumar = [];
+  (costos || []).forEach(c => (c.moneda !== moneda && CONCEPTOS_SIN_SUMAR_7.indexOf(c.concepto) !== -1 ? sinSumar : sumar).push(c));
+  const m = margenProyecto((aCentavos(contrato) + adicCts) / 100, moneda, sumar);
+  m.contrato = aCentavos(contrato) / 100;
+  m.adicionales = adicCts / 100;
+  if (sinSumar.length) {
+    m.sinSumar = sinSumar.map(c => ({ concepto: c.concepto, moneda: c.moneda, monto: redondear(c.monto), cantidad: c.cantidad || 0 }));
+  }
+  return m;
+}
+
+/**
+ * Gastos y nómina de todos los proyectos, para el margen: {FOLIO: [costos]}. monedas = {FOLIO: moneda del contrato} o una función
+ * folio → moneda (los gastos en otra moneda con tipo de cambio se convierten; sin él, van en su moneda). Lee la pestaña Gastos del
+ * libro de compras (sin crear nada) y el total de nómina por proyecto (en caché); si una parte falla, el margen lo dice (error).
+ */
+function costosExtraDeProyectos_(monedas) {
+  const lo = libroComprasSiExiste_();
+  const gastos = lo && lo.getSheetByName('Gastos') ? gastosDelLibro_(lo) : [];
+  return costosExtraPorProyecto(costoGastosPorProyecto(gastos, monedas), nominaEnMargen_() ? costoNominaDeProyectos_() : {});
 }

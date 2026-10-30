@@ -134,7 +134,9 @@ const mg = plain(P.margenPorProyecto({ contratos: [{ proyectoFolio: 'PRY-2026-00
 assert.deepEqual([mg.proyectos[0].margen, mg.conceptos], [987, ['Órdenes de compra', 'Gastos']]);
 const mg2 = plain(P.margenPorProyecto({ contratos: [{ proyectoFolio: 'PRY-2026-0001', cotizacion: 'HLG-2', marca: 'helgen', moneda: 'MXN', subtotal: 1000, estado: 'Firmado' }],
   proyectos: [{ folio: 'PRY-2026-0001', estado: 'Activo' }], ordenes: [], prueba: [], costosExtra: P.costoGastosPorProyecto(GS, MON) }));
-assert(mg2.proyectos[0].margenError && mg2.proyectos[0].margen === null, 'un gasto en USD sin tipo de cambio en un proyecto MXN: no se suma');
+// Integración (§6.I, contrato §1): el gasto en USD sin tipo de cambio no se suma ni anula el margen: va aparte (sinSumar, "Revisar")
+assert.deepEqual([mg2.proyectos[0].margenError, mg2.proyectos[0].margen, mg2.proyectos[0].sinSumar],
+  ['', 714.7, [{ concepto: 'Gastos', moneda: 'USD', monto: 7, cantidad: 1 }]], 'un gasto en USD sin tipo de cambio en un proyecto MXN: no se suma');
 // Acciones por rol, filtro y totales
 const g0 = { folio: 'GAS-1', estado: 'Enviado', solicitanteEmail: 'obrero@helgen.tech' };
 assert.deepEqual(plain(P.accionesGasto(g0, { yo: 'obrero@helgen.tech' })), { propio: true, puedeCancelar: true, puedeAprobar: false, puedeRechazar: false, puedeReembolsar: false });

@@ -460,7 +460,7 @@
           <table style="font-size:12px">
             <thead><tr><th>Proyecto</th><th>Contrato</th><th class="num">Contratado</th><th class="num">Cobrado</th>
               <th class="num">Saldo</th><th style="width:90px">Avance</th><th>Siguiente etapa · último pago</th>
-              <th class="num">Costo OC</th><th class="num">Margen</th></tr></thead>
+              <th class="num">Costos</th><th class="num">Margen</th></tr></thead>
             <tbody id="resLista"></tbody>
           </table>
         </div>
@@ -2087,7 +2087,12 @@
         '<td><div class="barra" title="' + p.avance + '%"><i style="width:' + Math.max(0, Math.min(100, p.avance)) + '%"></i></div><span class="nota">' + p.avance + '%</span></td>' +
         '<td>' + (p.siguienteEtapa ? esc(p.siguienteEtapa) + ' · ' + dinero(p.siguienteSaldo, p.moneda) : 'Pagado') +
         '<div class="nota">' + (p.ultimoPago ? 'Último pago ' + esc(fechaMx(p.ultimoPago)) : 'Sin pagos') + '</div></td>' +
-        '<td class="num">' + (p.costoOc == null ? '—' : dinero(p.costoOc, p.moneda) + '<div class="nota">' + p.ordenes + (p.ordenes === 1 ? ' orden' : ' órdenes') + '</div>') + '</td>' +
+        // Incremento 7: costos = órdenes + gastos + nómina (el detalle por concepto en el título); lo de otra moneda no suma (Revisar)
+        '<td class="num"' + (p.costos ? ' title="' + esc(p.costos.map(x => x.concepto + ': ' + dinero(x.monto, p.moneda)).join(' · ')) + '"' : '') + '>' +
+          (p.costoOc == null ? '—' : dinero(p.costoOc, p.moneda) + '<div class="nota">' + p.ordenes + (p.ordenes === 1 ? ' orden' : ' órdenes') +
+          (p.costos && p.costos.length > 1 ? ' + ' + esc(p.costos.slice(1).map(x => x.concepto.toLowerCase()).join(', ')) : '') + '</div>') +
+          (p.sinSumar ? '<div class="nota aviso-moneda" title="' + esc(p.sinSumar.map(x => x.concepto + ' ' + dinero(x.monto, x.moneda)).join(' · ')) +
+            '">Revisar: otra moneda</div>' : '') + '</td>' +
         '<td class="num">' + (p.margen == null ? '<span class="nota aviso-moneda" title="' + esc(p.margenError) + '">Revisar</span>'
           : '<b' + (p.margen < 0 ? ' class="aviso-moneda"' : '') + '>' + dinero(p.margen, p.moneda) + '</b><div class="nota">' + p.margenPorcentaje + '%</div>') + '</td></tr>';
     }).join('') : '<tr><td colspan="9" class="nota">' + ((RESUMEN.proyectos || []).length ? 'Ningún proyecto coincide con los filtros.' : 'Sin proyectos con contrato.') + '</td></tr>';
@@ -2099,7 +2104,7 @@
     const texto = s => { const v = String(s ?? ''); return '"' + (/^[=+\-@\t\r]/.test(v) ? "'" + v : v).replace(/"/g, '""') + '"'; };
     const num = n => n == null ? '' : r2(n).toFixed(2);
     const enc = ['Folio', 'Proyecto', 'Cliente', 'Línea de negocio', 'Contrato', 'Moneda', 'Contratado con IVA', 'Cobrado', 'Saldo', 'Avance %',
-      'Siguiente etapa', 'Saldo siguiente etapa', 'Último pago', 'Órdenes de compra', 'Costo OC sin IVA', 'Margen sin IVA', 'Margen %',
+      'Siguiente etapa', 'Saldo siguiente etapa', 'Último pago', 'Órdenes de compra', 'Costos sin IVA (órdenes, gastos y nómina)', 'Margen sin IVA', 'Margen %',
       'Adicionales con IVA', 'Total contratado con IVA']; // A (incremento 7): al final, para no mover las columnas de antes
     const filas = lista.map(p => [texto(folioVis(p)), texto(p.nombre), texto(p.cliente), texto(MARCA_TXT[p.marca] || ''), texto(p.estadoContrato),
       texto(p.moneda), num(p.contratado), num(p.pagado), num(p.saldo), String(p.avance), texto(p.siguienteEtapa),
@@ -2179,17 +2184,23 @@
 
     // Margen (sin IVA, en la moneda del proyecto): el servidor solo lo manda al rol de cobranza
     const mg = v.margen;
+    // Incremento 7: la nómina dice sus horas (nunca personas); gastos o nómina en otra moneda que el contrato no se suman (Revisar)
+    const etiquetaCosto = x => x.concepto + (x.horas != null ? ' (' + x.horas + ' h' + (x.sinCostear ? '; ' + x.sinCostear + ' h sin costear' : '') + ')'
+      : ' (' + x.cantidad + ')');
+    const sinSumar = !mg || !mg.sinSumar ? '' : mg.sinSumar.map(x => '<div class="nota aviso-moneda" style="grid-column:1/-1">Revisar: ' +
+      esc(x.concepto) + ' en ' + esc(x.moneda) + ' por ' + esc(dinero(x.monto, x.moneda)) + ' no se suma (el contrato es en ' + esc(mg.moneda) + ').</div>').join('');
     $('cobMargen').classList.toggle('oculto', !mg);
     $('cobMargen').innerHTML = !mg ? '' : mg.error ? '<div class="nota aviso-moneda">' + esc(mg.error) + '</div>'
-      // Sin cotización aceptada no hay contratado: solo el costo de las órdenes de compra (cada moneda aparte)
-      : mg.sinContrato ? '<div class="sat-titulo" style="grid-column:1/-1;margin:0">Costo de órdenes de compra (sin IVA)</div>' +
-        mg.costos.map(x => [x.concepto + ' (' + x.cantidad + ')', dinero(x.monto, x.moneda)]).concat([['Margen', 'Sin contrato']])
+      // Sin cotización aceptada no hay contratado: solo los costos del proyecto (órdenes, gastos y nómina; cada moneda aparte)
+      : mg.sinContrato ? '<div class="sat-titulo" style="grid-column:1/-1;margin:0">Costos del proyecto (sin IVA)</div>' +
+        mg.costos.map(x => [etiquetaCosto(x), dinero(x.monto, x.moneda)]).concat([['Margen', 'Sin contrato']])
           .map(([k, x]) => '<div class="tile"><span>' + esc(k) + '</span><b>' + esc(x) + '</b></div>').join('')
       : '<div class="sat-titulo" style="grid-column:1/-1;margin:0">Margen del proyecto (sin IVA)</div>' +
-        [['Contratado sin IVA', dinero(mg.contratado, mg.moneda)]]
-          .concat(mg.costos.map(x => [x.concepto + ' (' + x.cantidad + ')', '− ' + dinero(x.monto, mg.moneda)]))
+        (mg.adicionales ? [['Contrato sin IVA', dinero(mg.contrato, mg.moneda)], ['Adicionales sin IVA', dinero(mg.adicionales, mg.moneda)],
+          ['Contratado sin IVA', dinero(mg.contratado, mg.moneda)]] : [['Contratado sin IVA', dinero(mg.contratado, mg.moneda)]])
+          .concat(mg.costos.map(x => [etiquetaCosto(x), '− ' + dinero(x.monto, mg.moneda)]))
           .concat([['Margen', dinero(mg.margen, mg.moneda), mg.margen < 0], ['Margen %', mg.porcentaje + '%', mg.margen < 0]])
-          .map(([k, x, neg]) => '<div class="tile"><span>' + esc(k) + '</span><b' + (neg ? ' class="negativo"' : '') + '>' + x + '</b></div>').join('');
+          .map(([k, x, neg]) => '<div class="tile"><span>' + esc(k) + '</span><b' + (neg ? ' class="negativo"' : '') + '>' + x + '</b></div>').join('') + sinSumar;
 
     // Esquema
     $('cobModEsquema').classList.toggle('oculto', !c);
@@ -5929,10 +5940,13 @@
           '<td><span class="chip ' + (p.estadoContrato === 'Firmado' ? 'firmado' : 'aceptada') + '" style="white-space:nowrap">' + esc(p.estadoContrato) + '</span></td>' +
           '<td class="num">' + dinero(p.contratado, p.moneda) + '</td>' + conceptos.map(c => celda(costo(c), p.moneda)).join('') +
           (p.margenError ? '<td class="num" colspan="2"><span class="nota aviso-moneda" title="' + esc(p.margenError) + '">Revisar: ' + esc(p.margenError) + '</span></td>'
-            : '<td class="num"><b' + (p.margen < 0 ? ' class="aviso-moneda"' : '') + '>' + dinero(p.margen, p.moneda) + '</b></td><td class="num">' + p.porcentaje + '%</td>') + '</tr>';
+            : '<td class="num"><b' + (p.margen < 0 ? ' class="aviso-moneda"' : '') + '>' + dinero(p.margen, p.moneda) + '</b>' +
+              (p.sinSumar ? '<div class="nota aviso-moneda">Revisar: ' + esc(p.sinSumar.map(x => x.concepto + ' ' + dineroTexto(x.monto, x.moneda)).join(', ')) +
+                ' no suma</div>' : '') + '</td><td class="num">' + p.porcentaje + '%</td>') + '</tr>';
       }).join('');
-      return tot + tabla(enc, filas, ';margin-top:10px') + '<div class="nota" style="margin-top:8px">Contratado sin IVA (subtotal de la cotización aceptada) menos ' +
-        'el costo sin IVA de las órdenes de compra no canceladas, en la moneda del contrato; los gastos y la nómina se sumarán como otras columnas. ' +
+      return tot + tabla(enc, filas, ';margin-top:10px') + '<div class="nota" style="margin-top:8px">Contratado sin IVA (subtotal de la cotización aceptada ' +
+        'más sus adicionales aceptadas) menos el costo sin IVA de las órdenes de compra no canceladas, los gastos aprobados o reembolsados y la ' +
+        'nómina repartida por horas aprobadas, en la moneda del contrato (lo que está en otra moneda no se suma: "Revisar"). ' +
         'Los totales son por línea de negocio y moneda, solo de contratos firmados. Fuera: proyectos cancelados, lo anulado y los registros de prueba.</div>';
     }
     /** Importe con su moneda como texto plano (para notas que luego se escapan). */
