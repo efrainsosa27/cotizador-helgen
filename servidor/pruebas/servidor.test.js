@@ -190,7 +190,9 @@ caso('HTTP: CORS solo para la interfaz, 404, 413 y /salud', async () => {
     const corrida = JSON.parse((await pedir('POST', '/admin/correr', JSON.stringify({ funcion: 'cadaQuinceMinutos' }))).texto);
     assert.equal(corrida.ok, true, 'una función del editor corre desde el servidor: ' + JSON.stringify(corrida).slice(0, 200));
     assert.equal((await pedir('POST', '/admin/correr', JSON.stringify({ funcion: 'prepararCapri' }), { 'X-Forwarded-For': '201.141.1.1' })).estado, 404, 'por nginx no existe');
-    const grande = await pedir('POST', '/api', Buffer.alloc(51 * 1024 * 1024, 'a'));
+    // El servidor rechaza Content-Length desde las cabeceras. No hace falta enviar los 51 MB:
+    // hacerlo compite con su cierre y puede dar EPIPE antes de leer el 413 en el cliente de prueba.
+    const grande = await pedir('POST', '/api', null, { 'Content-Length': String(51 * 1024 * 1024) });
     assert.equal(grande.estado, 413);
     assert(/pesan demasiado/.test(JSON.parse(grande.texto).error));
   } finally { await B.cerrar(); }
