@@ -3,7 +3,7 @@
 Lista para copiar y pegar, de la instalación al cambio y el regreso. El porqué de cada paso de Google está en
 [`servidor-google-paso-a-paso.md`](servidor-google-paso-a-paso.md); el diseño, en [`servidor-etapa-1.md`](servidor-etapa-1.md).
 
-- **[Gibran]** = en el servidor (helgensrvr), con su usuario y `sudo`. **[Leo]** = Google, Apps Script, la interfaz.
+- **[Gibran]** = en el servidor (helgensrvr = `git.helgen.online` por SSH, puerto 22), con su usuario y `sudo`. **[Leo]** = Google, Apps Script, la interfaz.
   **[facilities@]** = Leo entrando con esa cuenta. **[Verificar]** = qué debe salir.
 - `<usuario>` = tu usuario de SSH en el servidor (la misma máquina que `drogheda.helgen.online` y `git.helgen.online`).
 - Docker se usa con `sudo` (así funciona aunque tu usuario no esté en el grupo `docker`).
@@ -13,17 +13,17 @@ Lista para copiar y pegar, de la instalación al cambio y el regreso. El porqué
 
 ## A0. Subir el código al repositorio (una vez) — [Leo]
 
-Claude no puede escribir en `git.helgen.online`: el código llega como *bundle* de git (`entregas/capri-incrementos-6-7-servidor.bundle`).
-En tu Mac, en tu copia del repositorio:
+Claude no puede escribir en `git.helgen.online`: el código llega como *bundle* de git
+(`entregas/incremento-7/capri-incrementos-5-6-7-servidor.bundle`, historia completa: no necesita los bundles anteriores).
+En tu Mac, en tu copia del repositorio (`origin` = `git.helgen.online`):
 ```bash
-B=~/Documents/Claude/Projects/cotizador-helgen/entregas/capri-incrementos-6-7-servidor.bundle
+cd ~/Documents/Claude/Projects/cotizador-helgen
+B=entregas/incremento-7/capri-incrementos-5-6-7-servidor.bundle
 git bundle verify "$B"
-git fetch "$B" 'refs/heads/*:refs/remotes/entrega/*'
-git push ssh://git@git.helgen.online:222/leo/cotizador-helgen.git \
-  entrega/incremento-6-final:refs/heads/incremento-6-final entrega/incremento-7:refs/heads/incremento-7 \
-  entrega/servidor-etapa-1:refs/heads/servidor-etapa-1
+git fetch "$B" incremento-5:incremento-5 incremento-6-final:incremento-6 incremento-7:incremento-7 servidor-etapa-1:servidor-etapa-1
+git push origin incremento-5 incremento-6 incremento-7 servidor-etapa-1
 ```
-[Verificar] `git bundle verify` dice "is okay"; el push crea las tres ramas. `incremento-7` y `servidor-etapa-1` apuntan al mismo
+[Verificar] `git bundle verify` dice "is okay"; el push crea las cuatro ramas. `incremento-7` y `servidor-etapa-1` apuntan al mismo
 commit (el servidor corre el mismo `Code.js` que se publicará en Apps Script). Gibran necesita acceso de lectura a
 `leo/cotizador-helgen` con la llave SSH de su usuario en el servidor (la usa `actualizar.sh` con `git fetch`).
 
@@ -67,7 +67,7 @@ en la organización, Sheets/Drive/Gmail API, consentimiento **Interno**, permiso
 
 **B4. Subir el cliente OAuth al servidor** (en la Mac):
 ```bash
-scp ~/Downloads/client_secret_*.json <usuario>@helgensrvr:/tmp/cliente-oauth.json && rm ~/Downloads/client_secret_*.json
+scp ~/Downloads/client_secret_*.json leo@git.helgen.online:/tmp/cliente-oauth.json && rm ~/Downloads/client_secret_*.json
 ```
 
 ## C. Los dos tokens de facilities@ (una vez) — [Gibran] [Leo] [facilities@]
@@ -78,9 +78,9 @@ sudo install -o capri -g capri -m 600 /tmp/cliente-oauth.json /srv/capri/config/
 ```
 **[Leo]** En la Mac, un túnel (deja esta terminal abierta; ahí mismo se corren C2 y C3):
 ```bash
-ssh -L 8765:127.0.0.1:8765 <usuario>@helgensrvr
+ssh -L 8765:127.0.0.1:8765 leo@git.helgen.online
 ```
-**C2.** Token de Sheets + Drive. En la sesión del túnel:
+**C2. [Leo]** Token de Sheets + Drive. En la sesión del túnel (la liga de Google regresa a tu Mac por el túnel):
 ```bash
 cd /srv/projects/capri/app/servidor
 sudo docker compose run --rm -p 127.0.0.1:8765:8765 -v /srv/capri/config:/salida capri \

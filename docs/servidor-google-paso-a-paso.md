@@ -106,8 +106,8 @@ de facilities@ (Google revoca los tokens que tienen Gmail), solo se apagan los c
 
 1. [Gibran] deja el archivo del paso 5 en `/srv/capri/config/cliente-oauth.json` (dueño capri, 600) — `servidor-comandos.md` C1.
 2. [Leo], en la Mac, abre un túnel al servidor (la herramienta recibe la respuesta de Google en `127.0.0.1:8765`):
-   `ssh -L 8765:127.0.0.1:8765 <usuario>@helgensrvr` y deja esa terminal abierta.
-3. [Gibran] En esa misma sesión del servidor corre el comando C2 de `servidor-comandos.md` (`autorizar.js --alcances hojas,drive`).
+   `ssh -L 8765:127.0.0.1:8765 leo@git.helgen.online` y deja esa terminal abierta.
+3. [Leo] En esa misma terminal (la del túnel, ya dentro del servidor) corre el comando C2 de `servidor-comandos.md` (`autorizar.js --alcances hojas,drive`).
    Imprime una liga larga de `accounts.google.com`.
 4. [facilities@] Abre la liga en el Chrome **donde está entrada facilities@** (perfil aparte o incógnito). Google muestra "CAPRI
    servidor quiere acceder a tu cuenta de Google": revisa que diga **facilities@helgen.tech** y que pida Hojas de cálculo
