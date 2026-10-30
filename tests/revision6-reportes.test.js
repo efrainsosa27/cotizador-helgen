@@ -177,7 +177,9 @@ const filasR = d => plain(P.antiguedadPorPagar(d, P.saldoOrdenCompra)).grupos.re
   assert.deepEqual([saldoRes('PRY-9-0022').estadoContrato, saldoR('PRY-9-0022')], ['Por firmar', 660], 'desbloqueado: R cuenta (R mayor)');
   assert.deepEqual([saldoRes('PRY-9-0024').saldo, saldoR('PRY-9-0024')], [-0.5, undefined], 'pago de más en la tolerancia (R mayor ≤ 1.00)');
   assert.deepEqual([saldoRes('PRY-9-0025').estadoContrato, saldoR('PRY-9-0025')], ['Por firmar', undefined], 'por firmar sin pagos: fuera en los dos');
-  assert.deepEqual([rg.totales[0].porCobrar, ar.totales[0].total], [160 + 1160 - 0.5, 160 + 660]);
+  // Revisión del incremento 7 (dinero): "Por cobrar" suma solo saldos positivos (el −0.50 ya no resta; antes 160 + 1160 − 0.5)
+  assert.deepEqual([rg.totales[0].porCobrar, ar.totales[0].total], [160 + 1160, 160 + 660]);
+  assert.deepEqual([rg.totales[0].aFavor, saldoRes('PRY-9-0024').aFavor], [0, false], 'dentro de la tolerancia no es saldo a favor');
   // Margen · totales: el reporte sin los de prueba (el resumen con ellos); por proyecto, lo mismo
   const mg = plain(P.margenPorProyecto(dc));
   assert.deepEqual([mg.totales[0].contratado, rg.totales[0].contratadoSinIva], [2000, 3000], 'margen: prueba fuera del reporte');

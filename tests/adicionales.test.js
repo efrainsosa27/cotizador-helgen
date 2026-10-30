@@ -17,6 +17,11 @@ const dir = process.argv[2] || '.';
 
 // ================= 0. Regresión (sin adicionales, todo igual que antes) =================
 const esperado = JSON.parse(fs.readFileSync(path.join(__dirname, 'adicionales-regresion.json'), 'utf8'));
+// Único cambio a propósito sobre la salida del código de antes (revisión del incremento 7, dinero): "Por cobrar" del resumen suma
+// solo saldos positivos; el pago de más de PRY-AAAA-0101 dentro de la tolerancia (saldo −0.50) ya no resta del total
+assert.deepStrictEqual([esperado.puras.resumenGeneral.totales[0].porCobrar, esperado.servidor.resumenGeneral.totales[0].porCobrar], [247.5, 5099.5]);
+esperado.puras.resumenGeneral.totales[0].porCobrar = 248;
+esperado.servidor.resumenGeneral.totales[0].porCobrar = 5100;
 const obtenido = require('./adicionales-regresion')(dir);
 Object.keys(esperado.puras).forEach(k => assert.deepStrictEqual(obtenido.puras[k], esperado.puras[k], 'regresión (pura): ' + k));
 Object.keys(esperado.servidor).forEach(k => assert.deepStrictEqual(obtenido.servidor[k], esperado.servidor[k], 'regresión (servidor): ' + k));

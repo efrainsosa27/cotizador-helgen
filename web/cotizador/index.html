@@ -2068,13 +2068,17 @@
     // Totales: uno por moneda, solo contratos firmados (los filtros aplican a la tabla, no a los totales)
     $('resTotales').innerHTML = RESUMEN.totales.length ? RESUMEN.totales.map(t =>
       '<div class="sat-titulo" style="margin-top:4px">' + esc(t.moneda) + ' · ' + t.proyectos + (t.proyectos === 1 ? ' contrato firmado' : ' contratos firmados') +
-      (t.porFirmar ? ' · ' + t.porFirmar + ' por firmar (' + dinero(t.montoPorFirmar, t.moneda) + ', no suman)' : '') + '</div>' +
+      (t.porFirmar ? ' · ' + t.porFirmar + ' por firmar (' + dinero(t.montoPorFirmar, t.moneda) + ', no suman)' : '') +
+      // Revisión del incremento 7 (dinero): proyectos con gastos o nómina en otra moneda (el margen del total no los incluye)
+      (t.sinSumar ? ' · ' + t.sinSumar + (t.sinSumar === 1 ? ' proyecto' : ' proyectos') + ' con costos en otra moneda (no suman al margen)' : '') + '</div>' +
       // A (incremento 7): con adicionales, contratado, adicionales y total aparte
       '<div class="tiles">' + tile('Contratado (con IVA)', dinero(t.contratado, t.moneda)) +
       (t.adicionales ? tile('Adicionales (con IVA)', dinero(t.adicionales, t.moneda)) + tile('Total contratado', dinero(t.total, t.moneda)) : '') +
       tile('Cobrado', dinero(t.cobrado, t.moneda)) +
       tile('Por cobrar', dinero(t.porCobrar, t.moneda)) + tile('Avance', t.avance + '%') +
       tile('Proyectos con saldo', t.conSaldo + ' de ' + t.proyectos) +
+      // Revisión del incremento 7 (dinero): lo pagado de más, aparte (nunca se resta de lo que deben otros proyectos)
+      (t.aFavor ? tile('Saldo a favor de clientes', dinero(t.aFavor, t.moneda) + ' · ' + t.conSaldoAFavor + (t.conSaldoAFavor === 1 ? ' proyecto' : ' proyectos')) : '') +
       tile('Margen (sin IVA)', t.margen == null ? '—' : dinero(t.margen, t.moneda) + (t.margenPorcentaje == null ? '' : ' · ' + t.margenPorcentaje + '%'),
         t.margen != null && t.margen < 0 ? 'negativo' : '') + '</div>').join('')
       : '<span class="nota">Todavía no hay proyectos con cotización aceptada.</span>';
@@ -2087,7 +2091,8 @@
         '<span class="chip ' + (firmado ? 'firmado' : 'aceptada') + '" style="white-space:nowrap">' + esc(p.estadoContrato) + '</span></td>' +
         '<td class="num">' + dinero(p.contratado, p.moneda) + (p.adicionales ? '<div class="nota">+ adicionales ' + dinero(p.adicionales, p.moneda) +
           '</div><div class="nota">= total ' + dinero(p.total, p.moneda) + '</div>' : '') + '</td><td class="num">' + dinero(p.pagado, p.moneda) + '</td>' +
-        '<td class="num"><b>' + dinero(p.saldo, p.moneda) + '</b></td>' +
+        '<td class="num"><b>' + dinero(p.saldo, p.moneda) + '</b>' +
+          (p.aFavor ? '<div class="nota aviso-moneda">' + dinero(-p.saldo, p.moneda) + ' a favor del cliente</div>' : '') + '</td>' +
         '<td><div class="barra" title="' + p.avance + '%"><i style="width:' + Math.max(0, Math.min(100, p.avance)) + '%"></i></div><span class="nota">' + p.avance + '%</span></td>' +
         '<td>' + (p.siguienteEtapa ? esc(p.siguienteEtapa) + ' · ' + dinero(p.siguienteSaldo, p.moneda) : 'Pagado') +
         '<div class="nota">' + (p.ultimoPago ? 'Último pago ' + esc(fechaMx(p.ultimoPago)) : 'Sin pagos') + '</div></td>' +
@@ -5933,7 +5938,9 @@
       const conceptos = d.conceptos || [];
       const tot = d.totales.map(t => '<div class="sat-titulo" style="margin-top:4px">' + esc(MARCA_TXT[t.marca] || 'Sin línea') + ' · ' + esc(t.moneda) +
         ' · ' + plural(t.proyectos, 'contrato firmado', 'contratos firmados') + (t.porFirmar ? ' · ' + t.porFirmar + ' por firmar (no suman)' : '') +
-        (t.conError ? ' · ' + t.conError + ' con costos en otra moneda (no suman)' : '') + '</div>' +
+        (t.conError ? ' · ' + t.conError + ' con costos en otra moneda (no suman)' : '') +
+        // Revisión del incremento 7 (dinero): suman, pero sin sus gastos o su nómina en otra moneda
+        (t.sinSumar ? ' · ' + t.sinSumar + ' con gastos o nómina en otra moneda (no suman)' : '') + '</div>' +
         '<div class="tiles">' + tile('Contratado sin IVA', dinero(t.contratado, t.moneda)) +
         t.costos.map(c => tile(c.concepto, '− ' + dinero(c.monto, t.moneda))).join('') +
         tile('Margen', dinero(t.margen, t.moneda), t.margen < 0) + tile('Margen %', t.porcentaje == null ? '—' : t.porcentaje + '%', t.margen < 0) + '</div>').join('');
@@ -7012,7 +7019,7 @@
         '<div><label>Costo mensual (MXN) *</label><input id="nomCosto" type="number" min="0" step="0.01" inputmode="decimal" style="text-align:right"></div>' +
         '<div><label>Notas</label><input id="nomNotas" maxlength="200" placeholder="Sueldo + IMSS, aguinaldo…"></div></div>' +
         '<div class="acciones"><button type="button" id="btnNomGuardar" class="btn" onclick="HORAS.guardarCosto()">Guardar costo</button>' +
-        '<span class="nota">O sube un CSV (correo, mes, costo[, notas]):</span><input id="nomCsv" type="file" accept=".csv,text/csv,text/plain" style="width:auto">' +
+        '<span class="nota">O sube un CSV (correo, mes, costo[, notas]; el costo como 45000 o 45,000.00):</span><input id="nomCsv" type="file" accept=".csv,text/csv,text/plain" style="width:auto">' +
         '<button type="button" id="btnNomCsv" class="btn btn-sec" onclick="HORAS.importar()">Importar CSV</button></div>' + imp + faltan +
         '<div class="acciones"><label style="margin:0">Mes</label><select id="nomFiltroMes" style="width:auto" onchange="HORAS.filtrarMes(this.value)"><option value="">Todos</option>' +
         meses.map(m => '<option value="' + esc(m) + '"' + (m === st.costoMes ? ' selected' : '') + '>' + esc(m) + '</option>').join('') + '</select></div>' +
@@ -7048,10 +7055,19 @@
         sinC + sinH + '<div class="nota" style="margin-top:8px">Por persona y mes: costo × horas aprobadas en el proyecto ÷ horas aprobadas de esa persona en el mes. ' +
         'Un mes sin costo capturado deja sus horas sin costear (no se inventa un costo). Siempre en MXN.</div></div>';
     }
-    function guardarCosto() {
+    function guardarCosto(confirmado) {
       const p = { correo: $('nomPersona').value, mes: $('nomMes').value, costo: $('nomCosto').value, notas: $('nomNotas').value };
       if (!p.correo) { mostrarError('Elige a la persona.'); return; }
-      llamar('guardarCostoPersonal', [p], d => { recibirCostos(d); st.reporte = null; cargarReporte(); aviso('ok', 'Costo guardado.'); }, 'btnNomGuardar');
+      if (confirmado === true) p.confirmado = true;
+      // Revisión del incremento 7 (dinero): un costo menor a 1,000 MXN se confirma (el servidor responde con codigo CONFIRMAR)
+      const b = $('btnNomGuardar');
+      if (b) { if (b.disabled) return; b.disabled = true; }
+      google.script.run.withSuccessHandler(d => { if (b) b.disabled = false; recibirCostos(d); st.reporte = null; cargarReporte(); aviso('ok', 'Costo guardado.'); })
+        .withFailureHandler(err => {
+          if (b) b.disabled = false;
+          if (err && err.codigo === 'CONFIRMAR' && confirmado !== true) { if (window.confirm(err.message)) guardarCosto(true); return; }
+          mostrarError(err);
+        }).guardarCostoPersonal(p);
     }
     function quitarCosto(i) {
       const x = st.costos && st.costos.costos[i];

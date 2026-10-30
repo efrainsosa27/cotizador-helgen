@@ -646,7 +646,7 @@ const TROZO_CACHE = 30000; // caracteres por entrada (CacheService admite 100 KB
  * caché vacío). No va en las claves de idempotencia (REQ_, OC_, PGP_…: un reintento justo al publicar no debe duplicar), ni en las
  * de la entrada con código (CAPRI_*: bloqueos y códigos vigentes) ni en FOTOCM_ (fotos ya archivadas en Drive).
  */
-const VERSION_CODIGO_CACHE = '2026-10-29s'; // incremento 7: margen, adicionales, gastos, horas y facturas cambian la forma de lo que va en caché
+const VERSION_CODIGO_CACHE = '2026-10-29d'; // revisión del incremento 7 (dinero): saldo a favor y costos que no suman en el resumen y el margen, facturas por revisar
 function claveNs_(clave) { return clave + '@' + VERSION_CODIGO_CACHE; }
 
 /**
@@ -1960,7 +1960,9 @@ const HOJAS_COBRANZA = {
     enc: ['folio', 'fecha_pago', 'fecha_registro', 'proyecto_folio', 'monto', 'moneda_pago', 'tipo_cambio',
       'monto_aplicado', 'moneda_proyecto', 'metodo', 'referencia', 'etapa_orden', 'etapa', 'aplicacion (JSON)',
       'comprobante_id', 'comprobante_url', 'registro_email', 'registro_nombre', 'estado', 'cancelado_por',
-      'fecha_cancelacion', 'motivo_cancelacion', 'etapa_adicional'],
+      'fecha_cancelacion', 'motivo_cancelacion', 'etapa_adicional', 'id_solicitud', 'huella_solicitud'],
+    // Revisión del incremento 7 (dinero): id_solicitud y huella_solicitud = idempotencia de registrarPago en la hoja (como
+    // PagosProveedores en el incremento 6); vacías en filas de antes
     numeros: [5, 7, 8, 12],
   },
   Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
@@ -1990,6 +1992,8 @@ const colEsq_ = nombre => HOJAS_COBRANZA.Esquemas.enc.indexOf(nombre) + 1;
 /** A (incremento 7): columna (desde 1) de un encabezado de Adicionales, y la de etapa_adicional en Pagos (desde 0). */
 const colAdic_ = nombre => HOJAS_COBRANZA.Adicionales.enc.indexOf(nombre) + 1;
 const COL_PAGO_ADICIONAL_ = HOJAS_COBRANZA.Pagos.enc.indexOf('etapa_adicional');
+/** Revisión del incremento 7 (dinero): id_solicitud y huella_solicitud de Pagos (desde 0). */
+const COL_PAGO_ID_SOLICITUD_ = HOJAS_COBRANZA.Pagos.enc.indexOf('id_solicitud'), COL_PAGO_HUELLA_ = HOJAS_COBRANZA.Pagos.enc.indexOf('huella_solicitud');
 /** ¿La fila de Esquemas es de una adicional? (columna adicional con folio; vacía = etapa del contrato original) */
 const esquemaDeAdicional_ = r => String(r[colEsq_('adicional') - 1] == null ? '' : r[colEsq_('adicional') - 1]).trim().toUpperCase();
 
@@ -2532,6 +2536,14 @@ function marcarAceptada(proyectoFolio, cotizacionFolio, confirmado) {
       throw new Error('El proyecto ya tiene órdenes de compra en ' + oc.monedaProyecto + ': la cotización aceptada debe ser en ' +
         oc.monedaProyecto + '.');
     }
+    // Revisión del incremento 7 (dinero): lo mismo con los gastos vivos (Enviado, Aprobado o Reembolsado). Un gasto capturado en la
+    // moneda del proyecto no lleva tipo de cambio: con el proyecto en otra moneda ya no entraría al margen ("Revisar")
+    const gasto = gastosDelLibro_(libroComprasSiExiste_()).find(g => g.proyectoFolio === String(proyecto.folio).toUpperCase() &&
+      [GAS_ENVIADO, GAS_APROBADO, GAS_REEMBOLSADO].indexOf(g.estado) !== -1 && (g.monedaProyecto || g.moneda) !== cot.moneda);
+    if (gasto) {
+      const m = gasto.monedaProyecto || gasto.moneda;
+      throw new Error('El proyecto ya tiene gastos en ' + m + ': la cotización aceptada debe ser en ' + m + '.');
+    }
 
     // Esquema: al pasar a Helgen Energy se pone el 60/30/10 (después solo el administrador lo cambia); entre cotizaciones
     // de la misma línea, o de Energy a Helgen, se conserva el que ya tenga
@@ -2544,6 +2556,8 @@ function marcarAceptada(proyectoFolio, cotizacionFolio, confirmado) {
         '60% Anticipo, 30% Instalación, 10% Encendido del sistema, y reemplazará el esquema actual. ¿Continuar?' };
     }
     const etapas = pasaAEnergy || !d.etapas.length ? porOmision : d.etapas;
+    // Revisión del incremento 7 (dinero): al pasar a Helgen Energy el esquema se reemplaza; sin mover la liga de una factura de cliente
+    if (etapas !== d.etapas) exigirEsquemaSinFacturasLigadas_(libro, proyecto.folio, '', d.etapas, etapas, 'cambiar la cotización aceptada');
 
     const t = textoCelda;
     const fila = [proyecto.folio, cot.folio, MARCAS[cot.marca], cot.moneda, cot.subtotal, cot.iva, cot.total, ESTADO_ACEPTADA,
@@ -2580,6 +2594,8 @@ function guardarEsquema(proyectoFolio, etapas, motivo) {
       if (m.length < 5) throw new Error('Escribe el motivo del cambio al esquema de Helgen Energy.');
       if (m.length > 500) throw new Error('El motivo debe tener máximo 500 caracteres.');
     }
+    // Revisión del incremento 7 (dinero): sin mover la liga de una factura de cliente (antes de firmar o tras un desbloqueo)
+    exigirEsquemaSinFacturasLigadas_(libro, proyecto.folio, '', d.etapas, limpio);
     const antes = d.etapas.map(e => e.etapa + ' ' + e.porcentaje + '%').join(' · ');
     escribirEsquema_(d.hojas.esquemas, proyecto.folio, limpio, c.total);
     bitacora_(libro, c.marca === 'energy' ? 'Editar esquema de pagos (Helgen Energy)' : 'Editar esquema de pagos', proyecto.folio,
@@ -2661,15 +2677,14 @@ function registrarPago(p) {
   const tipo = validarComprobante(bytes);
   const libro = libroCobranza_();
 
+  // Revisión del incremento 7 (dinero): la idempotencia vive en la hoja (columnas id_solicitud y huella_solicitud de Pagos), no en
+  // el caché (CacheService la puede tirar, y {folio, url, vista} ya pasaba de los 100 KB con muchas facturas: no se guardaba)
   const idSolicitud = String(d0.idSolicitud || '').slice(0, 64);
-  const cache = CacheService.getScriptCache();
-  const claveCache = idSolicitud ? 'PAG_' + idSolicitud : '';
+  const huella = idSolicitud ? huellaPagoCobranza_(d0, bytes) : '';
 
   return conCandado_(() => {
-    if (claveCache) {
-      const previo = cache.get(claveCache);
-      if (previo) return JSON.parse(previo);
-    }
+    const repetido = pagoCobranzaYaRegistrado_(libro, idSolicitud, huella);
+    if (repetido) return repetido;
     const proyecto = proyectoParaCobranza_(d0.proyectoFolio);
     const d = datosCobranza_(libro, proyecto.folio);
     const c = d.contrato;
@@ -2711,16 +2726,49 @@ function registrarPago(p) {
       pago.etapaOrden, t(etiquetaEtapaCobranza(resumen.etapas[indice])), JSON.stringify(aplicacion), archivo.getId(), archivo.getUrl(),
       t(VENDEDOR_.email), t([VENDEDOR_.nombre, VENDEDOR_.apellido].filter(Boolean).join(' ')), 'Vigente', '', '', '',
       etapaAdic, // A (incremento 7): etapa_adicional
+      t(idSolicitud), t(huella), // revisión del incremento 7 (dinero): idempotencia en la hoja (la huella puede empezar con "-")
     ]);
     bitacora_(libro, 'Registrar pago', proyecto.folio, folio + ' · ' + formatoMoneda(pago.monto) + ' ' + pago.monedaPago +
       (pago.tipoCambio ? ' · TC ' + pago.tipoCambio + ' = ' + formatoMoneda(pago.montoAplicado) + ' ' + c.moneda : '') +
       ' · ' + pago.metodo + ' · ' + aplicacion.map(a => etiquetaEtapaCobranza(a) + ' ' + formatoMoneda(a.monto)).join(' + '));
     SpreadsheetApp.flush();
 
-    const resultado = { folio: folio, url: archivo.getUrl(), vista: vistaCobranza_(libro, proyecto) };
-    guardarIdempotencia_(cache, claveCache, resultado); // 6 h; si no cabe no lanza (ya se escribió)
-    return resultado;
+    return { folio: folio, url: archivo.getUrl(), vista: vistaCobranza_(libro, proyecto) };
   });
+}
+
+/**
+ * Revisión del incremento 7 (dinero): huella del contenido de un envío de pago de cobranza (proyecto, fecha, monto, moneda, tipo de
+ * cambio, método, referencia, etapa y el comprobante). Dos envíos con el mismo idSolicitud y la misma huella son el mismo pago.
+ */
+function huellaPagoCobranza_(d, bytes) {
+  const n = v => (v === '' || v == null ? '' : String(Number(v)));
+  const t = v => String(v == null ? '' : v).trim();
+  const md5 = x => Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, x));
+  return md5(JSON.stringify([t(d.proyectoFolio).toUpperCase(), t(d.fecha), n(d.monto), t(d.monedaPago).toUpperCase(), n(d.tipoCambio),
+    t(d.metodo), t(d.referencia), n(d.etapaOrden), t(d.etapaAdicional).toUpperCase(), md5(bytes || [])])).replace(/=+$/, '');
+}
+
+/**
+ * Revisión del incremento 7 (dinero): un envío de pago de cobranza que ya se registró (mismo idSolicitud en la columna id_solicitud
+ * de Pagos). Con la misma huella devuelve el mismo PAG con la vista de ahora; con otra (otro monto, fecha, referencia, etapa o
+ * comprobante) se rechaza, como pagoYaRegistrado_ con los pagos a proveedores. null si no se ha registrado. Dentro del candado (lee
+ * las filas de la petición: datosCobranza_ usa las mismas).
+ */
+function pagoCobranzaYaRegistrado_(libro, idSolicitud, huella) {
+  if (!idSolicitud) return null;
+  let previo = null;
+  filasCobranza_(hojaCobranza_(libro, 'Pagos'), 'Pagos').forEach((r, i) => {
+    if (!previo && String(r[COL_PAGO_ID_SOLICITUD_] == null ? '' : r[COL_PAGO_ID_SOLICITUD_]) === idSolicitud) {
+      previo = Object.assign(pagoDesdeFila_(r, i + 2), { huella: String(r[COL_PAGO_HUELLA_] == null ? '' : r[COL_PAGO_HUELLA_]) });
+    }
+  });
+  if (!previo) return null;
+  if (previo.huella && huella && previo.huella !== huella) {
+    throw new Error('Este envío ya se registró como ' + previo.folio + ' con otros datos (monto, moneda, fecha, referencia, etapa o ' +
+      'comprobante). Si es otro pago, recarga el proyecto y regístralo de nuevo.');
+  }
+  return { folio: previo.folio, url: previo.comprobanteUrl, repetido: true, vista: vistaCobranza_(libro, proyectoParaCobranza_(previo.proyectoFolio)) };
 }
 
 /** Cancela un pago (no se borra): rol de cobranza, con motivo; queda en la Bitácora. */
@@ -4797,7 +4845,9 @@ function registrarFacturaProveedor(p) {
     }
     const { hoja: hO, orden } = buscarOrden_(libro, d0.ocFolio);
     const hoy = hoyIso_();
-    const v = validarFacturaProveedor(factura, orden, { rfcHelgen: cfg.EMPRESA_RFC, hoy: hoy, facturas: facturasDelLibro_(libro) });
+    // Revisión del incremento 7 (dinero): dentro del candado, también contra los gastos vivos (como guardarGasto contra las facturas)
+    const v = validarFacturaProveedor(factura, orden, { rfcHelgen: cfg.EMPRESA_RFC, hoy: hoy, facturas: facturasDelLibro_(libro),
+      gastos: uuidsDeGastosVivos_(libro) });
     const hoja = hojaCompras_(libro, 'FacturasProveedor');
     const folio = siguienteFolio_(PREFIJO_FPR, hoja, 'CONSECUTIVO_FPR_');
     const dias = diasCreditoGuardados(orden.diasCredito);
@@ -4837,6 +4887,19 @@ function registrarFacturaProveedor(p) {
     }
     return Object.assign(base, vistaDeOrden_(libro, orden, d0.desde));
   });
+}
+
+/**
+ * Revisión del incremento 7 (dinero): {UUID: folio GAS} de los gastos vivos (Enviado, Aprobado, Reembolsado; no Cancelado, Rechazado
+ * ni Anulada) del libro de compras. Sin pestaña Gastos: {}.
+ */
+function uuidsDeGastosVivos_(libro) {
+  const r = {};
+  gastosDelLibro_(libro).forEach(g => {
+    const u = String(g.uuid || '').trim().toUpperCase();
+    if (u && [GAS_ENVIADO, GAS_APROBADO, GAS_REEMBOLSADO].indexOf(g.estado) !== -1) r[u] = r[u] || g.folio;
+  });
+  return r;
 }
 
 /** Cancela una factura Vigente (no se borra; sus archivos se quedan en Drive), con motivo. Deja de contar como por pagar. */
@@ -5612,7 +5675,9 @@ function costosDeOrdenes(ordenes, monedaContrato) {
  * Los proyectos Cancelados no aparecen. Un renglón por contrato: "Firmado" o "Por firmar" (aceptada sin
  * firmar: se muestra pero no suma a los totales). Pagado y saldo salen de resumenCobranza (lo mismo que la vista del proyecto);
  * margen = contratado sin IVA − órdenes de compra no canceladas. Totales por moneda, solo de contratos firmados: nunca se suman
- * MXN y USD. Renglones: firmados primero (por moneda y del mayor saldo al menor); luego los por firmar.
+ * MXN y USD. Renglones: firmados primero (por moneda y del mayor saldo al menor); luego los por firmar. Revisión del incremento 7
+ * (dinero): "Por cobrar" suma solo saldos positivos; el saldo a favor (negativo de más de TOLERANCIA_PAGO) va aparte (renglón aFavor;
+ * totales aFavor y conSaldoAFavor), y sinSumar = proyectos Firmados con costos en otra moneda que el margen del total no incluye.
  */
 function resumenGeneralCobranza(d) {
   const may = s => String(s || '').trim().toUpperCase();
@@ -5658,6 +5723,9 @@ function resumenGeneralCobranza(d) {
       marca: c.marca, moneda: c.moneda,
       estadoContrato: c.estado === ESTADO_FIRMADO ? 'Firmado' : 'Por firmar', cotizacion: c.cotizacion, fechaFirma: c.fechaFirma,
       contratado: r.contratado, subtotal: r.subtotal, pagado: r.pagado, saldo: r.saldo, avance: r.avance,
+      // Revisión del incremento 7 (dinero): saldo negativo de más de la tolerancia = saldo a favor del cliente (p. ej. se anuló una
+      // adicional ya pagada); un pago de más dentro de la tolerancia (≤ 1.00) es redondeo: ni por cobrar ni a favor
+      aFavor: aCentavos(r.saldo) < -aCentavos(TOLERANCIA_PAGO),
       siguienteEtapa: siguiente ? etiquetaEtapaCobranza(siguiente) : '', siguienteSaldo: siguiente ? siguiente.saldo : 0, ultimoPago: ultimoPago,
       ordenes: ocs.length, costoOc: margen ? margen.totalCostos : null, margen: margen ? margen.margen : null,
       margenPorcentaje: margen ? margen.porcentaje : null, margenError: margenError,
@@ -5674,15 +5742,20 @@ function resumenGeneralCobranza(d) {
   const tot = {};
   renglones.forEach(x => {
     const t = tot[x.moneda] || (tot[x.moneda] = { moneda: x.moneda, proyectos: 0, conSaldo: 0, contratado: 0, cobrado: 0,
-      porCobrar: 0, contratadoSinIva: 0, costoOc: 0, porFirmar: 0, montoPorFirmar: 0, margenError: false, adicionales: 0 });
+      porCobrar: 0, contratadoSinIva: 0, costoOc: 0, porFirmar: 0, montoPorFirmar: 0, margenError: false, adicionales: 0,
+      aFavor: 0, conSaldoAFavor: 0, sinSumar: 0 });
     // A (incremento 7): un contrato por firmar con adicionales (desbloqueado) muestra contrato + adicionales; tampoco suman
     if (x.estadoContrato !== 'Firmado') { t.porFirmar++; t.montoPorFirmar += aCentavos(x.total != null ? x.total : x.contratado); return; }
     t.proyectos++;
     if (aCentavos(x.saldo) > 0) t.conSaldo++;
-    t.contratado += aCentavos(x.contratado); t.cobrado += aCentavos(x.pagado); t.porCobrar += aCentavos(x.saldo);
+    // Revisión del incremento 7 (dinero): "Por cobrar" solo suma saldos positivos; el saldo a favor de un proyecto (negativo) va aparte
+    // y nunca se resta de lo que debe otro proyecto (antes se netteaba: CxC daba otra cifra)
+    t.contratado += aCentavos(x.contratado); t.cobrado += aCentavos(x.pagado); t.porCobrar += Math.max(0, aCentavos(x.saldo));
+    if (x.aFavor) { t.aFavor -= aCentavos(x.saldo); t.conSaldoAFavor++; }
     t.adicionales += aCentavos(x.adicionales || 0);
     t.contratadoSinIva += aCentavos(x.margenContratado != null ? x.margenContratado : x.subtotal); // incremento 7: con adicionales
     if (x.margenError) t.margenError = true; else t.costoOc += aCentavos(x.costoOc);
+    if (!x.margenError && x.sinSumar) t.sinSumar++; // gastos o nómina en otra moneda: el margen del total no los incluye
   });
   const totales = Object.keys(tot).sort().map(k => {
     const t = tot[k];
@@ -5694,6 +5767,9 @@ function resumenGeneralCobranza(d) {
       contratadoSinIva: t.contratadoSinIva / 100, costoOc: t.costoOc / 100, margen: t.margenError ? null : margenCts / 100,
       margenPorcentaje: t.margenError || t.contratadoSinIva <= 0 ? null : Math.round(margenCts / t.contratadoSinIva * 1000) / 10,
       porFirmar: t.porFirmar, montoPorFirmar: t.montoPorFirmar / 100,
+      // Revisión del incremento 7 (dinero): saldos a favor de los clientes (aparte de "Por cobrar") y cuántos proyectos tienen costos
+      // en otra moneda que el margen del total no suma
+      aFavor: t.aFavor / 100, conSaldoAFavor: t.conSaldoAFavor, sinSumar: t.sinSumar,
     }, conAdic ? { adicionales: t.adicionales / 100, total: totalCts / 100 } : {});
   });
   return { totales: totales, proyectos: renglones };
@@ -6477,6 +6553,13 @@ function validarFacturaProveedor(f, orden, ctx) {
     actualizarRfc = !ordenConRfc && !cfdiPrevio && RFC_VALIDO.test(f.emisor.rfc);
     const repetida = vigentes.find(v => String(v.uuid).toUpperCase() === f.uuid);
     if (repetida) throw new Error('La factura con folio fiscal ' + f.uuid + ' ya está registrada (' + repetida.folio + ').');
+    // Revisión del incremento 7 (dinero): el mismo CFDI ya es un gasto vivo (Enviado, Aprobado o Reembolsado): contaría dos veces
+    // (reembolso a la persona + pago al proveedor; Gastos + Órdenes de compra en el margen). ctx.gastos = {UUID: folio GAS}
+    const gasto = (x.gastos || {})[String(f.uuid).toUpperCase()];
+    if (gasto) {
+      throw new Error('El CFDI con folio fiscal ' + f.uuid + ' ya está registrado como el gasto ' + gasto + ': la misma factura no puede ' +
+        'contar dos veces. Si el gasto es un error, que lo cancelen o rechacen primero.');
+    }
   } else if (f.tipo === FPR_EXTRANJERA) {
     if (ordenConRfc) {
       throw new Error('El proveedor de la orden ' + o.folio + ' tiene RFC mexicano (' + rfcOrden + '): registra su factura con el XML (CFDI).');
@@ -10341,6 +10424,32 @@ function planAnulacion_(d, objetivo) {
       descripcion: 'Adicional ' + a.cotizacion + ' de ' + fv(a.proyectoFolio) + ' · ' + dinero(a.total, a.moneda) })) return;
     correo(a.aceptadaPor);
   }
+  /**
+   * Revisión del incremento 7 (dinero): texto para la vista previa al anular una adicional que ya tiene pagos aplicados (r = su
+   * registro del plan): lo cobrado se queda y, si pasa de lo que queda contratado (contrato + las demás adicionales), cuánto queda a
+   * favor del cliente. '' si la adicional no tiene nada cobrado o el proyecto no tiene contrato.
+   */
+  function saldoAFavorSinAdicional_(r) {
+    const c = contratoActivo(r.proyectoFolio);
+    if (!c) return '';
+    const folio = may(r.x.cotizacion);
+    const filasE = d.esquemas.filter(e => e.proyectoFolio === may(r.proyectoFolio)).map(e => ({ orden: Number(e.valores[1]),
+      etapa: String(e.valores[2]), porcentaje: Number(e.valores[3]), adicional: e.adicional }));
+    const delContrato = filasE.filter(e => !e.adicional).sort((a, b) => a.orden - b.orden).map(e => ({ etapa: e.etapa, porcentaje: e.porcentaje }));
+    const etapas = delContrato.length ? delContrato : [{ etapa: 'Total', porcentaje: 100 }];
+    const pagos = d.pagos.filter(x => may(x.proyectoFolio) === may(r.proyectoFolio) && vivo(x) && !enPlan('pago', x.folio));
+    const todas = adicionalesDe(r.proyectoFolio);
+    const antes = resumenCobranza(c, etapas, pagos, adicionalesConEtapas(todas, filasE, c.moneda));
+    const cobradoCts = antes.etapas.filter(e => e.adicional === folio).reduce((s, e) => s + aCentavos(e.pagado), 0);
+    if (cobradoCts <= 0) return '';
+    const quedan = todas.filter(a => !enPlan('adicional', 'ADICIONAL ' + may(a.cotizacion)));
+    const despues = resumenCobranza(c, etapas, pagos, adicionalesConEtapas(quedan, filasE, c.moneda));
+    const aFavorCts = -aCentavos(despues.saldo);
+    return 'La adicional ' + r.x.cotizacion + ' ya tiene ' + dinero(cobradoCts / 100, c.moneda) + ' cobrados: esos pagos se quedan (no se anulan). ' +
+      (aFavorCts > 0 ? fv(r.proyectoFolio) + ' quedará con un saldo a favor del cliente de ' + dinero(aFavorCts / 100, c.moneda) +
+        ' (lo pagado pasa de lo contratado): sale aparte en el resumen de cobranza; regístralo como nota de crédito o reembolso.'
+        : 'Si lo pagado llega a pasar de lo contratado, ' + fv(r.proyectoFolio) + ' queda con saldo a favor del cliente (aparte en el resumen de cobranza).');
+  }
   function pagoCliente(x) {
     if (!agregar({ clave: 'pago', folio: x.folio, x: x, proyectoFolio: x.proyectoFolio, estado: x.estado,
       descripcion: [x.folio, dinero(x.monto, x.monedaPago), x.fecha, x.metodo, fv(x.proyectoFolio)].filter(Boolean).join(' · ') })) return;
@@ -10501,6 +10610,10 @@ function planAnulacion_(d, objetivo) {
       plan.efectos.push({ clave: 'info', texto: fv(r.proyectoFolio) + ' queda sin la adicional ' + r.x.cotizacion + ' (' + dinero(r.x.total, r.x.moneda) +
         '): se borra su esquema de pagos (queda copia en Anulaciones). Los pagos que se le aplicaron siguen vigentes y se vuelven a repartir ' +
         'entre las etapas del contrato y de las demás adicionales.' });
+      // Revisión del incremento 7 (dinero): una adicional ya cobrada deja lo cobrado en el proyecto; si pasa de lo que queda contratado,
+      // el proyecto queda con saldo a favor del cliente (aparte en el resumen de cobranza)
+      const afavor = saldoAFavorSinAdicional_(r);
+      if (afavor) plan.efectos.push({ clave: 'info', texto: afavor });
     } else if (r.clave === 'pago' && !enPlan('contrato', 'CONTRATO ' + may(r.proyectoFolio)) && !enPlan('proyecto', r.proyectoFolio)) {
       plan.efectos.push({ clave: 'info', texto: 'El cobrado, el saldo y el avance por etapa de ' + fv(r.proyectoFolio) + ' se recalculan sin ' + r.folio + '.' });
     } else if (r.clave === 'fpr' && !enPlan('oc', r.x.ocFolio)) {
@@ -13459,7 +13572,8 @@ function flujoSemanal(d) {
  * renglón se muestra pero no suma). Totales por línea (Helgen, Helgen Energy) y moneda, solo de los Firmados sin error (los "Por
  * firmar" se muestran y no suman, como en el resumen de cobranza), con el total de cada concepto. Devuelve {conceptos (en orden
  * de aparición, "Órdenes de compra" primero), totales [{marca, moneda, proyectos, contratado, costos [{concepto, monto}],
- * totalCostos, margen, porcentaje, porFirmar, conError}], proyectos [{folio, folioVisible, nombre, cliente, estadoProyecto,
+ * totalCostos, margen, porcentaje, porFirmar, conError, sinSumar (revisión del incremento 7: Firmados que suman pero con gastos o
+ * nómina en otra moneda fuera)}], proyectos [{folio, folioVisible, nombre, cliente, estadoProyecto,
  * marca, moneda, estadoContrato, cotizacion, contratado, costos, totalCostos, margen, porcentaje, margenError, ordenes}]}.
  */
 function margenPorProyecto(d) {
@@ -13496,10 +13610,12 @@ function margenPorProyecto(d) {
   const tot = {};
   filas.forEach(x => {
     const k = x.marca + '|' + x.moneda;
-    const t = tot[k] || (tot[k] = { marca: x.marca, moneda: x.moneda, proyectos: 0, contratado: 0, costos: {}, totalCostos: 0, porFirmar: 0, conError: 0 });
+    const t = tot[k] || (tot[k] = { marca: x.marca, moneda: x.moneda, proyectos: 0, contratado: 0, costos: {}, totalCostos: 0, porFirmar: 0, conError: 0,
+      sinSumar: 0 });
     if (x.estadoContrato !== 'Firmado') { t.porFirmar++; return; }
     if (x.margenError) { t.conError++; return; }
     t.proyectos++;
+    if (x.sinSumar) t.sinSumar++; // revisión del incremento 7 (dinero): gastos o nómina en otra moneda, que el total no suma
     t.contratado += aCentavos(x.contratado);
     x.costos.forEach(cc => { t.costos[cc.concepto] = (t.costos[cc.concepto] || 0) + aCentavos(cc.monto); t.totalCostos += aCentavos(cc.monto); });
   });
@@ -13508,7 +13624,8 @@ function margenPorProyecto(d) {
     return { marca: t.marca, moneda: t.moneda, proyectos: t.proyectos, contratado: t.contratado / 100,
       costos: conceptos.filter(c => t.costos[c] != null).map(c => ({ concepto: c, monto: t.costos[c] / 100 })),
       totalCostos: t.totalCostos / 100, margen: margen / 100,
-      porcentaje: t.contratado > 0 ? Math.round(margen / t.contratado * 1000) / 10 : null, porFirmar: t.porFirmar, conError: t.conError };
+      porcentaje: t.contratado > 0 ? Math.round(margen / t.contratado * 1000) / 10 : null, porFirmar: t.porFirmar, conError: t.conError,
+      sinSumar: t.sinSumar };
   });
   return { conceptos: conceptos, totales: totales, proyectos: filas };
 }
@@ -13701,6 +13818,9 @@ function guardarEsquemaAdicional(proyectoFolio, cotizacionFolio, etapas) {
     if (adicionalConPagos_(d, a.cotizacion)) {
       throw new Error('La adicional ' + a.cotizacion + ' ya tiene pagos aplicados: su esquema de pagos ya no se puede cambiar.');
     }
+    // Revisión del incremento 7 (dinero): sin mover la liga de una factura de cliente a otra etapa
+    exigirEsquemaSinFacturasLigadas_(libro, proyecto.folio, a.cotizacion, a.etapas.length ? a.etapas : esquemaAdicionalPorOmision(), limpio,
+      'cambiar el esquema de la adicional ' + a.cotizacion);
     const antes = a.etapas.map(e => e.etapa + ' ' + e.porcentaje + '%').join(' · ');
     escribirEsquemaAdicional_(d.hojas.esquemas, proyecto.folio, a.cotizacion, limpio, a.total);
     escribe_(d.hojas.adicionales).getRange(a.fila, colAdic_('actualizado')).setValue(Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm'));
@@ -13730,6 +13850,9 @@ function cancelarAdicional(proyectoFolio, cotizacionFolio, motivo) {
     if (adicionalConPagos_(d, a.cotizacion)) {
       throw new Error('La adicional ' + a.cotizacion + ' tiene pagos aplicados: cancela primero esos pagos (o pide a un super admin que la anule).');
     }
+    // Revisión del incremento 7 (dinero): sus etapas se quitan; una factura ligada a ellas primero se liga a otra etapa o se cancela
+    exigirEsquemaSinFacturasLigadas_(libro, proyecto.folio, a.cotizacion, a.etapas.length ? a.etapas : esquemaAdicionalPorOmision(), [],
+      'cancelar la adicional ' + a.cotizacion);
     const ahora = Utilities.formatDate(new Date(), 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss');
     const h = d.hojas.adicionales;
     escribe_(h).getRange(a.fila, colAdic_('estado')).setValue(ADIC_CANCELADA);
@@ -14691,6 +14814,8 @@ const MAX_PEDIDOS_HORAS = 100;      // partes por llamada al aprobar o devolver
 const HORA_RECORDATORIO_HORAS = 12; // viernes desde las 12:00 (hora de la Ciudad de México)
 const PROP_RECORDATORIO_HORAS = 'HORAS_RECORDATORIO_SEMANA'; // lunes de la última semana con recordatorio (lo escribe CAPRI)
 const MAX_COSTO_PERSONAL = 5000000, MAX_FILAS_CSV_COSTOS = 500, MAX_TEXTO_CSV_COSTOS = 200000, MAX_MESES_REPORTE_NOMINA = 24;
+// Revisión del incremento 7 (dinero): costo mensual mínimo sin confirmar (a mano) y mínimo del CSV (no se puede confirmar)
+const MIN_COSTO_PERSONAL = 1000, MIN_COSTO_PERSONAL_CSV = 100;
 const DIAS_SEMANA_HORAS = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
 const CONCEPTO_NOMINA = 'Nómina';
 
@@ -15573,21 +15698,36 @@ function rangoMesesNomina(desde, hasta, hoy) {
   return { desde: d, hasta: h, meses: meses };
 }
 
-/** Importe de un texto ("45000", "45,000.50", "$45,000", "45000,5", "45 000 MXN"); null si no se entiende. */
+/** Texto de un importe sin "$", "MXN", "M.N.", espacios ni el apóstrofo de Sheets. */
+const textoDeImporte_ = v => String(v == null ? '' : v).trim().replace(/^'/, '').replace(/\$|mxn|m\.n\./gi, '').replace(/\s+/g, '');
+
+/**
+ * Importe de un texto ("45000", "45,000.50", "$45,000", "45000,5", "45 000 MXN", "45.000"); null si no se entiende o es ambiguo.
+ * Revisión del incremento 7 (dinero): un punto seguido de grupos de tres cifras y sin parte decimal ("45.000", "1.250.000", como
+ * los escribe Excel en español) es separador de miles, no decimal (antes "45.000" se leía como 45). Con coma además ("45.000,50")
+ * es ambiguo: null (importeAmbiguo lo dice).
+ */
 function importeDeTexto(v) {
   if (typeof v === 'number') return isFinite(v) ? v : null;
-  const t = String(v == null ? '' : v).trim().replace(/^'/, '').replace(/\$|mxn|m\.n\./gi, '').replace(/\s+/g, '');
+  const t = textoDeImporte_(v);
+  if (/^\d{1,3}(\.\d{3})+$/.test(t)) return Number(t.replace(/\./g, ''));
   if (/^\d+(\.\d+)?$/.test(t)) return Number(t);
   if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) return Number(t.replace(/,/g, ''));
   if (/^\d+,\d{1,2}$/.test(t)) return Number(t.replace(',', '.'));
   return null;
 }
 
+/** ¿El texto lleva punto de miles y además coma ("45.000,50", "1.250.000,00")? No se adivina: se pide escribirlo sin ambigüedad. */
+function importeAmbiguo(v) {
+  return typeof v !== 'number' && /^\d{1,3}(\.\d{3})+,\d*$/.test(textoDeImporte_(v));
+}
+
 /**
  * Costo de una persona en un mes: p = {correo (de CAPRI), mes (AAAA-MM), costo (MXN, mayor a 0, máximo MAX_COSTO_PERSONAL), notas
- * (≤ 200), quitar}. Devuelve {correo, mes, costo, notas, quitar}.
+ * (≤ 200), quitar, confirmado (costo menor a MIN_COSTO_PERSONAL)}; opciones = {sinConfirmar} (CSV: mínimo MIN_COSTO_PERSONAL_CSV,
+ * sin confirmación). Devuelve {correo, mes, costo, notas, quitar}.
  */
-function normalizarCostoPersonal(p) {
+function normalizarCostoPersonal(p, opciones) {
   const x = p || {};
   const correo = correoCapri(x.correo);
   if (!correo) throw new Error('Escribe el correo de la persona (@' + DOMINIO_HELGEN + ' o @' + DOMINIO_SERVICIOS + ').');
@@ -15596,9 +15736,26 @@ function normalizarCostoPersonal(p) {
   const notas = String(x.notas == null ? '' : x.notas).trim().replace(/\s+/g, ' ');
   if (notas.length > 200) throw new Error('Las notas deben tener máximo 200 caracteres.');
   if (x.quitar === true) return { correo: correo, mes: mes, costo: 0, notas: notas, quitar: true };
+  if (importeAmbiguo(x.costo)) {
+    throw new Error('El costo «' + String(x.costo).trim() + '» es ambiguo (punto y coma a la vez): escribe 45000 o 45,000.00.');
+  }
   const costo = importeDeTexto(x.costo);
   if (costo === null || !(costo > 0)) throw new Error('El costo mensual debe ser mayor a cero (MXN: sueldo + carga patronal).');
   if (costo > MAX_COSTO_PERSONAL) throw new Error('El costo mensual no puede pasar de ' + formatoMoneda(MAX_COSTO_PERSONAL) + ' MXN: revisa la cifra.');
+  // Revisión del incremento 7 (dinero): un costo mensual muy bajo casi siempre es una cifra mal leída o mal escrita ("45" por 45,000).
+  // Debajo de MIN_COSTO_PERSONAL se pide confirmarlo (x.confirmado = true; error con codigo 'CONFIRMAR' para que la interfaz pregunte);
+  // donde no se puede confirmar (el CSV: opciones.sinConfirmar), debajo de MIN_COSTO_PERSONAL_CSV se rechaza.
+  const sinConfirmar = !!(opciones && opciones.sinConfirmar);
+  if (sinConfirmar && costo < MIN_COSTO_PERSONAL_CSV) {
+    throw new Error('El costo mensual (' + formatoMoneda(costo) + ' MXN) es menor a ' + formatoMoneda(MIN_COSTO_PERSONAL_CSV) +
+      ' MXN: revisa la cifra (escribe 45000 o 45,000.00).');
+  }
+  if (!sinConfirmar && costo < MIN_COSTO_PERSONAL && x.confirmado !== true) {
+    const e = new Error('El costo mensual de ' + formatoMoneda(costo) + ' MXN es menor a ' + formatoMoneda(MIN_COSTO_PERSONAL) +
+      ' MXN. ¿Es correcto? (Si querías escribir miles, escribe 45000 o 45,000.00.)');
+    e.codigo = 'CONFIRMAR';
+    throw e;
+  }
   return { correo: correo, mes: mes, costo: redondear(costo), notas: notas, quitar: false };
 }
 
@@ -15652,7 +15809,7 @@ function leerCsvCostos(texto) {
     const r = { fila: x.linea, correo: String(v('correo')).trim().toLowerCase(), mes: mesValido(v('mes')) || String(v('mes')),
       costo: importeDeTexto(v('costo')), notas: String(v('notas')).trim(), error: '' };
     try {
-      const c = normalizarCostoPersonal({ correo: v('correo'), mes: v('mes'), costo: v('costo'), notas: v('notas') });
+      const c = normalizarCostoPersonal({ correo: v('correo'), mes: v('mes'), costo: v('costo'), notas: v('notas') }, { sinConfirmar: true });
       Object.assign(r, { correo: c.correo, mes: c.mes, costo: c.costo, notas: c.notas });
     } catch (e) {
       r.error = e.message;
@@ -16368,6 +16525,15 @@ function facturasDeVistaCobranza_(libro, proyecto, contrato, resumen) {
   }
 }
 
+/**
+ * Revisión del incremento 7 (dinero): lanza el error si cambiar el esquema (contrato o adicional) movería la liga de una factura de
+ * cliente Vigente (facturasQueImpidenCambiarEsquema). Dentro del candado; solo lee FacturasClientes (no la crea).
+ */
+function exigirEsquemaSinFacturasLigadas_(libro, folio, adicional, actuales, nuevas, que) {
+  const lista = facturasQueImpidenCambiarEsquema(facturasClientesDelLibro_(libro), folio, adicional, actuales, nuevas);
+  if (lista.length) throw new Error(errorFacturasLigadasEsquema(lista, que || 'cambiar el esquema de pagos'));
+}
+
 /** Pendientes de cobranza con las facturas de clientes (pendientes(); solo con el rol de cobranza). */
 function facturasCliParaPendientes_() {
   return listarFacturasClientes() || null;
@@ -16633,6 +16799,45 @@ function claveEtapa(e, i) {
   return e && e.adicional ? String(e.adicional).trim().toUpperCase() + '/' + orden : String(orden);
 }
 
+/**
+ * Revisión del incremento 7 (dinero). Facturas de clientes que quedarían mal ligadas si cambia el esquema de pagos de un proyecto
+ * (lógica pura). facturas = filas de FacturasClientes (facturaCliDesdeFila_); folio = PRY-AAAA-NNNN; adicional = folio HLG de la
+ * adicional ('' = el contrato); actuales = etapas de hoy [{etapa}] en su orden; nuevas = las que quedarían ([] = se quitan todas).
+ * La liga guarda el número de la etapa (claveEtapa: '2' o 'HLG-…/2') y su nombre: cada etapa ligada (de una I o una E Vigente) debe
+ * seguir en el mismo número y con el mismo nombre (sin acentos ni mayúsculas). Agregar etapas al final o cambiar porcentajes sí se
+ * puede. Una liga que ya no cuadraba antes del cambio (ya está "Por revisar") no detiene nada. Devuelve [{uuid, serieFolio, tipo,
+ * clave, etapa (la de la liga), ahora (lo que quedaría en ese número; '' = ya no existe)}].
+ */
+function facturasQueImpidenCambiarEsquema(facturas, folio, adicional, actuales, nuevas) {
+  const may = s => String(s == null ? '' : s).trim().toUpperCase();
+  const f0 = may(folio), a0 = may(adicional), r = [];
+  (facturas || []).filter(f => f && f.estado === FAC_VIGENTE && (f.tipo === 'I' || f.tipo === 'E') && may(f.proyectoFolio) === f0).forEach(f => {
+    (Array.isArray(f.etapas) ? f.etapas : []).forEach(p => {
+      const clave = may(p && p.clave);
+      const num = a0 ? (clave.indexOf(a0 + '/') === 0 ? clave.slice(a0.length + 1) : '') : clave.indexOf('/') === -1 ? clave : '';
+      if (!/^\d+$/.test(num)) return;
+      const n = Number(num), antes = (actuales || [])[n - 1], despues = (nuevas || [])[n - 1];
+      const nombre = String((p && p.etapa) || (antes && antes.etapa) || '');
+      if (!antes || textoNormal(antes.etapa) !== textoNormal(nombre)) return; // ya estaba por revisar: este cambio no la mueve
+      if (despues && textoNormal(despues.etapa) === textoNormal(nombre)) return;
+      r.push({ uuid: f.uuid, serieFolio: f.serieFolio || '', tipo: f.tipo, clave: clave, etapa: nombre, ahora: despues ? String(despues.etapa) : '' });
+    });
+  });
+  return r;
+}
+
+/** Texto del error de facturasQueImpidenCambiarEsquema (que = 'cambiar el esquema de pagos' o 'cancelar la adicional HLG-…'). */
+function errorFacturasLigadasEsquema(lista, que) {
+  const vistas = {};
+  const partes = (lista || []).filter(x => !vistas[x.uuid + '|' + x.clave] && (vistas[x.uuid + '|' + x.clave] = true)).map(x =>
+    (x.tipo === 'E' ? 'nota de crédito ' : '') + (x.serieFolio || x.uuid) + ' (etapa ' + x.clave.split('/').pop() + ' «' + x.etapa + '» → ' +
+    (x.ahora ? '«' + x.ahora + '»' : 'se quitaría') + ')');
+  return 'No se puede ' + que + ': ' + (partes.length === 1 ? 'esta factura de cliente está ligada' : 'estas facturas de clientes están ligadas') +
+    ' a etapas que cambiarían de número o de nombre, o se quitarían: ' + partes.join(', ') + '. Primero vuelve a ligarlas a otra etapa ' +
+    '(Cobranza → Facturas de clientes → Cambiar) o márcalas Canceladas si se cancelaron en CONTALINK. Agregar etapas al final o cambiar ' +
+    'porcentajes sí se puede.';
+}
+
 /** Etapas de un resumenCobranza para las facturas: [{clave, etapa, monto, cobrado, adicional}] (todo en la moneda del contrato). */
 function etapasParaFacturas(resumen) {
   return ((resumen && resumen.etapas) || []).map((e, i) => ({ clave: claveEtapa(e, i), etapa: e.etapa, monto: redondear(e.monto),
@@ -16710,13 +16915,16 @@ function calcularFacturasClientes(facturas, cobranza) {
     x.ligada = !!x.proyectoFolio && x.partes.length > 0;
     x.proyectoArchivos = x.ligada ? x.proyectoFolio : '';
   });
-  // 2. Sustituciones (04): la nueva dice a cuál sustituye; la sustituida queda por revisar (marcarla Cancelada)
+  // 2. Sustituciones (04): la nueva dice a cuál sustituye; la sustituida queda por revisar (marcarla Cancelada). Revisión del
+  // incremento 7 (dinero): un REP (P) o una nota de crédito (E) sustituida ya no cuenta (ni como REP ni como lo que resta), aunque
+  // siga Vigente en CAPRI; si no, el REP corregido y el de antes sumaban los dos y tapaban un REP pendiente.
   vig.forEach(f => (f.relacionadas || []).filter(r => r.tipoRelacion === RELACION_SUSTITUCION).forEach(r => {
     const u = may(r.uuid), y = info[u];
     if (u === may(f.uuid)) return;
     info[may(f.uuid)].sustituye.push(u);
     if (y && y.vigente) y.sustituidaPor = may(f.uuid);
   }));
+  const sustituidaQueNoCuenta = u => !!info[u].sustituidaPor && (info[u].tipo === 'P' || info[u].tipo === 'E');
   // 3. Notas de crédito: restan de sus relacionadas en CAPRI (o de sus etapas, si se ligaron a mano)
   const reducir = (y, cts) => {
     const antes = y.netoCts;
@@ -16728,7 +16936,7 @@ function calcularFacturasClientes(facturas, cobranza) {
       p.cts -= q; quitado += q;
     });
   };
-  vig.filter(f => f.tipo === 'E').sort(porFecha).forEach(e => {
+  vig.filter(f => f.tipo === 'E' && !sustituidaQueNoCuenta(may(f.uuid))).sort(porFecha).forEach(e => {
     const x = info[may(e.uuid)];
     let resto = aCentavos(e.total);
     const vistos = {};
@@ -16771,6 +16979,13 @@ function calcularFacturasClientes(facturas, cobranza) {
     x.partes.forEach(p => {
       const e = etapas[p.clave];
       if (!e) { x.revisar = x.revisar || 'Una etapa de la liga ya no existe en el esquema de pagos del proyecto: vuelve a ligar la factura.'; return; }
+      // Revisión del incremento 7 (dinero): la liga guarda el número de la etapa y su nombre. Si en ese número ahora hay otra etapa
+      // (se renombró o se renumeró el esquema), la factura no se pasa sola a la etapa nueva: queda por revisar y no cuenta ahí
+      if (p.etapa && textoNormal(p.etapa) !== textoNormal(e.etapa)) {
+        x.revisar = x.revisar || 'La etapa «' + p.etapa + '» de la liga ya no está en el esquema de pagos del proyecto (en su lugar ahora está «' +
+          e.etapa + '»): vuelve a ligar la factura.';
+        return;
+      }
       e.facturadoCts += p.cts;
       e.entradas.push({ f: f, x: x, cts: p.cts, cobradoCts: 0 });
     });
@@ -16785,17 +17000,18 @@ function calcularFacturasClientes(facturas, cobranza) {
   }));
   // 5. Complementos de pago: lo que cada factura ya tiene con REP
   vig.filter(f => f.tipo === 'P').forEach(p => {
-    const x = info[may(p.uuid)], ps = [];
+    const x = info[may(p.uuid)], ps = [], sustituido = sustituidaQueNoCuenta(x.uuid);
     (p.pagos || []).forEach(pg => (pg.documentos || []).forEach(d => {
       const u = may(d.uuid), i = ingresos[u], y = info[u];
       const cuenta = !!i && (!d.moneda || d.moneda === i.moneda);
       x.documentos.push({ uuid: u, encontrado: !!i, serieFolio: i ? i.serieFolio : d.serieFolio || '', fecha: pg.fecha, parcialidad: d.parcialidad,
         pagado: redondear(d.pagado), saldoInsoluto: redondear(d.saldoInsoluto), moneda: d.moneda || '', otraMoneda: !!i && !cuenta });
       if (!cuenta) return;
+      if (y.proyectoArchivos && ps.indexOf(y.proyectoArchivos) === -1) ps.push(y.proyectoArchivos);
+      if (sustituido) return; // lo sustituye otro REP (04): ya no cubre nada
       y.repCts += aCentavos(d.pagado);
       y.reps.push({ uuid: x.uuid, serieFolio: p.serieFolio, fecha: pg.fecha, parcialidad: d.parcialidad, pagado: redondear(d.pagado),
         saldoInsoluto: redondear(d.saldoInsoluto) });
-      if (y.proyectoArchivos && ps.indexOf(y.proyectoArchivos) === -1) ps.push(y.proyectoArchivos);
     }));
     x.proyectoArchivos = ps.length === 1 && x.documentos.every(dd => !dd.encontrado || info[dd.uuid].proyectoArchivos === ps[0]) ? ps[0] : '';
   });
@@ -16804,11 +17020,34 @@ function calcularFacturasClientes(facturas, cobranza) {
     const x = info[u], f = ingresos[u];
     if (!f) return;
     x.reps.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.parcialidad - b.parcialidad));
-    x.repPendiente = f.metodo === 'PPD' && x.ligada && x.cobradoCts - x.repCts > tol;
-    x.porCubrirRepCts = f.metodo === 'PPD' ? Math.max(0, x.cobradoCts - x.repCts) : 0;
-    x.repSinCobro = x.repCts - x.cobradoCts > tol && x.ligada;
     x.saldoSegunRep = x.reps.length ? x.reps[x.reps.length - 1].saldoInsoluto : null;
+    // Revisión del incremento 7 (dinero): si su último REP (por fecha y parcialidad) deja el saldo insoluto en cero (± tolerancia), la
+    // factura ya tiene todos sus REP aunque lo cobrado y lo del REP difieran (p. ej. factura en USD pagada en MXN: CAPRI y el REP
+    // convierten con tipos de cambio distintos). Tampoco se pregunta "¿falta registrar un pago?" si CAPRI ya la tiene cobrada completa.
+    const saldada = x.saldoSegunRep != null && aCentavos(x.saldoSegunRep) <= tol;
+    const cobradaCompleta = x.cobradoCts >= x.netoCts - tol;
+    x.repPendiente = f.metodo === 'PPD' && x.ligada && !saldada && x.cobradoCts - x.repCts > tol;
+    x.porCubrirRepCts = f.metodo === 'PPD' && !saldada ? Math.max(0, x.cobradoCts - x.repCts) : 0;
+    x.repSinCobro = x.repCts - x.cobradoCts > tol && x.ligada && !cobradaCompleta;
     if (x.sustituidaPor && !x.revisar) x.revisar = 'La sustituye otra factura (relación 04): márcala Cancelada cuando la canceles en CONTALINK.';
+  });
+  // Revisión del incremento 7 (dinero): un REP o una nota de crédito sustituida (04) y la que la sustituye quedan por revisar mientras
+  // la de antes siga Vigente en CAPRI (la de antes ya no cuenta; se marca Cancelada cuando se cancele en CONTALINK)
+  const folioDoc = u => (todas.find(z => may(z.uuid) === u) || {}).serieFolio || u;
+  const nombreDoc = u => (info[u].tipo === 'P' ? 'el REP ' : info[u].tipo === 'E' ? 'la nota de crédito ' : 'la factura ') + folioDoc(u);
+  const marcala = t => (t === 'P' ? 'márcalo Cancelado cuando lo canceles' : 'márcala Cancelada cuando la canceles') + ' en CONTALINK';
+  Object.keys(info).forEach(u => {
+    const x = info[u];
+    if (!x.vigente || (x.tipo !== 'P' && x.tipo !== 'E')) return;
+    if (x.sustituidaPor && !x.revisar) {
+      x.revisar = (x.tipo === 'P' ? 'Lo' : 'La') + ' sustituye ' + nombreDoc(x.sustituidaPor) + ' (relación 04): ya no cuenta' +
+        (x.tipo === 'P' ? ' como REP' : ' (no resta)') + '; ' + marcala(x.tipo) + '.';
+    }
+    const vivas = x.sustituye.filter(s => info[s] && info[s].sustituidaPor === u && (info[s].tipo === 'P' || info[s].tipo === 'E'));
+    if (vivas.length && !x.revisar) {
+      x.revisar = 'Sustituye ' + vivas.map(s => nombreDoc(s).replace(/^el /, 'al ').replace(/^la /, 'a la ')).join(', ') +
+        ' (relación 04), que sigue Vigente en CAPRI: ' + marcala(info[vivas[0]].tipo) + ' (mientras, solo cuenta ' + (x.tipo === 'P' ? 'este' : 'esta') + ').';
+    }
   });
   const salida = {};
   Object.keys(proyectos).forEach(k => {

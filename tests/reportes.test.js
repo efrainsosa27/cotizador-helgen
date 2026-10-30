@@ -235,7 +235,7 @@ assert(/no se suman monedas distintas/.test(mg.proyectos[1].margenError), 'una o
 const totM = k => mg.totales.find(t => t.marca + ' ' + t.moneda === k);
 assert.deepEqual(plain(totM('helgen MXN')), { marca: 'helgen', moneda: 'MXN', proyectos: 1, contratado: 10000,
   costos: [{ concepto: 'Órdenes de compra', monto: 3000 }, { concepto: 'Gastos', monto: 400 }], totalCostos: 3400, margen: 6600, porcentaje: 66,
-  porFirmar: 1, conError: 1 }, 'por firmar y con error no suman');
+  porFirmar: 1, conError: 1, sinSumar: 0 }, 'por firmar y con error no suman'); // sinSumar: revisión del incremento 7 (dinero)
 assert.deepEqual([totM('helgen USD').margen, totM('energy MXN').margen, totM('energy MXN').porcentaje], [900, 4000, 80]);
 
 // ================= 2. Servidor (doPost) =================
