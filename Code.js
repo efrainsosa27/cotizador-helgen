@@ -92,7 +92,8 @@ function verificarTokenGoogle_(idToken) {
 const MODULOS_ = [modIdentidad_(), modAnular_(), modCorreos_(), modCentroMando_(), modPantallas_(),
   modProveedores_(), // incremento 5: F · Proveedores y forma de pago (§6.F)
   modRecepcion_(), // incremento 5: H · recepción con fotos y devoluciones (§6.H)
-  modReportes_()]; // incremento 6: R · reportes de CxC y CxP, flujo y margen; fecha esperada por etapa (§6.R)
+  modReportes_(), // incremento 6: R · reportes de CxC y CxP, flujo y margen; fecha esperada por etapa (§6.R)
+  modNomina_()]; // incremento 7: N · horas por proyecto, líder de proyecto, rol Nómina y costo de personal (§6.N)
 /** Une un campo de todos los módulos: objetos con Object.assign, listas con concat. */
 function deModulos_(campo, inicial) {
   return MODULOS_.reduce((acc, m) => Array.isArray(inicial) ? acc.concat(m[campo] || []) : Object.assign(acc, m[campo] || {}), inicial);
@@ -431,7 +432,9 @@ function sitiosDetalle_() {
 
 // permisos: Permisos y Delegaciones (incremento 4); anulaciones: lo que un super admin anuló (se esconde de listas y totales)
 const COLECCIONES = ['proyectos', 'contratos', 'cotizaciones', 'catalogo', 'requisiciones', 'oc', 'pagosCobranza',
-  'pagosProveedores', 'facturasProveedor', 'permisos', 'anulaciones'];
+  'pagosProveedores', 'facturasProveedor', 'permisos', 'anulaciones',
+  // N (incremento 7): horas capturadas (libro de nómina) y costo mensual por persona (solo Nómina lo ve)
+  'horas', 'costosPersonal'];
 
 /** Colecciones que cambia cada función de la API: doPost sube su versión cuando termina bien. */
 const CAMBIOS_API = Object.assign({
@@ -1674,10 +1677,12 @@ function logoDataUrl_(fileId) {
 
 const ENCABEZADOS_PROYECTOS = [
   'Folio', 'Fecha', 'Nombre', 'Cliente', 'cliente_id', 'Ubicación', 'Estado', 'carpeta_id',
-  'vendedor_email', 'vendedor_nombre', 'vendedor_apellido', 'clave'
+  'vendedor_email', 'vendedor_nombre', 'vendedor_apellido', 'clave',
+  'lider_email' // M (incremento 7, N): líder del proyecto (aprueba sus horas); lo asignan super admin o cobranza (asignarLider)
 ];
 const COL_ESTADO_PROYECTO = 7;   // G
 const COL_CLAVE_PROYECTO = 12;   // L
+const COL_LIDER_PROYECTO = 13;   // M
 const COL_CARPETA_PROYECTO = 8;  // H
 const ESTADOS_PROYECTO = ['Activo', 'Cerrado', 'Cancelado'];
 // Sin "Pagos" ni "Órdenes de compra": comprobantes y órdenes van en las carpetas de cobranza y compras (no visibles para
@@ -2157,7 +2162,8 @@ function filasCobranza_(hoja, nombre) {
 function filasDeArea_(hoja, hojas, nombre) {
   const leer = () => filasDatos_(hoja, hojas[nombre].enc.length);
   // Rapidez: una vez por petición (filasEnPeticion_); el área fija el libro (compras, cobranza o administración)
-  const area = hojas === HOJAS_COMPRAS ? 'compras' : hojas === HOJAS_COBRANZA ? 'cobranza' : hojas === HOJAS_ADMIN ? 'admin' : '';
+  const area = hojas === HOJAS_COMPRAS ? 'compras' : hojas === HOJAS_COBRANZA ? 'cobranza' : hojas === HOJAS_ADMIN ? 'admin'
+    : hojas === HOJAS_NOMINA ? 'nomina' : ''; // nomina: incremento 7 (N)
   if (!area) return leer();
   const sufijo = sufijoFilas_(hoja);
   return sufijo ? filasEnPeticion_(area + sufijo, leer) : leer();
@@ -4990,6 +4996,7 @@ function proyectosDesdeFilas(filas) {
       estado: String(r[6] || '').trim() || 'Activo',
       carpetaId: String(r[7] || ''),
       clave: clave, folioVisible: folioVisible(folio, clave),
+      lider: String(r[12] || '').trim().toLowerCase(), // M (incremento 7, N): no sale en las listas (proyectoParaLista_)
     };
   });
 }
@@ -7003,9 +7010,12 @@ function construirHtmlOrdenCompra(d, cfg, logoUrl) {
 // ---- Usuarios, roles y sitios (CAPRI, incremento 4; lógica pura) ----
 
 /** Roles de CAPRI. superadmin = todos los demás (menos solo_requisicion) + Administración. */
-const ROLES_CAPRI = ['ventas', 'requisicion', 'solo_requisicion', 'aprobaciones', 'compras', 'cobranza', 'desbloqueo', 'superadmin'];
+// nomina (incremento 7, N): ve y captura el costo mensual de cada persona y el reporte de nómina; no se delega
+const ROLES_CAPRI = ['ventas', 'requisicion', 'solo_requisicion', 'aprobaciones', 'compras', 'cobranza', 'desbloqueo', 'nomina',
+  'superadmin'];
 const NOMBRES_ROLES = { ventas: 'Ventas', requisicion: 'Requisiciones', solo_requisicion: 'Solo requisiciones',
-  aprobaciones: 'Aprobaciones', compras: 'Compras', cobranza: 'Cobranza', desbloqueo: 'Desbloqueo', superadmin: 'Super admin' };
+  aprobaciones: 'Aprobaciones', compras: 'Compras', cobranza: 'Cobranza', desbloqueo: 'Desbloqueo', nomina: 'Nómina',
+  superadmin: 'Super admin' };
 /** Lo que un usuario puede entregar a otro por unas fechas (decisión de Leo, 28/10/2026). */
 const ROLES_DELEGABLES = ['aprobaciones', 'compras'];
 /** Roles de una cuenta @helgen.services (decisión de Leo, 28/10/2026: solo requisiciones por ahora). */
@@ -8082,6 +8092,7 @@ function infoDeAviso_(tipo, d, actor, memo) {
     Object.assign(info, { nuevo: correoCapri(d.correo), nuevoNombre: String(d.nombre || '').trim() || nombreDeCorreo_(d.correo) });
   }
   if (tipo === 'proveedor.banco') Object.assign(info, datosAvisoBanco(d)); // F (incremento 5): solo banco y últimos 4 dígitos
+  if (/^horas\./.test(tipo)) Object.assign(info, datosAvisoHoras_(d)); // N (incremento 7): la semana (nunca horas ni costos)
   if (tipo === 'anulado') {
     const folio = String(d.folio || d.oc || '').trim(); // el folio de una orden nunca va en el correo
     info.anuladoFolio = /^OC-/i.test(folio) ? '' : folio;
@@ -8257,6 +8268,7 @@ function destinatariosAviso(tipo, d, info, roles) {
   const sinSol = l => l.filter(c => c !== sol);
   const revisan = i.flujo ? { quien: 'aprobaciones', para: sinSol(ap) } : { quien: 'compras', para: sinSol(co) };
   if (tipo === 'proveedor.banco') return [{ quien: 'compras', para: co }]; // F (incremento 5): cambio de banco de un proveedor
+  if (/^horas\./.test(tipo)) return destinatariosAvisoHoras(tipo, x); // N (incremento 7): recordatorio y horas devueltas
   switch (tipo) {
     case 'req.solicitada': return [revisan];
     case 'req.aprobada': return [{ quien: 'compras', para: co }];
@@ -8329,6 +8341,7 @@ function contenidoAviso(tipo, quien, info) {
   const entrega = i.entrega ? ' Entrega esperada: ' + fechaCorreo(i.entrega) + '.' : '';
   const registrar = i.centro ? ' Cuando llegue, se recibe en el centro de mando (inventario del sitio).' : ' Cuando llegue, regístralo en CAPRI.';
   if (tipo === 'proveedor.banco') return contenidoAvisoBanco(x, i, quienHizo); // F (incremento 5): sin nombre del proveedor
+  if (/^horas\./.test(tipo)) return contenidoAvisoHoras(tipo, x, i, quienHizo); // N (incremento 7): sin montos; la nota no va
   switch (tipo) {
     case 'req.solicitada':
       if (quien === 'compras') req(i.reenviada ? 'Corregida, por autorizar' : 'Por autorizar', 'Revisa la requisición y la cotización ' +
@@ -9293,6 +9306,7 @@ function cadaQuinceMinutos() {
   try { r.avisos = enviarPendientesPortal_(null); } catch (e) { r.avisos = { error: e.message }; }
   try { r.recepciones = traerRecepcionesPortal(); } catch (e) { r.recepciones = { error: e.message }; }
   try { r.cache = calentarCache_(); } catch (e) { r.cache = { error: e.message }; }
+  try { r.horas = recordatorioHoras_(); } catch (e) { r.horas = { error: e.message }; } // N (incremento 7): viernes, una vez por semana
   try { if (MEMO_.correos && MEMO_.correos.length) enviarCorreosPendientes_(); } catch (e) { console.warn('Correos sin mandar: ' + e.message); }
   VENDEDOR_ = null; MEMO_ = {};
   console.log('cadaQuinceMinutos: ' + JSON.stringify(r).slice(0, 2000));
@@ -9578,7 +9592,8 @@ function fechaCortaEs(iso) {
 /** Estados en que una requisición todavía espera a alguien (Cerrada, Rechazada y Cancelada ya no). */
 const ESTADOS_PENDIENTES = [REQ_SOLICITADA, REQ_DEVUELTA, REQ_APROBADA, REQ_COTIZADA, REQ_AUTORIZADA, REQ_PAGADA, REQ_RECIBIDA, REQ_EN_CAMINO];
 /** Colecciones de las que dependen los pendientes (si cambia una, la sincronización los vuelve a mandar). */
-const COLECCIONES_PENDIENTES = ['requisiciones', 'oc', 'pagosProveedores', 'facturasProveedor', 'permisos', 'proyectos', 'anulaciones'];
+const COLECCIONES_PENDIENTES = ['requisiciones', 'oc', 'pagosProveedores', 'facturasProveedor', 'permisos', 'proyectos', 'anulaciones',
+  'horas']; // horas: incremento 7 (N), horas por aprobar
 /** Una factura de proveedor sale en Pendientes desde 7 días antes de vencer. */
 const DIAS_AVISO_FACTURA = 7;
 
@@ -9616,6 +9631,8 @@ function pendientes(todos) {
   if (roles.compras || esSuperAdmin_()) {
     try { o.devoluciones = devolucionesParaPendientes_(); } catch (e) { avisos.push('Devoluciones: ' + e.message); }
   }
+  // Incremento 7 (N): horas por aprobar, para el líder del proyecto y Aprobaciones (solo horas: nunca costos)
+  try { if (verTodos || permisosHoras_().aprobar) o.horas = horasParaPendientes_(); } catch (e) { avisos.push('Horas: ' + e.message); }
   const base = basePendientes_();
   const mios = itemsPendientes(base, o);
   return { hoy: hoy, todos: verTodos, flujo: o.flujo, items: verTodos ? itemsPendientes(base, Object.assign({}, o, { todos: true })) : mios,
@@ -9842,6 +9859,9 @@ function itemsPendientes(base, o) {
       detalle: [f.proveedor, f.serieFolio || '', dinero(debe(f), f.moneda), saldo ? '' : f.ocFolio, f.proyectoVisible].filter(Boolean).join(' · '),
       orden: marcaOrdenable(f.fechaVencimiento) }, todos ? { para: 'Compras' } : {}));
   }));
+
+  // Incremento 7 (N): semanas de horas por aprobar (sección 'horas'; destino 'horas'; sin costos)
+  if (x.horas) itemsHorasPendientes(x.horas, x).forEach(it => items.push(it));
 
   items.sort((a, b) => a.orden < b.orden ? -1 : a.orden > b.orden ? 1 : a.folio < b.folio ? -1 : a.folio > b.folio ? 1 : 0);
   return items.map(it => { const y = Object.assign({}, it); delete y.orden; return y; });
@@ -13226,4 +13246,1229 @@ function margenPorProyecto(d) {
       porcentaje: t.contratado > 0 ? Math.round(margen / t.contratado * 1000) / 10 : null, porFirmar: t.porFirmar, conError: t.conError };
   });
   return { conceptos: conceptos, totales: totales, proyectos: filas };
+}
+
+// ---- 6.N Horas y nómina (incremento 7; contrato en docs/incremento-7.md §0–§3; detalle en docs/incremento-7-nomina.md) ----
+// Decisiones 9 y 10 de Leo (spec "CAPRI — what's missing", 29/10/2026).
+// - Hoja de horas semanal (semana ISO: de lunes a domingo; se guarda el lunes AAAA-MM-DD): cualquier persona activa (Google o
+//   @helgen.services) captura, por día y proyecto (Activo o Cerrado), horas en pasos de 0.25, máximo 24 h al día entre todos sus
+//   proyectos, con la actividad de cada proyecto, y la envía. Estado por "parte" (persona + semana + proyecto): Borrador → Enviada
+//   → Aprobada | Devuelta (motivo) → (corrige y reenvía) → Enviada. Una parte aprobada ya no cambia (si hay un error, quien la
+//   aprobó la devuelve). Las horas no se anulan: se devuelven.
+// - Aprueba el líder del proyecto (columna lider_email de Proyectos; la asignan super admin o cobranza). Las horas del propio
+//   líder, y las de un proyecto sin líder, las aprueba Aprobaciones. Nadie aprueba ni devuelve sus propias horas (super admin con
+//   motivo, como en el incremento 4). Un super admin puede aprobar cualquier parte.
+// - Rol Nómina (no delegable): captura el costo mensual de cada persona (sueldo + carga patronal, MXN; a mano o en CSV) y ve el
+//   reporte de costo por proyecto y mes. Solo Nómina y super admin ven un costo de una persona: ninguna otra función, ni bootstrap,
+//   sincronizar, Pendientes, correos, CSV o mensajes de error lo llevan.
+// - Todo vive en el área privada NÓMINA (carpeta "CAPRI — Nómina" en Mi unidad + libro "CAPRI — Nómina y horas", con privado_ de
+//   arriba abajo): las horas no van en la Base de datos que lee todo el dominio.
+// - Reparto (costoNominaPorProyecto, pura, contrato §1): por persona y mes, costo × horas aprobadas en el proyecto / horas aprobadas
+//   de esa persona ese mes (en centavos; la suma de los proyectos es el costo exacto). Un mes sin costo capturado deja sus horas
+//   "sin costear" (se cuentan aparte; nunca se inventa un costo). Siempre en MXN. El margen lo conecta el integrador.
+// - Recordatorio por correo los viernes (desde las 12:00) a quien no ha enviado su semana, una vez por semana, sin montos:
+//   recordatorioHoras_() (lo llama cadaQuinceMinutos; el servidor de la etapa 1 solo necesita llamar esa función).
+
+function modNomina_() {
+  // Solo declaraciones de función y literales: las const de esta sección todavía no existen cuando se llama (arriba)
+  return { nombre: 'Horas y nómina',
+    api: { misHoras: misHoras, guardarSemana: guardarSemana, horasPorAprobar: horasPorAprobar, aprobarHoras: aprobarHoras,
+      devolverHoras: devolverHoras, listarLideres: listarLideres, asignarLider: asignarLider, listarCostosPersonal: listarCostosPersonal,
+      guardarCostoPersonal: guardarCostoPersonal, importarCostosPersonal: importarCostosPersonal, reporteNomina: reporteNomina },
+    // El líder vive en Proyectos (colección 'proyectos'): cambia quién aprueba (Pendientes y "Por aprobar" dependen de ella)
+    cambios: { guardarSemana: ['horas'], aprobarHoras: ['horas'], devolverHoras: ['horas'], asignarLider: ['proyectos'],
+      guardarCostoPersonal: ['costosPersonal'], importarCostosPersonal: ['costosPersonal'] },
+    // Quien solo usa requisiciones (también @helgen.services) captura su semana; si es líder, aprueba (cada función lo revisa)
+    solo: ['misHoras', 'guardarSemana', 'horasPorAprobar', 'aprobarHoras', 'devolverHoras'],
+    publicas: [],
+    bootstrap: function () { return { horasPermisos: permisosHoras_() }; },
+    // Solo lo que esta persona puede ver: costos y reporte únicamente con el rol Nómina (o super admin)
+    sincronizar: function (permisos, ctx, algo, r, errores) {
+      if (algo('permisos', 'proyectos')) r.horasPermisos = intentar_(errores, 'Horas', permisosHoras_) || undefined;
+      const c = ctx || {};
+      if (c.horasSemana && algo('horas', 'proyectos', 'anulaciones')) {
+        r.horasSemana = intentar_(errores, 'Mis horas', () => misHoras(c.horasSemana));
+      }
+      if (c.horasAprobar && algo('horas', 'proyectos', 'permisos', 'anulaciones') && permisosHoras_().aprobar) {
+        r.horasAprobar = intentar_(errores, 'Horas por aprobar', horasPorAprobar);
+      }
+      if (c.horasLideres && algo('proyectos', 'permisos', 'anulaciones') && puedeAsignarLider_()) {
+        r.horasLideres = intentar_(errores, 'Líderes', listarLideres);
+      }
+      if (!esNomina_()) return;
+      if (c.nomCostos && algo('costosPersonal', 'horas', 'permisos')) r.nomCostos = intentar_(errores, 'Costos de personal', listarCostosPersonal);
+      if (c.nomReporte && algo('horas', 'costosPersonal', 'proyectos', 'permisos', 'anulaciones')) {
+        r.nomReporte = intentar_(errores, 'Reporte de nómina', () => reporteNomina(c.nomReporte.desde, c.nomReporte.hasta));
+      }
+    },
+    preparar: prepararNomina_ };
+}
+
+const NOMBRE_CARPETA_NOMINA = 'CAPRI — Nómina';
+const NOMBRE_LIBRO_NOMINA = 'CAPRI — Nómina y horas';
+/** Libro de nómina. numeros = columnas (1 = A) con formato de número; las demás, texto. */
+const HOJAS_NOMINA = {
+  // Una fila por persona, semana, proyecto y día con horas (> 0). semana = lunes (AAAA-MM-DD); dia = AAAA-MM-DD. estado, motivo,
+  // aprobo y fecha_aprobacion son de la parte (persona + semana + proyecto) y se repiten en sus filas; enviada = cuándo se envió.
+  Horas: { enc: ['semana', 'correo', 'nombre', 'proyecto_folio', 'dia', 'horas', 'actividad', 'estado', 'motivo', 'aprobo',
+    'fecha_aprobacion', 'enviada', 'actualizado'], numeros: [6] },
+  // Un costo por persona y mes (AAAA-MM): sueldo + carga patronal en MXN. Solo Nómina (y super admin) lo ve.
+  CostosPersonal: { enc: ['correo', 'nombre', 'mes', 'costo', 'notas', 'capturo', 'actualizado'], numeros: [4] },
+  // Mismas columnas que las demás bitácoras (bitacora_): enviar, aprobar y devolver horas; líderes; costos (con montos: el libro es privado)
+  Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
+};
+const AREA_NOMINA = { que: 'nómina', propCarpeta: 'NOMINA_FOLDER_ID', propLibro: 'NOMINA_DB_ID', carpeta: NOMBRE_CARPETA_NOMINA,
+  libro: NOMBRE_LIBRO_NOMINA, hojas: HOJAS_NOMINA };
+/** Columnas de Horas (desde 0). */
+const HC_ = { semana: 0, correo: 1, nombre: 2, proyecto: 3, dia: 4, horas: 5, actividad: 6, estado: 7, motivo: 8, aprobo: 9,
+  fechaAprobacion: 10, enviada: 11, actualizado: 12 };
+const HORAS_BORRADOR = 'Borrador', HORAS_ENVIADA = 'Enviada', HORAS_APROBADA = 'Aprobada', HORAS_DEVUELTA = 'Devuelta';
+const ESTADOS_HORAS = [HORAS_BORRADOR, HORAS_ENVIADA, HORAS_APROBADA, HORAS_DEVUELTA];
+const SIN_CAPTURAR_HORAS = 'Sin capturar';
+const MAX_HORAS_DIA = 24, MAX_PROYECTOS_SEMANA = 15, MAX_ACTIVIDAD_HORAS = 300, MIN_ACTIVIDAD_HORAS = 3;
+const SEMANAS_RECIENTES_HORAS = 8;  // "Mis semanas": las últimas 8 (con la actual)
+const SEMANAS_REVISADAS_HORAS = 5;  // "Por aprobar": las aprobadas o devueltas de las últimas 5 semanas (una aprobada se puede devolver)
+const MAX_PEDIDOS_HORAS = 100;      // partes por llamada al aprobar o devolver
+const HORA_RECORDATORIO_HORAS = 12; // viernes desde las 12:00 (hora de la Ciudad de México)
+const PROP_RECORDATORIO_HORAS = 'HORAS_RECORDATORIO_SEMANA'; // lunes de la última semana con recordatorio (lo escribe CAPRI)
+const MAX_COSTO_PERSONAL = 5000000, MAX_FILAS_CSV_COSTOS = 500, MAX_TEXTO_CSV_COSTOS = 200000, MAX_MESES_REPORTE_NOMINA = 24;
+const DIAS_SEMANA_HORAS = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
+const CONCEPTO_NOMINA = 'Nómina';
+
+// Incremento 7 (N): avisos por correo (módulo de correos, 6.B): el recordatorio de los viernes y las horas devueltas
+EVENTOS_CORREO.push('horas.recordatorio', 'horas.devuelta');
+
+function libroNomina_() { return libroArea_(AREA_NOMINA); }
+/** Libro de nómina si ya existe; null si todavía no (leer nunca lo crea: lo crean la primera semana guardada o preparar). */
+function libroNominaSiExiste_() { return libroAreaSiExiste_(AREA_NOMINA); }
+function hojaNomina_(libro, nombre) { return hojaDeArea_(libro, HOJAS_NOMINA, nombre); }
+function bitacoraNomina_(libro, accion, folio, detalle, motivo) { bitacora_(libro, accion, folio, detalle, motivo, HOJAS_NOMINA); }
+
+/**
+ * Correr desde el editor (facilities@, la cuenta de la API) antes de publicar el incremento 7 (también lo corre prepararCapri): crea
+ * la carpeta "CAPRI — Nómina" (raíz de Mi unidad) y el libro "CAPRI — Nómina y horas" con Horas, CostosPersonal y Bitacora, deja
+ * los dos en Restringido (de arriba abajo) y agrega la columna lider_email a Proyectos. No comparte nada.
+ */
+function prepararNomina() {
+  MEMO_ = {};
+  prepararNomina_();
+}
+
+function prepararNomina_() {
+  const libro = libroNomina_();
+  const carpeta = privado_(carpetaArea_(AREA_NOMINA)); // primero la carpeta: el libro hereda su acceso (§6.11)
+  privado_(DriveApp.getFileById(libro.getId()));
+  Object.keys(HOJAS_NOMINA).forEach(n => hojaNomina_(libro, n));
+  hojaProyectos_(); // encabezado lider_email (columna M)
+  const nomina = correosConRol_('nomina');
+  console.log('Nómina y horas: carpeta ' + carpeta.getUrl() + ' y libro ' + libro.getUrl() + ' (restringidos). Compártelos solo con ' +
+    'quien tenga el rol Nómina y deba abrir el libro (por persona).');
+  console.log('Rol Nómina: ' + (nomina.length ? nomina.join(', ') : '(nadie todavía: dalo en Administración → Permisos)'));
+}
+
+// ---- Permisos ----
+
+function esNomina_() { return !!VENDEDOR_ && tieneRol_('nomina'); }
+
+function exigirNomina_() {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión para continuar.');
+  if (!esNomina_()) throw errorPermiso_('Solo Nómina puede ver o capturar el costo de las personas.');
+}
+
+/** Toda cuenta activa captura sus horas (doPost ya revisó la sesión y exigirAcceso_). */
+function exigirSesionHoras_() {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión para continuar.');
+}
+
+/** ¿Asigna líderes de proyecto? Super admin o cobranza. */
+function puedeAsignarLider_() { return !!VENDEDOR_ && (esSuperAdmin_() || esCobranza_()); }
+
+function exigirLideres_() {
+  if (!VENDEDOR_) throw errorSesion_('Inicia sesión para continuar.');
+  if (!puedeAsignarLider_()) throw errorPermiso_('Solo un super admin o cobranza asigna el líder de un proyecto.');
+}
+
+/**
+ * Qué ve el usuario en la pestaña Horas (solo para dibujar: cada función lo vuelve a revisar). capturar: todos; lider: es líder de
+ * algún proyecto; aprobar: líder, Aprobaciones o super admin; lideres: asigna líderes; nomina: costos y reporte.
+ */
+function permisosHoras_() {
+  if (!VENDEDOR_) return { capturar: false, lider: false, aprobar: false, lideres: false, nomina: false };
+  const yo = yo_();
+  const lider = proyectosCache_().some(p => p.lider === yo && !esAnulado_(p.folio));
+  return { capturar: true, lider: lider, aprobar: lider || esOperaciones_() || esSuperAdmin_(), lideres: puedeAsignarLider_(),
+    nomina: esNomina_() };
+}
+
+// ---- Lectura del libro ----
+
+/** "AAAA-MM-DD HH:mm:ss" de una celda (texto con o sin apóstrofo, o Date de Sheets). */
+function marcaDeCeldaHoras_(v) {
+  return v instanceof Date ? Utilities.formatDate(v, 'America/Mexico_City', 'yyyy-MM-dd HH:mm:ss') : String(v == null ? '' : v).replace(/^'/, '');
+}
+
+function horaDesdeFila_(r, i) {
+  return { fila: i + 2, semana: fechaIso_(r[HC_.semana]).replace(/^'/, ''), correo: String(r[HC_.correo] || '').trim().toLowerCase(),
+    nombre: String(r[HC_.nombre] || ''), proyecto: folioInterno(r[HC_.proyecto]), dia: fechaIso_(r[HC_.dia]).replace(/^'/, ''),
+    horas: Number(r[HC_.horas]) || 0, actividad: String(r[HC_.actividad] || ''), estado: String(r[HC_.estado] || '').trim() || HORAS_BORRADOR,
+    motivo: String(r[HC_.motivo] || ''), aprobo: String(r[HC_.aprobo] || ''), fechaAprobacion: marcaDeCeldaHoras_(r[HC_.fechaAprobacion]),
+    enviada: marcaDeCeldaHoras_(r[HC_.enviada]), actualizado: marcaDeCeldaHoras_(r[HC_.actualizado]) };
+}
+
+/** Filas de Horas con datos (sin crear el libro ni la pestaña: si no existen, ninguna). */
+function horasDelLibro_(libro) {
+  return filasSiHay_(libro, HOJAS_NOMINA, 'Horas').map(horaDesdeFila_).filter(h => h.correo && h.semana && h.proyecto);
+}
+
+function costoDesdeFila_(r, i) {
+  const mes = r[2] instanceof Date ? Utilities.formatDate(r[2], 'America/Mexico_City', 'yyyy-MM') : mesValido(r[2]);
+  return { fila: i + 2, correo: String(r[0] || '').trim().toLowerCase(), nombre: String(r[1] || ''), mes: mes, costo: Number(r[3]) || 0,
+    notas: String(r[4] || ''), capturo: String(r[5] || ''), actualizado: marcaDeCeldaHoras_(r[6]) };
+}
+
+/** Costos capturados (sin crear el libro). Solo los leen funciones de Nómina y el reparto. */
+function costosDelLibro_(libro) {
+  return filasSiHay_(libro, HOJAS_NOMINA, 'CostosPersonal').map(costoDesdeFila_).filter(c => c.correo && c.mes);
+}
+
+/** Proyectos con la marca de anulado (para las vistas puras). */
+function proyectosParaHoras_() {
+  return proyectosCache_().map(p => Object.assign({}, p, { anulado: esAnulado_(p.folio) }));
+}
+
+/** Nombres de Permisos ({correo: nombre}). */
+function nombresCapri_() {
+  const u = contextoRoles_().usuarios, n = {};
+  Object.keys(u).forEach(c => { if (u[c].nombre) n[c] = u[c].nombre; });
+  return n;
+}
+
+// ---- Hoja de horas (cada quien la suya) ----
+
+/**
+ * La semana de quien llama (por omisión la actual): sus partes con horas por día, totales, la semana anterior (para "Copiar
+ * proyectos"), sus últimas semanas y los proyectos que puede elegir (Activo y Cerrado). Nunca horas de otra persona ni costos.
+ */
+function misHoras(semana) {
+  exigirSesionHoras_();
+  const hoy = hoyIso_(), actual = lunesDe(hoy);
+  const lunes = semana ? validarSemanaHoras(semana, hoy) : actual;
+  const yo = yo_();
+  return enCache_('HRS_' + yo + '_' + lunes + '_' + actual, ['horas', 'proyectos', 'anulaciones'], TTL_CACHE, () =>
+    vistaSemanaHoras({ semana: lunes, hoy: hoy, proyectos: proyectosParaHoras_(),
+      bloques: bloquesDeHoras(horasDelLibro_(libroNominaSiExiste_()).filter(h => h.correo === yo)) }));
+}
+
+/**
+ * Guarda la semana de quien llama. p = {semana: lunes AAAA-MM-DD, bloques: [{proyecto, horas: [7 números, lunes a domingo],
+ * actividad}], enviar}. Reglas en normalizarSemanaHoras y planSemanaHoras; proyecto Activo o Cerrado (no cancelado ni anulado).
+ * Las filas de la semana se reescriben en su lugar (las de una parte aprobada no se tocan). Devuelve la semana (misHoras).
+ */
+function guardarSemana(p) {
+  exigirSesionHoras_();
+  const hoy = hoyIso_();
+  const datos = normalizarSemanaHoras(p, { hoy: hoy });
+  const yo = yo_(), nombre = nombreYo_();
+  const libro = libroNomina_(); // la primera vez crea el área privada (fuera del candado)
+  conCandado_(() => {
+    const proyectos = mapaProyectos_();
+    const hoja = hojaNomina_(libro, 'Horas');
+    const todas = filasDeArea_(hoja, HOJAS_NOMINA, 'Horas').map(horaDesdeFila_);
+    const mias = todas.filter(h => h.correo === yo && h.semana === datos.semana && h.proyecto);
+    const plan = planSemanaHoras(bloquesDeHoras(mias), datos.bloques, datos.enviar);
+    plan.escribir.forEach(b => {
+      const pr = proyectos[b.proyecto];
+      if (!pr || esAnulado_(b.proyecto)) throw new Error('No existe el proyecto ' + b.proyecto + ': quítalo de la semana.');
+      if (pr.estado !== 'Activo' && pr.estado !== 'Cerrado') {
+        throw new Error('El proyecto ' + pr.folioVisible + ' está ' + String(pr.estado).toLowerCase() + ': quítalo de la semana.');
+      }
+    });
+    const ahora = "'" + ahoraTexto_(), t = textoCelda, nuevas = [];
+    plan.escribir.forEach(b => b.horas.forEach((h, i) => {
+      if (!h) return;
+      nuevas.push([textoFecha_(datos.semana), t(yo), t(nombre), b.proyecto, textoFecha_(sumarDias(datos.semana, i)), h, t(b.actividad),
+        b.estado, t(b.motivo || ''), '', '', b.enviada === null ? ahora : b.enviada ? "'" + b.enviada : '', ahora]);
+    }));
+    const conservar = {};
+    plan.conservar.forEach(b => b.filas.forEach(f => { conservar[f] = true; }));
+    reescribirFilasHoras_(hoja, mias.filter(h => !conservar[h.fila]).map(h => h.fila), nuevas, todas.length);
+    if (datos.enviar) {
+      const total = plan.escribir.reduce((s, b) => s + b.horas.reduce((a, h) => a + h, 0), 0);
+      bitacoraNomina_(libro, 'Enviar horas', '', 'Semana ' + datos.semana + ' · ' + plan.escribir.length + ' proyecto(s) · ' +
+        textoHoras(total) + ' h', '');
+    }
+    SpreadsheetApp.flush();
+  });
+  return misHoras(datos.semana);
+}
+
+/**
+ * Escribe las filas nuevas de una semana en los lugares que ya ocupaba (filas de la hoja, de menor a mayor; por tramos seguidos),
+ * agrega al final las que sobran o borra los lugares que ya no se usan (de abajo hacia arriba). nDatos = filas de datos leídas.
+ */
+function reescribirFilasHoras_(hoja, lugares, nuevas, nDatos) {
+  const ancho = HOJAS_NOMINA.Horas.enc.length;
+  const usar = lugares.slice(0, nuevas.length);
+  for (let i = 0; i < usar.length;) {
+    let j = i;
+    while (j + 1 < usar.length && usar[j + 1] === usar[j] + 1) j++;
+    escribe_(hoja).getRange(usar[i], 1, j - i + 1, ancho).setValues(nuevas.slice(i, j + 1));
+    i = j + 1;
+  }
+  const resto = nuevas.slice(usar.length);
+  if (resto.length) escribe_(hoja).getRange(nDatos + 2, 1, resto.length, ancho).setValues(resto);
+  const sobran = lugares.slice(nuevas.length);
+  for (let k = sobran.length - 1; k >= 0;) {
+    let m = k;
+    while (m - 1 >= 0 && sobran[m - 1] === sobran[m] - 1) m--;
+    escribe_(hoja).deleteRows(sobran[m], k - m + 1);
+    k = m - 1;
+  }
+}
+
+// ---- Aprobar y devolver (líder del proyecto, Aprobaciones; super admin) ----
+
+/**
+ * Partes por aprobar de quien llama (las Enviadas que le tocan: como líder, como Aprobaciones o, a un super admin, todas) y las
+ * que aprobó o devolvió en las últimas semanas (una aprobada se puede devolver). Solo horas y actividad: nunca costos.
+ */
+function horasPorAprobar() {
+  exigirSesionHoras_();
+  if (!permisosHoras_().aprobar) {
+    throw errorPermiso_('No tienes horas por aprobar: las aprueba el líder de cada proyecto y, las del líder, Aprobaciones.');
+  }
+  return vistaPorAprobarHoras({ yo: yo_(), roles: { aprobaciones: esOperaciones_(), superadmin: esSuperAdmin_() }, hoy: hoyIso_(),
+    bloques: bloquesDeHoras(horasDelLibro_(libroNominaSiExiste_())), proyectos: mapaProyectos_(), nombres: nombresCapri_() });
+}
+
+/**
+ * Aprueba partes Enviadas. lista = [{correo, semana, proyecto, huella}] (huella = la que vio la persona: si las horas cambiaron
+ * mientras tanto, error). Nadie aprueba sus horas; un super admin, con motivoExcepcion (≥ 10 caracteres, a la bitácora de
+ * Administración). Devuelve horasPorAprobar().
+ */
+function aprobarHoras(lista, motivoExcepcion) {
+  return revisarHoras_('aprobar', lista, '', motivoExcepcion);
+}
+
+/** Devuelve partes Enviadas o Aprobadas a quien las capturó, con motivo (le llega un correo sin horas ni costos). */
+function devolverHoras(lista, motivo) {
+  exigirSesionHoras_();
+  const m = motivoObligatorio_(motivo, 'Escribe por qué devuelves las horas (mínimo 5 caracteres).');
+  return revisarHoras_('devolver', lista, m, m);
+}
+
+function revisarHoras_(accion, lista, motivo, motivoExcepcion) {
+  exigirSesionHoras_();
+  const pedidos = normalizarPedidosHoras(lista);
+  const libro = libroNominaSiExiste_();
+  if (!libro) throw new Error('Todavía no hay horas capturadas.');
+  const yo = yo_(), roles = { aprobaciones: esOperaciones_(), superadmin: esSuperAdmin_() };
+  conCandado_(() => {
+    const hoja = hojaNomina_(libro, 'Horas');
+    const bloques = {};
+    bloquesDeHoras(filasDeArea_(hoja, HOJAS_NOMINA, 'Horas').map(horaDesdeFila_).filter(h => h.correo && h.semana && h.proyecto))
+      .forEach(b => { bloques[claveBloqueHoras(b)] = b; });
+    const proyectos = mapaProyectos_();
+    const cambios = pedidos.map(pd => {
+      const b = bloques[claveBloqueHoras(pd)];
+      const etiqueta = (b ? b.nombre || b.correo : pd.correo) + ' · ' + ((proyectos[pd.proyecto] || {}).folioVisible || pd.proyecto) +
+        ' · semana ' + textoSemanaHoras(pd.semana);
+      if (!b) throw new Error('No se encontraron las horas de ' + etiqueta + ': actualiza la lista.');
+      const validos = accion === 'aprobar' ? [HORAS_ENVIADA] : [HORAS_ENVIADA, HORAS_APROBADA];
+      if (validos.indexOf(b.estado) === -1) throw new Error('Las horas de ' + etiqueta + ' están ' + b.estado.toLowerCase() + ': actualiza la lista.');
+      if (pd.huella && pd.huella !== huellaBloqueHoras(b)) {
+        throw new Error('Las horas de ' + etiqueta + ' cambiaron desde que las abriste: actualiza la lista y revísalas otra vez.');
+      }
+      const perm = permisoAprobarHoras(yo, roles, b.correo, (proyectos[b.proyecto] || {}).lider || '');
+      if (perm.propio) {
+        if (!excepcionSuperAdmin_(accion === 'aprobar' ? 'aprobar sus propias horas' : 'devolver sus propias horas',
+          b.proyecto, motivoExcepcion)) {
+          throw errorPermiso_('Nadie ' + (accion === 'aprobar' ? 'aprueba' : 'devuelve') + ' sus propias horas: las ' +
+            (perm.como === 'lider' ? 'revisa el líder del proyecto.' : 'revisa Aprobaciones.') + textoExcepcion_());
+        }
+      } else if (!perm.puede) {
+        throw errorPermiso_('Las horas de ' + etiqueta + ' las revisa ' + (perm.como === 'lider' ? 'el líder del proyecto' : 'Aprobaciones') + '.');
+      }
+      return b;
+    });
+    const fecha = "'" + ahoraTexto_();
+    const valores = accion === 'aprobar' ? [HORAS_APROBADA, '', yo, fecha] : [HORAS_DEVUELTA, textoCelda(motivo), '', ''];
+    const avisos = {};
+    cambios.forEach(b => {
+      const filas = b.filas.slice().sort((x, y) => x - y);
+      for (let i = 0; i < filas.length;) {
+        let j = i;
+        while (j + 1 < filas.length && filas[j + 1] === filas[j] + 1) j++;
+        escribe_(hoja).getRange(filas[i], HC_.estado + 1, j - i + 1, 4).setValues(filas.slice(i, j + 1).map(() => valores));
+        i = j + 1;
+      }
+      const total = b.horas.reduce((s, h) => s + h, 0);
+      bitacoraNomina_(libro, accion === 'aprobar' ? 'Aprobar horas' : (b.estado === HORAS_APROBADA ? 'Devolver horas aprobadas' : 'Devolver horas'),
+        b.proyecto, b.correo + ' · semana ' + b.semana + ' · ' + textoHoras(total) + ' h', motivo);
+      if (accion === 'devolver') {
+        const k = b.correo + '|' + b.semana;
+        (avisos[k] = avisos[k] || { para: [b.correo], semana: b.semana, proyectos: [], nota: motivo, folio: 'Horas ' + b.semana }).proyectos.push(b.proyecto);
+      }
+    });
+    Object.keys(avisos).forEach(k => notificar_('horas.devuelta', avisos[k])); // se mandan al terminar (doPost), fuera del candado
+    SpreadsheetApp.flush();
+  });
+  return horasPorAprobar();
+}
+
+/** Partes con horas Enviadas para Pendientes (todas; itemsHorasPendientes filtra por persona). En caché por versión. */
+function horasParaPendientes_() {
+  return enCache_('horasPend', ['horas', 'proyectos', 'anulaciones'], TTL_CACHE, () => {
+    const libro = libroNominaSiExiste_();
+    if (!libro) return [];
+    const proyectos = mapaProyectos_();
+    return bloquesDeHoras(horasDelLibro_(libro)).filter(b => b.estado === HORAS_ENVIADA).map(b => {
+      const p = proyectos[b.proyecto] || {};
+      return { correo: b.correo, nombre: b.nombre, semana: b.semana, proyecto: b.proyecto, proyectoVisible: p.folioVisible || b.proyecto,
+        proyectoNombre: p.nombre || '', horas: b.horas.reduce((s, h) => s + h, 0), enviada: b.enviada, lider: p.lider || '' };
+    });
+  });
+}
+
+// ---- Líder de proyecto (super admin o cobranza) ----
+
+/** Proyectos (no cancelados ni anulados) con su líder y las personas activas que pueden serlo. */
+function listarLideres() {
+  exigirLideres_();
+  return vistaLideres_();
+}
+
+function vistaLideres_() {
+  const usuarios = contextoRoles_().usuarios;
+  const nombre = c => (usuarios[c] && usuarios[c].nombre) || c;
+  const proyectos = proyectosVisibles_().filter(p => p.estado !== 'Cancelado').slice().reverse().map(p => ({ folio: p.folio,
+    folioVisible: p.folioVisible, nombre: p.nombre, estado: p.estado, lider: p.lider || '', liderNombre: p.lider ? nombre(p.lider) : '' }));
+  const candidatos = Object.keys(usuarios).map(c => usuarios[c]).filter(u => u.activo)
+    .map(u => ({ correo: u.correo, nombre: u.nombre || u.correo })).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  return { proyectos: proyectos, candidatos: candidatos };
+}
+
+/**
+ * Asigna (o quita, con correo vacío) el líder de un proyecto: una cuenta de CAPRI activa. Escribe la columna lider_email de
+ * Proyectos y deja el cambio en la Bitacora de nómina. Las partes ya Enviadas pasan a quien corresponda desde ese momento.
+ */
+function asignarLider(folio, correo) {
+  exigirLideres_();
+  const texto = String(correo == null ? '' : correo).trim();
+  const c = texto ? correoCapri(texto) : '';
+  if (texto && !c) throw new Error('El líder debe ser una cuenta @' + DOMINIO_HELGEN + ' o @' + DOMINIO_SERVICIOS + '.');
+  if (c && !rolesEfectivos(c, contextoRoles_()).activo) {
+    throw new Error(c + ' no tiene acceso activo a CAPRI: dale de alta en Administración → Permisos antes de hacerlo líder.');
+  }
+  const libro = libroNomina_(); // bitácora (la primera vez crea el área privada, fuera del candado)
+  return conCandado_(() => {
+    const hoja = hojaProyectos_();
+    const p = buscarProyecto_(hoja, folio);
+    if (!p || esAnulado_(p.folio)) throw new Error('No existe el proyecto ' + String(folio || '').toUpperCase() + '.');
+    if (p.estado === 'Cancelado') throw new Error('El proyecto ' + p.folioVisible + ' está cancelado.');
+    if ((p.lider || '') !== c) {
+      escribe_(hoja).getRange(p.fila, COL_LIDER_PROYECTO).setValue(textoCelda(c));
+      bitacoraNomina_(libro, 'Asignar líder', p.folio, (p.lider || 'sin líder') + ' → ' + (c || 'sin líder'), '');
+      SpreadsheetApp.flush();
+    }
+    return vistaLideres_();
+  });
+}
+
+// ---- Costo de personal y reporte (solo Nómina y super admin) ----
+
+/** Costos capturados (todos), las personas que se pueden elegir y lo que falta costear (meses con horas aprobadas sin costo). */
+function listarCostosPersonal() {
+  exigirNomina_();
+  return vistaCostos_();
+}
+
+function vistaCostos_() {
+  const libro = libroNominaSiExiste_();
+  const usuarios = contextoRoles_().usuarios, nombres = nombresCapri_();
+  const costos = costosDelLibro_(libro), horas = horasDelLibro_(libro);
+  const nombreDe = c => nombres[c] || (horas.find(h => h.correo === c) || {}).nombre || (costos.find(x => x.correo === c) || {}).nombre || c;
+  const personas = {};
+  Object.keys(usuarios).forEach(c => { if (usuarios[c].activo) personas[c] = true; });
+  horas.forEach(h => { personas[h.correo] = true; });
+  costos.forEach(x => { personas[x.correo] = true; });
+  const mesActual = hoyIso_().slice(0, 7), desde = mesMas(mesActual, -5);
+  const r = repartoNomina(horas.filter(h => h.estado === HORAS_APROBADA && h.dia.slice(0, 7) >= desde), costos);
+  const faltan = Object.keys(r.personas).map(k => r.personas[k]).filter(x => x.costo == null)
+    .map(x => ({ correo: x.correo, nombre: nombreDe(x.correo), mes: x.mes, horas: x.ch / 100 }))
+    .sort((a, b) => (a.mes < b.mes ? 1 : a.mes > b.mes ? -1 : 0) || a.nombre.localeCompare(b.nombre, 'es'));
+  return {
+    mesActual: mesActual,
+    costos: costos.map(x => ({ correo: x.correo, nombre: nombreDe(x.correo), mes: x.mes, costo: x.costo, notas: x.notas,
+      capturo: x.capturo, actualizado: x.actualizado }))
+      .sort((a, b) => (a.mes < b.mes ? 1 : a.mes > b.mes ? -1 : 0) || a.nombre.localeCompare(b.nombre, 'es')),
+    personas: Object.keys(personas).map(c => ({ correo: c, nombre: nombreDe(c) })).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')),
+    faltan: faltan,
+  };
+}
+
+/**
+ * Alta, cambio o baja (p.quitar) del costo de una persona en un mes: p = {correo, mes: AAAA-MM, costo (MXN, sueldo + carga
+ * patronal), notas, quitar}. Un costo por persona y mes (el nuevo reemplaza al anterior; el anterior queda en la Bitacora de
+ * nómina). Devuelve listarCostosPersonal().
+ */
+function guardarCostoPersonal(p) {
+  exigirNomina_();
+  const c = normalizarCostoPersonal(p);
+  const libro = libroNomina_();
+  return conCandado_(() => {
+    const hoja = hojaNomina_(libro, 'CostosPersonal');
+    const filas = filasDeArea_(hoja, HOJAS_NOMINA, 'CostosPersonal').map(costoDesdeFila_);
+    const x = filas.find(f => f.correo === c.correo && f.mes === c.mes);
+    const t = textoCelda, ahora = "'" + ahoraTexto_(), yo = yo_();
+    if (c.quitar) {
+      if (!x) throw new Error('No hay costo de ' + c.correo + ' en ' + c.mes + '.');
+      escribe_(hoja).deleteRow(x.fila);
+      bitacoraNomina_(libro, 'Quitar costo de personal', '', c.correo + ' · ' + c.mes + ' · era ' + formatoMoneda(x.costo) + ' MXN', c.notas);
+    } else {
+      const fila = [t(c.correo), t(nombreDeCorreo_(c.correo) === c.correo ? (x ? x.nombre : '') : nombreDeCorreo_(c.correo)), "'" + c.mes,
+        c.costo, t(c.notas), t(yo), ahora];
+      if (x) escribe_(hoja).getRange(x.fila, 1, 1, fila.length).setValues([fila]);
+      else escribe_(hoja).appendRow(fila);
+      bitacoraNomina_(libro, x ? 'Cambiar costo de personal' : 'Capturar costo de personal', '', c.correo + ' · ' + c.mes + ' · ' +
+        (x ? formatoMoneda(x.costo) + ' → ' : '') + formatoMoneda(c.costo) + ' MXN', c.notas);
+    }
+    SpreadsheetApp.flush();
+    return vistaCostos_();
+  });
+}
+
+/**
+ * Importa costos de un CSV (correo, mes, costo[, notas]; con o sin encabezado; separado por coma, punto y coma o tabulador). Cada
+ * renglón da su resultado (Nuevo · Actualizado · Sin cambio · Error con el motivo); un renglón con error no detiene a los demás.
+ * Si una persona y mes se repite en el archivo, gana el último. Devuelve {resultados, resumen, vista: listarCostosPersonal()}.
+ */
+function importarCostosPersonal(texto) {
+  exigirNomina_();
+  const t = String(texto == null ? '' : texto);
+  if (t.length > MAX_TEXTO_CSV_COSTOS) throw new Error('El archivo es demasiado grande (máximo ' + MAX_FILAS_CSV_COSTOS + ' renglones).');
+  const filasCsv = leerCsvCostos(t);
+  if (!filasCsv.length) throw new Error('El archivo no tiene renglones con costos (correo, mes, costo).');
+  if (filasCsv.length > MAX_FILAS_CSV_COSTOS) throw new Error('Máximo ' + MAX_FILAS_CSV_COSTOS + ' renglones por archivo.');
+  const libro = libroNomina_();
+  return conCandado_(() => {
+    const hoja = hojaNomina_(libro, 'CostosPersonal');
+    const filas = filasDeArea_(hoja, HOJAS_NOMINA, 'CostosPersonal').map(costoDesdeFila_);
+    const porClave = {};
+    filas.forEach(f => { porClave[f.correo + '|' + f.mes] = f; });
+    const ultimo = {};
+    filasCsv.forEach((f, i) => { if (!f.error) ultimo[f.correo + '|' + f.mes] = i; });
+    const tt = textoCelda, ahora = "'" + ahoraTexto_(), yo = yo_(), nuevas = [];
+    const resultados = filasCsv.map((f, i) => {
+      const r = { fila: f.fila, correo: f.correo, mes: f.mes, costo: f.costo, notas: f.notas || '' };
+      if (f.error) return Object.assign(r, { resultado: 'Error', error: f.error });
+      const k = f.correo + '|' + f.mes;
+      if (ultimo[k] !== i) return Object.assign(r, { resultado: 'Repetido', error: 'Se repite más abajo en el archivo: vale el renglón ' + filasCsv[ultimo[k]].fila + '.' });
+      const x = porClave[k];
+      if (x && aCentavos(x.costo) === aCentavos(f.costo) && x.notas === (f.notas || '')) return Object.assign(r, { resultado: 'Sin cambio' });
+      const nombre = nombreDeCorreo_(f.correo) === f.correo ? (x ? x.nombre : '') : nombreDeCorreo_(f.correo);
+      const fila = [tt(f.correo), tt(nombre), "'" + f.mes, f.costo, tt(f.notas || ''), tt(yo), ahora];
+      if (x) escribe_(hoja).getRange(x.fila, 1, 1, fila.length).setValues([fila]);
+      else nuevas.push(fila);
+      return Object.assign(r, { resultado: x ? 'Actualizado' : 'Nuevo', antes: x ? x.costo : null });
+    });
+    if (nuevas.length) escribe_(hoja).getRange(filas.length + 2, 1, nuevas.length, nuevas[0].length).setValues(nuevas);
+    const resumen = { nuevos: 0, actualizados: 0, sinCambio: 0, errores: 0, repetidos: 0 };
+    resultados.forEach(r => {
+      const k = { Nuevo: 'nuevos', Actualizado: 'actualizados', 'Sin cambio': 'sinCambio', Error: 'errores', Repetido: 'repetidos' }[r.resultado];
+      resumen[k]++;
+    });
+    bitacoraNomina_(libro, 'Importar costos de personal (CSV)', '', resumen.nuevos + ' nuevos · ' + resumen.actualizados + ' actualizados · ' +
+      resumen.sinCambio + ' sin cambio · ' + resumen.errores + ' con error · ' + resumen.repetidos + ' repetidos', '');
+    SpreadsheetApp.flush();
+    return { resultados: resultados, resumen: resumen, vista: vistaCostos_() };
+  });
+}
+
+/**
+ * Reporte de nómina (Nómina y super admin): costo por proyecto y mes (reparto por horas aprobadas), horas sin costear (por persona
+ * y mes, y por proyecto), costos sin horas aprobadas (no se reparten) y horas enviadas por aprobar. desde/hasta = AAAA-MM (por
+ * omisión los últimos 6 meses; máximo 24). En caché por versión de horas, costos, proyectos y permisos.
+ */
+function reporteNomina(desde, hasta) {
+  exigirNomina_();
+  const r = rangoMesesNomina(desde, hasta, hoyIso_());
+  return enCache_('NOMREP_' + r.desde + '_' + r.hasta, ['horas', 'costosPersonal', 'proyectos', 'permisos', 'anulaciones'], TTL_CACHE, () => {
+    const libro = libroNominaSiExiste_();
+    return reporteNominaDatos({ meses: r.meses, horas: horasDelLibro_(libro), costos: costosDelLibro_(libro), proyectos: proyectosParaHoras_(),
+      nombres: nombresCapri_() });
+  });
+}
+
+/**
+ * PARA EL INTEGRADOR (margen de cobranza, resumen y reporteMargen): costo de nómina de todos los proyectos con todas las horas
+ * aprobadas y los costos capturados = costoNominaPorProyecto (contrato §1): {[folio]: [{concepto: 'Nómina', moneda: 'MXN', monto,
+ * horas, sinCostear}]}. Nunca lleva datos por persona. Sin libro de nómina: {}. En caché por versión de horas y costos.
+ */
+function costoNominaDeProyectos_() {
+  return enCache_('NOM_PROYECTOS', ['horas', 'costosPersonal'], TTL_CACHE, () => {
+    const libro = libroNominaSiExiste_();
+    return libro ? costoNominaPorProyecto(horasDelLibro_(libro), costosDelLibro_(libro)) : {};
+  });
+}
+
+// ---- Recordatorio de los viernes (lo llama cadaQuinceMinutos; el servidor de la etapa 1 solo necesita esta función) ----
+
+/**
+ * Viernes desde las 12:00 (o sábado y domingo, si el viernes no corrió): un correo a cada persona activa de Permisos que no ha
+ * enviado su semana (ninguna parte Enviada o Aprobada), menos las de la Script Property opcional HORAS_SIN_RECORDATORIO. Una vez
+ * por semana: la semana se marca (HORAS_RECORDATORIO_SEMANA) bajo el candado y el correo se manda ya fuera de él. Sin montos ni
+ * horas. cuando = {hoy: AAAA-MM-DD, hora} (opcional; para probar). Devuelve {enviado, semana, personas}.
+ */
+function recordatorioHoras_(cuando) {
+  const c = cuando || {};
+  const hoy = c.hoy || hoyIso_();
+  const hora = c.hora != null ? Number(c.hora) : Number(Utilities.formatDate(new Date(), 'America/Mexico_City', 'HH'));
+  const props = PropertiesService.getScriptProperties();
+  const lunes = tocaRecordatorioHoras(hoy, hora, props.getProperty(PROP_RECORDATORIO_HORAS));
+  if (!lunes) return { enviado: false };
+  const marcada = conCandado_(() => {
+    if (props.getProperty(PROP_RECORDATORIO_HORAS) === lunes) return false;
+    props.setProperty(PROP_RECORDATORIO_HORAS, lunes);
+    return true;
+  });
+  if (!marcada) return { enviado: false };
+  const enviaron = {};
+  bloquesDeHoras(horasDelLibro_(libroNominaSiExiste_()).filter(h => h.semana === lunes)).forEach(b => {
+    if (b.estado === HORAS_ENVIADA || b.estado === HORAS_APROBADA) enviaron[b.correo] = true;
+  });
+  const para = destinatariosRecordatorioHoras(contextoRoles_().usuarios, enviaron, correosCapri(propiedades_().HORAS_SIN_RECORDATORIO));
+  if (para.length) notificar_('horas.recordatorio', { para: para, semana: lunes, folio: 'Horas ' + lunes });
+  enviarCorreosPendientes_();
+  return { enviado: true, semana: lunes, personas: para.length };
+}
+
+/** Lo que un aviso de horas agrega a info (infoDeAviso_): la semana y los proyectos (folio visible). Nunca horas ni costos. */
+function datosAvisoHoras_(d) {
+  const x = d || {}, proyectos = mapaProyectos_();
+  const lista = (Array.isArray(x.proyectos) ? x.proyectos : x.proyecto ? [x.proyecto] : []).map(f => {
+    const p = proyectos[folioInterno(f)];
+    return p ? [p.folioVisible, p.nombre].filter(Boolean).join(' · ') : String(f);
+  });
+  return { horasSemana: String(x.semana || ''), horasSemanaTexto: fechaIsoValida(x.semana) ? textoSemanaHoras(x.semana) : '', horasProyectos: lista };
+}
+
+// ---- Horas y nómina: lógica pura (sin servicios de Google; se prueba en Node) ----
+
+/** 1.5 → "1.5", 8 → "8", 7.25 → "7.25". */
+function textoHoras(n) {
+  return String(Math.round(Number(n || 0) * 100) / 100);
+}
+
+/** ¿Es un lunes válido (AAAA-MM-DD)? */
+function esLunesIso(fechaIso) {
+  return fechaIsoValida(fechaIso) && lunesDe(fechaIso) === fechaIso;
+}
+
+/** Los 7 días (lunes a domingo) de una semana. */
+function diasDeSemanaHoras(lunes) {
+  return [0, 1, 2, 3, 4, 5, 6].map(i => sumarDias(lunes, i));
+}
+
+/** Semana ISO de una fecha: {anio, semana} (la semana 1 es la que tiene el 4 de enero; el jueves decide el año). */
+function numeroSemanaIso(fechaIso) {
+  const anio = Number(sumarDias(lunesDe(fechaIso), 3).slice(0, 4));
+  return { anio: anio, semana: Math.floor(diasEntre(lunesDe(anio + '-01-04'), lunesDe(fechaIso)) / 7) + 1 };
+}
+
+/** "del 26/10 al 01/11/2026" (con los dos años si cambian: "del 29/12/2025 al 04/01/2026"). */
+function textoSemanaHoras(lunes) {
+  const fin = sumarDias(lunes, 6);
+  const f = (s, conAnio) => s.slice(8, 10) + '/' + s.slice(5, 7) + (conAnio ? '/' + s.slice(0, 4) : '');
+  return 'del ' + f(lunes, lunes.slice(0, 4) !== fin.slice(0, 4)) + ' al ' + f(fin, true);
+}
+
+/** Semana que se puede capturar: un lunes (AAAA-MM-DD), desde 2020 y no posterior a la semana de hoy. */
+function validarSemanaHoras(semana, hoy) {
+  const s = validarFechaIso(String(semana == null ? '' : semana).trim(), null, 'La semana');
+  if (!esLunesIso(s)) throw new Error('La semana empieza en lunes (AAAA-MM-DD).');
+  if (hoy && s > lunesDe(hoy)) throw new Error('No se capturan horas de semanas futuras.');
+  return s;
+}
+
+/** Horas de los 7 días de un proyecto: números de 0 a 24 en pasos de 0.25 (vacío = 0). etiqueta = el proyecto (para el error). */
+function normalizarHorasDias(v, etiqueta) {
+  const a = Array.isArray(v) ? v : [];
+  if (a.length > 7) throw new Error('Una semana tiene 7 días (' + etiqueta + ').');
+  return DIAS_SEMANA_HORAS.map((dia, i) => {
+    const t = a[i];
+    if (t === '' || t == null) return 0;
+    const n = Number(String(t).trim().replace(',', '.'));
+    if (!isFinite(n) || n < 0) throw new Error('Horas no válidas en ' + etiqueta + ' (' + dia + ').');
+    if (n > MAX_HORAS_DIA) throw new Error('Máximo ' + MAX_HORAS_DIA + ' h al día (' + etiqueta + ', ' + dia + ').');
+    if (Math.abs(n * 4 - Math.round(n * 4)) > 1e-9) {
+      throw new Error('Las horas van en cuartos de hora (0.25, 0.5, 0.75…): revisa ' + etiqueta + ' (' + dia + ').');
+    }
+    return Math.round(n * 4) / 4;
+  });
+}
+
+/**
+ * Lo que manda la interfaz para guardar la semana. p = {semana, bloques: [{proyecto, horas: [7], actividad}], enviar}; o = {hoy}.
+ * Un proyecto una sola vez; uno sin horas se quita (aunque traiga actividad); con horas, la actividad es obligatoria (3 a 300
+ * caracteres). Devuelve {semana, bloques: [{proyecto (folio interno), horas, actividad}], enviar}.
+ */
+function normalizarSemanaHoras(p, o) {
+  const x = p || {}, opc = o || {};
+  const semana = validarSemanaHoras(x.semana, opc.hoy);
+  const lista = Array.isArray(x.bloques) ? x.bloques.filter(Boolean) : [];
+  if (lista.length > MAX_PROYECTOS_SEMANA) throw new Error('Máximo ' + MAX_PROYECTOS_SEMANA + ' proyectos por semana.');
+  const vistos = {}, bloques = [];
+  lista.forEach(b => {
+    const folio = folioInterno(b.proyecto);
+    if (!/^PRY-\d{4}-\d{4,}$/.test(folio)) throw new Error('Proyecto no válido: ' + (String(b.proyecto == null ? '' : b.proyecto).trim() || '(vacío)') + '.');
+    if (vistos[folio]) throw new Error('El proyecto ' + folio + ' está dos veces en la semana: junta sus horas en un renglón.');
+    vistos[folio] = true;
+    const horas = normalizarHorasDias(b.horas, folio);
+    const actividad = String(b.actividad == null ? '' : b.actividad).trim().replace(/\s+/g, ' ');
+    if (actividad.length > MAX_ACTIVIDAD_HORAS) throw new Error('La actividad de ' + folio + ' debe tener máximo ' + MAX_ACTIVIDAD_HORAS + ' caracteres.');
+    if (!horas.some(h => h > 0)) return;
+    if (actividad.length < MIN_ACTIVIDAD_HORAS) throw new Error('Escribe la actividad de ' + folio + ' (qué hiciste en el proyecto).');
+    bloques.push({ proyecto: folio, horas: horas, actividad: actividad });
+  });
+  return { semana: semana, bloques: bloques, enviar: x.enviar === true };
+}
+
+/** Clave de una parte: correo|semana|proyecto. */
+function claveBloqueHoras(b) {
+  return String(b.correo || '').trim().toLowerCase() + '|' + String(b.semana || '') + '|' + folioInterno(b.proyecto);
+}
+
+/** Huella de una parte (horas de los 7 días y actividad): si cambia, quien aprueba ya no está viendo lo mismo. */
+function huellaBloqueHoras(b) {
+  return (b.horas || []).map(h => (Math.round(Number(h || 0) * 100) / 100).toFixed(2)).join(',') + '|' + String(b.actividad || '').trim();
+}
+
+/**
+ * Filas de Horas (horaDesdeFila_) → partes: [{correo, nombre, semana, proyecto, horas: [7], actividad, estado, motivo, aprobo,
+ * fechaAprobacion, enviada, filas: [número de fila]}], en el orden en que aparecen. Un día fuera de la semana se ignora.
+ */
+function bloquesDeHoras(horas) {
+  const porClave = {}, orden = [];
+  (horas || []).forEach(h => {
+    if (!h || !h.correo || !h.semana || !h.proyecto) return;
+    const k = claveBloqueHoras(h);
+    let b = porClave[k];
+    if (!b) {
+      b = porClave[k] = { correo: String(h.correo).toLowerCase(), nombre: h.nombre || '', semana: h.semana, proyecto: folioInterno(h.proyecto),
+        horas: [0, 0, 0, 0, 0, 0, 0], actividad: h.actividad || '', estado: h.estado || HORAS_BORRADOR, motivo: h.motivo || '',
+        aprobo: h.aprobo || '', fechaAprobacion: h.fechaAprobacion || '', enviada: h.enviada || '', filas: [] };
+      orden.push(b);
+    }
+    if (h.fila) b.filas.push(h.fila);
+    const i = fechaIsoValida(h.dia) && fechaIsoValida(h.semana) ? diasEntre(h.semana, h.dia) : -1;
+    if (i >= 0 && i < 7) b.horas[i] = Math.round((b.horas[i] + (Number(h.horas) || 0)) * 100) / 100;
+  });
+  return orden;
+}
+
+/** Estado de una semana por sus partes: Sin capturar · Devuelta · Borrador · Enviada · Aprobada (gana el primero que tenga). */
+function estadoSemanaHoras(bloques) {
+  const e = (bloques || []).map(b => b.estado);
+  if (!e.length) return SIN_CAPTURAR_HORAS;
+  return [HORAS_DEVUELTA, HORAS_BORRADOR, HORAS_ENVIADA, HORAS_APROBADA].find(x => e.indexOf(x) !== -1) || HORAS_BORRADOR;
+}
+
+/**
+ * Qué se escribe al guardar una semana. existentes = partes guardadas de esa persona y semana (bloquesDeHoras); nuevos =
+ * normalizarSemanaHoras().bloques. Reglas: una parte Aprobada no cambia (si viene igual o no viene, se conserva; distinta = error);
+ * las demás que no vienen se quitan. Con enviar, toda parte no aprobada queda Enviada (enviada = null → ahora, salvo la que ya
+ * estaba Enviada sin cambios). Sin enviar: la que no cambió conserva su estado; una Devuelta sigue Devuelta (con su motivo) hasta
+ * reenviarla; una Enviada que cambia regresa a Borrador. Máximo 24 h por día entre todas las partes (también las aprobadas).
+ * Devuelve {conservar: [partes aprobadas], escribir: [{proyecto, horas, actividad, estado, motivo, enviada}], quitar: [partes],
+ * totalesDia: [7]}.
+ */
+function planSemanaHoras(existentes, nuevos, enviar) {
+  const ex = {};
+  (existentes || []).forEach(b => { ex[b.proyecto] = b; });
+  const nv = {};
+  (nuevos || []).forEach(b => { nv[b.proyecto] = b; });
+  const conservar = [], escribir = [], quitar = [];
+  Object.keys(ex).forEach(f => {
+    const e = ex[f];
+    if (e.estado === HORAS_APROBADA) {
+      if (nv[f] && huellaBloqueHoras(nv[f]) !== huellaBloqueHoras(e)) {
+        throw new Error('Las horas de ' + f + ' de esta semana ya están aprobadas: no se pueden cambiar. Si hay un error, pide a quien ' +
+          'las aprobó que te las devuelva.');
+      }
+      conservar.push(e);
+    } else if (!nv[f]) {
+      quitar.push(e);
+    }
+  });
+  (nuevos || []).forEach(n => {
+    const e = ex[n.proyecto];
+    if (e && e.estado === HORAS_APROBADA) return;
+    const igual = !!e && huellaBloqueHoras(e) === huellaBloqueHoras(n);
+    let estado, motivo = '', enviada = '';
+    if (enviar) {
+      estado = HORAS_ENVIADA;
+      enviada = igual && e.estado === HORAS_ENVIADA ? e.enviada || null : null;
+    } else if (!e) {
+      estado = HORAS_BORRADOR;
+    } else if (igual) {
+      estado = e.estado; motivo = e.motivo || ''; enviada = e.enviada || '';
+    } else if (e.estado === HORAS_DEVUELTA) {
+      estado = HORAS_DEVUELTA; motivo = e.motivo || '';
+    } else {
+      estado = HORAS_BORRADOR;
+    }
+    escribir.push({ proyecto: n.proyecto, horas: n.horas.slice(), actividad: n.actividad, estado: estado, motivo: motivo, enviada: enviada });
+  });
+  const totalesDia = [0, 0, 0, 0, 0, 0, 0];
+  conservar.concat(escribir).forEach(b => b.horas.forEach((h, i) => { totalesDia[i] = Math.round((totalesDia[i] + Number(h || 0)) * 100) / 100; }));
+  totalesDia.forEach((t, i) => {
+    if (t > MAX_HORAS_DIA) throw new Error('El ' + DIAS_SEMANA_HORAS[i] + ' suma ' + textoHoras(t) + ' h: máximo ' + MAX_HORAS_DIA + ' h al día entre todos tus proyectos.');
+  });
+  if (enviar && !escribir.length) {
+    throw new Error(conservar.length ? 'Tus horas de esta semana ya están aprobadas: no hay nada por enviar.'
+      : 'Captura al menos un cuarto de hora antes de enviar la semana.');
+  }
+  return { conservar: conservar, escribir: escribir, quitar: quitar, totalesDia: totalesDia };
+}
+
+/**
+ * La semana de una persona para la interfaz. o = {semana, hoy, bloques (todas las partes de esa persona), proyectos (todos, con
+ * anulado)}. Ver misHoras. Ningún costo.
+ */
+function vistaSemanaHoras(o) {
+  const lunes = o.semana, hoy = o.hoy, actual = lunesDe(hoy);
+  const proyectos = {};
+  (o.proyectos || []).forEach(p => { proyectos[String(p.folio).toUpperCase()] = p; });
+  const de = s => (o.bloques || []).filter(b => b.semana === s);
+  const info = f => {
+    const p = proyectos[f];
+    return { folioVisible: p ? p.folioVisible || p.folio : f, nombre: p ? p.nombre : '', estadoProyecto: !p || p.anulado ? 'Anulado' : p.estado };
+  };
+  const suma = hs => Math.round(hs.reduce((s, h) => s + Number(h || 0), 0) * 100) / 100;
+  const esta = de(lunes).slice().sort((a, b) => a.proyecto < b.proyecto ? -1 : a.proyecto > b.proyecto ? 1 : 0);
+  const bloques = esta.map(b => Object.assign({ proyecto: b.proyecto }, info(b.proyecto), { horas: b.horas.slice(), total: suma(b.horas),
+    actividad: b.actividad, estado: b.estado, motivo: b.estado === HORAS_DEVUELTA ? b.motivo : '', aprobo: b.estado === HORAS_APROBADA ? b.aprobo : '',
+    aprobada: b.estado === HORAS_APROBADA ? b.fechaAprobacion : '', enviada: b.enviada, editable: b.estado !== HORAS_APROBADA }));
+  const totalesDia = [0, 1, 2, 3, 4, 5, 6].map(i => suma(esta.map(b => b.horas[i])));
+  const presentes = {};
+  esta.forEach(b => { presentes[b.proyecto] = true; });
+  const elegible = p => p && !p.anulado && (p.estado === 'Activo' || p.estado === 'Cerrado');
+  const anterior = de(sumarDias(lunes, -7)).filter(b => !presentes[b.proyecto] && elegible(proyectos[b.proyecto]))
+    .map(b => Object.assign({ proyecto: b.proyecto }, info(b.proyecto), { actividad: b.actividad }));
+  const recientes = [];
+  for (let i = 0; i < SEMANAS_RECIENTES_HORAS; i++) {
+    const s = sumarDias(actual, -7 * i), bs = de(s);
+    recientes.push({ semana: s, numero: numeroSemanaIso(s).semana, texto: textoSemanaHoras(s), estado: estadoSemanaHoras(bs),
+      total: suma(bs.map(b => suma(b.horas))) });
+  }
+  const n = numeroSemanaIso(lunes);
+  return { semana: lunes, hoy: hoy, actual: lunes === actual, numero: n.semana, anio: n.anio, texto: textoSemanaHoras(lunes),
+    dias: diasDeSemanaHoras(lunes), semanaAnterior: sumarDias(lunes, -7), semanaSiguiente: lunes < actual ? sumarDias(lunes, 7) : '',
+    estado: estadoSemanaHoras(esta), bloques: bloques, totalesDia: totalesDia, total: suma(totalesDia), anterior: anterior,
+    recientes: recientes, maxHorasDia: MAX_HORAS_DIA,
+    proyectos: (o.proyectos || []).filter(elegible).slice().reverse()
+      .map(p => ({ folio: p.folio, folioVisible: p.folioVisible || p.folio, nombre: p.nombre, estado: p.estado })) };
+}
+
+/** Quién aprueba una parte: el líder del proyecto ('lider') salvo que no haya o que sea el mismo que capturó ('aprobaciones'). */
+function quienApruebaHoras(correo, lider) {
+  const c = String(correo || '').trim().toLowerCase(), l = String(lider || '').trim().toLowerCase();
+  return l && l !== c ? 'lider' : 'aprobaciones';
+}
+
+/**
+ * ¿Puede yo aprobar (o devolver) la parte de correo en un proyecto con ese líder? roles = {aprobaciones, superadmin}. Devuelve
+ * {puede, propio (es suya: solo un super admin con motivo), como: 'lider' | 'aprobaciones' | 'superadmin'}.
+ */
+function permisoAprobarHoras(yo, roles, correo, lider) {
+  const r = roles || {}, y = String(yo || '').trim().toLowerCase(), c = String(correo || '').trim().toLowerCase();
+  const l = String(lider || '').trim().toLowerCase();
+  const como = quienApruebaHoras(c, l);
+  if (c === y) return { puede: false, propio: true, como: como };
+  if (como === 'lider' && l === y) return { puede: true, propio: false, como: 'lider' };
+  if (como === 'aprobaciones' && r.aprobaciones) return { puede: true, propio: false, como: 'aprobaciones' };
+  if (r.superadmin) return { puede: true, propio: false, como: 'superadmin' };
+  return { puede: false, propio: false, como: como };
+}
+
+/** Lo que manda la interfaz para aprobar o devolver: [{correo, semana, proyecto, huella}] (1 a MAX_PEDIDOS_HORAS, sin repetir). */
+function normalizarPedidosHoras(lista) {
+  const l = Array.isArray(lista) ? lista.filter(Boolean) : [];
+  if (!l.length) throw new Error('Elige las horas que vas a revisar.');
+  if (l.length > MAX_PEDIDOS_HORAS) throw new Error('Máximo ' + MAX_PEDIDOS_HORAS + ' partes a la vez.');
+  const vistos = {};
+  return l.map(x => {
+    const correo = correoCapri(x.correo), semana = String(x.semana || '').trim(), proyecto = folioInterno(x.proyecto);
+    if (!correo || !esLunesIso(semana) || !/^PRY-\d{4}-\d{4,}$/.test(proyecto)) throw new Error('Horas no válidas: actualiza la lista.');
+    const k = correo + '|' + semana + '|' + proyecto;
+    if (vistos[k]) throw new Error('Las mismas horas vienen dos veces.');
+    vistos[k] = true;
+    return { correo: correo, semana: semana, proyecto: proyecto, huella: String(x.huella == null ? '' : x.huella) };
+  });
+}
+
+/**
+ * "Por aprobar" de una persona. o = {yo, roles: {aprobaciones, superadmin}, hoy, bloques (todas las partes), proyectos ({folio:
+ * proyecto con lider}), nombres}. porAprobar = Enviadas que le tocan (como líder o Aprobaciones) y, a un super admin, también las
+ * de los demás líderes (como: 'superadmin') y las suyas (propio: piden motivo); revisadas = Aprobadas o Devueltas de las últimas
+ * semanas que podría devolver. Sin costos.
+ */
+function vistaPorAprobarHoras(o) {
+  const x = o || {}, roles = x.roles || {}, nombres = x.nombres || {}, proyectos = x.proyectos || {};
+  const desde = sumarDias(lunesDe(x.hoy), -7 * (SEMANAS_REVISADAS_HORAS - 1));
+  const porAprobar = [], revisadas = [];
+  (x.bloques || []).forEach(b => {
+    const p = proyectos[b.proyecto] || proyectos[String(b.proyecto).toUpperCase()] || {};
+    const perm = permisoAprobarHoras(x.yo, roles, b.correo, p.lider || '');
+    if (!perm.puede && !(perm.propio && roles.superadmin)) return;
+    const item = { correo: b.correo, nombre: nombres[b.correo] || b.nombre || b.correo, semana: b.semana, texto: textoSemanaHoras(b.semana),
+      numero: numeroSemanaIso(b.semana).semana, dias: diasDeSemanaHoras(b.semana), proyecto: b.proyecto,
+      folioVisible: p.folioVisible || b.proyecto, proyectoNombre: p.nombre || '', horas: b.horas.slice(),
+      total: Math.round(b.horas.reduce((s, h) => s + h, 0) * 100) / 100, actividad: b.actividad, estado: b.estado,
+      motivo: b.estado === HORAS_DEVUELTA ? b.motivo : '', aprobo: b.aprobo, aprobada: b.fechaAprobacion, enviada: b.enviada,
+      huella: huellaBloqueHoras(b), como: perm.como, propio: perm.propio };
+    if (b.estado === HORAS_ENVIADA) porAprobar.push(item);
+    else if ((b.estado === HORAS_APROBADA || b.estado === HORAS_DEVUELTA) && b.semana >= desde && !perm.propio) revisadas.push(item);
+  });
+  porAprobar.sort((a, b) => (a.enviada < b.enviada ? -1 : a.enviada > b.enviada ? 1 : 0) || (a.correo < b.correo ? -1 : 1));
+  revisadas.sort((a, b) => (a.semana < b.semana ? 1 : a.semana > b.semana ? -1 : 0) || a.nombre.localeCompare(b.nombre, 'es'));
+  return { hoy: x.hoy, porAprobar: porAprobar, revisadas: revisadas };
+}
+
+/**
+ * Pendientes de horas (itemsPendientes): una tarjeta por persona y semana con horas Enviadas que esperan a quien ve la lista (como
+ * líder del proyecto o como Aprobaciones; nunca las suyas). base = horasParaPendientes_; o = {yo, roles: {aprobaciones}, todos,
+ * hoy, nombres}. Con todos (super admin), una por persona, semana y quién la espera (para). Solo horas: nunca costos.
+ */
+function itemsHorasPendientes(base, o) {
+  const x = o || {}, roles = x.roles || {}, todos = !!x.todos, yo = String(x.yo || '').toLowerCase(), hoy = String(x.hoy || '');
+  const nombre = c => (x.nombres || {})[c] || c;
+  const grupos = {}, orden = [];
+  (base || []).forEach(b => {
+    const como = quienApruebaHoras(b.correo, b.lider);
+    if (!todos) {
+      if (b.correo === yo) return;
+      if (como === 'lider' ? b.lider !== yo : !roles.aprobaciones) return;
+    }
+    const para = como === 'lider' ? nombre(b.lider) : 'Aprobaciones';
+    const k = [b.correo, b.semana, todos ? para : ''].join('|');
+    let g = grupos[k];
+    if (!g) {
+      g = grupos[k] = { correo: b.correo, nombre: nombre(b.correo) !== b.correo ? nombre(b.correo) : b.nombre || b.correo, semana: b.semana,
+        horas: 0, proyectos: [], desde: '', para: para };
+      orden.push(g);
+    }
+    g.horas = Math.round((g.horas + Number(b.horas || 0)) * 100) / 100;
+    if (g.proyectos.indexOf(b.proyectoVisible) === -1) g.proyectos.push(b.proyectoVisible);
+    const m = marcaOrdenable(b.enviada) || b.semana + ' 00:00';
+    if (!g.desde || m < g.desde) g.desde = m;
+  });
+  return orden.map(g => {
+    const d = g.desde.slice(0, 10);
+    return Object.assign({ tipo: 'horas', seccion: 'horas', folio: 'Horas · ' + g.nombre, req: '', semana: g.semana, correo: g.correo,
+      titulo: 'Por aprobar', sitio: '', desde: d, dias: fechaIsoValida(d) && fechaIsoValida(hoy) ? Math.max(0, diasEntre(d, hoy)) : 0,
+      prioridad: '', urgente: false, accion: 'Revisar horas', destino: 'horas',
+      detalle: ['semana ' + textoSemanaHoras(g.semana), textoHoras(g.horas) + ' h', g.proyectos.join(', ')].join(' · '), orden: g.desde },
+      todos ? { para: g.para } : {});
+  });
+}
+
+/** Mes "AAAA-MM" de un texto (AAAA-MM, AAAA/MM, MM/AAAA, AAAA-MM-DD o DD/MM/AAAA, como lo deja Excel); '' si no es válido. */
+function mesValido(texto) {
+  const t = String(texto == null ? '' : texto).trim().replace(/^'/, '');
+  const ok = (a, m) => {
+    const y = Number(a), n = Number(m);
+    return y >= 2020 && y <= 2100 && n >= 1 && n <= 12 ? y + '-' + String(n).padStart(2, '0') : '';
+  };
+  let m = t.match(/^(\d{4})[-/](\d{1,2})$/);
+  if (m) return ok(m[1], m[2]);
+  m = t.match(/^(\d{1,2})[-/](\d{4})$/);
+  if (m) return ok(m[2], m[1]);
+  m = t.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return fechaIsoValida(t) ? ok(m[1], m[2]) : '';
+  m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return ok(m[3], m[2]);
+  return '';
+}
+
+/** "AAAA-MM" + n meses. */
+function mesMas(mes, n) {
+  const y = Number(mes.slice(0, 4)), m = Number(mes.slice(5, 7)) - 1 + Number(n || 0);
+  const a = y + Math.floor(m / 12), mm = ((m % 12) + 12) % 12;
+  return a + '-' + String(mm + 1).padStart(2, '0');
+}
+
+/** Rango del reporte: {desde, hasta, meses: [AAAA-MM…]}; por omisión los últimos 6 meses hasta el de hoy; máximo 24 meses. */
+function rangoMesesNomina(desde, hasta, hoy) {
+  const h = hasta ? mesValido(hasta) : String(hoy || '').slice(0, 7);
+  if (!h) throw new Error('El mes final va como AAAA-MM.');
+  const d = desde ? mesValido(desde) : mesMas(h, -5);
+  if (!d) throw new Error('El mes inicial va como AAAA-MM.');
+  if (d > h) throw new Error('El mes inicial debe ser anterior al final.');
+  const meses = [];
+  for (let m = d; m <= h; m = mesMas(m, 1)) {
+    meses.push(m);
+    if (meses.length > MAX_MESES_REPORTE_NOMINA) throw new Error('El reporte abarca máximo ' + MAX_MESES_REPORTE_NOMINA + ' meses.');
+  }
+  return { desde: d, hasta: h, meses: meses };
+}
+
+/** Importe de un texto ("45000", "45,000.50", "$45,000", "45000,5", "45 000 MXN"); null si no se entiende. */
+function importeDeTexto(v) {
+  if (typeof v === 'number') return isFinite(v) ? v : null;
+  const t = String(v == null ? '' : v).trim().replace(/^'/, '').replace(/\$|mxn|m\.n\./gi, '').replace(/\s+/g, '');
+  if (/^\d+(\.\d+)?$/.test(t)) return Number(t);
+  if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) return Number(t.replace(/,/g, ''));
+  if (/^\d+,\d{1,2}$/.test(t)) return Number(t.replace(',', '.'));
+  return null;
+}
+
+/**
+ * Costo de una persona en un mes: p = {correo (de CAPRI), mes (AAAA-MM), costo (MXN, mayor a 0, máximo MAX_COSTO_PERSONAL), notas
+ * (≤ 200), quitar}. Devuelve {correo, mes, costo, notas, quitar}.
+ */
+function normalizarCostoPersonal(p) {
+  const x = p || {};
+  const correo = correoCapri(x.correo);
+  if (!correo) throw new Error('Escribe el correo de la persona (@' + DOMINIO_HELGEN + ' o @' + DOMINIO_SERVICIOS + ').');
+  const mes = mesValido(x.mes);
+  if (!mes) throw new Error('El mes va como AAAA-MM (por ejemplo 2026-10).');
+  const notas = String(x.notas == null ? '' : x.notas).trim().replace(/\s+/g, ' ');
+  if (notas.length > 200) throw new Error('Las notas deben tener máximo 200 caracteres.');
+  if (x.quitar === true) return { correo: correo, mes: mes, costo: 0, notas: notas, quitar: true };
+  const costo = importeDeTexto(x.costo);
+  if (costo === null || !(costo > 0)) throw new Error('El costo mensual debe ser mayor a cero (MXN: sueldo + carga patronal).');
+  if (costo > MAX_COSTO_PERSONAL) throw new Error('El costo mensual no puede pasar de ' + formatoMoneda(MAX_COSTO_PERSONAL) + ' MXN: revisa la cifra.');
+  return { correo: correo, mes: mes, costo: redondear(costo), notas: notas, quitar: false };
+}
+
+/**
+ * Renglones de un CSV (comillas dobles con "" adentro; separador , ; o tabulador según el primer renglón), sin los vacíos:
+ * [{linea (renglón del archivo donde empieza, desde 1), campos: [texto]}].
+ */
+function renglonesCsv(texto) {
+  const t = String(texto == null ? '' : texto).replace(/^﻿/, '');
+  const primera = (t.split(/\r?\n/).find(l => l.trim()) || '').replace(/"[^"]*"/g, '');
+  const cuenta = c => primera.split(c).length - 1;
+  const sep = [';', '\t', ','].reduce((a, c) => cuenta(c) > cuenta(a) ? c : a, ',');
+  const filas = [];
+  let fila = [], campo = '', comillas = false, linea = 1, inicio = 1;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (comillas) {
+      if (ch === '"' && t[i + 1] === '"') { campo += '"'; i++; } else if (ch === '"') comillas = false; else campo += ch;
+      if (ch === '\n') linea++;
+    } else if (ch === '"') comillas = true;
+    else if (ch === sep) { fila.push(campo); campo = ''; }
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && t[i + 1] === '\n') i++;
+      fila.push(campo); filas.push({ linea: inicio, campos: fila }); fila = []; campo = '';
+      inicio = ++linea;
+    } else campo += ch;
+  }
+  if (campo !== '' || fila.length) { fila.push(campo); filas.push({ linea: inicio, campos: fila }); }
+  return filas.map(f => ({ linea: f.linea, campos: f.campos.map(c => c.trim()) })).filter(f => f.campos.some(c => c !== ''));
+}
+
+/**
+ * Costos de un CSV para importarCostosPersonal: correo, mes, costo y notas (opcional), con o sin encabezado (si lo trae, las
+ * columnas se buscan por nombre: correo/email, mes/periodo, costo/monto/importe, notas). Devuelve [{fila (renglón del archivo,
+ * el encabezado es el 1), correo, mes, costo, notas, error}] (con error, el renglón no se importa).
+ */
+function leerCsvCostos(texto) {
+  const filas = renglonesCsv(texto);
+  if (!filas.length) return [];
+  const enc = filas[0].campos.map(textoNormal);
+  const col = re => enc.findIndex(c => re.test(c));
+  const conEncabezado = enc.some(c => /correo|email|e-mail/.test(c));
+  const idx = conEncabezado ? { correo: col(/correo|email|e-mail/), mes: col(/^mes|periodo/), costo: col(/costo|monto|importe/), notas: col(/nota/) }
+    : { correo: 0, mes: 1, costo: 2, notas: 3 };
+  if (conEncabezado && (idx.mes === -1 || idx.costo === -1)) {
+    return [{ fila: filas[0].linea, correo: '', mes: '', costo: 0, notas: '', error: 'El encabezado debe tener las columnas correo, mes y costo.' }];
+  }
+  return filas.slice(conEncabezado ? 1 : 0).map(x => {
+    const f = x.campos;
+    const v = k => idx[k] >= 0 && f[idx[k]] != null ? f[idx[k]] : '';
+    const r = { fila: x.linea, correo: String(v('correo')).trim().toLowerCase(), mes: mesValido(v('mes')) || String(v('mes')),
+      costo: importeDeTexto(v('costo')), notas: String(v('notas')).trim(), error: '' };
+    try {
+      const c = normalizarCostoPersonal({ correo: v('correo'), mes: v('mes'), costo: v('costo'), notas: v('notas') });
+      Object.assign(r, { correo: c.correo, mes: c.mes, costo: c.costo, notas: c.notas });
+    } catch (e) {
+      r.error = e.message;
+      if (r.costo === null) r.costo = 0;
+    }
+    return r;
+  });
+}
+
+/**
+ * Reparto de nómina (base de costoNominaPorProyecto y del reporte). horas = [{correo, proyecto (o proyectoFolio), dia
+ * (AAAA-MM-DD), horas, estado?}] (si trae estado, solo cuenta Aprobada); costos = [{correo, mes (AAAA-MM), costo}] (si una persona y
+ * mes se repite, vale el último). Por persona y mes: costo × horas del proyecto / horas de esa persona ese mes, en centavos, con el
+ * método del resto mayor (la suma de los proyectos es el costo exacto). Sin costo: las horas quedan sin costear. Devuelve
+ * {porProyecto: {folio: {mes: {cts, ch (centésimas de hora), sinCh}}}, personas: {correo|mes: {correo, mes, ch, costo (centavos o
+ * null), proyectos}}, sinHoras: [{correo, mes, costo}] (costo de un mes sin horas aprobadas: no se reparte)}.
+ */
+function repartoNomina(horas, costos) {
+  const costo = {};
+  (costos || []).forEach(c => {
+    if (!c) return;
+    const correo = String(c.correo || '').trim().toLowerCase(), mes = mesValido(c.mes);
+    const n = Number(c.costo != null ? c.costo : c.monto);
+    if (!correo || !mes || !(n > 0)) return;
+    costo[correo + '|' + mes] = aCentavos(n);
+  });
+  const personas = {};
+  (horas || []).forEach(h => {
+    if (!h) return;
+    if (h.estado != null && h.estado !== '' && h.estado !== HORAS_APROBADA) return;
+    const correo = String(h.correo || '').trim().toLowerCase();
+    const dia = String(h.dia == null ? '' : h.dia).trim().replace(/^'/, '').slice(0, 10);
+    const folio = folioInterno(h.proyecto != null ? h.proyecto : h.proyectoFolio);
+    const ch = Math.round(Number(h.horas) * 100);
+    if (!correo || !fechaIsoValida(dia) || !folio || !(ch > 0)) return;
+    const mes = dia.slice(0, 7), k = correo + '|' + mes;
+    const x = personas[k] || (personas[k] = { correo: correo, mes: mes, ch: 0, costo: costo[k] == null ? null : costo[k], proyectos: {} });
+    x.ch += ch;
+    x.proyectos[folio] = (x.proyectos[folio] || 0) + ch;
+  });
+  const porProyecto = {};
+  const sumar = (f, mes, cts, ch, sinCh) => {
+    const p = porProyecto[f] || (porProyecto[f] = {});
+    const m = p[mes] || (p[mes] = { cts: 0, ch: 0, sinCh: 0 });
+    m.cts += cts; m.ch += ch; m.sinCh += sinCh;
+  };
+  Object.keys(personas).sort().forEach(k => {
+    const x = personas[k], folios = Object.keys(x.proyectos).sort();
+    if (x.costo == null) { folios.forEach(f => sumar(f, x.mes, 0, x.proyectos[f], x.proyectos[f])); return; }
+    const partes = folios.map(f => {
+      const exacto = x.costo * x.proyectos[f] / x.ch, base = Math.floor(exacto);
+      return { f: f, base: base, resto: exacto - base };
+    });
+    let falta = x.costo - partes.reduce((s, p) => s + p.base, 0);
+    partes.slice().sort((a, b) => b.resto - a.resto || (a.f < b.f ? -1 : a.f > b.f ? 1 : 0)).forEach(p => { if (falta > 0) { p.base++; falta--; } });
+    partes.forEach(p => sumar(p.f, x.mes, p.base, x.proyectos[p.f], 0));
+  });
+  const sinHoras = Object.keys(costo).filter(k => !personas[k]).sort()
+    .map(k => ({ correo: k.split('|')[0], mes: k.split('|')[1], costo: costo[k] / 100 }));
+  return { porProyecto: porProyecto, personas: personas, sinHoras: sinHoras };
+}
+
+/** Por proyecto y mes: {folio: {mes: {monto (MXN), horas, sinCostear}}} (repartoNomina). */
+function costoNominaPorProyectoMes(horas, costos) {
+  const r = repartoNomina(horas, costos).porProyecto, s = {};
+  Object.keys(r).forEach(f => {
+    s[f] = {};
+    Object.keys(r[f]).sort().forEach(m => { s[f][m] = { monto: r[f][m].cts / 100, horas: r[f][m].ch / 100, sinCostear: r[f][m].sinCh / 100 }; });
+  });
+  return s;
+}
+
+/**
+ * CONTRATO §1 (incremento 7): costo de nómina repartido por proyecto. Para cada persona y mes: costo_mensual × (horas aprobadas en
+ * el proyecto ese mes / horas aprobadas de esa persona ese mes en todos los proyectos). Mes sin costo capturado = horas sin costear
+ * (se cuentan aparte, no se inventan). Siempre en MXN. horas = [{correo, proyecto, dia, horas, estado?}]; costos = [{correo, mes,
+ * costo}]. Devuelve {[proyectoFolio]: [{concepto: 'Nómina', moneda: 'MXN', monto, horas, sinCostear}]} (un elemento por proyecto;
+ * nunca datos por persona). Un proyecto con solo horas sin costear sale con monto 0.
+ */
+function costoNominaPorProyecto(horas, costos) {
+  const r = repartoNomina(horas, costos).porProyecto, s = {};
+  Object.keys(r).sort().forEach(f => {
+    let cts = 0, ch = 0, sinCh = 0;
+    Object.keys(r[f]).forEach(m => { cts += r[f][m].cts; ch += r[f][m].ch; sinCh += r[f][m].sinCh; });
+    s[f] = [{ concepto: CONCEPTO_NOMINA, moneda: 'MXN', monto: cts / 100, horas: ch / 100, sinCostear: sinCh / 100 }];
+  });
+  return s;
+}
+
+/**
+ * Reporte de nómina (lógica pura). d = {meses: [AAAA-MM…], horas (todas: horaDesdeFila_), costos, proyectos (con anulado), nombres}.
+ * Devuelve {desde, hasta, meses, proyectos: [{folio, folioVisible, nombre, estado, meses: {mes: {monto, horas, sinCostear}}, total}],
+ * totales: {meses: {…}, total}, sinCostear: [{correo, nombre, mes, horas}], sinHoras: [{correo, nombre, mes, costo}], porAprobar:
+ * {horas, partes}}. Lo de una persona solo va a Nómina (reporteNomina lo exige).
+ */
+function reporteNominaDatos(d) {
+  const meses = d.meses || [], enRango = {};
+  meses.forEach(m => { enRango[m] = true; });
+  const nombres = d.nombres || {}, proyectos = {};
+  (d.proyectos || []).forEach(p => { proyectos[String(p.folio).toUpperCase()] = p; });
+  const horas = (d.horas || []).filter(h => enRango[String(h.dia || '').slice(0, 7)]);
+  const costos = (d.costos || []).filter(c => enRango[mesValido(c.mes)]);
+  const r = repartoNomina(horas.filter(h => h.estado === HORAS_APROBADA), costos);
+  const nombreDe = c => nombres[c] || (horas.find(h => h.correo === c) || {}).nombre || c;
+  const vacio = () => ({ cts: 0, ch: 0, sinCh: 0 });
+  const dinero = x => ({ monto: x.cts / 100, horas: x.ch / 100, sinCostear: x.sinCh / 100 });
+  const totMes = {}, tot = vacio();
+  const filas = Object.keys(r.porProyecto).sort().map(f => {
+    const p = proyectos[f] || {}, porMes = {}, t = vacio();
+    Object.keys(r.porProyecto[f]).forEach(m => {
+      const x = r.porProyecto[f][m];
+      porMes[m] = dinero(x);
+      ['cts', 'ch', 'sinCh'].forEach(k => { t[k] += x[k]; tot[k] += x[k]; (totMes[m] = totMes[m] || vacio())[k] += x[k]; });
+    });
+    return { folio: f, folioVisible: p.folioVisible || f, nombre: p.nombre || '', estado: !p.folio ? 'No existe' : p.anulado ? 'Anulado' : p.estado,
+      meses: porMes, total: dinero(t) };
+  });
+  const totalesMes = {};
+  Object.keys(totMes).forEach(m => { totalesMes[m] = dinero(totMes[m]); });
+  const sinCostear = Object.keys(r.personas).map(k => r.personas[k]).filter(x => x.costo == null)
+    .map(x => ({ correo: x.correo, nombre: nombreDe(x.correo), mes: x.mes, horas: x.ch / 100 }))
+    .sort((a, b) => (a.mes < b.mes ? -1 : a.mes > b.mes ? 1 : 0) || a.nombre.localeCompare(b.nombre, 'es'));
+  const enviadas = horas.filter(h => h.estado === HORAS_ENVIADA);
+  return { desde: meses[0] || '', hasta: meses[meses.length - 1] || '', meses: meses, proyectos: filas,
+    totales: { meses: totalesMes, total: dinero(tot) }, sinCostear: sinCostear,
+    sinHoras: r.sinHoras.map(x => Object.assign({ nombre: nombreDe(x.correo) }, x)),
+    porAprobar: { horas: Math.round(enviadas.reduce((s, h) => s + h.horas, 0) * 100) / 100, partes: bloquesDeHoras(enviadas).length } };
+}
+
+/**
+ * ¿Toca mandar el recordatorio? hoy = AAAA-MM-DD (Ciudad de México), hora = 0–23, ultimaSemana = lunes de la última semana con
+ * recordatorio. Viernes desde HORA_RECORDATORIO_HORAS, sábado o domingo, una vez por semana. Devuelve el lunes de la semana o ''.
+ */
+function tocaRecordatorioHoras(hoy, hora, ultimaSemana) {
+  if (!fechaIsoValida(hoy)) return '';
+  const lunes = lunesDe(hoy), dia = diasEntre(lunes, hoy); // 0 = lunes … 6 = domingo
+  if (dia < 4 || (dia === 4 && Number(hora) < HORA_RECORDATORIO_HORAS)) return '';
+  return String(ultimaSemana || '').trim() === lunes ? '' : lunes;
+}
+
+/** A quién va el recordatorio: personas activas de Permisos que no enviaron su semana y no están en excluir. Ordenados. */
+function destinatariosRecordatorioHoras(usuarios, enviaron, excluir) {
+  const fuera = {};
+  (excluir || []).forEach(c => { fuera[String(c).trim().toLowerCase()] = true; });
+  return Object.keys(usuarios || {}).map(c => usuarios[c]).filter(u => u && u.activo !== false && correoCapri(u.correo) &&
+    !(enviaron || {})[u.correo] && !fuera[u.correo]).map(u => u.correo).sort();
+}
+
+/** Destinatarios de un aviso de horas: uno por persona (nadie ve a quién más le llegó). */
+function destinatariosAvisoHoras(tipo, d) {
+  const x = d || {};
+  const lista = Array.isArray(x.para) ? x.para : String(x.para || '').split(/[\s,;]+/);
+  return lista.filter(Boolean).map(c => ({ quien: 'persona', para: [c] }));
+}
+
+/** Texto de los avisos de horas (contenidoAviso): sin montos ni horas; la nota de una devolución solo como "hay una nota". */
+function contenidoAvisoHoras(tipo, x, i, quienHizo) {
+  const semana = i.horasSemanaTexto || '';
+  const proyectos = (i.horasProyectos || []).join(', ');
+  x.boton = { texto: 'Abrir mis horas en CAPRI', url: URL_AVISOS_CAPRI + '#horas' };
+  if (tipo === 'horas.recordatorio') {
+    x.asunto = '[CAPRI] Envía tus horas de la semana' + (semana ? ' ' + semana : '');
+    x.titulo = 'Tus horas de la semana';
+    x.que = 'Todavía no envías tus horas de la semana' + (semana ? ' ' + semana : '') + '. Captúralas en CAPRI (toma menos de un minuto: ' +
+      'puedes copiar los proyectos de la semana pasada) y envíalas para que las aprueben.';
+    x.filas = [['Semana', semana]];
+    x.pie = 'Aviso automático de CAPRI (Helgen): llega los viernes a quien no ha enviado su semana. No reenvíes este correo fuera de Helgen.';
+  } else {
+    x.asunto = '[CAPRI] Te devolvieron horas' + (semana ? ' · semana ' + semana : '');
+    x.titulo = 'Te devolvieron horas para corregir';
+    x.que = 'Te regresaron las horas' + (proyectos ? ' de ' + proyectos : '') + (semana ? ' de la semana ' + semana : '') +
+      '. Corrígelas con lo que dice la nota y vuelve a enviar la semana.';
+    x.filas = [['Proyecto', proyectos], ['Semana', semana], ['Lo hizo', quienHizo], ['Cuándo', fechaCorreo(i.fecha)]];
+    x.nota = i.nota ? NOTA_EN_CAPRI : '';
+  }
+  x.filas = x.filas.filter(f => f && f[1]);
+  return x;
 }

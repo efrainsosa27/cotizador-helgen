@@ -66,6 +66,8 @@ module.exports = function crearArnes(dir, opciones) {
         getDisplayValues: () => { an('lee', m, m.reduce((s, r) => s + r.length, 0)); return m.map(r => r.map(x => String(x ?? ''))); } }; },
       appendRow: a => { revisarMemo(m, idHoja); an('escribe', m, a.length); return m.push(a.map(comoSheets)); },
       deleteRow: n => { revisarMemo(m, idHoja); an('escribe', m, 1); return m.splice(n - 1, 1); },
+      // Incremento 7 (N): varias filas seguidas (la hoja de horas reescribe una semana en su lugar)
+      deleteRows: (n, k) => { revisarMemo(m, idHoja); an('escribe', m, k); return m.splice(n - 1, k); },
       getRange: (r, c = 1, nr = 1, nc = 1) => typeof r === 'string' ? { setNumberFormat: fmt, setDataValidation: fmt } : ({
         getValues: () => { an('lee', m, nr * nc); return Array.from({ length: nr }, (_, i) => { const f = (m[r - 1 + i] || []).slice(c - 1, c - 1 + nc); while (f.length < nc) f.push(''); return f; }); },
         getValue: () => { an('lee', m, 1); return ((m[r - 1] || [])[c - 1] ?? ''); },

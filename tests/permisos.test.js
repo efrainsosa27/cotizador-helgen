@@ -72,7 +72,8 @@ assert.equal(R('otro@helgen.services').activo, false, '@helgen.services sin alta
 assert.equal(R('x@gmail.com').activo, false);
 const root = R('root@helgen.tech');
 assert.equal(root.superadmin, true);
-assert.deepEqual(root.roles, ['ventas', 'requisicion', 'aprobaciones', 'compras', 'cobranza', 'desbloqueo', 'superadmin']);
+// Incremento 7 (N): super admin = todos los roles, también Nómina
+assert.deepEqual(root.roles, ['ventas', 'requisicion', 'aprobaciones', 'compras', 'cobranza', 'desbloqueo', 'nomina', 'superadmin']);
 assert.equal(P.rolesEfectivos('ana@helgen.tech', Object.assign({}, ctxR, { soloListados: true })).roles.length, 0, 'solo listados');
 // Super admin por fila (aunque esté también en otra lista) y un super admin raíz desactivado en la hoja sigue entrando
 const u2 = P.usuariosDesdeFilas([['jefa@helgen.tech', 'Jefa', '', 'superadmin', '', 'Sí'], ['root@helgen.tech', 'Root', '', 'ventas', '', 'No']]);
