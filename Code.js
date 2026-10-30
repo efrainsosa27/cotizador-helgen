@@ -27,7 +27,7 @@ function doGet() {
  * Client ID de OAuth (tipo "Aplicación web") del proyecto de Google Cloud. No es secreto: también va en la interfaz.
  * Debe ser el mismo valor que CLIENT_ID_GOOGLE en web/cotizador/index.html.
  */
-const CLIENT_ID_GOOGLE = '884526916417-cn5fh45io0nnpvlad2439thkpius4063.apps.googleusercontent.com';
+const CLIENT_ID_GOOGLE = '521813806200-vrbnrc80jjvg9r1h3uq4ntpns9ddbg67.apps.googleusercontent.com';
 const DOMINIO_HELGEN = 'helgen.tech';
 
 /** Vendedor de la petición actual, tomado del token verificado en doPost (cada ejecución empieza en null). */
