@@ -281,7 +281,9 @@ const conPend = items => Object.assign({}, SIN_PEND, { items, conteos: conteos(i
   assert(!W.oculto('grpCompras') && !W.oculto('tabReq') && !W.oculto('lnkInventario'), 'pide materiales: Compras → Requisiciones e inventario');
   assert(/Nueva requisición/.test(W.$('pendLista').innerHTML) && !/Nueva cotización/.test(W.$('pendLista').innerHTML));
   W.run("verGrupo('compras')");
-  assert(!W.oculto('vistaReq') && W.oculto('subnav'), 'una sola pantalla en el grupo: sin barra');
+  // G (incremento 7): quien pide también ve Gastos en el grupo Compras, así que el grupo ya tiene barra (Requisiciones · Gastos); la regla
+  // "una sola pantalla: sin barra" sigue probada con Administración (un bloque, abajo)
+  assert(!W.oculto('vistaReq') && !W.oculto('subnav') && !W.oculto('tabGas'), 'Requisiciones y Gastos en el grupo: con barra');
 
   // ---- Solo requisiciones que aprueba: Pendientes, Requisiciones, Aprobaciones y Administración → Delegaciones ----
   const IT = [item('aprobar', 'REQ-2026-0010', 'aprobaciones', 'ops', { prioridad: 'Urgente', urgente: true }),
