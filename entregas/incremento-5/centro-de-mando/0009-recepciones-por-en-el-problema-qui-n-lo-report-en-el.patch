@@ -1,0 +1,81 @@
+From 50da4d11417153cbbe5f5c11284b00229ec7c792 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 14:51:11 -0600
+Subject: [PATCH 09/11] =?UTF-8?q?recepciones:=20=C2=ABpor=C2=BB=20en=20el?=
+ =?UTF-8?q?=20problema=20(qui=C3=A9n=20lo=20report=C3=B3=20en=20el=20sitio?=
+ =?UTF-8?q?)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- problema_json agrega «por» = usuario del sitio que reportó el problema (al recibir o después);
+  CAPRI lo usa como quien reporta la DEV. El resto de la forma del contrato no cambia.
+- Pruebas: la forma del problema en recepciones y el problema reportado después.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013SfRStBeRbueu9grrfatQU
+---
+ DESPLIEGUE.md         | 2 ++
+ backend/compras.py    | 3 ++-
+ backend/tests-1029.sh | 6 ++++--
+ 3 files changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/DESPLIEGUE.md b/DESPLIEGUE.md
+index 7462672..0a5884a 100644
+--- a/DESPLIEGUE.md
++++ b/DESPLIEGUE.md
+@@ -743,6 +743,8 @@ ssh -t leo@git.helgen.online '
+   Cancelar lo cierran con faltante). Sin `origen`, o `'centro'`, es el de siempre: un faltante del sitio nunca se contó y
+   no mueve existencias. Si ya no queda nada por llegar, «Reponer» no reabre el renglón (antes lo reabría «por 0» y la
+   requisición se atoraba). La tabla `devoluciones` guarda el origen (columna nueva, se agrega sola).
++- **`recepciones`: `problema.por`** — el usuario del sitio que reportó el problema (CAPRI lo pone como quien reporta la
++  DEV). Es un campo más dentro de `problema`; lo demás del contrato no cambia.
+ - **Recepción en partes:** un renglón que llegó en parte (15 de 20) se puede volver a recibir por lo que falta; esos 5
+   entran al sitio como «entrada» con el folio de la OC (su envío se cerró con lo que llegó la primera vez). Solo se
+   rechaza un renglón cerrado (llegó todo o compras aceptó el faltante).
+diff --git a/backend/compras.py b/backend/compras.py
+index 1b95649..cb15226 100644
+--- a/backend/compras.py
++++ b/backend/compras.py
+@@ -964,7 +964,8 @@ class Compras:
+             return None
+         q = _num(r["problema_cantidad"])
+         return {"tipo": r["problema_tipo"], "comentario": r["problema_comentario"] or "",
+-                "cantidad": int(q) if q == int(q) else q, "foto": self.foto_json(r, "problema_foto")}
++                "cantidad": int(q) if q == int(q) else q, "foto": self.foto_json(r, "problema_foto"),
++                "por": r["problema_por"] or ""}      # usuario del sitio que lo reportó (quien reporta la DEV)
+ 
+     # ---------------------------------------------------------------- avisos del cotizador
+     def guardar_oc(self, c, d, tipo, quien, prueba):
+diff --git a/backend/tests-1029.sh b/backend/tests-1029.sh
+index 19b1942..26f0dad 100644
+--- a/backend/tests-1029.sh
++++ b/backend/tests-1029.sh
+@@ -166,13 +166,13 @@ r = {x['n']: x for x in o['renglones']}
+ ok = lambda i: bool(re.match(r'^[A-Za-z0-9._-]{1,80}\$', i or ''))
+ print('r1foto=%s r1prob=%s' % (ok(r[1]['foto']['id']) and r[1]['foto']['archivada'] is False and r[1]['foto']['url'] == '', r[1]['problema']))
+ p = r[2]['problema']
+-print('r2prob=%s/%s/%s/%s pfoto=%s p-en-id=%s' % (p['tipo'], p['cantidad'], p['comentario'], sorted(p), ok(p['foto']['id']), '-r2-p-' in p['foto']['id']))
++print('r2prob=%s/%s/%s/%s pfoto=%s p-en-id=%s por=%s' % (p['tipo'], p['cantidad'], p['comentario'], sorted(p), ok(p['foto']['id']), '-r2-p-' in p['foto']['id'], p['por']))
+ print('r3prob=%s/%s foto=%s r3foto=%s' % (r[3]['problema']['tipo'], r[3]['problema']['cantidad'], r[3]['problema']['foto'], r[3]['foto']))
+ print('llaves=%s completa=%s recibio=%s' % (sorted(r[2]), o['completa'], o['recibio']))
+ print('pedido-recibido=%s/%s' % (r[2]['pedido'], r[2]['recibido']))
+ ")
+ check "foto del renglón 1: id del contrato, sin archivar, sin url" 'r1foto=True r1prob=None' "$FORMA"
+-check "problema del renglón 2: tipo, cantidad, comentario y su foto «-p-»" "r2prob=Dañado/10/Rollo aplastado/['cantidad', 'comentario', 'foto', 'tipo'] pfoto=True p-en-id=True" "$FORMA"
++check "problema del renglón 2: tipo, cantidad, comentario, su foto «-p-» y quién lo reportó" "r2prob=Dañado/10/Rollo aplastado/['cantidad', 'comentario', 'foto', 'por', 'tipo'] pfoto=True p-en-id=True por=jesush" "$FORMA"
+ check "faltante del renglón 3 sin foto (foto: null), y sin foto de recepción" 'r3prob=Faltante/10 foto=None r3foto=None' "$FORMA"
+ check "cada renglón trae n, pedido, recibido, foto y problema" "llaves=['foto', 'n', 'pedido', 'problema', 'recibido'] completa=False recibio=jesush" "$FORMA"
+ check "recibido = lo que llegó" 'pedido-recibido=80.0/80.0' "$FORMA"
+@@ -254,6 +254,8 @@ check "se reporta" '"ok":true' "$R"
+ check "…y queda en el renglón" 'Incorrecto' "$(sql "SELECT problema_tipo, problema_comentario FROM renglones WHERE oc_folio='OC-2026-0012' AND n=1")"
+ check "otro problema mientras el cotizador no recoge la foto del anterior: 409" 'todavía no recoge' "$(as jesush -d '{"oc":"OC-2026-0012","n":1,"problema":{"tipo":"Dañado","cantidad":1,"comentario":"otro",'"$FP"'}}' $U/api/compras/problema)"
+ check "el cotizador lo ve (vuelve a salir la recepción)" 'Incorrecto' "$(sget "/api/integracion/cotizador/recepciones?desde=$H1")"
++check "…con quién lo reportó después" 'Incorrecto/jesush' "$(sget "/api/integracion/cotizador/recepciones?desde=$H1" | $PY -c "
++import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_folio']=='OC-2026-0012'][0];p=o['renglones'][0]['problema'];print(p['tipo']+'/'+p['por'])")"
+ 
+ echo
+ echo "## oc.devolucion — validación (contrato §5d)"
+-- 
+2.43.0
+

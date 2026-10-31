@@ -1,0 +1,639 @@
+From a54996b7b1248b698cb3378ba7a54ff27226b150 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 13:53:08 -0600
+Subject: [PATCH 02/11] =?UTF-8?q?Compras=20(p=C3=A1gina):=20foto=20por=20r?=
+ =?UTF-8?q?engl=C3=B3n=20al=20recibir,=20=C2=ABReportar=20problema=C2=BB?=
+ =?UTF-8?q?=20y=20devoluciones=20a=20la=20vista?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- «Recibir» con un bloque por renglón (cabe en el teléfono): cantidad que llegó, foto obligatoria si
+  llegó algo (comprimida en el navegador: lado mayor 1600 px, JPEG 0.72; «Tomar foto» con
+  capture=environment y «Galería», como en las actas) y «Reportar problema» (tipo, cantidad,
+  comentario, foto salvo Faltante). En 0 el renglón sigue en camino. Un toque fuera no cierra el
+  diálogo (no se pierden las fotos).
+- Tarjeta: liga «foto» por renglón (servidor mientras no se archiva, Drive después), el problema
+  reportado, las devoluciones DEV-… con su efecto, faltante aceptado y «Reportar problema» hasta 30
+  días después de recibir. ?oc=OC-… busca y resalta la orden (de los pendientes y de Inventario).
+- Inventario: un envío en camino que es de una OC dice «Recibir en Compras» (allá va la foto); el
+  movimiento «devolucion» se lee «devolución al proveedor».
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013SfRStBeRbueu9grrfatQU
+---
+ docs/tableros/compras.css    |  38 ++++
+ docs/tableros/compras.js     | 363 +++++++++++++++++++++++++++--------
+ docs/tableros/compras.md     |   6 +-
+ docs/tableros/inventario.css |   2 +-
+ docs/tableros/inventario.js  |  13 +-
+ 5 files changed, 332 insertions(+), 90 deletions(-)
+
+diff --git a/docs/tableros/compras.css b/docs/tableros/compras.css
+index b56ef31..87f865f 100644
+--- a/docs/tableros/compras.css
++++ b/docs/tableros/compras.css
+@@ -43,6 +43,42 @@
+ .tb-compras dialog .t { margin: 6px 0 12px; }
+ .tb-compras dialog input[type="number"] { width: 5.5em; text-align: center; }
+ 
++/* ---- 29-oct: foto por renglón, problemas y devoluciones --------------------- */
++.tb-compras .cmp-acc button svg.i, .tb-compras .cmp-foto svg.i { width: 16px; height: 16px; }
++.tb-compras .cmp-ren .cmp-problema { color: var(--hg-aviso); margin-top: 3px; }
++.tb-compras .cmp-ren .cmp-problema b { color: var(--hg-aviso); font-weight: 600; }
++.tb-compras .cmp-ren .cmp-dev { margin-top: 2px; }
++.tb-compras .cmp-ren .cmp-dev b { color: var(--hg-texto-2); font-weight: 600; }
++.tb-compras .cmp-ren a.cmp-ver-foto { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
++.tb-compras .cmp-ren td.num a.cmp-ver-foto { font-weight: 500; }
++.tb-compras button.cmp-rep { padding: 2px 6px; margin: 2px 0 0 -6px; font-size: 12.5px; color: var(--hg-texto-3); }
++.tb-compras .cmp-oc.foco { border-color: var(--hg-foco); box-shadow: 0 0 0 2px color-mix(in srgb, var(--hg-foco) 45%, transparent); }
++
++/* «Recibir»: un bloque por renglón (cabe en el teléfono, a diferencia de una tabla) */
++.tb-compras .cmp-rl { border: 1px solid var(--hg-linea); border-radius: 10px; background: var(--hg-plano);
++  padding: 10px 12px; margin: 0 0 10px; }
++.tb-compras .cmp-rl.falta { border-color: color-mix(in srgb, var(--hg-bloqueado) 70%, transparent); }
++.tb-compras .cmp-rl-cab { font-weight: 600; color: var(--hg-texto-fuerte); line-height: 1.35; }
++.tb-compras .cmp-rl-cab .n { color: var(--hg-texto-3); font-variant-numeric: tabular-nums; }
++.tb-compras .cmp-rl-cab .mini { font-weight: 400; }
++.tb-compras .cmp-rl-fila { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 8px; }
++.tb .tb-compras .cmp-rl-fila label.cmp-llego, .tb.tb-compras .cmp-rl-fila label.cmp-llego {
++  display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 14px; color: var(--hg-texto); }
++.tb.tb-compras dialog .cmp-rl input[type="number"] { width: 6.5em; text-align: center; }
++.tb-compras .cmp-foto { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
++.tb.tb-compras .cmp-foto label.boton { margin: 0; padding: 6px 12px; font-size: 13.5px; position: relative; overflow: hidden; }
++.tb-compras .cmp-foto.falta label.boton { border-color: var(--hg-bloqueado); color: var(--hg-bloqueado); }
++.tb-compras .cmp-foto img.cmp-mini { width: 44px; height: 44px; object-fit: cover; border-radius: 6px;
++  border: 1px solid var(--hg-linea-2); }
++.tb-compras .cmp-foto.lista .mini { color: var(--hg-hecho); font-weight: 600; }
++.tb-compras .cmp-oculto { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 0; }
++.tb-compras .err-t { color: var(--hg-bloqueado) !important; font-weight: 600; }
++.tb-compras details.cmp-prob { margin-top: 8px; }
++.md-typeset .tb-compras details.cmp-prob > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--hg-aviso); }
++.tb-compras details.cmp-prob[open] { border-top: 1px dashed var(--hg-linea); padding-top: 4px; }
++.tb-compras .cmp-prob-cuerpo textarea { min-height: 3.2em; }
++.tb-compras .cmp-prob-cuerpo label { margin-top: 8px; }
++
+ @media (max-width: 640px) {
+   .tb-compras .cmp-oc { padding: 12px 12px 10px; }
+   .tb-compras .cmp-meta { gap: 2px 12px; font-size: 12.5px; }
+@@ -52,4 +88,6 @@
+   .tb-compras .cmp-ren { font-size: 13px; }
+   .tb-compras .cmp-ren th, .tb-compras .cmp-ren td { padding-left: 6px; padding-right: 6px; }
+   .tb-compras dialog .t th:nth-child(1), .tb-compras dialog .t td:nth-child(1) { display: none; }
++  .tb-compras .cmp-rl { padding: 9px 10px; }
++  .tb.tb-compras .cmp-foto label.boton { padding: 8px 12px; }      /* dedo, no ratón */
+ }
+diff --git a/docs/tableros/compras.js b/docs/tableros/compras.js
+index 74d38f3..e053529 100644
+--- a/docs/tableros/compras.js
++++ b/docs/tableros/compras.js
+@@ -1,12 +1,19 @@
+ /* Compras: las órdenes de compra del cotizador dentro del centro de mando (28-oct-2026).
+ 
+    Una pestaña por sitio (ICAVE, TIMSA, EIT, LCT, Querétaro) y «Todo». Cada OC es una tarjeta con sus renglones:
+-   qué se pidió, a qué ítem del inventario corresponde, qué va en camino y qué llegó. Dos acciones: «Ligar» un
+-   renglón que vino sin ítem y «Recibir» con lo que llegó de verdad.
++   qué se pidió, a qué ítem del inventario corresponde, qué va en camino y qué llegó. Acciones: «Ligar» un renglón
++   que vino sin ítem, «Recibir» con lo que llegó de verdad y «Reportar problema».
+ 
+-   Servidor (backend/compras.py): GET /api/compras · POST /api/compras/ligar · POST /api/compras/recibir.
+-   Las OC entran solas por /api/integracion/cotizador/evento, firmadas por el cotizador: esta página nunca las crea.
+-   Aquí NO hay montos: el dinero vive en el cotizador (D-27-4).
++   29-oct (incremento 5 de CAPRI): «Recibir» pide UNA FOTO por renglón que llegó (cantidad > 0), comprimida aquí en el
++   navegador (lado mayor 1600 px, JPEG 0.72) y enviada en el mismo «Recibir». Cada renglón puede llevar un problema
++   (Incorrecto · Dañado · Faltante · Sobrante · Otro, cantidad, comentario obligatorio y foto salvo Faltante). Las
++   fotos se quedan en el servidor hasta que el cotizador se las lleva a Google Drive; «foto» abre la del servidor o,
++   ya archivada, la de Drive. Las devoluciones (DEV-…) las resuelve compras en el cotizador y aquí se ven por renglón.
++
++   Servidor (backend/compras.py): GET /api/compras · POST /api/compras/ligar · POST /api/compras/recibir ·
++   POST /api/compras/problema · GET /api/compras/foto?id=. Las OC entran solas por /api/integracion/cotizador/evento,
++   firmadas por el cotizador: esta página nunca las crea. Aquí NO hay montos: el dinero vive en el cotizador (D-27-4).
++   ?sitio=timsa abre esa pestaña; ?oc=OC-2026-0012 busca esa orden (el pendiente y el Inventario mandan aquí).
+    Necesita tableros/kanban.js (íconos) y tableros/tablero.css; estilos propios en tableros/compras.css. */
+ (function () {
+   const el = (t, a, ...k) => {
+@@ -20,6 +27,8 @@
+   const fecha = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? (+m[3]) + ' ' + MES[+m[2] - 1] : ''; };
+   const num = n => (Math.round((+n || 0) * 100) / 100).toLocaleString('es-MX');
+   const hoy = () => new Date().toISOString().slice(0, 10);
++  const icono = n => (window.Kanban && window.Kanban.icono ? window.Kanban.icono(n) : '');
++  const CAMARA = '<svg class="i" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l1.6-2.2h6.8L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.4"/></svg>';
+ 
+   const ESTADOS = {
+     autorizada: ['Autorizada', 'e-aut'], pagada: ['Pagada', 'e-pag'], 'en-camino': ['En camino', 'e-cam'],
+@@ -27,27 +36,156 @@
+   };
+   const ABIERTAS = ['autorizada', 'pagada', 'en-camino', 'recibida-parcial'];
+   const ORDEN = ['icave', 'timsa', 'eit', 'lzc', 'qro'];
++  // Contrato CAPRI §4: tipos de problema. Faltante = no llegó: no lleva foto (no hay qué fotografiar).
++  const TIPOS_PROBLEMA = [['Incorrecto', 'Incorrecto — llegó otra cosa'], ['Dañado', 'Dañado — llegó roto o golpeado'],
++    ['Faltante', 'Faltante — llegó menos (no lleva foto)'], ['Sobrante', 'Sobrante — llegó de más'], ['Otro', 'Otro']];
++  const FOTO_LADO = 1600, FOTO_CALIDAD = 0.72, MAX_ENVIO = 20 * 1024 * 1024;
+ 
+-  let OC = [], ITEMS = [], SITIOS = [], USER = '', INTEG = true, vista = 'todo';
++  let OC = [], ITEMS = [], SITIOS = [], USER = '', INTEG = true, vista = 'todo', ocFoco = '';
+   const dlg = $('dlg'), aviso = $('aviso'), cont = $('cont'), tabs = $('cmp-tabs');
+ 
+   const corto = id => { const s = SITIOS.find(x => x.id === id); return id === 'qro' ? 'Querétaro' : (s ? s.corto : String(id || '').toUpperCase()); };
+ 
+   function mensaje(t, bien) {
+     aviso.className = 'msg ' + (bien ? 'ok' : 'err'); aviso.textContent = t;
+-    clearTimeout(aviso._t); aviso._t = setTimeout(() => (aviso.className = 'msg'), bien ? 5000 : 10000);
++    clearTimeout(aviso._t); aviso._t = setTimeout(() => (aviso.className = 'msg'), bien ? 6000 : 12000);
+   }
+   async function api(url, opts) {
+     const r = await fetch(url, Object.assign({ cache: 'no-store' }, opts || {}));
+     let j = null; try { j = await r.json(); } catch (e) { /* sin JSON */ }
++    if (r.status === 413) throw new Error('Las fotos pesan demasiado juntas: recibe en dos partes (unos renglones y luego los demás).');
+     if (!r.ok || !j || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+     return j;
+   }
+   const json = (m, b) => ({ method: m, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
+   function campo(l, i, ayuda) { const d = el('div'); d.append(el('label', { text: l }), i); if (ayuda) d.append(el('div', { class: 'ayuda', text: ayuda })); return d; }
++  const fotoUrl = f => (f && f.archivada && f.url ? f.url : '/api/compras/foto?id=' + encodeURIComponent((f && f.id) || ''));
++  const ligaFoto = (f, txt) => el('a', { href: fotoUrl(f), target: '_blank', rel: 'noopener', class: 'cmp-ver-foto', title: f.archivada ? 'Ya está en Google Drive' : 'Todavía en el servidor; el cotizador la pasa a Drive' }, txt || 'foto');
+ 
+   Object.entries(ESTADOS).forEach(([k, v]) => $('fEstado').append(el('option', { value: k, text: v[0] })));
+ 
++  // ---------------------------------------------------------------- fotos: comprimir en el navegador (contrato §3)
++  // comprimirFoto(file) → {nombre, datos (base64 sin prefijo), mime: 'image/jpeg'} (+ bytes y url para la vista previa)
++  async function comprimirFoto(file) {
++    let img, w, h, soltar = () => {};
++    try {
++      img = await createImageBitmap(file, { imageOrientation: 'from-image' });
++      w = img.width; h = img.height; soltar = () => img.close && img.close();
++    } catch (e) {
++      img = await new Promise((ok, mal) => {
++        const u = URL.createObjectURL(file), i = new Image();
++        i.onload = () => { URL.revokeObjectURL(u); ok(i); };
++        i.onerror = () => { URL.revokeObjectURL(u); mal(new Error('No pude abrir esa foto (¿HEIC?). Usa «Tomar foto»: la cámara la entrega en JPG.')); };
++        i.src = u;
++      });
++      w = img.naturalWidth; h = img.naturalHeight;
++    }
++    if (!w || !h) throw new Error('Esa foto viene vacía. Tómala otra vez.');
++    const k = Math.min(1, FOTO_LADO / Math.max(w, h));
++    const cw = Math.max(1, Math.round(w * k)), ch = Math.max(1, Math.round(h * k));
++    const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
++    const cx = cv.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, cw, ch); cx.drawImage(img, 0, 0, cw, ch); soltar();
++    const blob = await new Promise(ok => cv.toBlob(ok, 'image/jpeg', FOTO_CALIDAD));
++    if (!blob) throw new Error('El navegador no pudo comprimir la foto. Intenta con otra.');
++    const datos = await new Promise((ok, mal) => {
++      const r = new FileReader();
++      r.onload = () => ok(String(r.result).split(',')[1] || '');
++      r.onerror = () => mal(new Error('No pude leer la foto.'));
++      r.readAsDataURL(blob);
++    });
++    return { nombre: String(file.name || 'foto').replace(/\.[^.]+$/, '').slice(0, 60) + '.jpg', datos, mime: 'image/jpeg', bytes: blob.size, url: URL.createObjectURL(blob) };
++  }
++
++  // Dos botones como en las actas (A12, 28-oct): «Tomar foto» abre la cámara (capture) y «Galería» deja elegir una ya tomada.
++  function selectorFoto(texto) {
++    const caja = el('div', { class: 'cmp-foto' });
++    const boton = (txt, captura) => {
++      const i = el('input', { type: 'file', accept: 'image/*', class: 'cmp-oculto', capture: captura ? 'environment' : null });
++      const l = el('label', { class: 'boton sec' }); l.innerHTML = captura ? CAMARA : ''; l.append(txt, i);
++      i.addEventListener('change', () => elegir(i));
++      return l;
++    };
++    const bCam = boton('Tomar foto', true), bGal = boton('Galería', false);
++    const prev = el('img', { class: 'cmp-mini', alt: 'foto', hidden: 'hidden' });
++    const est = el('span', { class: 'mini', text: texto || '' });
++    let foto = null, trabajo = null;
++    async function elegir(i) {
++      const f = i.files && i.files[0]; i.value = '';
++      if (!f) return;
++      est.className = 'mini'; est.textContent = 'Comprimiendo…';
++      trabajo = comprimirFoto(f).then(x => {
++        if (foto && foto.url) URL.revokeObjectURL(foto.url);
++        foto = x; prev.src = x.url; prev.hidden = false; caja.classList.add('lista'); caja.classList.remove('falta');
++        est.textContent = 'lista · ' + Math.max(1, Math.round(x.bytes / 1024)) + ' KB';
++        caja.dispatchEvent(new Event('foto-lista', { bubbles: true }));
++      }, e => { est.className = 'mini err-t'; est.textContent = e.message; });
++      await trabajo; trabajo = null;
++    }
++    caja.append(bCam, bGal, prev, est);
++    return {
++      nodo: caja,
++      valor: () => (foto ? { nombre: foto.nombre, datos: foto.datos, mime: foto.mime } : null),
++      espera: () => trabajo || Promise.resolve(),
++      falta: si => caja.classList.toggle('falta', !!si)
++    };
++  }
++
++  // Bloque «Reportar problema» (en Recibir y después de recibir). leer() → null (no hay), {error} o el problema.
++  function formaProblema(abierto) {
++    const fTipo = el('select');
++    fTipo.append(el('option', { value: '', text: '— ¿qué pasó? —' }));
++    TIPOS_PROBLEMA.forEach(([v, t]) => fTipo.append(el('option', { value: v, text: t })));
++    const fCant = el('input', { type: 'number', min: '0', step: 'any', inputmode: 'decimal', placeholder: '¿cuántas?' });
++    const fCom = el('textarea', { rows: '2', maxlength: '500', placeholder: 'Qué pasó, con detalle: «el rollo llegó aplastado», «mandaron calibre 12»…' });
++    const foto = selectorFoto('Foto del problema');
++    const lFoto = campo('Foto del problema', foto.nodo, 'Obligatoria, salvo «Faltante».');
++    const caja = el('div', { class: 'cmp-prob-cuerpo' });
++    const g = el('div', { class: 'dos-col' }); g.append(campo('Qué pasó', fTipo), campo('Cantidad con el problema', fCant));
++    caja.append(g, campo('Comentario (obligatorio)', fCom), lFoto);
++    const act = () => { lFoto.style.opacity = fTipo.value === 'Faltante' ? '0.55' : ''; };
++    fTipo.addEventListener('change', act);
++    return {
++      nodo: caja,
++      espera: () => foto.espera(),
++      leer(que) {
++        const lleno = fTipo.value || fCant.value !== '' || fCom.value.trim() || foto.valor();
++        if (!abierto() || !lleno) return null;
++        if (!fTipo.value) return { error: que + ': elige qué pasó.' };
++        const q = +fCant.value;
++        if (!(q > 0)) return { error: que + ': ¿cuántas tienen el problema?' };
++        if (fCom.value.trim().length < 3) return { error: que + ': escribe qué pasó (el comentario es obligatorio).' };
++        const f = foto.valor();
++        if (!f && fTipo.value !== 'Faltante') { foto.falta(true); return { error: que + ': falta la foto del problema.' }; }
++        const p = { tipo: fTipo.value, cantidad: q, comentario: fCom.value.trim() };
++        if (f) p.foto = f;
++        return p;
++      }
++    };
++  }
++
++  // ---------------------------------------------------------------- diálogo (mismo armado que Inventario)
++  function abrirDialogo(titulo, cuerpoFn, botones, fijo) {
++    dlg.innerHTML = '';
++    dlg.dataset.fijo = fijo ? '1' : '';            // con fotos tomadas, un toque fuera no debe cerrar (se perderían)
++    const cab = el('div', { class: 'dcab' }); cab.append(el('h2', { text: titulo }));
++    const x = el('button', { type: 'button', 'aria-label': 'Cerrar', html: icono('cerrar') || '×' }); x.addEventListener('click', () => dlg.close()); cab.append(x); dlg.append(cab);
++    const cuerpo = el('div', { class: 'dcuerpo' }); dlg.append(cuerpo);
++    const m = el('div', { class: 'msg' });
++    cuerpoFn(cuerpo, m); cuerpo.append(m);
++    const pie = el('div', { class: 'dpie' }); dlg.append(pie);
++    const cancelar = el('button', { type: 'button', class: 'sec', text: botones && botones.length ? 'Cancelar' : 'Cerrar' }); cancelar.addEventListener('click', () => dlg.close()); pie.append(cancelar);
++    (botones || []).forEach(([txt, fn]) => {
++      const b = el('button', { type: 'button', text: txt });
++      b.addEventListener('click', async () => {
++        b.disabled = true; m.className = 'msg';
++        try { await fn(m, b); } catch (e) { m.className = 'msg err'; m.textContent = e.message; m.scrollIntoView({ block: 'nearest' }); }
++        b.disabled = false; b.textContent = txt;
++      });
++      pie.append(b);
++    });
++    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
++  }
++
+   // ---------------------------------------------------------------- filtros y pestañas
+   const faltaRecibir = o => ABIERTAS.includes(o.estado);
+ 
+@@ -81,7 +219,7 @@
+   // ---------------------------------------------------------------- pintar
+   function tarjeta(o) {
+     const [etq, cls] = ESTADOS[o.estado] || [o.estado, ''];
+-    const c = el('article', { class: 'cmp-oc' + (o.estado === 'cancelada' ? ' cancelada' : '') });
++    const c = el('article', { class: 'cmp-oc' + (o.estado === 'cancelada' ? ' cancelada' : '') + (ocFoco && o.folio === ocFoco ? ' foco' : ''), id: 'oc-' + o.folio });
+     const cab = el('header', { class: 'cmp-cab' });
+     cab.append(el('h2', {}, o.folio), el('span', { class: 'pill ' + cls, text: etq }));
+     if (o.sitio_portal) cab.append(el('span', { class: 'chip', text: corto(o.sitio_portal) }));
+@@ -105,6 +243,19 @@
+       tr.append(el('td', { class: 'num', text: r.n }));
+       const td = el('td', {}, el('span', { class: 'desc', text: r.descripcion || '—' }));
+       if (r.nota) td.append(el('div', { class: 'mini aviso-t', text: r.nota }));
++      if (r.problema) {
++        const p = r.problema, ln = el('div', { class: 'mini cmp-problema' });
++        ln.append(el('b', { text: 'Problema: ' + p.tipo + ' · ' + num(p.cantidad) }), ' — «' + (p.comentario || '') + '»');
++        if (p.foto) ln.append(' · ', ligaFoto(p.foto, 'foto del problema'));
++        td.append(ln);
++      }
++      (r.devoluciones || []).forEach(dv => td.append(el('div', { class: 'mini cmp-dev' },
++        el('b', { text: (dv.folio || 'DEV') + ' · ' + dv.resolucion }), (dv.efecto ? ' — ' + dv.efecto : '') + (dv.nota ? ' (' + dv.nota + ')' : ''))));
++      if (r.problema_reportable && o.estado !== 'cancelada') {
++        const bp = el('button', { type: 'button', class: 'fantasma cmp-rep' }, 'Reportar problema');
++        bp.onclick = () => reportar(o, r);
++        td.append(bp);
++      }
+       tr.append(td);
+       tr.append(el('td', { class: 'num', text: num(r.cantidad) + ' ' + (r.unidad || '') }));
+       const tdI = el('td');
+@@ -119,7 +270,13 @@
+         tdI.append(b);
+       }
+       tr.append(tdI);
+-      tr.append(el('td', { class: 'num' }, r.recibido_en ? num(r.recibido) : el('span', { class: 'mini', text: '—' })));
++      const tdL = el('td', { class: 'num' });
++      if (r.recibido_en) tdL.append(num(r.recibido));
++      else if (+r.recibido > 0) tdL.append(num(r.recibido), el('div', { class: 'mini', text: 'faltan ' + num(r.pendiente) }));
++      else tdL.append(el('span', { class: 'mini', text: '—' }));
++      if (+r.faltante_aceptado > 0) tdL.append(el('div', { class: 'mini', text: 'faltante ' + num(r.faltante_aceptado) }));
++      if (r.foto) tdL.append(el('div', {}, ligaFoto(r.foto)));
++      tr.append(tdL);
+       tb.append(tr);
+     });
+     t.append(tb);
+@@ -127,11 +284,11 @@
+ 
+     if (faltaRecibir(o)) {
+       const acc = el('div', { class: 'cmp-acc' });
+-      const b = el('button', { type: 'button' }, 'Recibir…');
++      const b = el('button', { type: 'button', html: CAMARA + 'Recibir…' });
+       b.onclick = () => recibir(o);
+       acc.append(b);
+       const falta = (o.renglones || []).filter(r => !r.recibido_en).length;
+-      if (falta) acc.append(el('span', { class: 'mini', text: falta === 1 ? 'falta 1 renglón por recibir' : 'faltan ' + falta + ' renglones por recibir' }));
++      if (falta) acc.append(el('span', { class: 'mini', text: (falta === 1 ? 'falta 1 renglón por recibir' : 'faltan ' + falta + ' renglones por recibir') + ' · una foto por renglón' }));
+       c.append(acc);
+     } else if (o.recepcion_en) {
+       c.append(el('div', { class: 'cmp-acc mini', text: 'Recibida por ' + (o.recepcion_por || '—') + ' el ' + fecha(o.recepcion_en) }));
+@@ -148,7 +305,7 @@
+       cont.append(el('div', { class: 'info cmp-apagado' },
+         el('b', { text: 'La conexión con el cotizador todavía no está encendida. ' }),
+         'Falta el secreto compartido en el servidor (COTIZADOR_SECRETO) y en el cotizador (PORTAL_SECRETO). ',
+-        'Mientras tanto no van a entrar órdenes nuevas.'));
++        'Mientras tanto no van a entrar órdenes nuevas y las fotos se quedan en el servidor.'));
+     }
+     if (!v.length) {
+       cont.append(el('div', { class: 'tb-vacio' },
+@@ -162,81 +319,108 @@
+ 
+   // ---------------------------------------------------------------- ligar
+   function ligar(o, r) {
+-    dlg.innerHTML = '';
+-    const f = el('form', { method: 'dialog', class: 'form' });
+-    f.append(el('h2', {}, 'Ligar el renglón ' + r.n + ' de ' + o.folio));
+-    f.append(el('p', { class: 'mini', text: '«' + (r.descripcion || '') + '» — ' + num(r.cantidad) + ' ' + (r.unidad || '') }));
+-    const sel = el('select', { id: 'lgItem', required: 'required' });
+-    sel.append(el('option', { value: '', text: '— elige el ítem del inventario —' }));
+-    ITEMS.forEach(i => sel.append(el('option', { value: i.codigo, text: i.codigo + ' · ' + i.descripcion + ' (' + i.unidad + ')' })));
+-    const sug = ITEMS.find(i => (i.descripcion || '').toLowerCase() === String(r.descripcion || '').toLowerCase());
+-    if (sug) sel.value = sug.codigo;
+-    f.append(campo('Ítem', sel, 'Al ligarlo, si la orden ya va en camino, el material aparece en camino al sitio en ese momento.'));
+-    const err = el('div', { class: 'msg' });
+-    f.append(err);
+-    const acc = el('div', { class: 'form-acc' });
+-    const cancelar = el('button', { type: 'button', class: 'sec' }, 'Cancelar');
+-    cancelar.onclick = () => dlg.close();
+-    acc.append(cancelar, el('button', { type: 'submit' }, 'Ligar'));
+-    f.append(acc);
+-    f.onsubmit = async ev => {
+-      ev.preventDefault();
+-      try {
+-        await api('/api/compras/ligar', json('POST', { oc: o.folio, n: r.n, item: sel.value }));
+-        dlg.close(); mensaje('Renglón ' + r.n + ' de ' + o.folio + ' ligado a ' + sel.value + '.', true); cargar();
+-      } catch (e) { err.className = 'msg err'; err.textContent = e.message; }
+-    };
+-    dlg.append(f); dlg.showModal();
++    abrirDialogo('Ligar el renglón ' + r.n + ' de ' + o.folio, c => {
++      c.append(el('p', { class: 'mini', text: '«' + (r.descripcion || '') + '» — ' + num(r.cantidad) + ' ' + (r.unidad || '') }));
++      const sel = el('select', { id: 'lgItem' });
++      sel.append(el('option', { value: '', text: '— elige el ítem del inventario —' }));
++      ITEMS.forEach(i => sel.append(el('option', { value: i.codigo, text: i.codigo + ' · ' + i.descripcion + ' (' + i.unidad + ')' })));
++      const sug = ITEMS.find(i => (i.descripcion || '').toLowerCase() === String(r.descripcion || '').toLowerCase());
++      if (sug) sel.value = sug.codigo;
++      c.append(campo('Ítem', sel, 'Al ligarlo, si la orden ya va en camino, el material aparece en camino al sitio en ese momento.'));
++    }, [['Ligar', async () => {
++      const item = $('lgItem').value;
++      if (!item) throw new Error('Elige el ítem.');
++      await api('/api/compras/ligar', json('POST', { oc: o.folio, n: r.n, item }));
++      dlg.close(); mensaje('Renglón ' + r.n + ' de ' + o.folio + ' ligado a ' + item + '.', true); cargar();
++    }]]);
+   }
+ 
+-  // ---------------------------------------------------------------- recibir
++  // ---------------------------------------------------------------- recibir (con foto por renglón)
+   function recibir(o) {
+-    dlg.innerHTML = '';
+-    const f = el('form', { method: 'dialog', class: 'form' });
+-    f.append(el('h2', {}, 'Recibir ' + o.folio + ' en ' + corto(o.sitio_portal)));
+-    f.append(el('p', { class: 'mini', text: 'Anota lo que llegó DE VERDAD. Si llegó menos, déjalo en lo que llegó: la orden queda recibida en parte y su pendiente sigue abierto.' }));
+-    const t = el('table', { class: 't' });
+-    t.append(el('thead', {}, el('tr', {}, el('th', { text: '#' }), el('th', { text: 'Material' }),
+-      el('th', { class: 'num', text: 'Pedido' }), el('th', { class: 'num', text: 'Llegó' }))));
+-    const tb = el('tbody');
+-    const inputs = [];
+-    (o.renglones || []).forEach(r => {
+-      const tr = el('tr');
+-      tr.append(el('td', { class: 'num', text: r.n }), el('td', { text: r.descripcion || '—' }),
+-        el('td', { class: 'num', text: num(r.cantidad) + ' ' + (r.unidad || '') }));
+-      if (r.recibido_en) {
+-        tr.append(el('td', { class: 'num mini', text: 'ya: ' + num(r.recibido) }));
+-      } else {
+-        const i = el('input', { type: 'number', min: '0', step: '1', max: String(r.cantidad), value: String(r.cantidad), 'data-n': r.n });
+-        inputs.push(i);
+-        tr.append(el('td', { class: 'num' }, i));
+-      }
+-      tb.append(tr);
+-    });
+-    t.append(tb); f.append(t);
+-    if (!inputs.length) f.append(el('p', { class: 'mini', text: 'Todos los renglones ya se recibieron.' }));
+-    const err = el('div', { class: 'msg' });
+-    f.append(err);
+-    const acc = el('div', { class: 'form-acc' });
+-    const cancelar = el('button', { type: 'button', class: 'sec' }, 'Cancelar');
+-    cancelar.onclick = () => dlg.close();
+-    acc.append(cancelar);
+-    if (inputs.length) acc.append(el('button', { type: 'submit' }, 'Recibir'));
+-    f.append(acc);
+-    f.onsubmit = async ev => {
+-      ev.preventDefault();
+-      const renglones = inputs.map(i => ({ n: +i.dataset.n, recibido: +i.value }));
+-      try {
+-        const j = await api('/api/compras/recibir', json('POST', { oc: o.folio, renglones }));
+-        dlg.close();
+-        const e = (j.orden || {}).estado;
+-        mensaje(e === 'recibida' ? o.folio + ' recibida completa: su pendiente se cerró.'
+-                                 : o.folio + ' recibida en parte: su pendiente sigue abierto con lo que falta.', true);
+-        if ((j.avisos || []).length) mensaje(j.avisos.join(' '), false);
+-        cargar();
+-      } catch (e) { err.className = 'msg err'; err.textContent = e.message; }
+-    };
+-    dlg.append(f); dlg.showModal();
++    const lineas = [];
++    abrirDialogo('Recibir ' + o.folio + ' en ' + corto(o.sitio_portal), c => {
++      c.append(el('p', { class: 'mini', text: 'Anota lo que llegó DE VERDAD y toma una foto de cada renglón que llegó (obligatoria). ' +
++        'Si un renglón todavía no llega, déjalo en 0: sigue en camino. Si algo llegó mal o falta, ábrelo en «Reportar problema» y compras lo resuelve.' }));
++      const pend = (o.renglones || []).filter(r => !r.recibido_en);
++      pend.forEach(r => {
++        const sec = el('section', { class: 'cmp-rl' });
++        const falta = +r.pendiente;
++        const entero = Math.abs(falta - Math.round(falta)) < 1e-9;
++        sec.append(el('div', { class: 'cmp-rl-cab' }, el('span', { class: 'n', text: '#' + r.n + ' ' }), r.descripcion || '—',
++          el('span', { class: 'mini', text: ' · pedido ' + num(r.cantidad) + ' ' + (r.unidad || '') + (+r.recibido > 0 ? ' · ya llegaron ' + num(r.recibido) + ' · faltan ' + num(falta) : '') })));
++        const fCant = el('input', { type: 'number', min: '0', step: entero ? '1' : 'any', inputmode: entero ? 'numeric' : 'decimal', max: String(falta), value: String(falta) });
++        const foto = selectorFoto('Foto de lo que llegó');
++        const fila = el('div', { class: 'cmp-rl-fila' });
++        fila.append(el('label', { class: 'cmp-llego' }, 'Llegó ', fCant, ' ' + (r.unidad || '')), foto.nodo);
++        sec.append(fila);
++        const nota = el('div', { class: 'ayuda' });
++        const act = () => { const v = fCant.value === '' ? -1 : +fCant.value; foto.nodo.style.display = v === 0 ? 'none' : ''; nota.textContent = v === 0 ? 'No llegó nada de este renglón: se queda en camino (sin foto).' : ''; };
++        fCant.addEventListener('input', act);
++        sec.append(nota);
++        const det = el('details', { class: 'cmp-prob' }); det.append(el('summary', { text: 'Reportar problema' }));
++        const prob = formaProblema(() => det.open);
++        det.append(prob.nodo); sec.append(det);
++        lineas.push({ r, falta, fCant, foto, prob, sec });
++        c.append(sec);
++      });
++      const hechos = (o.renglones || []).filter(r => r.recibido_en);
++      if (hechos.length) c.append(el('p', { class: 'mini', text: 'Ya recibidos: ' + hechos.map(r => '#' + r.n + ' ' + (r.descripcion || '') + ' (' + num(r.recibido) + ')').join(' · ') }));
++      if (!pend.length) c.append(el('p', { class: 'mini', text: 'Todos los renglones ya se recibieron.' }));
++    }, (o.renglones || []).some(r => !r.recibido_en) ? [['Recibir', async (m, boton) => {
++      boton.textContent = 'Preparando fotos…';
++      await Promise.all(lineas.map(l => Promise.all([l.foto.espera(), l.prob.espera()])));
++      const renglones = [], errores = [];
++      let peso = 0;
++      lineas.forEach(l => {
++        l.sec.classList.remove('falta'); l.foto.falta(false);
++        const que = 'Renglón ' + l.r.n;
++        const v = l.fCant.value === '' ? NaN : +l.fCant.value;
++        if (isNaN(v) || v < 0 || v > l.falta + 1e-9) { errores.push(que + ': llegó entre 0 y ' + num(l.falta) + '.'); l.sec.classList.add('falta'); return; }
++        const p = l.prob.leer(que);
++        if (p && p.error) { errores.push(p.error); l.sec.classList.add('falta'); return; }
++        if (v === 0 && !p) return;                                   // no llegó: se queda en camino
++        const ln = { n: l.r.n, recibido: v };
++        if (v > 0) {
++          const f = l.foto.valor();
++          if (!f) { errores.push(que + ' (' + (l.r.descripcion || '') + '): falta la foto.'); l.foto.falta(true); l.sec.classList.add('falta'); return; }
++          ln.foto = f; peso += f.datos.length;
++        }
++        if (p) { ln.problema = p; if (p.foto) peso += p.foto.datos.length; }
++        renglones.push(ln);
++      });
++      if (errores.length) throw new Error(errores.join(' '));
++      if (!renglones.length) throw new Error('No anotaste nada que haya llegado. Si falta material que ya debía llegar, repórtalo en «Reportar problema» → Faltante.');
++      if (peso > MAX_ENVIO) throw new Error('Son demasiadas fotos para un solo envío: recibe primero unos renglones (deja los demás en 0) y luego el resto.');
++      boton.textContent = 'Enviando…';
++      const j = await api('/api/compras/recibir', json('POST', { oc: o.folio, renglones }));
++      dlg.close();
++      const e = (j.orden || {}).estado, sin = (j.sin_llegar || []).length;
++      mensaje((e === 'recibida' ? o.folio + ' recibida completa: su pendiente se cerró.'
++                                : o.folio + ' recibida en parte: su pendiente sigue abierto con lo que falta.')
++              + (renglones.some(x => x.problema) ? ' El problema ya le llegó a compras.' : '')
++              + (sin ? ' ' + sin + (sin === 1 ? ' renglón sigue' : ' renglones siguen') + ' en camino.' : ''), true);
++      cargar();
++    }]] : null, true);
++  }
++
++  // ---------------------------------------------------------------- reportar un problema después de recibir
++  function reportar(o, r) {
++    let prob = null;
++    abrirDialogo('Problema con ' + o.folio + ' · renglón ' + r.n, c => {
++      c.append(el('p', { class: 'mini', text: '«' + (r.descripcion || '') + '» — llegaron ' + num(r.recibido) + ' de ' + num(r.cantidad) + ' ' + (r.unidad || '') +
++        ' el ' + fecha(r.recibido_en) + '. Compras recibe el aviso y decide: reponer, devolver al proveedor, cancelar o conservar.' }));
++      prob = formaProblema(() => true);
++      c.append(prob.nodo);
++    }, [['Reportar', async (m, boton) => {
++      boton.textContent = 'Preparando foto…';
++      await prob.espera();
++      const p = prob.leer('Renglón ' + r.n);
++      if (!p) throw new Error('Dime qué pasó con ese renglón.');
++      if (p.error) throw new Error(p.error);
++      boton.textContent = 'Enviando…';
++      await api('/api/compras/problema', json('POST', { oc: o.folio, n: r.n, problema: p }));
++      dlg.close(); mensaje('Problema reportado en ' + o.folio + ' (renglón ' + r.n + '). Compras lo resuelve en el cotizador.', true); cargar();
++    }]], true);
+   }
+ 
+   // ---------------------------------------------------------------- cargar
+@@ -249,6 +433,12 @@
+       $('meta').textContent = OC.length + ' órdenes · ' + abiertas + ' por recibir'
+         + (USER ? ' · ' + USER : '');
+       pintar();
++      if (ocFoco) {
++        const t = document.getElementById('oc-' + ocFoco);
++        if (t) { t.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
++        else mensaje('No encuentro ' + ocFoco + ' en Compras. ¿Ya llegó del cotizador?', false);
++        ocFoco = ocFoco && t ? ocFoco : '';
++      }
+     } catch (e) {
+       $('meta').textContent = 'no se pudo cargar';
+       mensaje('No se pudo cargar Compras: ' + e.message, false);
+@@ -258,7 +448,10 @@
+   const u = new URL(location.href);
+   const s = (u.searchParams.get('sitio') || '').toLowerCase();
+   if (s) vista = { lct: 'lzc', ver: 'icave', zlo: 'timsa', ese: 'eit', veracruz: 'icave', manzanillo: 'timsa', ensenada: 'eit', queretaro: 'qro' }[s] || s;
++  ocFoco = (u.searchParams.get('oc') || '').trim().toUpperCase().slice(0, 40);
++  if (ocFoco) { $('fBuscar').value = ocFoco; $('fAbiertas').checked = false; }
+   ['fEstado', 'fBuscar', 'fAbiertas'].forEach(id => { $(id).oninput = pintar; $(id).onchange = pintar; });
+-  dlg.addEventListener('click', ev => { if (ev.target === dlg) dlg.close(); });
++  dlg.addEventListener('click', ev => { if (ev.target === dlg && !dlg.dataset.fijo) dlg.close(); });
++  dlg.addEventListener('foto-lista', ev => { const b = ev.target.closest('.cmp-rl'); if (b) b.classList.remove('falta'); });
+   cargar();
+ })();
+diff --git a/docs/tableros/compras.md b/docs/tableros/compras.md
+index 84d48cf..f7ee867 100644
+--- a/docs/tableros/compras.md
++++ b/docs/tableros/compras.md
+@@ -1,6 +1,6 @@
+ ---
+ title: "Compras"
+-description: "Las órdenes de compra del cotizador: qué viene en camino a cada sitio, qué llegó y qué falta por recibir."
++description: "Las órdenes de compra del cotizador: qué viene en camino a cada sitio, qué llegó (con foto) y qué falta por recibir."
+ template: tablero.html
+ hide:
+   - toc
+@@ -19,7 +19,9 @@ hide:
+   <ol>
+     <li>Las órdenes de compra <b>las hace el cotizador</b>, no esta página: aquí llegan solas cuando compras las autoriza. El dinero, la autorización y el pago <b>se quedan en el cotizador</b>; aquí nunca se ven montos.</li>
+     <li>Cuando el proveedor manda el material, la OC pasa a <b>En camino</b> y cada renglón aparece <b>en camino</b> en la pestaña de su sitio en <a href="/tableros/inventario/">Inventario</a>.</li>
+-    <li>Cuando llega, <b>el responsable del sitio le da «Recibir»</b> con lo que llegó <b>de verdad</b> (puede ser menos de lo pedido). Eso da de alta el material en el inventario de ese sitio, cierra el pendiente de la OC si llegó todo, y el cotizador cierra la requisición solo.</li>
++    <li>Cuando llega, <b>el responsable del sitio le da «Recibir»</b> con lo que llegó <b>de verdad</b> (puede ser menos de lo pedido) y <b>una foto de cada renglón que llegó</b> (obligatoria; «Tomar foto» o «Galería»). Eso da de alta el material en el inventario de ese sitio, cierra el pendiente de la OC si llegó todo, y el cotizador cierra la requisición solo. Un renglón que todavía no llega se deja en 0: sigue en camino.</li>
++    <li>¿Llegó algo <b>equivocado, dañado, de menos o de más</b>? En el renglón, <b>«Reportar problema»</b>: qué pasó, cuántas, un comentario y la foto del problema (salvo «Faltante»). También se puede reportar después, hasta 30 días. Compras recibe el aviso y decide en el cotizador: <b>reponer</b> (vuelve a «en camino»), <b>devolver al proveedor</b>, <b>cancelar el renglón</b> o <b>conservar</b>; lo que decida se ve aquí en el renglón y en el inventario del sitio.</li>
++    <li>Las fotos se ven con <b>«foto»</b>. Se quedan en el servidor unos minutos, hasta que el cotizador las pasa a <b>Google Drive</b>; después la liga abre la de Drive.</li>
+     <li>Un renglón <b>«por ligar»</b> es material que el cotizador mandó sin decir a qué ítem del inventario corresponde. Lígalo aquí y se va en camino en ese momento. Si es algo que no se cuenta en el inventario, recíbelo igual: se anota sin tocar existencias.</li>
+     <li>Cada OC abre <b>un pendiente</b> en su sitio, con el responsable del sitio y la fecha de entrega. No lo cierres a mano: se cierra cuando se recibe todo.</li>
+   </ol>
+diff --git a/docs/tableros/inventario.css b/docs/tableros/inventario.css
+index 97f0c56..2141fa3 100644
+--- a/docs/tableros/inventario.css
++++ b/docs/tableros/inventario.css
+@@ -43,7 +43,7 @@
+ .tb-inv .inv-camino .cant { font-weight: 700; min-width: 4.5em; font-variant-numeric: tabular-nums; color: var(--hg-texto-fuerte); }
+ .tb-inv .inv-camino .que { flex: 1; min-width: 0; }
+ .tb-inv .inv-camino .que .mini { display: block; }
+-.tb-inv .inv-camino button { padding: 5px 12px; font-size: 13px; }
++.tb-inv .inv-camino button, .tb-inv .inv-camino .boton { padding: 5px 12px; font-size: 13px; }
+ 
+ /* ---- Tabla de un sitio ---------------------------------------------------- */
+ .tb-inv table.inv-sitio tr.falta td.num.stock { color: var(--hg-bloqueado); font-weight: 700; }
+diff --git a/docs/tableros/inventario.js b/docs/tableros/inventario.js
+index 3aa4e1f..0dfc1fd 100644
+--- a/docs/tableros/inventario.js
++++ b/docs/tableros/inventario.js
+@@ -7,6 +7,8 @@
+    Servidor (backend/app.py): GET /api/inventario (ítems con por_sitio y en_camino, envíos abiertos, sitios) ·
+    POST /api/inventario · PATCH /api/inventario/item?id= · POST /api/inventario/movimiento (entrada, salida, ajuste,
+    envio con sitio y destino, recepcion con envio_id) · GET /api/inventario/movimientos?item_id= · export.csv.
++   29-oct: un envío «en camino» que es de una orden de compra (envío.oc) se recibe en Compras, con la foto de cada
++   renglón (el servidor rechaza recibirlo aquí); «devolucion» = lo que regresó al proveedor por una DEV del cotizador.
+    Un envío puede salir de «fuera» (FUERA): una compra que viene en camino o material que salió antes de contarlo.
+    Necesita tableros/kanban.js (íconos) y tableros/tablero.css; estilos propios en tableros/inventario.css. */
+ (function () {
+@@ -168,8 +170,13 @@
+         f.append(el('span', { class: 'cant', text: e.cantidad + ' ' + (e.unidad || 'pza') }),
+           el('span', { class: 'que' }, el('b', { text: e.codigo }), ' ' + (e.descripcion || ''),
+             el('span', { class: 'mini', text: 'desde ' + corto(e.origen) + ' · ' + fechaC(e.cuando) + ' · ' + e.quien + (e.referencia ? ' · ' + e.referencia : '') })));
+-        const b = el('button', { type: 'button', text: 'Recibir' }); b.addEventListener('click', () => recibir(e));
+-        f.append(b); box.append(f);
++        if (e.oc) {   // 29-oct: una compra del cotizador se recibe en Compras, con la foto de cada renglón
++          f.append(el('a', { class: 'boton', href: '/tableros/compras/?oc=' + encodeURIComponent(e.oc), title: 'Es la orden de compra ' + e.oc + ': se recibe en Compras, con foto', text: 'Recibir en Compras' }));
++        } else {
++          const b = el('button', { type: 'button', text: 'Recibir' }); b.addEventListener('click', () => recibir(e));
++          f.append(b);
++        }
++        box.append(f);
+       });
+       cont.append(box);
+     }
+@@ -322,6 +329,7 @@
+   }
+ 
+   function recibir(e) {
++    if (e.oc) { location.href = '/tableros/compras/?oc=' + encodeURIComponent(e.oc); return; }
+     abrirDialogo('Recibir envío', c => {
+       c.append(el('p', { class: 'sub', html: '<b>' + esc(e.cantidad) + ' ' + esc(e.unidad || 'pza') + '</b> de ' + esc(e.codigo) + ' — ' + esc(e.descripcion || '') +
+         '<br>desde ' + esc(corto(e.origen)) + ' hacia ' + esc(corto(e.destino)) + ', enviado el ' + esc(fmt(e.cuando)) + ' por ' + esc(e.quien) + (e.referencia ? ' · ' + esc(e.referencia) : '') }));
+@@ -406,6 +414,7 @@
+     if (m.tipo === 'envio') return 'envío ' + (m.sitio === FUERA.id ? 'de fuera del inventario' : s) + ' → ' + corto(m.destino) + (m.estado === 'en-camino' ? ' · en camino' : ' · recibido' + (m.recibido != null && m.recibido !== m.cantidad ? ' ' + m.recibido : ''));
+     if (m.tipo === 'recepcion') return 'recepción en ' + s + (m.origen ? ' (de ' + corto(m.origen) + ')' : '');
+     if (m.tipo === 'ajuste') return 'conteo en ' + s + ' → ' + m.cantidad;
++    if (m.tipo === 'devolucion') return 'devolución al proveedor desde ' + s;
+     return m.tipo + ' en ' + s;
+   }
+   async function verMovimientos(i) {
+-- 
+2.43.0
+

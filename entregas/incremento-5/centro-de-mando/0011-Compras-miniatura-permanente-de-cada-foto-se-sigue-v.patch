@@ -1,0 +1,461 @@
+From b33ce2c147af53454fdc361efbc23c16ffa72832 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 14:55:32 -0600
+Subject: [PATCH 11/11] =?UTF-8?q?Compras:=20miniatura=20permanente=20de=20?=
+ =?UTF-8?q?cada=20foto=20=E2=80=94=20se=20sigue=20viendo=20en=20el=20sitio?=
+ =?UTF-8?q?=20despu=C3=A9s=20de=20irse=20a=20Drive?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- El navegador hace, junto con cada foto (de recepción y de problema), una miniatura: lado mayor 480 px,
+  JPEG 0.6 (baja a 0.45 / 360 px si pasa de 80 KB). Va dentro de la misma foto ({…, mini}); el servidor
+  la revisa como la foto (JPEG completo, ≤ 640 px, ≤ 120 KB) y la guarda en compras/<OC>/mini/. Si falta
+  o no sirve, la recepción sigue y esa foto queda como antes.
+- foto-archivada borra la completa, nunca la miniatura. /api/compras/foto?id= da la completa mientras no
+  se archiva y la miniatura después; &original=1 lleva a Drive; &mini=1 la miniatura. Las fotos viejas
+  sin miniatura siguen yendo a Drive.
+- La tarjeta muestra la miniatura de cada renglón y del problema, y «original en Drive» ya archivada.
+- El contrato con CAPRI no cambia: la miniatura nunca viaja (ni en recepciones ni en /foto).
+- Pruebas: tests-1029.sh 238 (guardado, completa/miniatura/original antes y después de archivar, la
+  PNG descartada, CAPRI solo ve la completa); prueba en navegador: miniaturas reales de 480 px.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013SfRStBeRbueu9grrfatQU
+---
+ CLAUDE.md                                   |   2 +-
+ DESPLIEGUE.md                               |   6 ++
+ backend/compras.py                          | 110 ++++++++++++++++----
+ backend/tests-1029.sh                       |  32 ++++++
+ docs/inventario/fotos-devoluciones-29oct.md |  10 +-
+ docs/tableros/compras.css                   |   5 +
+ docs/tableros/compras.js                    |  41 ++++++--
+ 7 files changed, 170 insertions(+), 36 deletions(-)
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 9dd72dc..d4142e4 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -31,7 +31,7 @@ Adriana, Michelle, Jesús and the field technicians work from it; Claude closes
+ | **Ruta a producción**, version cards, fase, pedido, próximas fechas, map pins | `docs/datos/proyecto.json` | Claude or Leo | edit by hand (keep the one-array-per-line format); step states `hecho · ahora · bloqueado · falta`, card tone `hecho · ahora · aviso · bloqueado`; bump `actualizado` |
+ | **Instalaciones** (per-site installation board, 22-oct) | `docs/tableros/instalaciones.md` + `.js`/`.css`; data: field actas via `GET /api/instalaciones` (`backend/instalaciones.py`, hooked at the end of `app.py`) | automatic | stages envío → recepción → instalación → **prueba en sitio** (acta `prueba-sitio`; only a passed test counts for the 1–2 per-site goal) → en operación (7 days after the test, no failure) + «con falla»; colour, nota and meta per site from `proyecto.json`; forms accept `?serie=&sitio=&<clave>=` prefill (`acta.js`) |
+ | **Inventario por sitio** (23-oct) | `docs/tableros/inventario.md` + `.js`/`.css`; data: server `/srv/projects/drogheda/inventario` via `/api/inventario` | everyone in the UI | tabs ICAVE · TIMSA · EIT · LCT · Querétaro + «Todo» (`?sitio=eit&n=2`); every movement carries `sitio` (none = qro); `envio` leaves a site (or `fuera`: purchase in transit / material shipped before counting) and stays «en camino» until the destination presses «Recibir» (`recepcion`); item `por_instalacion` = the installation kit; team rules in `docs/inventario/index.md`; tests `backend/tests-1023.sh` |
+-| **Compras** (28-oct) | `docs/tableros/compras.md` + `.js`/`.css`; datos: SQLite `/srv/projects/drogheda/drogheda.db` vía `backend/compras.py` (enganchado al final de `app.py`) | las OC entran solas desde el cotizador; el responsable del sitio da «Recibir» | las órdenes de compra de DROGHEDA **sin montos**, por sitio y estado (autorizada · pagada · en-camino · recibida-parcial · recibida · cancelada); «Ligar» un renglón a un ítem del inventario y «Recibir» completo o en parte; cada OC abre su pendiente `t-oc-<folio>` y se cierra sola al recibir todo; las dos puertas de recepción (Compras y el envío «en camino» de Inventario) se concilian. Las rutas `/api/integracion/…` van firmadas con `COTIZADOR_SECRETO` (HMAC del cuerpo y la hora, ventana 5 min), **sin sesión**: sin secreto contestan 503 y el resto del sitio sigue igual. Las rondas `"prueba": true` se guardan aparte. Flujo y decisiones: `docs/inventario/flujo-compras-28oct.md`; pruebas `backend/tests-1028.sh` (61). **29-oct (CAPRI incremento 5):** «Recibir» pide una foto JPEG por renglón (comprimida en el navegador) y acepta un problema por renglón (también después, ≤ 30 días); fotos temporales en `ADJUNTOS_DIR/compras/<OC>/` hasta que el cotizador las baja (`/api/integracion/cotizador/foto`) y avisa `foto-archivada` (se borran); aviso `oc.devolucion` → movimiento `devolucion` en el sitio y el renglón vuelve en camino o se cierra con faltante; los envíos de una OC ya no se reciben en Inventario (manda a Compras). Proceso: `docs/inventario/fotos-devoluciones-29oct.md`; pruebas `backend/tests-1029.sh` (195) |
++| **Compras** (28-oct) | `docs/tableros/compras.md` + `.js`/`.css`; datos: SQLite `/srv/projects/drogheda/drogheda.db` vía `backend/compras.py` (enganchado al final de `app.py`) | las OC entran solas desde el cotizador; el responsable del sitio da «Recibir» | las órdenes de compra de DROGHEDA **sin montos**, por sitio y estado (autorizada · pagada · en-camino · recibida-parcial · recibida · cancelada); «Ligar» un renglón a un ítem del inventario y «Recibir» completo o en parte; cada OC abre su pendiente `t-oc-<folio>` y se cierra sola al recibir todo; las dos puertas de recepción (Compras y el envío «en camino» de Inventario) se concilian. Las rutas `/api/integracion/…` van firmadas con `COTIZADOR_SECRETO` (HMAC del cuerpo y la hora, ventana 5 min), **sin sesión**: sin secreto contestan 503 y el resto del sitio sigue igual. Las rondas `"prueba": true` se guardan aparte. Flujo y decisiones: `docs/inventario/flujo-compras-28oct.md`; pruebas `backend/tests-1028.sh` (61). **29-oct (CAPRI incremento 5):** «Recibir» pide una foto JPEG por renglón (comprimida en el navegador) y acepta un problema por renglón (también después, ≤ 30 días); fotos temporales en `ADJUNTOS_DIR/compras/<OC>/` hasta que el cotizador las baja (`/api/integracion/cotizador/foto`) y avisa `foto-archivada` (se borran); aviso `oc.devolucion` → movimiento `devolucion` en el sitio y el renglón vuelve en camino o se cierra con faltante; los envíos de una OC ya no se reciben en Inventario (manda a Compras). Proceso: `docs/inventario/fotos-devoluciones-29oct.md`; pruebas `backend/tests-1029.sh` (238); miniatura permanente de cada foto en `compras/<OC>/mini/` (la foto se sigue viendo después de irse a Drive) |
+ | **Entrada al sitio** (27-oct) | `docs/entrar.html` + `docs/publico/` (public); `backend/acceso.py`; nginx `backend/nginx/drogheda.helgen.online.conf` installed by `backend/nginx/cambiar-entrada.sh` (backup, tests, auto-rollback; `deshacer`) | — | session = signed cookie `hbox_sesion` (30 days; version = hash of the user's htpasswd line, so a password change ends old sessions); login by user or Equipo email, case-insensitive; **no HTTP Basic** (only from `ACCESO_BASIC_IPS`, empty by default — server scripts use 127.0.0.1:8081); unsafe methods only same-origin (Origin/Sec-Fetch-Site); lockout per user+IP (8) and per IP (20) in 15 min; attempts in `/srv/projects/drogheda/acceso/intentos-AAAA-MM.jsonl` (no passwords); public paths: entrada, `/publico/`, `/fonts/`, `helgen.css`, `tema.js`, icon, `/api/{entrar,salir,sesion,salud,incidencias/publica(s)}` |
+ | **Incidencias del sitio** (27-oct) | server `/srv/projects/drogheda/incidencias` (INC-0001.json…, `_errores/`, `_vigia/`); `backend/incidencias.py`; page `docs/tableros/incidencias.md` + `incidencias-tablero.js/.css`; footer «Problemas del sitio» = `docs/js/incidencias.js` (in `overrides/main.html` head and in every standalone page) | everyone reports; `INCIDENCIAS_EDITORES` (leo, gibranlp, adriana, claude) triage; the daily agent through `scripts/agente-api.sh` | rules: `docs/agentes.md`; the agent's runbook: `agentes/agente-diario.md`; vigía `backend/vigia.py` (leo's crontab, minute 7); never put passwords or project data in `publica` notices |
+ | **Standup** (27-oct) | server `/srv/projects/drogheda/standup/AAAA-MM-DD/<user>.json`; `backend/standup.py`; `docs/tableros/standup.md` + `standup-tablero.js/.css`; banner `docs/js/standup.js` | the bot (`claude`) prepares; each person answers; Leo/Adriana see «Equipo» | answers can move the person's own cards (as them); everything else from the answers goes in a lote |
+diff --git a/DESPLIEGUE.md b/DESPLIEGUE.md
+index 8ae36cf..ddeb528 100644
+--- a/DESPLIEGUE.md
++++ b/DESPLIEGUE.md
+@@ -745,6 +745,12 @@ ssh -t leo@git.helgen.online '
+   requisición se atoraba). La tabla `devoluciones` guarda el origen (columna nueva, se agrega sola).
+ - **`recepciones`: `problema.por`** — el usuario del sitio que reportó el problema (CAPRI lo pone como quien reporta la
+   DEV). Es un campo más dentro de `problema`; lo demás del contrato no cambia.
++- **Miniaturas (las fotos se siguen viendo en el sitio):** el navegador hace, junto con cada foto, una miniatura (lado
++  mayor 480 px, JPEG ≈ 0.6, ≤ 80 KB) que se guarda **para siempre** en `adjuntos/compras/<OC>/mini/` (≈ 30–60 KB por
++  foto real). `foto-archivada` borra la foto completa pero no la miniatura. `/api/compras/foto?id=` da la completa
++  mientras no se archiva y la miniatura después; `&original=1` lleva a Drive (para quien tiene acceso a la carpeta).
++  Las fotos de antes de este cambio no tienen miniatura y siguen como estaban (ya archivadas, a Drive). La miniatura
++  nunca viaja al cotizador: el contrato no cambia.
+ - **Órdenes de PRUEBA** (`"prueba": true`): nunca salen en recepciones, así que nadie archiva sus fotos. No esperan
+   al cotizador (ni para volver a recibir ni para otro problema) y sus fotos se borran solas cuando la orden se cierra
+   (recibida o cancelada) o a los 7 días (al arrancar el servicio y en cada consulta del cotizador).
+diff --git a/backend/compras.py b/backend/compras.py
+index 4c1105d..5d7b448 100644
+--- a/backend/compras.py
++++ b/backend/compras.py
+@@ -78,6 +78,11 @@ MIN_COMENTARIO = 3
+ DEV_RE = re.compile(r"^DEV-[A-Z0-9][A-Z0-9-]{0,35}$")              # folio de la devolución: DEV-AAAA-NNNN
+ HOSTS_DRIVE = ("drive.google.com", "docs.google.com")
+ FOTO_LADO_MAX = 6000          # px: el navegador manda 1600; una foto de más de 6000 de lado no es de este flujo
++# Miniatura (29-oct, pedido de Leo: las fotos se siguen viendo en el sitio después de irse a Drive). La hace el
++# navegador junto con la foto (lado mayor 480 px, JPEG ≈ 0.6, ≈ 80 KB) y se queda SIEMPRE en el servidor, en
++# compras/<OC>/mini/. Nunca viaja al cotizador.
++MINI_LADO_MAX = 640
++MINI_MAX_BYTES = 120 * 1024
+ ESPERA_CANDADO_MS = 25000     # una recepción grande espera a la otra (gunicorn corta a los 30 s)
+ ESPERA_COTIZADOR = ("Espera unos minutos: el cotizador recoge lo del centro de mando cada 15 min. "
+                     "Vuelve a intentarlo después.")
+@@ -210,7 +215,7 @@ def url_archivo_valida(url):
+             and u.netloc.lower() in HOSTS_DRIVE)
+ 
+ 
+-def _error_jpeg(b):
++def _error_jpeg(b, lado_max=FOTO_LADO_MAX):
+     """None si los bytes parecen un JPEG completo; si no, por qué. Barato: SOI al principio, EOI al final y un
+     segmento SOFn con medidas de 1 a FOTO_LADO_MAX px antes de los datos (SOS)."""
+     if len(b) < 128 or b[:3] != b"\xff\xd8\xff":
+@@ -236,8 +241,8 @@ def _error_jpeg(b):
+                 return "está dañada"
+             alto = int.from_bytes(b[i + 5:i + 7], "big")
+             ancho = int.from_bytes(b[i + 7:i + 9], "big")
+-            if not (1 <= alto <= FOTO_LADO_MAX and 1 <= ancho <= FOTO_LADO_MAX):
+-                return f"mide {ancho}×{alto} px (máximo {FOTO_LADO_MAX})"
++            if not (1 <= alto <= lado_max and 1 <= ancho <= lado_max):
++                return f"mide {ancho}×{alto} px (máximo {lado_max})"
+             return None
+         if m == 0xDA:                                   # empiezan los datos sin haber dicho las medidas
+             return "está dañada"
+@@ -548,8 +553,38 @@ class Compras:
+             fid = f"{base}-{k}"
+         return fid
+ 
+-    def guardar_foto(self, folio, fid, datos):
+-        d = self.dir_fotos(folio)
++    def ruta_mini(self, folio, fid):
++        """Ruta de la miniatura (compras/<OC>/mini/<id>.jpg), con la misma revisión que ruta_foto."""
++        if not foto_id_valido(fid):
++            return None
++        base = os.path.realpath(os.path.join(self.g["ADJ"], "compras"))
++        p = os.path.realpath(os.path.join(base, carpeta_oc(folio), "mini", fid + ".jpg"))
++        return p if p.startswith(base + os.sep) else None
++
++    def leer_mini(self, d, que):
++        """La miniatura que manda el navegador dentro de la foto: {…, mini: {datos, mime}}. Se revisa como la foto
++        (JPEG completo, ≤ MINI_LADO_MAX px, ≤ MINI_MAX_BYTES). Opcional: si falta o no sirve, la recepción sigue
++        y esa foto se ve como antes (en Drive, una vez archivada). Devuelve bytes o None."""
++        m = d.get("mini") if isinstance(d, dict) else None
++        if not isinstance(m, dict) or not m.get("datos"):
++            return None
++        datos = re.sub(r"\s+", "", str(m.get("datos")))
++        if datos.startswith("data:"):
++            datos = datos.split(",", 1)[-1]
++        if len(datos) > MINI_MAX_BYTES * 4 // 3 + 8:
++            return None
++        try:
++            b = base64.b64decode(datos, validate=True)
++        except (binascii.Error, ValueError):
++            return None
++        e = _error_jpeg(b, MINI_LADO_MAX) if len(b) <= MINI_MAX_BYTES else "pesa demasiado"
++        if e:
++            self.g["app"].logger.info("compras.py: miniatura descartada (%s): %s", que, e)
++            return None
++        return b
++
++    def guardar_foto(self, folio, fid, datos, mini=False):
++        d = os.path.join(self.dir_fotos(folio), "mini") if mini else self.dir_fotos(folio)
+         os.makedirs(d, exist_ok=True)
+         tmp = os.path.join(d, ".tmp-" + uuid.uuid4().hex[:8] + ".jpg")
+         try:
+@@ -603,7 +638,8 @@ class Compras:
+             foto, e = self.leer_foto(d.get("foto"), f"{que}, foto del problema")
+             if e:
+                 return None, e
+-        return {"tipo": tipo, "cantidad": q, "comentario": com, "foto": foto}, None
++        mini = self.leer_mini(d.get("foto"), f"{que}, foto del problema") if foto else None
++        return {"tipo": tipo, "cantidad": q, "comentario": com, "foto": foto, "mini": mini}, None
+ 
+     def anotar_problema(self, c, folio, r, p, quien, ahora, pfid=None):
+         """Columnas del problema (su foto ya se escribió con escribir_foto). problema_entregado_en vuelve a NULL:
+@@ -613,11 +649,15 @@ class Compras:
+                   "problema_por=?, problema_entregado_en=NULL, actualizado_en=? WHERE oc_folio=? AND n=?",
+                   (p["tipo"], p["cantidad"], p["comentario"], pfid, ahora, quien, ahora, folio, r["n"]))
+ 
+-    def escribir_foto(self, c, folio, n, datos, escritas, problema=False):
+-        """Escribe la foto y anota su ruta en «escritas», para borrarla si la operación falla después."""
++    def escribir_foto(self, c, folio, n, datos, escritas, problema=False, mini=None):
++        """Escribe la foto (y su miniatura, si vino) y anota sus rutas en «escritas», para borrarlas si la operación
++        falla después."""
+         fid = self.nuevo_foto_id(c, folio, n, problema=problema)
+         self.guardar_foto(folio, fid, datos)
+         escritas.append(os.path.join(self.dir_fotos(folio), fid + ".jpg"))
++        if mini:
++            self.guardar_foto(folio, fid, mini, mini=True)
++            escritas.append(os.path.join(self.dir_fotos(folio), "mini", fid + ".jpg"))
+         return fid
+ 
+     @staticmethod
+@@ -725,6 +765,7 @@ class Compras:
+                 if e:
+                     errores.append(e)
+                     continue
++                foto = (foto, self.leer_mini(ln.get("foto"), f"Renglón {n}"))
+             env = self.envio(r["envio_id"])
+             it, entero = None, None
+             if env and env.get("estado") == "en-camino":
+@@ -762,9 +803,9 @@ class Compras:
+             # 1) las fotos de todos los renglones
+             fotos = {}
+             for r, cant, foto, prob, env, it, entero in plan:
+-                fotos[r["n"]] = (self.escribir_foto(c, folio, r["n"], foto, escritas) if foto else None,
+-                                 self.escribir_foto(c, folio, r["n"], prob["foto"], escritas, problema=True)
+-                                 if prob and prob["foto"] else None)
++                fotos[r["n"]] = (self.escribir_foto(c, folio, r["n"], foto[0], escritas, mini=foto[1]) if foto else None,
++                                 self.escribir_foto(c, folio, r["n"], prob["foto"], escritas, problema=True,
++                                                    mini=prob["mini"]) if prob and prob["foto"] else None)
+             # 2) inventario y renglones
+             for r, cant, foto, prob, env, it, entero in plan:
+                 n, ahora = r["n"], g["ahora"]()
+@@ -1093,6 +1134,9 @@ class Compras:
+                 r["problema_reportable"] = bool(f["recibido_en"]) and f["recibido_en"] >= limite
+                 r["problema_en_espera"] = self.problema_en_espera(f, oc["prueba"])   # no otro hasta que lo recojan
+                 r["cerrado"] = self.cerrado(f)          # ya no se espera nada de este renglón
++                for pre in ("foto", "problema_foto"):     # la miniatura se queda aunque la foto ya esté en Drive
++                    rm = self.ruta_mini(oc["folio"], f[pre + "_id"]) if f[pre + "_id"] else None
++                    r[pre + "_mini"] = bool(rm and os.path.isfile(rm))
+                 r["recepcion_en_espera"] = not r["cerrado"] and self.foto_en_espera(f, oc["prueba"])
+                 rs.append(r)
+             d["renglones"] = rs
+@@ -1465,7 +1509,8 @@ def registrar(app, g):
+                 return jsonify(ok=False, error=e or "Dime qué pasó con ese renglón."), 400
+             escritas = []
+             try:
+-                pfid = C.escribir_foto(c, folio, n, p["foto"], escritas, problema=True) if p["foto"] else None
++                pfid = C.escribir_foto(c, folio, n, p["foto"], escritas, problema=True,
++                                       mini=p["mini"]) if p["foto"] else None
+                 C.anotar_problema(c, folio, r, p, u, g["ahora"](), pfid)
+             except Exception:                      # noqa: BLE001
+                 C.borrar_fotos(escritas)
+@@ -1480,7 +1525,9 @@ def registrar(app, g):
+ 
+     @app.get("/api/compras/foto")
+     def compras_foto():
+-        """La foto para quien ve la página Compras: el archivo mientras está aquí; ya archivada, la liga de Drive."""
++        """La foto para quien ve la página Compras. Mientras está aquí: la foto completa. Ya archivada: su miniatura
++        (se queda para siempre), o, si es de antes de las miniaturas, la liga de Drive. ?original=1: la de Drive (para
++        quien tiene acceso a la carpeta) o la local si todavía no se archiva. ?mini=1: la miniatura si la hay."""
+         if not g["quien"]():
+             return g["_sin_usuario"]()
+         fid = request.args.get("id") or ""
+@@ -1490,15 +1537,34 @@ def registrar(app, g):
+             r, pre = C.renglon_de_foto(c, fid)
+         if not r:
+             return jsonify(ok=False, error="No existe esa foto."), 404
+-        if r[pre + "_archivada"]:
+-            url = r[pre + "_url"] or ""
++        archivada = bool(r[pre + "_archivada"])
++        url = r[pre + "_url"] or ""
++        completa = C.ruta_foto(r["oc_folio"], fid)
++        completa = completa if completa and os.path.isfile(completa) else None
++        mini = C.ruta_mini(r["oc_folio"], fid)
++        mini = mini if mini and os.path.isfile(mini) else None
++
++        def mandar(ruta):
++            resp = send_file(ruta, mimetype="image/jpeg", max_age=0)
++            resp.headers["Cache-Control"] = "private, no-store"
++            resp.headers["X-Content-Type-Options"] = "nosniff"
++            return resp
++
++        def a_drive():
+             if url_archivo_valida(url):
+                 return redirect(url, code=302)
+             return jsonify(ok=False, error="La foto ya está en Drive pero no tengo su liga."), 404
+-        ruta = C.ruta_foto(r["oc_folio"], fid)
+-        if not ruta or not os.path.isfile(ruta):
+-            return jsonify(ok=False, error="No encuentro el archivo de esa foto."), 404
+-        resp = send_file(ruta, mimetype="image/jpeg", max_age=0)
+-        resp.headers["Cache-Control"] = "private, no-store"
+-        resp.headers["X-Content-Type-Options"] = "nosniff"
+-        return resp
++
++        if request.args.get("original"):
++            if archivada:
++                return a_drive()
++            return mandar(completa) if completa else (jsonify(ok=False, error="No encuentro el archivo de esa foto."), 404)
++        if request.args.get("mini") and mini:
++            return mandar(mini)
++        if not archivada and completa:
++            return mandar(completa)
++        if mini:
++            return mandar(mini)
++        if archivada:
++            return a_drive()
++        return jsonify(ok=False, error="No encuentro el archivo de esa foto."), 404
+diff --git a/backend/tests-1029.sh b/backend/tests-1029.sh
+index 90a5de6..e46697f 100644
+--- a/backend/tests-1029.sh
++++ b/backend/tests-1029.sh
+@@ -561,6 +561,38 @@ for f in os.listdir(d): p=os.path.join(d,f); os.path.isfile(p) and os.utime(p,(t
+ sget /api/integracion/cotizador/recepciones > /dev/null
+ check "una orden de prueba abierta: sus fotos de hace más de 7 días se borran en la siguiente consulta" '0' "$(find $T/adjuntos/compras/OC-PRUEBA-8 -type f | wc -l | tr -d ' ')"
+ 
++echo
++echo "## (en vivo) miniatura: la foto se sigue viendo en el sitio después de irse a Drive"
++MINI=$(printf '%s' "$FOTO" | $PY -c "import sys,base64;b=bytearray(base64.b64decode(sys.stdin.read()));b[15]=2;print(base64.b64encode(bytes(b)).decode())")
++sha() { $PY -c "import sys,hashlib;print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())"; }
++SHA_MINI=$(printf '%s' "$MINI" | base64 -d 2>/dev/null | sha)
++FM='"foto":{"nombre":"r.jpg","mime":"image/jpeg","datos":"'$FOTO'","mini":{"datos":"'$MINI'","mime":"image/jpeg"}}'
++FMALA='"foto":{"nombre":"r.jpg","mime":"image/jpeg","datos":"'$FOTO'","mini":{"datos":"'$PNG'","mime":"image/png"}}'
++O='"oc":{"folio":"OC-2026-0800","sitio":"QRO","renglones":[{"n":1,"descripcion":"Cinta","unidad":"pza","cantidad":2,"item":null},{"n":2,"descripcion":"Cinchos","unidad":"pza","cantidad":3,"item":null}]}'
++post '{"evento_id":"OC-2026-0800:oc.autorizada:1","tipo":"oc.autorizada",'"$O"'}' > /dev/null
++R="$(as jesus -d '{"oc":"OC-2026-0800","renglones":[{"n":1,"recibido":2,'"$FM"',"problema":{"tipo":"Dañado","cantidad":1,"comentario":"una rota",'"$FM"'}},{"n":2,"recibido":3,'"$FMALA"'}]}' $U/api/compras/recibir)"
++check "se recibe (una miniatura que no sirve no detiene la recepción)" '"ok":true' "$R"
++check "dos miniaturas guardadas en compras/OC-2026-0800/mini (la PNG se descartó)" '2' "$(ls $T/adjuntos/compras/OC-2026-0800/mini | wc -l | tr -d ' ')"
++check "la ficha dice qué fotos tienen miniatura" 'r1=True/True r2=False' "$(as leo $U/api/compras | $PY -c "
++import sys,json;d=json.load(sys.stdin);o=[x for x in d['ordenes'] if x['folio']=='OC-2026-0800'][0];r=o['renglones']
++print('r1=%s/%s r2=%s' % (r[0]['foto_mini'], r[0]['problema_foto_mini'], r[1]['foto_mini']))")"
++M1=$(sql "SELECT foto_id FROM renglones WHERE oc_folio='OC-2026-0800' AND n=1" | tr -d "[]()',")
++MP=$(sql "SELECT problema_foto_id FROM renglones WHERE oc_folio='OC-2026-0800' AND n=1" | tr -d "[]()',")
++M2=$(sql "SELECT foto_id FROM renglones WHERE oc_folio='OC-2026-0800' AND n=2" | tr -d "[]()',")
++check "sin archivar: «foto» da la foto completa" "$SHA_FOTO" "$(curl -s -H 'X-Remote-User: leo' "$U/api/compras/foto?id=$M1" | sha)"
++check "…y &mini=1 la miniatura" "$SHA_MINI" "$(curl -s -H 'X-Remote-User: leo' "$U/api/compras/foto?id=$M1&mini=1" | sha)"
++check "el cotizador siempre baja la completa (la miniatura nunca viaja)" "$SHA_FOTO" "$(sget "/api/integracion/cotizador/foto?id=$M1" | sha)"
++archivar OC-2026-0800
++check "archivada: se borra la completa pero la miniatura se queda" 'completas=0 minis=2' "completas=$(find $T/adjuntos/compras/OC-2026-0800 -maxdepth 1 -type f | wc -l | tr -d ' ') minis=$(ls $T/adjuntos/compras/OC-2026-0800/mini | wc -l | tr -d ' ')"
++check "ya archivada: «foto» da la miniatura (200, image/jpeg), no un salto a Drive" "200 image/jpeg" "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' -H 'X-Remote-User: leo' "$U/api/compras/foto?id=$M1")"
++check "…y es la miniatura" "$SHA_MINI" "$(curl -s -H 'X-Remote-User: leo' "$U/api/compras/foto?id=$M1" | sha)"
++check "«original en Drive» (&original=1) lleva a la liga de Drive" "302 $DRIVE" "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'X-Remote-User: leo' "$U/api/compras/foto?id=$M1&original=1")"
++check "la foto del problema también se ve con su miniatura" "$SHA_MINI" "$(curl -s -H 'X-Remote-User: leo' "$U/api/compras/foto?id=$MP" | sha)"
++check "una foto sin miniatura (la PNG descartada): como antes, a Drive" "302 $DRIVE" "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'X-Remote-User: leo' "$U/api/compras/foto?id=$M2")"
++check "el cotizador no puede bajar nada ya archivado (ni la miniatura)" '404' "$(sget "/api/integracion/cotizador/foto?id=$M1" "" 0 -o /dev/null -w '%{http_code}')"
++check "la miniatura no cambia la forma de la foto en recepciones" "['archivada', 'id', 'url']" "$(sget /api/integracion/cotizador/recepciones | $PY -c "
++import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_folio']=='OC-2026-0800'][0];print(sorted(o['renglones'][0]['foto']))")"
++
+ echo
+ echo "## sin secreto: las rutas nuevas también contestan 503 y la página sigue"
+ kill $APP 2>/dev/null; sleep 0.5
+diff --git a/docs/inventario/fotos-devoluciones-29oct.md b/docs/inventario/fotos-devoluciones-29oct.md
+index f4f95fb..07d7739 100644
+--- a/docs/inventario/fotos-devoluciones-29oct.md
++++ b/docs/inventario/fotos-devoluciones-29oct.md
+@@ -2,7 +2,7 @@
+ title: "Recibir con foto y reportar problemas: devoluciones de compras"
+ date: 2026-10-29
+ tags: [project-drogheda, hbox, compras, inventario, cotizador, recepcion, devoluciones, portal]
+-estado: construido y probado (195 pruebas del servidor + 61 de compras); se publica con el despliegue del 29-oct
++estado: construido y probado (238 pruebas del servidor + 61 de compras); se publica con el despliegue del 29-oct
+ ---
+ 
+ # Recibir con foto y reportar problemas
+@@ -83,8 +83,10 @@ hay y el renglón lo dice: hay que aclararlo con compras.
+ 
+ - Se quedan **unos minutos en el servidor** del centro de mando. El cotizador las pasa a **Google Drive** (carpeta
+   privada *Compras/AAAA/<proyecto>/Recepciones*) en su siguiente consulta, y entonces se borran del servidor.
+-- En la tarjeta de la orden, **«foto»** abre la foto: la del servidor mientras está ahí, la de Drive después (para
+-  abrir la de Drive necesitas acceso a la carpeta).
++- Al tomarla, la página guarda además una **miniatura** (chica, para verla en el celular) que **se queda en el
++  sitio para siempre**. En la tarjeta de la orden cada renglón muestra su miniatura: tócala para verla. Mientras la
++  foto está en el servidor se abre completa; cuando ya se fue a Drive se abre la miniatura, y **«original en Drive»**
++  abre la completa (para eso necesitas acceso a la carpeta de compras).
+ - Si la conexión con el cotizador está apagada, las fotos se quedan guardadas en el servidor hasta que se encienda:
+   no se pierden.
+ 
+@@ -112,7 +114,7 @@ se siguen recibiendo en Inventario como siempre.
+ - **Servidor** (`backend/compras.py`): foto por renglón obligatoria al recibir (todo o nada), problema por renglón,
+   fotos temporales en `adjuntos/compras/<OC>/`, las rutas firmadas con las que el cotizador baja cada foto y avisa
+   que ya la archivó (entonces se borra aquí), y el aviso `oc.devolucion` con el efecto de cada decisión en el
+-  inventario y en el pendiente. Nunca guarda montos. Pruebas: `backend/tests-1029.sh` (195) y
++  inventario y en el pendiente. Nunca guarda montos. Pruebas: `backend/tests-1029.sh` (238) y
+   `backend/tests-1028.sh` (61).
+ - **Página [Compras](../tableros/compras.md)**: el diálogo de Recibir con un bloque por renglón (cantidad, foto,
+   problema), las fotos y devoluciones en cada renglón y «Reportar problema» después de recibir.
+diff --git a/docs/tableros/compras.css b/docs/tableros/compras.css
+index 87f865f..45a8415 100644
+--- a/docs/tableros/compras.css
++++ b/docs/tableros/compras.css
+@@ -50,6 +50,11 @@
+ .tb-compras .cmp-ren .cmp-dev { margin-top: 2px; }
+ .tb-compras .cmp-ren .cmp-dev b { color: var(--hg-texto-2); font-weight: 600; }
+ .tb-compras .cmp-ren a.cmp-ver-foto { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
++.tb-compras .cmp-foto-ren { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; }
++.tb-compras .cmp-ren .cmp-problema .cmp-foto-ren { flex-direction: row; align-items: center; gap: 6px; vertical-align: middle; }
++.tb-compras img.cmp-mini-ren { width: 52px; height: 52px; object-fit: cover; border-radius: 6px; display: block;
++  border: 1px solid var(--hg-linea-2); background: var(--hg-elevado); }
++.tb-compras a.cmp-drive { font-size: 11.5px; font-weight: 500; white-space: nowrap; }
+ .tb-compras .cmp-ren td.num a.cmp-ver-foto { font-weight: 500; }
+ .tb-compras button.cmp-rep { padding: 2px 6px; margin: 2px 0 0 -6px; font-size: 12.5px; color: var(--hg-texto-3); }
+ .tb-compras .cmp-oc.foco { border-color: var(--hg-foco); box-shadow: 0 0 0 2px color-mix(in srgb, var(--hg-foco) 45%, transparent); }
+diff --git a/docs/tableros/compras.js b/docs/tableros/compras.js
+index 65fe2d4..9709d83 100644
+--- a/docs/tableros/compras.js
++++ b/docs/tableros/compras.js
+@@ -40,6 +40,8 @@
+   const TIPOS_PROBLEMA = [['Incorrecto', 'Incorrecto — llegó otra cosa'], ['Dañado', 'Dañado — llegó roto o golpeado'],
+     ['Faltante', 'Faltante — llegó menos (no lleva foto)'], ['Sobrante', 'Sobrante — llegó de más'], ['Otro', 'Otro']];
+   const FOTO_LADO = 1600, FOTO_CALIDAD = 0.72, MAX_ENVIO = 20 * 1024 * 1024;
++  // Miniatura (29-oct): se queda en el servidor para siempre, así la foto se sigue viendo aquí cuando ya está en Drive.
++  const MINI_LADO = 480, MINI_CALIDAD = 0.6, MINI_MAX = 80 * 1024;
+ 
+   let OC = [], ITEMS = [], SITIOS = [], USER = '', INTEG = true, vista = 'todo', ocFoco = '';
+   const dlg = $('dlg'), aviso = $('aviso'), cont = $('cont'), tabs = $('cmp-tabs');
+@@ -61,7 +63,17 @@
+   function campo(l, i, ayuda) { const d = el('div'); d.append(el('label', { text: l }), i); if (ayuda) d.append(el('div', { class: 'ayuda', text: ayuda })); return d; }
+   // Siempre por el servidor: él abre la foto local o, ya archivada, manda a Drive (revisa que la liga sea de Drive).
+   const fotoUrl = f => '/api/compras/foto?id=' + encodeURIComponent((f && f.id) || '');
+-  const ligaFoto = (f, txt) => el('a', { href: fotoUrl(f), target: '_blank', rel: 'noopener', class: 'cmp-ver-foto', title: f.archivada ? 'Ya está en Google Drive' : 'Todavía en el servidor; el cotizador la pasa a Drive' }, txt || 'foto');
++  // La foto del renglón: miniatura (si la hay) o la palabra «foto»; ya archivada, además «original en Drive».
++  function ligaFoto(f, txt, mini) {
++    const caja = el('span', { class: 'cmp-foto-ren' });
++    const a = el('a', { href: fotoUrl(f), target: '_blank', rel: 'noopener', class: 'cmp-ver-foto',
++      title: f.archivada ? 'Ya está en Google Drive (aquí se ve la miniatura)' : 'Todavía en el servidor; el cotizador la pasa a Drive' });
++    if (mini) a.append(el('img', { src: fotoUrl(f) + '&mini=1', alt: txt || 'foto', loading: 'lazy', class: 'cmp-mini-ren' }));
++    else a.append(txt || 'foto');
++    caja.append(a);
++    if (f.archivada) caja.append(el('a', { href: fotoUrl(f) + '&original=1', target: '_blank', rel: 'noopener', class: 'cmp-drive', title: 'Abre la foto completa en Google Drive (necesitas acceso a la carpeta de compras)', text: 'original en Drive' }));
++    return caja;
++  }
+ 
+   Object.entries(ESTADOS).forEach(([k, v]) => $('fEstado').append(el('option', { value: k, text: v[0] })));
+ 
+@@ -88,13 +100,23 @@
+     const cx = cv.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, cw, ch); cx.drawImage(img, 0, 0, cw, ch); soltar();
+     const blob = await new Promise(ok => cv.toBlob(ok, 'image/jpeg', FOTO_CALIDAD));
+     if (!blob) throw new Error('El navegador no pudo comprimir la foto. Intenta con otra.');
+-    const datos = await new Promise((ok, mal) => {
++    const base64 = b => new Promise((ok, mal) => {
+       const r = new FileReader();
+       r.onload = () => ok(String(r.result).split(',')[1] || '');
+       r.onerror = () => mal(new Error('No pude leer la foto.'));
+-      r.readAsDataURL(blob);
++      r.readAsDataURL(b);
+     });
+-    return { nombre: String(file.name || 'foto').replace(/\.[^.]+$/, '').slice(0, 60) + '.jpg', datos, mime: 'image/jpeg', bytes: blob.size, url: URL.createObjectURL(blob) };
++    const datos = await base64(blob);
++    // miniatura desde la foto ya comprimida (ya viene derecha); si pasa de ~80 KB, más chica y con menos calidad
++    let mini = null;
++    for (const [lado, q] of [[MINI_LADO, MINI_CALIDAD], [MINI_LADO, 0.45], [360, 0.45]]) {
++      const k2 = Math.min(1, lado / Math.max(cw, ch));
++      const mv = document.createElement('canvas'); mv.width = Math.max(1, Math.round(cw * k2)); mv.height = Math.max(1, Math.round(ch * k2));
++      mv.getContext('2d').drawImage(cv, 0, 0, mv.width, mv.height);
++      const mb = await new Promise(ok => mv.toBlob(ok, 'image/jpeg', q));
++      if (mb && mb.size <= MINI_MAX) { mini = { datos: await base64(mb), mime: 'image/jpeg', bytes: mb.size }; break; }
++    }
++    return { nombre: String(file.name || 'foto').replace(/\.[^.]+$/, '').slice(0, 60) + '.jpg', datos, mime: 'image/jpeg', bytes: blob.size, url: URL.createObjectURL(blob), mini };
+   }
+ 
+   // Dos botones como en las actas (A12, 28-oct): «Tomar foto» abre la cámara (capture) y «Galería» deja elegir una ya tomada.
+@@ -125,7 +147,8 @@
+     caja.append(bCam, bGal, prev, est);
+     return {
+       nodo: caja,
+-      valor: () => (foto ? { nombre: foto.nombre, datos: foto.datos, mime: foto.mime } : null),
++      valor: () => (foto ? Object.assign({ nombre: foto.nombre, datos: foto.datos, mime: foto.mime },
++        foto.mini ? { mini: { datos: foto.mini.datos, mime: foto.mini.mime } } : {}) : null),
+       espera: () => trabajo || Promise.resolve(),
+       falta: si => caja.classList.toggle('falta', !!si)
+     };
+@@ -247,7 +270,7 @@
+       if (r.problema) {
+         const p = r.problema, ln = el('div', { class: 'mini cmp-problema' });
+         ln.append(el('b', { text: 'Problema: ' + p.tipo + ' · ' + num(p.cantidad) }), ' — «' + (p.comentario || '') + '»');
+-        if (p.foto) ln.append(' · ', ligaFoto(p.foto, 'foto del problema'));
++        if (p.foto) ln.append(' · ', ligaFoto(p.foto, 'foto del problema', r.problema_foto_mini));
+         td.append(ln);
+       }
+       (r.devoluciones || []).forEach(dv => td.append(el('div', { class: 'mini cmp-dev' },
+@@ -280,7 +303,7 @@
+       else if (+r.recibido > 0) tdL.append(num(r.recibido), el('div', { class: 'mini', text: 'faltan ' + num(r.pendiente) }));
+       else tdL.append(el('span', { class: 'mini', text: '—' }));
+       if (+r.faltante_aceptado > 0) tdL.append(el('div', { class: 'mini', text: 'faltante ' + num(r.faltante_aceptado) }));
+-      if (r.foto) tdL.append(el('div', {}, ligaFoto(r.foto)));
++      if (r.foto) tdL.append(el('div', {}, ligaFoto(r.foto, 'foto', r.foto_mini)));
+       tr.append(tdL);
+       tb.append(tr);
+     });
+@@ -389,9 +412,9 @@
+         if (v > 0) {
+           const f = l.foto.valor();
+           if (!f) { errores.push(que + ' (' + (l.r.descripcion || '') + '): falta la foto.'); l.foto.falta(true); l.sec.classList.add('falta'); return; }
+-          ln.foto = f; peso += f.datos.length;
++          ln.foto = f; peso += f.datos.length + (f.mini ? f.mini.datos.length : 0);
+         }
+-        if (p) { ln.problema = p; if (p.foto) peso += p.foto.datos.length; }
++        if (p) { ln.problema = p; if (p.foto) peso += p.foto.datos.length + (p.foto.mini ? p.foto.mini.datos.length : 0); }
+         renglones.push(ln);
+       });
+       if (errores.length) throw new Error(errores.join(' '));
+-- 
+2.43.0
+

@@ -1,0 +1,1430 @@
+From 25065c2c2e2c7bc4602ddbdb43c8ae019b5f9bb3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 13:47:06 -0600
+Subject: [PATCH 01/11] =?UTF-8?q?Compras:=20foto=20por=20rengl=C3=B3n=20al?=
+ =?UTF-8?q?=20recibir,=20problemas=20y=20devoluciones=20(CAPRI=20increment?=
+ =?UTF-8?q?o=205,=20m=C3=B3dulo=20I=20=C2=B7=20servidor)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Recibir pide una foto JPEG por renglón que llegó (base64, todo o nada); un renglón en 0 sin
+  problema se queda por recibir. «Reportar problema» por renglón: Incorrecto · Dañado · Faltante ·
+  Sobrante · Otro, cantidad, comentario obligatorio y foto (salvo Faltante); también después de
+  recibir (≤ 30 días) con POST /api/compras/problema.
+- Fotos temporales en ADJUNTOS_DIR/compras/<OC>/<id>.jpg (id del contrato: <OC>-r<n>-AAAAMMDDTHHMMSS,
+  -p- para la del problema). Columnas nuevas por renglón con migración segura al arrancar
+  (foto, problema, faltante_aceptado, actualizado_en) y tabla devoluciones.
+- Rutas firmadas: recepciones trae foto/problema por renglón y vuelve a ofrecer lo que cambió
+  (actualizado_en); GET /api/integracion/cotizador/foto?id= (bytes image/jpeg, 404 si no existe o ya
+  se archivó); POST /api/integracion/cotizador/foto-archivada {id, url} guarda la liga de Drive y
+  borra el archivo (idempotente). Con sesión: GET /api/compras/foto?id= (local o 302 a Drive).
+- Aviso oc.devolucion (idempotente por evento_id y por folio DEV): Reponer saca del sitio lo devuelto
+  (movimiento nuevo «devolucion») y el renglón vuelve a «en camino» con su envío; Devolver al
+  proveedor / Cancelar renglón sacan del sitio y cierran el renglón con faltante aceptado; Conservar
+  no cambia nada. Faltante y Sobrante nunca mueven existencias (no se contaron). Sin montos.
+- app.py: tipo de movimiento «devolucion» (solo del sistema) y la «Recibir» de Inventario manda a
+  Compras los envíos que son de una OC (409 con el folio), para que nadie reciba sin foto.
+- Pruebas: tests-1029.sh (147) y tests-1028.sh al día con la foto obligatoria (61).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013SfRStBeRbueu9grrfatQU
+---
+ backend/app.py        |  25 +-
+ backend/compras.py    | 680 +++++++++++++++++++++++++++++++++++++++---
+ backend/tests-1028.sh |  22 +-
+ backend/tests-1029.sh | 368 +++++++++++++++++++++++
+ 4 files changed, 1038 insertions(+), 57 deletions(-)
+ create mode 100644 backend/tests-1029.sh
+
+diff --git a/backend/app.py b/backend/app.py
+index 5b0a9f5..e6fe57b 100644
+--- a/backend/app.py
++++ b/backend/app.py
+@@ -825,6 +825,9 @@ UNIDADES_INV = ("pza", "m")
+ # Inventario por sitio (23-oct): entrada, salida y ajuste (conteo físico) pasan EN un sitio; «envio» sale de un sitio
+ # y queda en camino hasta que se registra su «recepcion» en el destino. Lo de antes del 23-oct es de Querétaro.
+ TIPOS_MOV = ("entrada", "salida", "ajuste", "envio", "recepcion")
++# (29-oct) Tipos que solo escribe el sistema, nunca la página: «devolucion» = material que regresa al proveedor por una
++# devolución DEV-… resuelta en el cotizador (compras.py, aviso oc.devolucion). Sale del sitio y del total.
++TIPOS_MOV_SISTEMA = ("devolucion",)
+ SITIO_INV_OMISION = "qro"
+ # Origen de un envío que no sale de ningún sitio del inventario: una compra que viene en camino, o material que
+ # salió de un puerto antes de que ahí se contara. No descuenta de nadie; entra al total al registrarse (en camino).
+@@ -1858,6 +1861,18 @@ def _existencias():
+     return out
+ 
+ 
++def _compra_de_envio_(m):
++    """(29-oct) Folio de la orden de compra si el envío es una compra del cotizador (compras.py engancha
++    _compra_de_envio al cargar). Esos envíos se reciben en Compras, con la foto de cada renglón."""
++    f = globals().get("_compra_de_envio")
++    if not f or not m or _mov_sitio(m) != ORIGEN_FUERA:
++        return None
++    try:
++        return f(m.get("id"))
++    except Exception:   # noqa: BLE001 — sin la base de compras, el envío se recibe como siempre
++        return None
++
++
+ def _envios_abiertos(items=None):
+     items = items if items is not None else {it["id"]: it for it in _listar_json(INV_ITEMS())}
+     out = []
+@@ -1865,7 +1880,8 @@ def _envios_abiertos(items=None):
+         if m.get("tipo") == "envio" and m.get("estado") == "en-camino":
+             it = items.get(m.get("item_id")) or {}
+             e = {k: m.get(k) for k in ("id", "item_id", "codigo", "cantidad", "destino", "quien", "cuando", "motivo", "referencia")}
+-            e.update(origen=_mov_sitio(m), descripcion=it.get("descripcion"), unidad=it.get("unidad"))
++            e.update(origen=_mov_sitio(m), descripcion=it.get("descripcion"), unidad=it.get("unidad"),
++                     oc=_compra_de_envio_(m))
+             out.append(e)
+     out.sort(key=lambda x: x.get("cuando") or "")
+     return out
+@@ -1985,6 +2001,8 @@ def _registrar_movimiento(item, tipo, cantidad, motivo, referencia, u, sitio=SIT
+         delta = delta_sitio = cantidad - en_sitio
+     elif tipo == "envio":
+         delta, delta_sitio = (cantidad, 0) if sitio == ORIGEN_FUERA else (0, -cantidad)
++    elif tipo == "devolucion":   # regresa al proveedor: sale del sitio y del total (como una salida)
++        delta = delta_sitio = -cantidad
+     else:                    # recepción de un envío: llega 'cantidad' al destino
+         delta_sitio = cantidad
+         delta = cantidad - _entero(envio.get("cantidad"), 0)
+@@ -2030,6 +2048,10 @@ def inventario_movimiento():
+             return jsonify(ok=False, error=f"No existe el envío {eid}."), 404
+         if envio.get("estado") != "en-camino":
+             return jsonify(ok=False, error="Ese envío ya se recibió" + (f" ({envio.get('recibido_por')}, {envio.get('recibido_en')})." if envio.get("recibido_por") else ".")), 409
++        oc = _compra_de_envio_(envio)
++        if oc:   # (29-oct) una compra se recibe en Compras: ahí se pide la foto de cada renglón y se reporta un problema
++            return jsonify(ok=False, oc=oc, compras="/tableros/compras/?oc=" + oc,
++                           error=f"Este envío es la orden de compra {oc}: recíbelo en Compras, con la foto de lo que llegó."), 409
+         rid = envio.get("item_id")
+     else:
+         rid = slug(d.get("item_id"), 40)
+@@ -2404,6 +2426,7 @@ def actividad():
+ # incidencias.py (problemas del sitio, errores del navegador y del servidor) y standup.py (el bot de scrum).
+ # (28-oct) compras.py: las órdenes de compra del cotizador (SQLite), sus envíos «en camino» por sitio y el
+ # pendiente de cada OC; sus rutas /api/integracion/ van firmadas con COTIZADOR_SECRETO, sin sesión.
++# (29-oct) compras.py además pone aquí _compra_de_envio: los envíos de una OC se reciben en Compras (foto por renglón).
+ # Cada uno se carga aparte: si uno falla, los demás y el resto del servicio arrancan igual.
+ import importlib.util as _ilu
+ for _mod in ("instalaciones", "acceso", "incidencias", "standup", "compras"):
+diff --git a/backend/compras.py b/backend/compras.py
+index 5d6c158..4473f7f 100644
+--- a/backend/compras.py
++++ b/backend/compras.py
+@@ -13,10 +13,25 @@ cotizador se entera en su siguiente consulta.
+        oc.autorizada · oc.pagada · oc.en_camino · oc.cancelada · req.cerrada
+   GET  /api/integracion/inventario/items        (firmado) — el selector de ítems del cotizador
+   GET  /api/integracion/cotizador/recepciones?desde=…  (firmado) — lo que ya llegó, para cerrar la requisición
++       (29-oct) cada renglón trae su «foto» y su «problema»; vuelve a salir si su foto cambió (actualizado_en)
++  GET  /api/integracion/cotizador/foto?id=      (firmado) — los bytes de una foto que todavía no se archiva
++  POST /api/integracion/cotizador/foto-archivada (firmado) — {id, url}: el cotizador ya la subió a Drive; se borra aquí
++       oc.devolucion (29-oct) — compras resolvió una devolución DEV-…: Reponer · Devolver al proveedor ·
++       Cancelar renglón · Conservar (efecto en el inventario del sitio y en el renglón)
+ 
+   GET  /api/compras[?sitio=&estado=]            (con sesión) — la página Compras
+   POST /api/compras/ligar                       (con sesión) — ligar un renglón a un ítem del inventario
+-  POST /api/compras/recibir                     (con sesión) — recibir una OC completa o en parte
++  POST /api/compras/recibir                     (con sesión) — recibir una OC completa o en parte, con una foto
++                                                  por renglón que llegó y, opcional, el problema de ese renglón
++  POST /api/compras/problema                    (con sesión) — reportar un problema después (≤ 30 días)
++  GET  /api/compras/foto?id=                    (con sesión) — ver la foto (local) o ir a Drive (ya archivada)
++
++Fotos de recepción (29-oct, incremento 5 de CAPRI, contrato §3 y §5): el navegador las comprime (lado mayor
++1600 px, JPEG 0.72) y llegan en base64 dentro del mismo «Recibir». Se guardan **temporalmente** en
++ADJUNTOS_DIR/compras/<OC>/<id>.jpg; el cotizador se las lleva a Google Drive en su siguiente consulta, avisa con
++foto-archivada y entonces se borran de aquí (queda la liga de Drive). Los envíos «en camino» que son de una OC ya
++no se reciben desde Inventario: allá el botón manda a Compras, donde se pide la foto (app.py pregunta con
++_compra_de_envio, que engancha este módulo).
+ 
+ Seguridad de las rutas de integración: **no** usan la sesión de una persona. Cada llamada va firmada
+ con un secreto compartido (HMAC-SHA256 de la hora + "\\n" + el cuerpo). El secreto vive en el servicio
+@@ -31,21 +46,33 @@ Datos: SQLite en `/srv/projects/drogheda/drogheda.db` (D-27-2), en modo WAL porq
+ dos trabajadores. El inventario sigue en sus JSON: una OK «en camino» crea sus envíos con las mismas
+ funciones que usa la página de Inventario, así que las cuentas por sitio no cambian de origen.
+ """
++import base64
++import binascii
+ import datetime
+ import hashlib
+ import hmac
+ import json
+ import os
++import re
+ import sqlite3
++import unicodedata
++import uuid
++from urllib.parse import urlsplit
+ 
+-from flask import jsonify, request
++from flask import jsonify, redirect, request, send_file
+ 
+ VENTANA_FIRMA = 300          # segundos de tolerancia de la firma (reloj y red)
+ MAX_CUERPO = 256 * 1024      # un aviso más grande que esto no es una OC
+ MONTOS = ("costo", "costo_unitario", "precio", "precio_unitario", "importe", "subtotal", "iva",
+           "impuestos", "total", "tipo_cambio", "moneda", "margen", "descuento")
+ ESTADOS_OC = ("autorizada", "pagada", "en-camino", "recibida-parcial", "recibida", "cancelada")
+-TIPOS = ("oc.autorizada", "oc.pagada", "oc.en_camino", "oc.cancelada", "req.cerrada")
++TIPOS = ("oc.autorizada", "oc.pagada", "oc.en_camino", "oc.cancelada", "req.cerrada", "oc.devolucion")
++# Incremento 5 (29-oct): fotos por renglón, problemas y devoluciones (contrato CAPRI §3–§5)
++TIPOS_PROBLEMA = ("Incorrecto", "Dañado", "Faltante", "Sobrante", "Otro")
++RESOLUCIONES = ("Reponer", "Devolver al proveedor", "Cancelar renglón", "Conservar")
++FOTO_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")     # contrato §5a: [A-Za-z0-9._-], ≤ 80
++DIAS_PROBLEMA = 30            # un problema se puede reportar hasta 30 días después de recibir (contrato §4)
++MIN_COMENTARIO = 3
+ # Quién recibe el material en cada sitio (el que da «Recibir» y a quien se le abre el pendiente).
+ # Se puede cambiar sin tocar el código con COMPRAS_RESPONSABLES="VER:alan,ZLO:jesush,…".
+ RESPONSABLES = {"VER": "alan", "ZLO": "jesush", "ESE": "miguel", "LZC": "antonio", "QRO": "jesus"}
+@@ -70,6 +97,28 @@ CREATE INDEX IF NOT EXISTS ix_ordenes_sitio ON ordenes (sitio_portal, estado);
+ CREATE INDEX IF NOT EXISTS ix_renglones_envio ON renglones (envio_id);
+ """
+ 
++# 29-oct: columnas nuevas de los renglones. Se agregan al arrancar si faltan (ALTER TABLE ADD COLUMN no toca lo que
++# ya hay); con dos trabajadores de gunicorn arrancando a la vez, el segundo ve «duplicate column» y sigue.
++COLUMNAS_NUEVAS = (
++    ("renglones", "foto_id", "TEXT"), ("renglones", "foto_archivada", "INTEGER DEFAULT 0"),
++    ("renglones", "foto_url", "TEXT"),
++    ("renglones", "problema_tipo", "TEXT"), ("renglones", "problema_cantidad", "REAL"),
++    ("renglones", "problema_comentario", "TEXT"), ("renglones", "problema_foto_id", "TEXT"),
++    ("renglones", "problema_foto_archivada", "INTEGER DEFAULT 0"), ("renglones", "problema_foto_url", "TEXT"),
++    ("renglones", "problema_en", "TEXT"), ("renglones", "problema_por", "TEXT"),
++    ("renglones", "faltante_aceptado", "REAL DEFAULT 0"),   # lo que compras dio por perdido (devolver/cancelar)
++    ("renglones", "actualizado_en", "TEXT"),                # cambió la recepción, la foto o el problema
++)
++ESQUEMA_5 = """
++CREATE INDEX IF NOT EXISTS ix_renglones_foto ON renglones (foto_id);
++CREATE INDEX IF NOT EXISTS ix_renglones_pfoto ON renglones (problema_foto_id);
++CREATE TABLE IF NOT EXISTS devoluciones (
++  evento_id TEXT PRIMARY KEY, folio TEXT, oc_folio TEXT, n INTEGER, cantidad REAL, tipo TEXT,
++  resolucion TEXT, nota TEXT, efecto TEXT, movimiento_id TEXT, envio_id TEXT, quien TEXT, aplicado_en TEXT);
++CREATE INDEX IF NOT EXISTS ix_devoluciones_oc ON devoluciones (oc_folio, n);
++CREATE INDEX IF NOT EXISTS ix_devoluciones_folio ON devoluciones (folio);
++"""
++
+ 
+ def _responsables():
+     m = dict(RESPONSABLES)
+@@ -107,6 +156,40 @@ def _sin_montos(d):
+     return d
+ 
+ 
++def _plano(s):
++    """'Cancelar Renglón ' → 'cancelar renglon': para comparar sin acentos ni mayúsculas."""
++    return unicodedata.normalize("NFKD", str(s or "")).encode("ascii", "ignore").decode().lower().strip()
++
++
++def _de_lista(v, opciones):
++    p = _plano(v)
++    for o in opciones:
++        if _plano(o) == p:
++            return o
++    return None
++
++
++def foto_id_valido(fid):
++    """Ids del contrato: solo [A-Za-z0-9._-], ≤ 80, y nada que parezca una ruta (sin «..», sin empezar con punto)."""
++    return isinstance(fid, str) and bool(FOTO_ID_RE.match(fid)) and ".." not in fid
++
++
++def carpeta_oc(folio):
++    """Nombre de carpeta (y prefijo del id) a partir del folio: 'OC-2026-0012' se queda igual."""
++    s = re.sub(r"[^A-Za-z0-9._-]", "-", str(folio or "")).strip(".-")[:40]
++    return s or "OC"
++
++
++def url_archivo_valida(url):
++    """La liga que guarda el cotizador al archivar: https y de Google (Drive). Nada de javascript: ni otros sitios."""
++    try:
++        u = urlsplit(url)
++    except ValueError:
++        return False
++    host = (u.hostname or "").lower()
++    return u.scheme == "https" and (host == "google.com" or host.endswith(".google.com")) and len(url) <= 500
++
++
+ class Compras:
+     """Todo el estado del módulo: la base y las funciones de app.py que necesita."""
+ 
+@@ -127,6 +210,15 @@ class Compras:
+         os.makedirs(os.path.dirname(self.ruta) or ".", exist_ok=True)
+         with self.con() as c:
+             c.executescript(ESQUEMA)
++            for tabla, col, tipo in COLUMNAS_NUEVAS:
++                if col in {r[1] for r in c.execute(f"PRAGMA table_info({tabla})")}:
++                    continue
++                try:
++                    c.execute(f"ALTER TABLE {tabla} ADD COLUMN {col} {tipo}")
++                except sqlite3.OperationalError as e:      # el otro trabajador la agregó primero
++                    if "duplicate column" not in str(e).lower():
++                        raise
++            c.executescript(ESQUEMA_5)
+ 
+     # ---------------------------------------------------------------- sitios y equipo
+     def sitio_portal(self, codigo):
+@@ -237,22 +329,27 @@ class Compras:
+                 hechos.append(env)
+         return hechos
+ 
+-    def crear_envio(self, c, oc, r, quien):
++    def crear_envio(self, c, oc, r, quien, cantidad=None, motivo=None):
++        """Un envío «en camino» desde fuera del inventario por lo que falta de ese renglón (29-oct: lo que falta, no lo
++        pedido: tras «Reponer» un renglón vuelve a venir solo por lo devuelto)."""
+         it = self.item_por_codigo(r["item_codigo"])
+         if not it:
+             c.execute("UPDATE renglones SET item_codigo=NULL, nota=? WHERE oc_folio=? AND n=?",
+                       (f"El ítem {r['item_codigo']} no existe en el inventario: hay que ligarlo a mano.",
+                        oc["folio"], r["n"]))
+             return None
+-        cant = _entero_exacto(r["cantidad"])
++        falta = self.pendiente(r) if cantidad is None else cantidad
++        if falta <= 0:
++            return None
++        cant = _entero_exacto(falta)
+         if cant is None:
+             c.execute("UPDATE renglones SET nota=? WHERE oc_folio=? AND n=?",
+-                      (f"Cantidad {r['cantidad']}: el inventario cuenta piezas y metros enteros. "
++                      (f"Cantidad {falta:g}: el inventario cuenta piezas y metros enteros. "
+                        "Recíbelo a mano cuando llegue.", oc["folio"], r["n"]))
+             return None
+-        motivo = (f"compra en camino: {oc['folio']}"
+-                  + (f" ({oc['proveedor']})" if oc["proveedor"] else "")
+-                  + (f", guía {oc['guia']}" if oc["guia"] else ""))
++        motivo = motivo or (f"compra en camino: {oc['folio']}"
++                            + (f" ({oc['proveedor']})" if oc["proveedor"] else "")
++                            + (f", guía {oc['guia']}" if oc["guia"] else ""))
+         m = self.g["_registrar_movimiento"](it, "envio", cant, motivo[:200], oc["folio"], quien,
+                                             sitio=self.g["ORIGEN_FUERA"], destino=oc["sitio_portal"])
+         c.execute("UPDATE renglones SET envio_id=?, item_id=?, nota=NULL WHERE oc_folio=? AND n=?",
+@@ -283,9 +380,11 @@ class Compras:
+             env = self.envio(r["envio_id"])
+             if not env or env.get("estado") != "recibido":
+                 continue
+-            c.execute("UPDATE renglones SET recibido=?, recibido_en=?, recibido_por=? WHERE oc_folio=? AND n=?",
+-                      (_num(env.get("recibido"), 0), env.get("recibido_en") or self.g["ahora"](),
+-                       env.get("recibido_por") or "", r["oc_folio"], r["n"]))
++            # se suma: tras «Reponer» el renglón ya traía lo que se quedó de la primera vez
++            c.execute("UPDATE renglones SET recibido=?, recibido_en=?, recibido_por=?, actualizado_en=? "
++                      "WHERE oc_folio=? AND n=?",
++                      (_num(r["recibido"]) + _num(env.get("recibido"), 0), env.get("recibido_en") or self.g["ahora"](),
++                       env.get("recibido_por") or "", self.g["ahora"](), r["oc_folio"], r["n"]))
+             tocadas.add(r["oc_folio"])
+         for f in (tocadas | ({folio} if folio else set())):
+             self.cerrar_si_llego_todo(c, f)
+@@ -301,7 +400,7 @@ class Compras:
+         con_algo = [r for r in rs if r["recibido_en"]]
+         if not con_algo:
+             return
+-        completa = all(r["recibido_en"] and _num(r["recibido"]) >= _num(r["cantidad"]) for r in rs)
++        completa = all(self.cerrado(r) for r in rs)
+         quien = con_algo[-1]["recibido_por"] or "equipo"
+         cuando = max(r["recibido_en"] for r in con_algo)
+         estado = "recibida" if completa else "recibida-parcial"
+@@ -309,7 +408,7 @@ class Compras:
+             c.execute("UPDATE ordenes SET estado=?, recepcion_en=?, recepcion_por=?, actualizado_en=? WHERE folio=?",
+                       (estado, cuando, quien, self.g["ahora"](), folio))
+             falta = [f"{r['descripcion']}: llegaron {_num(r['recibido']):g} de {_num(r['cantidad']):g}"
+-                     for r in rs if _num(r["recibido"]) < _num(r["cantidad"])]
++                     for r in rs if self.pendiente(r) > 0]
+             if completa:
+                 self.nota_pendiente(oc["tarea_id"], f"llegó todo lo de {folio}: recibido por {quien}",
+                                     quien, estado="hecho")
+@@ -317,49 +416,364 @@ class Compras:
+                 self.nota_pendiente(oc["tarea_id"],
+                                     (f"llegó parte de {folio} ({quien}). Falta: " + "; ".join(falta))[:300], quien)
+ 
++    # ---------------------------------------------------------------- cuentas de un renglón
++    @staticmethod
++    def pendiente(r):
++        """Lo que falta por llegar: lo pedido menos lo recibido (neto de devoluciones) y menos el faltante aceptado."""
++        return max(0.0, _num(r["cantidad"]) - _num(r["recibido"]) - _num(r["faltante_aceptado"]))
++
++    @staticmethod
++    def cerrado(r):
++        """Renglón terminado: ya se recibió y no se espera nada más (llegó todo o compras aceptó el faltante)."""
++        return bool(r["recibido_en"]) and _num(r["recibido"]) + _num(r["faltante_aceptado"]) >= _num(r["cantidad"]) - 1e-9
++
++    # ---------------------------------------------------------------- fotos (temporales, contrato §5b)
++    def dir_fotos(self, folio):
++        return os.path.join(self.g["ADJ"], "compras", carpeta_oc(folio))
++
++    def ruta_foto(self, folio, fid):
++        """Ruta del archivo de una foto, solo si queda dentro de ADJUNTOS_DIR/compras (nada de rutas armadas)."""
++        if not foto_id_valido(fid):
++            return None
++        base = os.path.realpath(os.path.join(self.g["ADJ"], "compras"))
++        p = os.path.realpath(os.path.join(base, carpeta_oc(folio), fid + ".jpg"))
++        return p if p.startswith(base + os.sep) else None
++
++    def leer_foto(self, d, que):
++        """{nombre, datos (base64 sin prefijo), mime} → (bytes, None) o (None, error). Solo JPEG: el navegador la
++        comprime a JPEG (lado mayor 1600 px, calidad 0.72) y el cotizador la sirve como image/jpeg."""
++        if not isinstance(d, dict) or not d.get("datos"):
++            return None, f"{que}: falta la foto."
++        datos = re.sub(r"\s+", "", str(d.get("datos")))
++        if datos.startswith("data:"):
++            datos = datos.split(",", 1)[-1]
++        maximo = self.g["MAX_MB"] * 1024 * 1024
++        if len(datos) > maximo * 4 // 3 + 8:
++            return None, f"{que}: la foto pesa más de {self.g['MAX_MB']} MB."
++        try:
++            b = base64.b64decode(datos, validate=True)
++        except (binascii.Error, ValueError):
++            return None, f"{que}: la foto llegó dañada. Vuelve a tomarla."
++        if len(b) > maximo:
++            return None, f"{que}: la foto pesa más de {self.g['MAX_MB']} MB."
++        if b[:3] != b"\xff\xd8\xff":
++            return None, (f"{que}: la foto tiene que ser JPG. Si tu teléfono la guarda en HEIC, tómala con "
++                          "«Tomar foto» (la cámara la entrega en JPG).")
++        return b, None
++
++    def nuevo_foto_id(self, c, folio, n, problema=False):
++        """<OC>-r<n>-AAAAMMDDTHHMMSS (y -p- para la del problema), como en el contrato §5a."""
++        base = (f"{carpeta_oc(folio)}-r{n}-" + ("p-" if problema else "")
++                + datetime.datetime.now().strftime("%Y%m%dT%H%M%S"))[:76]
++        fid, k = base, 1
++        while (c.execute("SELECT 1 FROM renglones WHERE foto_id=? OR problema_foto_id=?", (fid, fid)).fetchone()
++               or os.path.exists(os.path.join(self.dir_fotos(folio), fid + ".jpg"))):
++            k += 1
++            fid = f"{base}-{k}"
++        return fid
++
++    def guardar_foto(self, folio, fid, datos):
++        d = self.dir_fotos(folio)
++        os.makedirs(d, exist_ok=True)
++        tmp = os.path.join(d, ".tmp-" + uuid.uuid4().hex[:8] + ".jpg")
++        with open(tmp, "wb") as f:
++            f.write(datos)
++        os.replace(tmp, os.path.join(d, fid + ".jpg"))
++
++    def renglon_de_foto(self, c, fid):
++        """(renglón, clase) de una foto por su id; clase = 'foto' o 'problema_foto' (el prefijo de sus columnas)."""
++        r = c.execute("SELECT * FROM renglones WHERE foto_id=?", (fid,)).fetchone()
++        if r:
++            return r, "foto"
++        r = c.execute("SELECT * FROM renglones WHERE problema_foto_id=?", (fid,)).fetchone()
++        return (r, "problema_foto") if r else (None, None)
++
++    # ---------------------------------------------------------------- problemas (contrato §4 y §5c)
++    def leer_problema(self, d, r, cant, falta, que):
++        """d = {tipo, cantidad, comentario, foto}. cant = lo que llega ahora; falta = lo que faltaba por llegar.
++        Devuelve (problema|None, error|None). Comentario obligatorio; foto obligatoria salvo «Faltante»."""
++        if d in (None, False, "") or (isinstance(d, dict) and not any(d.values())):
++            return None, None
++        if not isinstance(d, dict):
++            return None, f"{que}: el problema llegó mal."
++        tipo = _de_lista(d.get("tipo"), TIPOS_PROBLEMA)
++        if not tipo:
++            return None, f"{que}: elige qué pasó ({', '.join(TIPOS_PROBLEMA)})."
++        q = _num(d.get("cantidad"), -1)
++        if q <= 0:
++            return None, f"{que}: ¿cuántas tienen el problema? Tiene que ser más de 0."
++        pedido = _num(r["cantidad"])
++        if tipo == "Faltante":
++            no_llego = falta - cant
++            if no_llego <= 1e-9:
++                return None, (f"{que}: si llegó todo no hay faltante. Si llegó menos, en «Llegó» anota lo que llegó "
++                              "de verdad.")
++            if q > no_llego + 1e-9:
++                return None, f"{que}: no llegaron {no_llego:g}; el faltante no puede ser de {q:g}."
++        elif tipo != "Sobrante" and q > pedido + 1e-9:
++            return None, f"{que}: se pidieron {pedido:g}; el problema no puede ser de {q:g}."
++        com = self.g["_texto"](d.get("comentario"), 500)
++        if len(com) < MIN_COMENTARIO:
++            return None, f"{que}: escribe qué pasó (el comentario es obligatorio)."
++        foto = None
++        if tipo != "Faltante" or d.get("foto"):
++            foto, e = self.leer_foto(d.get("foto"), f"{que}, foto del problema")
++            if e:
++                return None, e
++        return {"tipo": tipo, "cantidad": q, "comentario": com, "foto": foto}, None
++
++    def anotar_problema(self, c, folio, r, p, quien, ahora):
++        """Guarda la foto del problema y sus columnas. La foto anterior, si no se había archivado, se queda en disco."""
++        pfid = None
++        if p["foto"]:
++            pfid = self.nuevo_foto_id(c, folio, r["n"], problema=True)
++            self.guardar_foto(folio, pfid, p["foto"])
++        c.execute("UPDATE renglones SET problema_tipo=?, problema_cantidad=?, problema_comentario=?, "
++                  "problema_foto_id=?, problema_foto_archivada=0, problema_foto_url=NULL, problema_en=?, "
++                  "problema_por=?, actualizado_en=? WHERE oc_folio=? AND n=?",
++                  (p["tipo"], p["cantidad"], p["comentario"], pfid, ahora, quien, ahora, folio, r["n"]))
++        return pfid
++
+     # ---------------------------------------------------------------- recibir desde el centro de mando
+     def recibir(self, c, folio, lineas, quien):
+-        """lineas = [{n, recibido}]. Recibe por el inventario lo que tiene envío; lo que no tiene ítem
+-        se anota aquí (así la requisición se puede cerrar igual). Devuelve (hechos, errores)."""
++        """lineas = [{n, recibido, foto, problema}]. Primero se revisa TODO (cantidades, fotos, problemas) y si algo
++        falla no se escribe nada; luego se reciben por el inventario los renglones que tienen envío y los demás se
++        anotan aquí (así la requisición se puede cerrar igual). Un renglón en 0 sin problema se queda por recibir.
++        Devuelve (hechos, errores, sin_llegar)."""
++        g = self.g
+         oc = c.execute("SELECT * FROM ordenes WHERE folio=?", (folio,)).fetchone()
+         if not oc:
+-            return [], [f"No existe {folio}."]
++            return [], [f"No existe {folio}."], []
+         if oc["estado"] == "cancelada":
+-            return [], [f"{folio} está cancelada en el cotizador."]
+-        hechos, errores = [], []
++            return [], [f"{folio} está cancelada en el cotizador."], []
++        plan, errores, sin_llegar, vistos = [], [], [], set()
+         for ln in lineas:
+-            n = self.g["_entero"](ln.get("n"), -1)
++            if not isinstance(ln, dict):
++                continue
++            n = g["_entero"](ln.get("n"), -1)
++            if n in vistos:
++                continue
++            vistos.add(n)
+             r = c.execute("SELECT * FROM renglones WHERE oc_folio=? AND n=?", (folio, n)).fetchone()
+             if not r:
+                 errores.append(f"El renglón {n} no existe en {folio}.")
+                 continue
+             if r["recibido_en"]:
+                 continue                       # ya se había recibido: no se recibe dos veces
++            falta = self.pendiente(r)
+             cant = _num(ln.get("recibido"), -1)
+-            if cant < 0 or cant > _num(r["cantidad"]):
+-                errores.append(f"Renglón {n}: se pidieron {_num(r['cantidad']):g} {r['unidad'] or ''}"
+-                               .strip() + f"; no pueden llegar {ln.get('recibido')}.")
++            if cant < 0 or cant > falta + 1e-9:
++                errores.append(f"Renglón {n}: faltan por llegar {falta:g} {r['unidad'] or ''}".rstrip()
++                               + f"; no pueden llegar {ln.get('recibido')}.")
+                 continue
+-            ahora = self.g["ahora"]()
++            prob, e = self.leer_problema(ln.get("problema"), r, cant, falta, f"Renglón {n}")
++            if e:
++                errores.append(e)
++                continue
++            if cant == 0 and not prob:
++                sin_llegar.append(n)           # todavía no llega: sigue en camino, sin foto
++                continue
++            foto = None
++            if cant > 0:
++                foto, e = self.leer_foto(ln.get("foto"), f"Renglón {n} ({r['descripcion'] or 'sin descripción'})")
++                if e:
++                    errores.append(e)
++                    continue
+             env = self.envio(r["envio_id"])
++            it, entero = None, None
+             if env and env.get("estado") == "en-camino":
+                 entero = _entero_exacto(cant) if cant else 0
+                 if entero is None:
+                     errores.append(f"Renglón {n}: el inventario cuenta enteros.")
+                     continue
+-                it = self.g["_leer_json"](self.g["_ruta_registro"](self.g["INV_ITEMS"](), env.get("item_id")))
++                it = g["_leer_json"](g["_ruta_registro"](g["INV_ITEMS"](), env.get("item_id")))
+                 if not it:
+                     errores.append(f"Renglón {n}: ya no existe el ítem del envío.")
+                     continue
+-                self.g["_registrar_movimiento"](it, "recepcion", entero,
+-                                                f"llegó la compra {folio}"[:200], folio, quien,
+-                                                sitio=env.get("destino"), envio=env)
+-            c.execute("UPDATE renglones SET recibido=?, recibido_en=?, recibido_por=? WHERE oc_folio=? AND n=?",
+-                      (cant, ahora, quien, folio, n))
++            else:
++                env = None
++            plan.append((r, cant, foto, prob, env, it, entero))
++        if errores:
++            return [], errores, []
++        if not plan:
++            return [], ["No anotaste nada que haya llegado. Si no llegó nada, no hay que recibir; si falta material "
++                        "que ya debía llegar, repórtalo con «Reportar problema» → Faltante."], sin_llegar
++        hechos, problemas = [], []
++        for r, cant, foto, prob, env, it, entero in plan:
++            n, ahora = r["n"], g["ahora"]()
++            if foto:
++                fid = self.nuevo_foto_id(c, folio, n)
++                self.guardar_foto(folio, fid, foto)
++                c.execute("UPDATE renglones SET foto_id=?, foto_archivada=0, foto_url=NULL WHERE oc_folio=? AND n=?",
++                          (fid, folio, n))
++            if env:
++                g["_registrar_movimiento"](it, "recepcion", entero, f"llegó la compra {folio}"[:200], folio, quien,
++                                           sitio=env.get("destino"), envio=env)
++            c.execute("UPDATE renglones SET recibido=?, recibido_en=?, recibido_por=?, actualizado_en=? "
++                      "WHERE oc_folio=? AND n=?", (_num(r["recibido"]) + cant, ahora, quien, ahora, folio, n))
++            if prob:
++                self.anotar_problema(c, folio, r, prob, quien, ahora)
++                problemas.append(f"renglón {n} ({r['descripcion'] or '—'}) — {prob['tipo']} {prob['cantidad']:g}: "
++                                 f"«{prob['comentario'][:120]}»")
+             hechos.append(n)
+-        if hechos:
+-            self.cerrar_si_llego_todo(c, folio)
+-        return hechos, errores
++        if problemas:
++            self.nota_pendiente(oc["tarea_id"], ("problema al recibir: " + "; ".join(problemas)
++                                                 + ". Compras lo resuelve en el cotizador.")[:600], quien)
++        self.cerrar_si_llego_todo(c, folio)
++        return hechos, [], sin_llegar
++
++    # ---------------------------------------------------------------- devoluciones (contrato §5d)
++    def recalcular_estado(self, c, folio):
++        """Estado de la OC según sus renglones, para cuando una devolución la regresa (Reponer) o la completa
++        (faltante aceptado). Devuelve el estado nuevo."""
++        oc = c.execute("SELECT * FROM ordenes WHERE folio=?", (folio,)).fetchone()
++        if not oc or oc["estado"] == "cancelada":
++            return oc["estado"] if oc else None
++        rs = c.execute("SELECT * FROM renglones WHERE oc_folio=?", (folio,)).fetchall()
++        if not rs:
++            return oc["estado"]
++        if all(self.cerrado(r) for r in rs):
++            estado = "recibida"
++        elif any(r["recibido_en"] or _num(r["recibido"]) > 0 for r in rs):
++            estado = "recibida-parcial"
++        elif oc["estado"] in ("recibida", "recibida-parcial"):
++            estado = "en-camino"
++        else:
++            estado = oc["estado"]
++        if estado != oc["estado"]:
++            c.execute("UPDATE ordenes SET estado=?, actualizado_en=? WHERE folio=?", (estado, self.g["ahora"](), folio))
++        return estado
++
++    def sacar_devolucion(self, r, oc, sale, dev, tipo, res, quien):
++        """Movimiento «devolucion» en el sitio de entrega: sale del sitio y del total. Nunca deja el sitio en negativo.
++        Devuelve (movimiento_id|None, cuánto salió, aviso)."""
++        g = self.g
++        it = (g["_leer_json"](g["_ruta_registro"](g["INV_ITEMS"](), r["item_id"])) if r["item_id"] else None) \
++            or self.item_por_codigo(r["item_codigo"])
++        if not it:
++            return None, 0, "el renglón no tiene ítem del inventario: no se descontó nada"
++        entero = _entero_exacto(sale)
++        if entero is None:
++            return None, 0, f"{sale:g} no es un número entero: descuéntalo a mano en Inventario"
++        sitio = oc["sitio_portal"]
++        hay = g["_stock_en_sitio"](it["id"], sitio)
++        sale_i = min(entero, max(0, hay))
++        if sale_i <= 0:
++            return None, 0, f"en {self.codigo(sitio)} ya no había {it.get('codigo')} que descontar"
++        m = g["_registrar_movimiento"](it, "devolucion", sale_i, f"devolución {dev} ({tipo}): {res}"[:200],
++                                       oc["folio"], quien, sitio=sitio)
++        aviso = "" if sale_i == entero else f"en {self.codigo(sitio)} solo había {hay}: se descontaron {sale_i}"
++        return m["id"], sale_i, aviso
++
++    def leer_devolucion(self, dv):
++        """Revisa el bloque «devolucion» del aviso antes de tocar nada. Devuelve (dict, None) o (None, error)."""
++        g = self.g
++        if not isinstance(dv, dict):
++            return None, "Falta el bloque «devolucion»."
++        n = g["_entero"](dv.get("renglon"), -1)
++        q = _num(dv.get("cantidad"), -1)
++        res = _de_lista(dv.get("resolucion"), RESOLUCIONES)
++        if n < 1:
++            return None, "La devolución no dice de qué renglón es."
++        if q <= 0:
++            return None, "La devolución trae una cantidad inválida."
++        if not res:
++            return None, "Resolución inválida: usa " + ", ".join(RESOLUCIONES) + "."
++        return {"folio": g["_texto"](dv.get("folio"), 40).upper(), "n": n, "cantidad": q,
++                "tipo": _de_lista(dv.get("tipo"), TIPOS_PROBLEMA) or "Otro", "resolucion": res,
++                "nota": g["_texto"](dv.get("nota"), 300)}, None
++
++    def aplicar_devolucion(self, c, oc, dv, quien, evento_id):
++        """Efecto de una devolución resuelta en el cotizador (contrato §5d):
++          Reponer → sale del sitio lo devuelto y el renglón vuelve a «en camino» por esa cantidad (pendiente reabierto).
++          Devolver al proveedor / Cancelar renglón → sale del sitio y el renglón queda cerrado con faltante aceptado.
++          Conservar → nada.
++        Solo sale del inventario lo que sí se contó: un «Faltante» nunca llegó y un «Sobrante» nunca se contó (al
++        recibir no se acepta más de lo pedido), así que esos dos no mueven existencias."""
++        g = self.g
++        folio = oc["folio"]
++        r = c.execute("SELECT * FROM renglones WHERE oc_folio=? AND n=?", (folio, dv["n"])).fetchone()
++        if not r:
++            return None, f"El renglón {dv['n']} no existe en {folio}."
++        if dv["folio"] and c.execute("SELECT 1 FROM devoluciones WHERE folio=?", (dv["folio"],)).fetchone():
++            return {"repetida": True, "folio": dv["folio"]}, None
++        q, tipo, res, dev = dv["cantidad"], dv["tipo"], dv["resolucion"], dv["folio"] or "DEV"
++        pedido, neto, falt = _num(r["cantidad"]), _num(r["recibido"]), _num(r["faltante_aceptado"])
++        ahora = g["ahora"]()
++        mov_id = env_id = None
++        avisos, efecto = [], ""
++        unidad = r["unidad"] or ""
++        if res == "Conservar":
++            efecto = "se conserva como llegó: nada cambia"
++        elif tipo == "Sobrante":
++            efecto = "el sobrante no se había contado en el inventario: nada cambia"
++        else:
++            sale = min(q, neto) if tipo != "Faltante" else 0.0
++            if sale > 0:
++                mov_id, salio, aviso = self.sacar_devolucion(r, oc, sale, dev, tipo, res, quien)
++                if aviso:
++                    avisos.append(aviso)
++                efecto = f"salieron {salio:g} {unidad} del inventario de {self.codigo(oc['sitio_portal'])}".rstrip()
++            neto2 = neto - sale            # el renglón deja de contar lo devuelto
++            hueco = max(0.0, pedido - neto2 - falt)
++            if res == "Reponer":
++                vuelve = min(q, hueco)
++                env = self.envio(r["envio_id"])
++                ya_viene = env and env.get("estado") == "en-camino"
++                c.execute("UPDATE renglones SET recibido=?, recibido_en=NULL, envio_id=? WHERE oc_folio=? AND n=?",
++                          (neto2, r["envio_id"] if ya_viene else None, folio, r["n"]))
++                if vuelve > 0 and not ya_viene and r["item_codigo"]:
++                    r2 = c.execute("SELECT * FROM renglones WHERE oc_folio=? AND n=?", (folio, r["n"])).fetchone()
++                    env_id = self.crear_envio(c, oc, r2, quien, cantidad=vuelve,
++                                              motivo=f"reposición de {dev} ({folio})")
++                efecto = ((efecto + "; ") if efecto else "") + f"el renglón vuelve a «en camino» por {vuelve:g} {unidad}".rstrip()
++            else:
++                acepta = min(q, hueco)
++                falt2 = falt + acepta
++                cierra = r["recibido_en"] is None and neto2 + falt2 >= pedido - 1e-9
++                if cierra:              # estaba por llegar y ya no se espera nada: el envío deja de contar
++                    env = self.envio(r["envio_id"])
++                    if env and env.get("estado") == "en-camino":
++                        it = g["_leer_json"](g["_ruta_registro"](g["INV_ITEMS"](), env.get("item_id")))
++                        if it:
++                            g["_registrar_movimiento"](it, "recepcion", 0, f"{dev}: {res}"[:200], folio, quien,
++                                                       sitio=env.get("destino"), envio=env)
++                c.execute("UPDATE renglones SET recibido=?, faltante_aceptado=?"
++                          + (", recibido_en=?, recibido_por=?" if cierra else "") + " WHERE oc_folio=? AND n=?",
++                          (neto2, falt2) + ((ahora, quien) if cierra else ()) + (folio, r["n"]))
++                efecto = ((efecto + "; ") if efecto else "") + (f"el renglón queda cerrado con faltante de "
++                                                                f"{falt2:g} {unidad}").rstrip()
++        c.execute("INSERT INTO devoluciones (evento_id, folio, oc_folio, n, cantidad, tipo, resolucion, nota, efecto, "
++                  "movimiento_id, envio_id, quien, aplicado_en) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
++                  (evento_id, dv["folio"], folio, r["n"], q, tipo, res, dv["nota"],
++                   "; ".join([efecto] + avisos)[:500], mov_id, env_id, quien, ahora))
++        antes = oc["estado"]
++        despues = self.recalcular_estado(c, folio)
++        linea = (f"{dev} · renglón {r['n']} ({r['descripcion'] or '—'}), {tipo} {q:g}: compras resolvió «{res}» — "
++                 + "; ".join([efecto] + avisos) + (f". Nota: {dv['nota']}" if dv["nota"] else ""))[:600]
++        if res == "Reponer" and despues != "recibida":
++            self.nota_pendiente(oc["tarea_id"], linea, quien, estado="por-hacer")
++        elif despues == "recibida" and antes != "recibida":
++            self.nota_pendiente(oc["tarea_id"], linea + ". Ya no se espera nada de esta orden.", quien, estado="hecho")
++        else:
++            self.nota_pendiente(oc["tarea_id"], linea, quien)
++        return {"folio": dv["folio"], "renglon": r["n"], "resolucion": res, "efecto": efecto, "avisos": avisos,
++                "movimiento_id": mov_id, "envio_id": env_id, "estado_portal": despues}, None
++
++    # ---------------------------------------------------------------- forma JSON del contrato (§5a)
++    @staticmethod
++    def foto_json(r, pre="foto"):
++        fid = r[pre + "_id"]
++        if not fid:
++            return None
++        return {"id": fid, "archivada": bool(r[pre + "_archivada"]), "url": r[pre + "_url"] or ""}
++
++    def problema_json(self, r):
++        if not r["problema_tipo"]:
++            return None
++        q = _num(r["problema_cantidad"])
++        return {"tipo": r["problema_tipo"], "comentario": r["problema_comentario"] or "",
++                "cantidad": int(q) if q == int(q) else q, "foto": self.foto_json(r, "problema_foto")}
+ 
+     # ---------------------------------------------------------------- avisos del cotizador
+     def guardar_oc(self, c, d, tipo, quien, prueba):
+@@ -443,15 +857,37 @@ class Compras:
+         d["req_cerrada"] = bool(d.get("req_cerrada"))
+         d["sitio_nombre"] = self.nombre_sitio(oc["sitio_portal"])
+         if con_renglones:
+-            rs = [{k: r[k] for k in r.keys()} for r in
+-                  c.execute("SELECT * FROM renglones WHERE oc_folio=? ORDER BY n", (oc["folio"],)).fetchall()]
+-            for r in rs:
+-                r["pendiente"] = _num(r["cantidad"]) - _num(r["recibido"]) if r["recibido_en"] else _num(r["cantidad"])
++            filas = c.execute("SELECT * FROM renglones WHERE oc_folio=? ORDER BY n", (oc["folio"],)).fetchall()
++            devs = {}
++            for dv in c.execute("SELECT folio, n, cantidad, tipo, resolucion, nota, efecto, aplicado_en FROM devoluciones "
++                                "WHERE oc_folio=? ORDER BY aplicado_en", (oc["folio"],)).fetchall():
++                devs.setdefault(dv["n"], []).append({k: dv[k] for k in dv.keys() if k != "n"})
++            limite = (datetime.datetime.now() - datetime.timedelta(days=DIAS_PROBLEMA)).replace(microsecond=0).isoformat()
++            rs = []
++            for f in filas:
++                r = {k: f[k] for k in f.keys()}
++                r["pendiente"] = self.pendiente(f)
++                r["foto"] = self.foto_json(f)
++                r["problema"] = self.problema_json(f)
++                r["devoluciones"] = devs.get(f["n"], [])
++                r["problema_reportable"] = bool(f["recibido_en"]) and f["recibido_en"] >= limite
++                rs.append(r)
+             d["renglones"] = rs
+             d["por_ligar"] = [r["n"] for r in rs if not r["item_codigo"]]
+             d["recibidos"] = sum(1 for r in rs if r["recibido_en"])
+         return d
+ 
++    # ---------------------------------------------------------------- para app.py (la otra puerta de recepción)
++    def compra_de_envio(self, envio_id):
++        """Folio de la OC si ese envío «en camino» es de una orden de compra; None si no (o si la base no abre)."""
++        if not envio_id:
++            return None
++        try:
++            fila = self.con().execute("SELECT oc_folio FROM renglones WHERE envio_id=?", (envio_id,)).fetchone()
++        except sqlite3.Error:
++            return None
++        return fila[0] if fila else None
++
+ 
+ def registrar(app, g):
+     C = Compras(g)
+@@ -459,6 +895,8 @@ def registrar(app, g):
+         C.arrancar()
+     except Exception as e:                     # noqa: BLE001 — sin base, el resto del sitio sigue igual
+         app.logger.error("compras.py: no se pudo abrir %s: %s", C.ruta, e)
++    # app.py pregunta con esto si un envío «en camino» es de una OC: entonces se recibe en Compras (con foto)
++    g["_compra_de_envio"] = C.compra_de_envio
+ 
+     # ------------------------------------------------------------ firma
+     def firmado():
+@@ -509,9 +947,25 @@ def registrar(app, g):
+         oc_in = d.get("oc") if isinstance(d.get("oc"), dict) else {}
+         quien = g["_texto"](d.get("quien"), 120) or "cotizador"
+         prueba = bool(d.get("prueba"))
++        dev = None
++        if tipo == "oc.devolucion":
++            dev, error = C.leer_devolucion(d.get("devolucion"))
++            if error:
++                return jsonify(ok=False, error=error), 400
+         with C.con() as c:
+             if c.execute("SELECT 1 FROM eventos WHERE evento_id=?", (evento_id,)).fetchone():
+                 return jsonify(ok=True, repetido=True)
++            if dev and not prueba:
++                f0 = g["_texto"](oc_in.get("folio"), 40).upper()
++                if not c.execute("SELECT 1 FROM ordenes WHERE folio=?", (f0,)).fetchone():
++                    # una OC que nunca llegó al centro de mando: no hay nada que devolver aquí
++                    c.execute("INSERT INTO eventos (evento_id, oc_folio, tipo, cuando, quien, origen, datos) "
++                              "VALUES (?,?,?,?,?,?,?)", (evento_id, f0, tipo, g["ahora"](), quien, "cotizador",
++                                                         json.dumps(d)[:20000]))
++                    return jsonify(ok=True, aplicado=False,
++                                   aviso=f"{f0 or '(sin folio)'} no está en el centro de mando: no hay nada que devolver.")
++                if not c.execute("SELECT 1 FROM renglones WHERE oc_folio=? AND n=?", (f0, dev["n"])).fetchone():
++                    return jsonify(ok=False, error=f"El renglón {dev['n']} no existe en {f0}."), 400
+             oc, error = C.guardar_oc(c, oc_in, tipo, quien, prueba)
+             if error:
+                 return jsonify(ok=False, error=error), 400
+@@ -540,13 +994,21 @@ def registrar(app, g):
+                 C.cancelar_envios(c, folio, quien, f"{folio} cancelada en el cotizador")
+                 C.nota_pendiente(tarea_id, f"{folio} se canceló en el cotizador: ya no llega.",
+                                  quien, estado="hecho")
++            resultado = None
++            if tipo == "oc.devolucion":
++                resultado, error = C.aplicar_devolucion(
++                    c, c.execute("SELECT * FROM ordenes WHERE folio=?", (folio,)).fetchone(), dev, quien, evento_id)
++                if error:
++                    c.rollback()
++                    return jsonify(ok=False, error=error), 400
+             c.execute("INSERT INTO eventos (evento_id, oc_folio, tipo, cuando, quien, origen, datos) "
+                       "VALUES (?,?,?,?,?,?,?)",
+                       (evento_id, folio, tipo, g["ahora"](), quien, "cotizador", json.dumps(d)[:20000]))
+             fila = c.execute("SELECT * FROM ordenes WHERE folio=?", (folio,)).fetchone()
+             por_ligar = [r["n"] for r in c.execute(
+                 "SELECT n FROM renglones WHERE oc_folio=? AND item_codigo IS NULL ORDER BY n", (folio,))]
+-        return jsonify(ok=True, estado_portal=fila["estado"], tarea_id=fila["tarea_id"], por_ligar=por_ligar)
++        extra = {"devolucion": resultado} if resultado is not None else {}
++        return jsonify(ok=True, estado_portal=fila["estado"], tarea_id=fila["tarea_id"], por_ligar=por_ligar, **extra)
+ 
+     @app.get("/api/integracion/inventario/items")
+     def integracion_items():
+@@ -568,8 +1030,11 @@ def registrar(app, g):
+         hasta = g["ahora"]()
+         with C.con() as c:
+             C.conciliar(c)
+-            q = ("SELECT DISTINCT oc_folio FROM renglones WHERE recibido_en IS NOT NULL"
+-                 + (" AND recibido_en > ?" if desde else ""))
++            # 29-oct (contrato §5a): una OC vuelve a salir si uno de sus renglones cambió después de «desde» (otra
++            # recepción, foto archivada, problema), aunque se haya recibido antes. «>=»: lo que cambió en el mismo
++            # segundo que la consulta anterior sale otra vez (el cotizador lo aplica una sola vez) en vez de perderse.
++            q = ("SELECT DISTINCT oc_folio FROM renglones WHERE (recibido_en IS NOT NULL OR foto_id IS NOT NULL "
++                 "OR problema_tipo IS NOT NULL)" + (" AND COALESCE(actualizado_en, recibido_en) >= ?" if desde else ""))
+             folios = [r[0] for r in c.execute(q, (desde,) if desde else ()).fetchall()]
+             out = []
+             for f in sorted(folios):
+@@ -577,17 +1042,74 @@ def registrar(app, g):
+                 if not oc or oc["prueba"]:
+                     continue
+                 rs = c.execute("SELECT * FROM renglones WHERE oc_folio=? ORDER BY n", (f,)).fetchall()
+-                con_algo = [r for r in rs if r["recibido_en"]]
++                con_algo = sorted((r for r in rs if r["recibido_en"]), key=lambda r: r["recibido_en"])
+                 out.append({"oc_folio": f, "req_folio": oc["req_folio"], "sitio": oc["sitio"],
+-                            "completa": all(r["recibido_en"] and _num(r["recibido"]) >= _num(r["cantidad"])
+-                                            for r in rs),
++                            "completa": all(C.cerrado(r) for r in rs),
+                             "recibio": (con_algo[-1]["recibido_por"] if con_algo else ""),
+                             "cuando": max((r["recibido_en"] for r in con_algo), default=""),
+-                            "renglones": [{"n": r["n"], "pedido": _num(r["cantidad"]),
+-                                           "recibido": _num(r["recibido"]) if r["recibido_en"] else 0}
++                            # «recibido» = lo que hay hoy de ese renglón (acumulado y neto de devoluciones)
++                            "renglones": [{"n": r["n"], "pedido": _num(r["cantidad"]), "recibido": _num(r["recibido"]),
++                                           "foto": C.foto_json(r), "problema": C.problema_json(r)}
+                                           for r in rs]})
+         return jsonify(ok=True, hasta=hasta, recepciones=out)
+ 
++    @app.get("/api/integracion/cotizador/foto")
++    def integracion_foto():
++        _, err = firmado()
++        if err:
++            return err
++        fid = request.args.get("id") or ""
++        if not foto_id_valido(fid):
++            return jsonify(ok=False, error="id de foto inválido"), 400
++        with C.con() as c:
++            r, pre = C.renglon_de_foto(c, fid)
++        if not r or r[pre + "_archivada"]:
++            return jsonify(ok=False, error="No existe esa foto o ya se archivó."), 404
++        ruta = C.ruta_foto(r["oc_folio"], fid)
++        if not ruta or not os.path.isfile(ruta):
++            app.logger.warning("compras.py: falta el archivo de la foto %s", fid)
++            return jsonify(ok=False, error="No existe esa foto o ya se archivó."), 404
++        resp = send_file(ruta, mimetype="image/jpeg", download_name=fid + ".jpg", max_age=0)
++        resp.headers["Cache-Control"] = "no-store"
++        resp.headers["X-Content-Type-Options"] = "nosniff"
++        return resp
++
++    @app.post("/api/integracion/cotizador/foto-archivada")
++    def integracion_foto_archivada():
++        texto, err = firmado()
++        if err:
++            return err
++        try:
++            d = json.loads(texto or "{}")
++        except ValueError:
++            return jsonify(ok=False, error="JSON inválido"), 400
++        if not isinstance(d, dict):
++            return jsonify(ok=False, error="JSON inválido"), 400
++        fid = d.get("id") if isinstance(d.get("id"), str) else ""
++        url = g["_texto"](d.get("url"), 600)
++        if not foto_id_valido(fid):
++            return jsonify(ok=False, error="id de foto inválido"), 400
++        if not url_archivo_valida(url):
++            return jsonify(ok=False, error="La url tiene que ser https de Google Drive."), 400
++        with C.con() as c:
++            r, pre = C.renglon_de_foto(c, fid)
++            if not r:
++                return jsonify(ok=False, error="No existe esa foto."), 404
++            repetido = bool(r[pre + "_archivada"])
++            if not repetido or r[pre + "_url"] != url:
++                c.execute(f"UPDATE renglones SET {pre}_archivada=1, {pre}_url=?, actualizado_en=? "
++                          "WHERE oc_folio=? AND n=?", (url, g["ahora"](), r["oc_folio"], r["n"]))
++            folio = r["oc_folio"]
++        ruta = C.ruta_foto(folio, fid)            # se borra DESPUÉS de guardar la liga (si falla, se reintenta)
++        borrada = False
++        if ruta and os.path.isfile(ruta):
++            try:
++                os.remove(ruta)
++                borrada = True
++            except OSError as e:
++                app.logger.warning("compras.py: no pude borrar %s: %s", ruta, e)
++        return jsonify(ok=True, id=fid, archivada=True, url=url, repetido=repetido, borrada=borrada)
++
+     # ------------------------------------------------------------ la página Compras
+     @app.get("/api/compras")
+     def compras_listar():
+@@ -658,8 +1180,68 @@ def registrar(app, g):
+         if not isinstance(lineas, list) or not lineas:
+             return jsonify(ok=False, error="Dime qué llegó: al menos un renglón."), 400
+         with C.con() as c:
+-            hechos, errores = C.recibir(c, folio, lineas, u)
+-            if errores and not hechos:
+-                return jsonify(ok=False, error=" ".join(errores)), 400
++            hechos, errores, sin_llegar = C.recibir(c, folio, lineas, u)
++            if errores:
++                return jsonify(ok=False, error=" ".join(errores), errores=errores), 400
+             ficha = C.ficha(c, c.execute("SELECT * FROM ordenes WHERE folio=?", (folio,)).fetchone())
+-        return jsonify(ok=True, orden=ficha, recibidos=hechos, avisos=errores)
++        return jsonify(ok=True, orden=ficha, recibidos=hechos, sin_llegar=sin_llegar, avisos=[])
++
++    @app.post("/api/compras/problema")
++    def compras_problema():
++        """Reportar un problema de un renglón que ya se recibió (≤ 30 días). El cotizador abre su devolución."""
++        u = g["quien"]()
++        if not u:
++            return g["_sin_usuario"]()
++        d = g["_json_body"]()
++        if d is None:
++            return jsonify(ok=False, error="JSON inválido"), 400
++        folio = g["_texto"](d.get("oc"), 40).upper()
++        n = g["_entero"](d.get("n"), -1)
++        with C.con() as c:
++            oc = c.execute("SELECT * FROM ordenes WHERE folio=?", (folio,)).fetchone()
++            r = c.execute("SELECT * FROM renglones WHERE oc_folio=? AND n=?", (folio, n)).fetchone()
++            if not oc or not r or oc["prueba"]:
++                return jsonify(ok=False, error=f"No existe el renglón {n} de {folio}."), 404
++            if not r["recibido_en"]:
++                return jsonify(ok=False, error="Ese renglón todavía no se recibe: repórtalo al darle «Recibir»."), 409
++            limite = (datetime.datetime.now() - datetime.timedelta(days=DIAS_PROBLEMA)).replace(microsecond=0)
++            if r["recibido_en"] < limite.isoformat():
++                return jsonify(ok=False, error=f"Se recibió hace más de {DIAS_PROBLEMA} días: avísale a compras "
++                                               "directamente."), 409
++            if r["problema_foto_id"] and not r["problema_foto_archivada"]:
++                return jsonify(ok=False, error="Ese renglón ya tiene un problema reportado que el cotizador todavía no "
++                                               "recoge. Espera unos minutos y vuelve a intentar."), 409
++            p, e = C.leer_problema(d.get("problema"), r, 0, C.pendiente(r), f"Renglón {n}")
++            if e or not p:
++                return jsonify(ok=False, error=e or "Dime qué pasó con ese renglón."), 400
++            C.anotar_problema(c, folio, r, p, u, g["ahora"]())
++            C.nota_pendiente(oc["tarea_id"], (f"problema reportado después de recibir: renglón {n} "
++                                              f"({r['descripcion'] or '—'}) — {p['tipo']} {p['cantidad']:g}: "
++                                              f"«{p['comentario'][:200]}». Compras lo resuelve en el cotizador.")[:600], u)
++            ficha = C.ficha(c, oc)
++        return jsonify(ok=True, orden=ficha)
++
++    @app.get("/api/compras/foto")
++    def compras_foto():
++        """La foto para quien ve la página Compras: el archivo mientras está aquí; ya archivada, la liga de Drive."""
++        if not g["quien"]():
++            return g["_sin_usuario"]()
++        fid = request.args.get("id") or ""
++        if not foto_id_valido(fid):
++            return jsonify(ok=False, error="id de foto inválido"), 400
++        with C.con() as c:
++            r, pre = C.renglon_de_foto(c, fid)
++        if not r:
++            return jsonify(ok=False, error="No existe esa foto."), 404
++        if r[pre + "_archivada"]:
++            url = r[pre + "_url"] or ""
++            if url_archivo_valida(url):
++                return redirect(url, code=302)
++            return jsonify(ok=False, error="La foto ya está en Drive pero no tengo su liga."), 404
++        ruta = C.ruta_foto(r["oc_folio"], fid)
++        if not ruta or not os.path.isfile(ruta):
++            return jsonify(ok=False, error="No encuentro el archivo de esa foto."), 404
++        resp = send_file(ruta, mimetype="image/jpeg", max_age=0)
++        resp.headers["Cache-Control"] = "private, no-store"
++        resp.headers["X-Content-Type-Options"] = "nosniff"
++        return resp
+diff --git a/backend/tests-1028.sh b/backend/tests-1028.sh
+index 068a7ad..0e69f89 100644
+--- a/backend/tests-1028.sh
++++ b/backend/tests-1028.sh
+@@ -27,7 +27,7 @@ if command -v lsof >/dev/null && lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>
+   echo "!! el puerto $PORT ya está ocupado. Dame otro: bash backend/tests-1028.sh \"$REPO\" 8123"; exit 2
+ fi
+ $PY $REPO/backend/app.py > $T/app.log 2>&1 &
+-APP=$!; trap "kill $APP 2>/dev/null" EXIT
++APP=$!; trap 'kill $APP 2>/dev/null' EXIT
+ U="http://127.0.0.1:$PORT"
+ # Esperar a que conteste (hasta 15 s): si no arranca, el resto de las pruebas no dice nada útil.
+ arriba=""
+@@ -46,6 +46,9 @@ ok=0; fail=0
+ check() { if [[ "$3" == *"$2"* ]]; then ok=$((ok+1)); echo "  ✓ $1"; else fail=$((fail+1)); echo "  ✕ $1 — esperaba «$2», obtuve: ${3:0:240}"; fi; }
+ no()    { if [[ "$3" != *"$2"* ]]; then ok=$((ok+1)); echo "  ✓ $1"; else fail=$((fail+1)); echo "  ✕ $1 — NO debía traer «$2»: ${3:0:240}"; fi; }
+ as()    { curl -s -H "X-Remote-User: $1" -H "Content-Type: application/json" "${@:2}"; }
++# (29-oct) «Recibir» pide una foto JPEG por renglón que llegó (incremento 5 de CAPRI; pruebas a fondo en tests-1029.sh)
++FOTO='/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCSiiivBPbP/9k='
++F='"foto":{"nombre":"r.jpg","mime":"image/jpeg","datos":"'$FOTO'"}'
+ 
+ # La hora y la firma se calculan aparte para que la cabecera y lo firmado coincidan exactamente.
+ # firma_t(cuerpo [secreto] [desfase]) -> la hora ISO con zona · firma_f(... [hora]) -> el hex del HMAC
+@@ -128,7 +131,7 @@ check "no se liga dos veces" 'en camino en el inventario' "$(as leo -d '{"oc":"O
+ echo
+ echo "## recibir en el centro de mando (lo que llegó de verdad)"
+ check "no pueden llegar más de los que se pidieron" 'no pueden llegar' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":9}]}' $U/api/compras/recibir)"
+-R3="$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4},{"n":2,"recibido":20}]}' $U/api/compras/recibir)"
++R3="$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4,'"$F"'},{"n":2,"recibido":20,'"$F"'}]}' $U/api/compras/recibir)"
+ check "se recibe parcial" '"estado":"recibida-parcial"' "$(echo $R3 | tr -d ' ')"
+ check "los 4 soportes entraron a TIMSA" '"por_sitio":{"timsa":4}' "$(as leo $U/api/inventario | tr -d ' ' | head -c 4000)"
+ check "el pendiente sigue abierto y dice qué falta" 'llegó parte de OC-2026-0012' "$(cat $T/tareas/t-oc-oc-2026-0012.json)"
+@@ -140,7 +143,9 @@ REC="$(get '/api/integracion/cotizador/recepciones')"
+ check "trae la recepción" '"oc_folio":"OC-2026-0012"' "$(echo $REC | tr -d ' ')"
+ check "…marcada como incompleta" '"completa":false' "$(echo $REC | tr -d ' ')"
+ check "…con quién recibió" '"recibio":"jesush"' "$(echo $REC | tr -d ' ')"
+-check "…y cuánto llegó por renglón" '"pedido":32.0,"recibido":20.0' "$(echo $REC | tr -d ' ')"
++check "…y cuánto llegó por renglón" 'r2:32.0/20.0' "$(echo "$REC" | $PY -c "
++import sys,json;d=json.load(sys.stdin)
++print(' '.join('r%d:%s/%s' % (x['n'], x['pedido'], x['recibido']) for o in d['recepciones'] for x in o['renglones']))")"
+ check "con «desde» en el futuro no trae nada" '"recepciones":[]' "$(get '/api/integracion/cotizador/recepciones?desde=2030-01-01T00:00:00-06:00' | tr -d ' ')"
+ 
+ echo
+@@ -148,7 +153,7 @@ echo "## una OC que llega completa cierra su pendiente"
+ post '{"evento_id":"OC-2026-0013:oc.autorizada:1","tipo":"oc.autorizada","quien":"tania@helgen.tech","oc":{"folio":"OC-2026-0013","req_folio":"REQ-2026-0032","sitio":"ESE","proveedor":"Edwin","fecha_entrega":"2026-11-03","renglones":[{"n":1,"descripcion":"Cable calibre 10","unidad":"m","cantidad":30,"item":"CBL-10"}]}}' > /dev/null
+ post '{"evento_id":"OC-2026-0013:oc.en_camino:1","tipo":"oc.en_camino","quien":"tania@helgen.tech","oc":{"folio":"OC-2026-0013","sitio":"ESE","guia":"ABC","renglones":[{"n":1,"descripcion":"Cable calibre 10","unidad":"m","cantidad":30,"item":"CBL-10"}]}}' > /dev/null
+ check "el pendiente de ESE es de Miguel" 'miguel' "$(grep -o '"responsable": "[^"]*"' $T/tareas/t-oc-oc-2026-0013.json)"
+-R4="$(as miguel -d '{"oc":"OC-2026-0013","renglones":[{"n":1,"recibido":30}]}' $U/api/compras/recibir)"
++R4="$(as miguel -d '{"oc":"OC-2026-0013","renglones":[{"n":1,"recibido":30,'"$F"'}]}' $U/api/compras/recibir)"
+ check "queda recibida" '"estado":"recibida"' "$(echo $R4 | tr -d ' ')"
+ check "y su pendiente se cerró solo" '"estado": "hecho"' "$(grep -o '"estado": "[^"]*"' $T/tareas/t-oc-oc-2026-0013.json | head -1)"
+ check "el cotizador la ve completa" 'OC-2026-0013=completa' "$(get '/api/integracion/cotizador/recepciones' | $PY -c "
+@@ -156,13 +161,16 @@ import sys,json;d=json.load(sys.stdin)
+ print(' '.join(r['oc_folio']+('=completa' if r['completa'] else '=parcial') for r in d['recepciones']))")"
+ 
+ echo
+-echo "## recibir desde Inventario (la otra puerta) también se concilia"
++echo "## (29-oct) un envío de una OC ya no se recibe desde Inventario: allá manda a Compras (foto por renglón)"
+ post '{"evento_id":"OC-2026-0014:oc.autorizada:1","tipo":"oc.autorizada","quien":"tania@helgen.tech","oc":{"folio":"OC-2026-0014","req_folio":"REQ-2026-0033","sitio":"VER","fecha_entrega":"2026-11-05","renglones":[{"n":1,"descripcion":"Soporte para RTG","unidad":"pza","cantidad":2,"item":"SOP-RTG"}]}}' > /dev/null
+ post '{"evento_id":"OC-2026-0014:oc.en_camino:1","tipo":"oc.en_camino","quien":"tania@helgen.tech","oc":{"folio":"OC-2026-0014","sitio":"VER","guia":"XYZ","renglones":[{"n":1,"descripcion":"Soporte para RTG","unidad":"pza","cantidad":2,"item":"SOP-RTG"}]}}' > /dev/null
+ ENV=$($PY -c "
+ import sqlite3;c=sqlite3.connect('$T/drogheda.db');print(c.execute(\"SELECT envio_id FROM renglones WHERE oc_folio='OC-2026-0014'\").fetchone()[0])")
+-as alan -d "{\"tipo\":\"recepcion\",\"envio_id\":\"$ENV\",\"cantidad\":2}" $U/api/inventario/movimiento > /dev/null
+-check "Compras se entera de la recepción hecha en Inventario" 'OC-2026-0014=recibida' "$(as leo $U/api/compras | $PY -c "
++check "el envío dice de qué OC es (la página manda a Compras)" '"oc":"OC-2026-0014"' "$(as leo $U/api/inventario | tr -d ' ')"
++check "Inventario rechaza recibirlo y dice dónde" 'rec\u00edbelo en Compras' "$(as alan -d "{\"tipo\":\"recepcion\",\"envio_id\":\"$ENV\",\"cantidad\":2}" $U/api/inventario/movimiento)"
++check "…y el envío sigue en camino" '"icave":2' "$(as leo $U/api/inventario | tr -d ' ')"
++as alan -d '{"oc":"OC-2026-0014","renglones":[{"n":1,"recibido":2,'"$F"'}]}' $U/api/compras/recibir > /dev/null
++check "recibida en Compras" 'OC-2026-0014=recibida' "$(as leo $U/api/compras | $PY -c "
+ import sys,json;d=json.load(sys.stdin)
+ print(' '.join(o['folio']+'='+o['estado'] for o in d['ordenes']))")"
+ check "y cierra su pendiente" '"estado": "hecho"' "$(grep -o '"estado": "[^"]*"' $T/tareas/t-oc-oc-2026-0014.json | head -1)"
+diff --git a/backend/tests-1029.sh b/backend/tests-1029.sh
+new file mode 100644
+index 0000000..94c21d2
+--- /dev/null
++++ b/backend/tests-1029.sh
+@@ -0,0 +1,368 @@
++#!/usr/bin/env bash
++# Pruebas del 29-oct: incremento 5 de CAPRI del lado del centro de mando — foto por renglón al recibir, «Reportar
++# problema», fotos temporales que el cotizador se lleva a Drive (rutas firmadas) y el aviso oc.devolucion.
++# Contrato: CONTRATO-CAPRI-INCREMENTO-5.md §3–§5. Arranca app.py con carpetas, htpasswd y base SQLite temporales
++# (como tests-1028.sh). No toca el servidor.
++# Uso: bash backend/tests-1029.sh <ruta-a-hbox-docs> [puerto]
++set -u
++REPO=${1:?ruta a hbox-docs}; PORT=${2:-8099}
++T=$(mktemp -d); SEC="secreto-de-pruebas-1029"
++export ACTAS_DIR=$T/actas HTPASSWD_FILE=$T/htpasswd HTPASSWD_LOCK=$T/.lock SESION_COOKIE_INSEGURA=1 \
++  ACTAS_ADMINS=leo PORT INCIDENCIAS_DIR=$T/incidencias INVENTARIO_DIR=$T/inventario TAREAS_DIR=$T/tareas \
++  EQUIPO_DIR=$T/equipo COMPRAS_DB=$T/drogheda.db COTIZADOR_SECRETO=$SEC
++mkdir -p $ACTAS_DIR $T/equipo $T/tareas $T/inventario
++PY=${PYTHON:-python3}
++$PY -c 'import flask, sqlite3' 2>/dev/null || { echo "!! $PY no tiene flask: pip3 install --break-system-packages flask"; exit 2; }
++$PY - "$T" <<'EOF'
++import sys, os, json, sqlite3
++t = sys.argv[1]
++for u, n in [("leo", "Leo"), ("adriana", "Adriana"), ("jesush", "Jesús Honorato"), ("alan", "Alán"),
++             ("miguel", "Miguel"), ("antonio", "Antonio"), ("jesus", "Jesús Romero"), ("claude", "Claude")]:
++    json.dump({"id": u, "nombre": n, "area": "operaciones", "activo": True},
++              open(os.path.join(t, "equipo", u + ".json"), "w"))
++# Una base como la del 28-oct (sin las columnas nuevas), con una OC vieja: la migración al arrancar no debe perderla.
++c = sqlite3.connect(os.path.join(t, "drogheda.db"))
++c.executescript("""
++CREATE TABLE ordenes (folio TEXT PRIMARY KEY, req_folio TEXT, proyecto_folio TEXT, proyecto_clave TEXT,
++  sitio TEXT, sitio_portal TEXT, proveedor TEXT, estado TEXT, fecha_entrega TEXT, paqueteria TEXT, guia TEXT,
++  en_camino_en TEXT, solicitante TEXT, autorizo TEXT, tarea_id TEXT, prueba INTEGER DEFAULT 0,
++  req_cerrada INTEGER DEFAULT 0, recepcion_en TEXT, recepcion_por TEXT, creado_en TEXT, actualizado_en TEXT);
++CREATE TABLE renglones (oc_folio TEXT, n INTEGER, descripcion TEXT, unidad TEXT, cantidad REAL,
++  item_codigo TEXT, item_id TEXT, envio_id TEXT, recibido REAL DEFAULT 0, recibido_en TEXT, recibido_por TEXT,
++  nota TEXT, PRIMARY KEY (oc_folio, n));
++CREATE TABLE eventos (evento_id TEXT PRIMARY KEY, oc_folio TEXT, tipo TEXT, cuando TEXT, quien TEXT,
++  origen TEXT, recibido_en TEXT, datos TEXT);
++INSERT INTO ordenes (folio, sitio, sitio_portal, estado, creado_en) VALUES ('OC-2026-0001','QRO','qro','recibida','2026-10-28T09:00:00');
++INSERT INTO renglones (oc_folio, n, descripcion, unidad, cantidad, recibido, recibido_en, recibido_por)
++  VALUES ('OC-2026-0001', 1, 'Cinta aislante', 'pza', 3, 3, '2026-10-28T10:00:00', 'jesus');
++""")
++c.commit()
++EOF
++if command -v lsof >/dev/null && lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; then
++  echo "!! el puerto $PORT ya está ocupado. Dame otro: bash backend/tests-1029.sh \"$REPO\" 8124"; exit 2
++fi
++$PY $REPO/backend/app.py > $T/app.log 2>&1 &
++APP=$!; trap 'kill $APP 2>/dev/null' EXIT
++U="http://127.0.0.1:$PORT"
++arriba=""
++for _ in $(seq 1 30); do
++  if curl -fsS -o /dev/null "$U/api/salud" 2>/dev/null; then arriba=si; break; fi
++  kill -0 $APP 2>/dev/null || break
++  sleep 0.5
++done
++if [[ -z "$arriba" ]]; then echo "!! app.py no arrancó:"; sed -n '1,40p' $T/app.log; exit 2; fi
++ok=0; fail=0
++# Flask escapa los acentos en JSON («\u00f3»): se comparan ya decodificados, así las pruebas se leen en español.
++dec()   { $PY -c 'import sys,re;print(re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), sys.stdin.read()), end="")'; }
++check() { local v="$3"; [[ "$v" == *'\u'* ]] && v="$(printf '%s' "$v" | dec)"
++          if [[ "$v" == *"$2"* ]]; then ok=$((ok+1)); echo "  ✓ $1"; else fail=$((fail+1)); echo "  ✕ $1 — esperaba «$2», obtuve: ${v:0:300}"; fi; }
++no()    { local v="$3"; [[ "$v" == *'\u'* ]] && v="$(printf '%s' "$v" | dec)"
++          if [[ "$v" != *"$2"* ]]; then ok=$((ok+1)); echo "  ✓ $1"; else fail=$((fail+1)); echo "  ✕ $1 — NO debía traer «$2»: ${v:0:300}"; fi; }
++as()    { curl -s -H "X-Remote-User: $1" -H "Content-Type: application/json" "${@:2}"; }
++sql()   { $PY -c "import sqlite3,sys;c=sqlite3.connect('$T/drogheda.db');print([tuple(r) for r in c.execute(sys.argv[1])])" "$1"; }
++tarea() { $PY -c "import json;d=json.load(open('$T/tareas/$1.json'));print(d['estado'], '|', ' // '.join(h['cambio'] for h in d['historial']))"; }
++inv()   { as leo $U/api/inventario | $PY -c "
++import sys,json;d=json.load(sys.stdin)
++print(' '.join('%s:sitio=%s:camino=%s:total=%s' % (i['codigo'], json.dumps(i['por_sitio'],sort_keys=True).replace(' ',''),
++      json.dumps(i['en_camino'],sort_keys=True).replace(' ',''), i['stock']) for i in d['items']))"; }
++
++# ---- firma (igual que tests-1028.sh) ----
++firma_t() { $PY -c '
++import sys, datetime
++print((datetime.datetime.now().astimezone() + datetime.timedelta(seconds=int(sys.argv[1] or 0))).replace(microsecond=0).isoformat())
++' "${1:-0}"; }
++firma_f() { $PY -c '
++import sys, hmac, hashlib
++print(hmac.new(sys.argv[1].encode(), sys.argv[3].encode() + b"\n" + sys.argv[2].encode(), hashlib.sha256).hexdigest())
++' "${3:-$SEC}" "$1" "$2"; }
++# spost <ruta> <cuerpo> [secreto] [desfase]  ·  sget <ruta> [secreto] [desfase] [curl extra…]
++spost() { local t f; t=$(firma_t "${4:-0}"); f=$(firma_f "$2" "$t" "${3:-$SEC}")
++          curl -s -H "Content-Type: application/json" -H "X-Hbox-Tiempo: $t" -H "X-Hbox-Firma: sha256=$f" -d "$2" "$U$1"; }
++post()  { spost /api/integracion/cotizador/evento "$1"; }
++sget()  { local t f; t=$(firma_t "${3:-0}"); f=$(firma_f "" "$t" "${2:-$SEC}")
++          curl -s -H "X-Hbox-Tiempo: $t" -H "X-Hbox-Firma: sha256=$f" "${@:4}" "$U$1"; }
++
++FOTO='/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCSiiivBPbP/9k='
++PNG='iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAFklEQVR4XmPUqDjBgA0wYRVlYBikEgAc5wF4FDd+XgAAAABJRU5ErkJggg=='
++F='"foto":{"nombre":"r.jpg","mime":"image/jpeg","datos":"'$FOTO'"}'
++FP='"foto":{"nombre":"p.jpg","mime":"image/jpeg","datos":"'$FOTO'"}'
++SHA_FOTO=$(printf '%s' "$FOTO" | base64 -d 2>/dev/null | $PY -c 'import sys,hashlib;print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
++DRIVE="https://drive.google.com/file/d/1AbCdEf/view?usp=drivesdk"
++
++echo "## arranque y migración segura"
++check "módulos cargados sin error" "" "$(grep -i 'no se cargó' $T/app.log)"
++COLS=$(sql "SELECT name FROM pragma_table_info('renglones')")
++for col in foto_id foto_archivada foto_url problema_tipo problema_cantidad problema_comentario problema_foto_id \
++           problema_foto_archivada problema_foto_url faltante_aceptado actualizado_en; do
++  check "columna nueva $col" "'$col'" "$COLS"
++done
++check "tabla de devoluciones" "devoluciones" "$(sql "SELECT name FROM sqlite_master WHERE type='table'")"
++check "la OC de antes de la migración sigue ahí" 'OC-2026-0001' "$(as leo $U/api/compras)"
++
++echo
++echo "## preparar: ítems, OC-2026-0012 a TIMSA en camino"
++as leo -d '{"codigo":"SOP-RTG","descripcion":"Soporte para RTG","categoria":"instalacion","unidad":"pza"}' $U/api/inventario > /dev/null
++as leo -d '{"codigo":"CBL-10","descripcion":"Cable calibre 10","categoria":"cable","unidad":"m"}' $U/api/inventario > /dev/null
++OC12='"oc":{"folio":"OC-2026-0012","req_folio":"REQ-2026-0031","sitio":"ZLO","proveedor":"Ferretería del Pacífico","fecha_entrega":"2026-10-30","guia":"G1","total":99999,"renglones":[{"n":1,"descripcion":"Soporte para RTG","unidad":"pza","cantidad":4,"item":"SOP-RTG","importe":4321},{"n":2,"descripcion":"Cable calibre 10","unidad":"m","cantidad":80,"item":"CBL-10"},{"n":3,"descripcion":"Tornillo 3/8","unidad":"pza","cantidad":10,"item":null}]}'
++post '{"evento_id":"OC-2026-0012:oc.autorizada:1","tipo":"oc.autorizada","quien":"tania@helgen.tech",'"$OC12"'}' > /dev/null
++check "en camino" '"estado_portal":"en-camino"' "$(post '{"evento_id":"OC-2026-0012:oc.en_camino:1","tipo":"oc.en_camino","quien":"tania@helgen.tech",'"$OC12"'}')"
++check "4 soportes y 80 m en camino a TIMSA" 'CBL-10:sitio={}:camino={"timsa":80}' "$(inv)"
++
++echo
++echo "## «Recibir» exige una foto por renglón que llegó"
++R="$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4}]}' $U/api/compras/recibir)"
++check "sin foto: 400 y dice cuál" 'Renglón 1 (Soporte para RTG): falta la foto' "$R"
++check "…y no se recibió nada" 'SOP-RTG:sitio={}:camino={"timsa":4}' "$(inv)"
++check "una foto PNG no sirve (tiene que ser JPG)" 'tiene que ser JPG' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4,"foto":{"datos":"'$PNG'","mime":"image/png"}}]}' $U/api/compras/recibir)"
++check "base64 dañado" 'llegó dañada' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4,"foto":{"datos":"@@no-es-base64@@"}}]}' $U/api/compras/recibir)"
++R="$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4,'"$F"'},{"n":2,"recibido":80}]}' $U/api/compras/recibir)"
++check "todo o nada: un renglón sin foto detiene la recepción" 'Renglón 2' "$R"
++check "…y el renglón 1 (que sí traía foto) tampoco se recibió" 'SOP-RTG:sitio={}:camino={"timsa":4}' "$(inv)"
++check "…ni se guardó su foto" "0" "$(ls $T/adjuntos/compras/OC-2026-0012 2>/dev/null | wc -l | tr -d ' ')"
++check "todo en 0 y sin problema: no hay nada que recibir" 'No anotaste nada' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":0},{"n":2,"recibido":0}]}' $U/api/compras/recibir)"
++
++echo
++echo "## «Reportar problema» al recibir"
++P='{"tipo":"Dañado","cantidad":10,"comentario":"Rollo aplastado",'"$FP"'}'
++check "problema sin comentario" 'comentario es obligatorio' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":2,"recibido":80,'"$F"',"problema":{"tipo":"Dañado","cantidad":10,"comentario":" ",'"$FP"'}}]}' $U/api/compras/recibir)"
++check "Dañado sin foto del problema" 'foto del problema: falta la foto' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":2,"recibido":80,'"$F"',"problema":{"tipo":"Dañado","cantidad":10,"comentario":"Rollo aplastado"}}]}' $U/api/compras/recibir)"
++check "tipo de problema inválido" 'elige qué pasó' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":2,"recibido":80,'"$F"',"problema":{"tipo":"Robado","cantidad":1,"comentario":"no está"}}]}' $U/api/compras/recibir)"
++check "faltante cuando llegó todo: no" 'si llegó todo no hay faltante' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":2,"recibido":80,'"$F"',"problema":{"tipo":"Faltante","cantidad":5,"comentario":"faltan 5"}}]}' $U/api/compras/recibir)"
++check "faltante mayor que lo que no llegó" 'no llegaron 10; el faltante no puede ser de 12' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":3,"recibido":0,"problema":{"tipo":"Faltante","cantidad":12,"comentario":"no llegó"}}]}' $U/api/compras/recibir)"
++check "cantidad del problema en 0" 'Tiene que ser más de 0' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":2,"recibido":80,'"$F"',"problema":{"tipo":"Dañado","cantidad":0,"comentario":"Rollo aplastado",'"$FP"'}}]}' $U/api/compras/recibir)"
++R="$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4,'"$F"'},{"n":2,"recibido":80,'"$F"',"problema":'"$P"'},{"n":3,"recibido":0,"problema":{"tipo":"Faltante","cantidad":10,"comentario":"No llegó la caja de tornillos"}}]}' $U/api/compras/recibir)"
++check "se recibe con fotos y problemas" '"ok":true' "$R"
++check "…los tres renglones" '"recibidos":[1,2,3]' "$(echo "$R" | tr -d ' ')"
++check "4 soportes y 80 m entraron a TIMSA" 'CBL-10:sitio={"timsa":80}:camino={}:total=80 SOP-RTG:sitio={"timsa":4}:camino={}:total=4' "$(inv)"
++check "tres fotos guardadas en adjuntos/compras/OC-2026-0012 (2 de recepción, 1 del problema)" "3" "$(ls $T/adjuntos/compras/OC-2026-0012 | wc -l | tr -d ' ')"
++check "el pendiente anota el problema" 'problema al recibir: rengl' "$(tarea t-oc-oc-2026-0012)"
++check "…con lo que pasó" 'Rollo aplastado' "$(tarea t-oc-oc-2026-0012)"
++check "la página Compras trae foto y problema del renglón" '"tipo":"Dañado"' "$(as leo "$U/api/compras" | tr -d ' ')"
++check "…y una foto que se puede ver" '"archivada":false' "$(as leo "$U/api/compras" | tr -d ' ')"
++check "un renglón ya recibido no se vuelve a recibir" 'No anotaste nada' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4,'"$F"'}]}' $U/api/compras/recibir)"
++
++sleep 1.1   # que la primera consulta del cotizador caiga en otro segundo que la recepción
++echo
++echo "## lo que consulta el cotizador: recepciones con foto y problema (contrato §5a)"
++REC="$(sget /api/integracion/cotizador/recepciones)"
++FORMA=$(echo "$REC" | $PY -c "
++import sys, json, re
++d = json.load(sys.stdin); o = [x for x in d['recepciones'] if x['oc_folio'] == 'OC-2026-0012'][0]
++r = {x['n']: x for x in o['renglones']}
++ok = lambda i: bool(re.match(r'^[A-Za-z0-9._-]{1,80}\$', i or ''))
++print('r1foto=%s r1prob=%s' % (ok(r[1]['foto']['id']) and r[1]['foto']['archivada'] is False and r[1]['foto']['url'] == '', r[1]['problema']))
++p = r[2]['problema']
++print('r2prob=%s/%s/%s/%s pfoto=%s p-en-id=%s' % (p['tipo'], p['cantidad'], p['comentario'], sorted(p), ok(p['foto']['id']), '-r2-p-' in p['foto']['id']))
++print('r3prob=%s/%s foto=%s r3foto=%s' % (r[3]['problema']['tipo'], r[3]['problema']['cantidad'], r[3]['problema']['foto'], r[3]['foto']))
++print('llaves=%s completa=%s recibio=%s' % (sorted(r[2]), o['completa'], o['recibio']))
++print('pedido-recibido=%s/%s' % (r[2]['pedido'], r[2]['recibido']))
++")
++check "foto del renglón 1: id del contrato, sin archivar, sin url" 'r1foto=True r1prob=None' "$FORMA"
++check "problema del renglón 2: tipo, cantidad, comentario y su foto «-p-»" "r2prob=Dañado/10/Rollo aplastado/['cantidad', 'comentario', 'foto', 'tipo'] pfoto=True p-en-id=True" "$FORMA"
++check "faltante del renglón 3 sin foto (foto: null), y sin foto de recepción" 'r3prob=Faltante/10 foto=None r3foto=None' "$FORMA"
++check "cada renglón trae n, pedido, recibido, foto y problema" "llaves=['foto', 'n', 'pedido', 'problema', 'recibido'] completa=False recibio=jesush" "$FORMA"
++check "recibido = lo que llegó" 'pedido-recibido=80.0/80.0' "$FORMA"
++no "nunca montos (total)" '99999' "$REC"
++no "nunca montos (importe)" '4321' "$REC"
++H1=$(echo "$REC" | $PY -c "import sys,json;print(json.load(sys.stdin)['hasta'])")
++F1=$(echo "$REC" | $PY -c "
++import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_folio']=='OC-2026-0012'][0]
++print(o['renglones'][0]['foto']['id'])")
++FP2=$(echo "$REC" | $PY -c "
++import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_folio']=='OC-2026-0012'][0]
++print(o['renglones'][1]['problema']['foto']['id'])")
++sleep 1.1
++check "con desde = la consulta anterior y sin cambios: nada" '"recepciones":[]' "$(sget "/api/integracion/cotizador/recepciones?desde=$H1" | tr -d ' ')"
++
++echo
++echo "## bajar la foto (firmada) — contrato §5b"
++CT=$(sget "/api/integracion/cotizador/foto?id=$F1" "" 0 -o $T/bajada.jpg -w '%{http_code} %{content_type}')
++check "200 con image/jpeg" '200 image/jpeg' "$CT"
++check "…y son los mismos bytes que se subieron" "$SHA_FOTO" "$($PY -c "import hashlib;print(hashlib.sha256(open('$T/bajada.jpg','rb').read()).hexdigest())")"
++check "la foto del problema también se baja" '200' "$(sget "/api/integracion/cotizador/foto?id=$FP2" "" 0 -o /dev/null -w '%{http_code}')"
++check "sin firma: 401" '401' "$(curl -s -o /dev/null -w '%{http_code}' "$U/api/integracion/cotizador/foto?id=$F1")"
++check "firma vencida (hace 10 min): 401" '401' "$(sget "/api/integracion/cotizador/foto?id=$F1" "" -600 -o /dev/null -w '%{http_code}')"
++check "firma con otro secreto: 401" '401' "$(sget "/api/integracion/cotizador/foto?id=$F1" "otro-secreto" 0 -o /dev/null -w '%{http_code}')"
++check "con sesión no se entra por la ruta firmada" '401' "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Remote-User: leo' "$U/api/integracion/cotizador/foto?id=$F1")"
++for malo in '../../etc/passwd' '..%2F..%2Fapp.py' 'a/b' '.oculto' 'OC-2026-0012-r1..x' "$(printf 'A%.0s' $(seq 1 81))" '' 'OC%201' 'OC-1%00'; do
++  check "id inválido «${malo:0:20}»: 400" '400' "$(sget "/api/integracion/cotizador/foto?id=$malo" "" 0 -o /dev/null -w '%{http_code}')"
++done
++check "id válido que no existe: 404" '404' "$(sget "/api/integracion/cotizador/foto?id=OC-2026-0012-r9-20261029T000000" "" 0 -o /dev/null -w '%{http_code}')"
++check "con sesión, la página Compras ve la foto local" '200 image/jpeg' "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' -H 'X-Remote-User: leo' "$U/api/compras/foto?id=$F1")"
++check "…y sin usuario no" '403' "$(curl -s -o /dev/null -w '%{http_code}' "$U/api/compras/foto?id=$F1")"
++check "…ni con un id raro" '400' "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Remote-User: leo' "$U/api/compras/foto?id=../app.py")"
++
++echo
++echo "## archivar: el cotizador ya la subió a Drive — se guarda la liga y se borra el archivo"
++check "sin firma: 401" '401' "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"id":"'$F1'","url":"'$DRIVE'"}' $U/api/integracion/cotizador/foto-archivada)"
++check "url que no es https de Google: 400" 'https de Google Drive' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"'$F1'","url":"http://drive.google.com/x"}')"
++check "javascript: no" 'https de Google Drive' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"'$F1'","url":"javascript:alert(1)"}')"
++check "otro dominio no" 'https de Google Drive' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"'$F1'","url":"https://drive.google.com.malo.example/x"}')"
++check "id inválido: 400" 'id de foto inv' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"../x","url":"'$DRIVE'"}')"
++check "id que no existe: 404" 'No existe esa foto' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"OC-9-r1-20261029T000000","url":"'$DRIVE'"}')"
++check "el archivo está antes de archivar" "$F1.jpg" "$(ls $T/adjuntos/compras/OC-2026-0012)"
++R="$(spost /api/integracion/cotizador/foto-archivada '{"id":"'$F1'","url":"'$DRIVE'"}')"
++check "archivada" '"archivada":true' "$R"
++check "…y borrada del servidor" '"borrada":true' "$R"
++no "el archivo ya no está" "$F1.jpg" "$(ls $T/adjuntos/compras/OC-2026-0012)"
++check "la otra foto sigue ahí" "2" "$(ls $T/adjuntos/compras/OC-2026-0012 | wc -l | tr -d ' ')"
++check "idempotente: otra vez = ok, repetido" '"repetido":true' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"'$F1'","url":"'$DRIVE'"}')"
++check "…sin error aunque el archivo ya no esté" '"ok":true' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"'$F1'","url":"'$DRIVE'"}')"
++check "archivada: GET firmada da 404" '404' "$(sget "/api/integracion/cotizador/foto?id=$F1" "" 0 -o /dev/null -w '%{http_code}')"
++check "con sesión: lleva a Drive (302)" "302 $DRIVE" "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'X-Remote-User: leo' "$U/api/compras/foto?id=$F1")"
++R2="$(sget "/api/integracion/cotizador/recepciones?desde=$H1")"
++check "la recepción vuelve a salir aunque se recibió antes de «desde» (se archivó)" 'OC-2026-0012' "$R2"
++check "…con la foto archivada y su liga" "archivada=True url=$DRIVE" "$(echo "$R2" | $PY -c "
++import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_folio']=='OC-2026-0012'][0]
++f=o['renglones'][0]['foto'];print('archivada=%s url=%s' % (f['archivada'], f['url']))")"
++spost /api/integracion/cotizador/foto-archivada '{"id":"'$FP2'","url":"'$DRIVE'"}' > /dev/null
++check "la foto del problema también se archiva" '1,' "$(sql "SELECT problema_foto_archivada=1 AND problema_foto_url IS NOT NULL FROM renglones WHERE oc_folio='OC-2026-0012' AND n=2" | tr -d '[]()')"
++
++echo
++echo "## reportar un problema después de recibir (≤ 30 días)"
++check "renglón que no se ha recibido: 409" 'todavía no se recibe' "$(post '{"evento_id":"OC-2026-0020:oc.autorizada:1","tipo":"oc.autorizada","oc":{"folio":"OC-2026-0020","sitio":"ESE","renglones":[{"n":1,"descripcion":"Soporte para RTG","unidad":"pza","cantidad":2,"item":"SOP-RTG"}]}}' >/dev/null; as miguel -d '{"oc":"OC-2026-0020","n":1,"problema":{"tipo":"Dañado","cantidad":1,"comentario":"golpe",'"$FP"'}}' $U/api/compras/problema)"
++check "sin foto (no es faltante): 400" 'foto del problema' "$(as jesush -d '{"oc":"OC-2026-0012","n":1,"problema":{"tipo":"Incorrecto","cantidad":1,"comentario":"es de otra medida"}}' $U/api/compras/problema)"
++R="$(as jesush -d '{"oc":"OC-2026-0012","n":1,"problema":{"tipo":"Incorrecto","cantidad":1,"comentario":"Uno es de otra medida",'"$FP"'}}' $U/api/compras/problema)"
++check "se reporta" '"ok":true' "$R"
++check "…y queda en el renglón" 'Incorrecto' "$(sql "SELECT problema_tipo, problema_comentario FROM renglones WHERE oc_folio='OC-2026-0012' AND n=1")"
++check "otro problema mientras el cotizador no recoge la foto del anterior: 409" 'todavía no recoge' "$(as jesush -d '{"oc":"OC-2026-0012","n":1,"problema":{"tipo":"Dañado","cantidad":1,"comentario":"otro",'"$FP"'}}' $U/api/compras/problema)"
++check "el cotizador lo ve (vuelve a salir la recepción)" 'Incorrecto' "$(sget "/api/integracion/cotizador/recepciones?desde=$H1")"
++
++echo
++echo "## oc.devolucion — validación (contrato §5d)"
++DEVOC='"oc":{"folio":"OC-2026-0012","sitio":"ZLO","total":777777}'
++check "resolución inválida: 400" 'Resolución inv' "$(post '{"evento_id":"OC-2026-0012:oc.devolucion:9","tipo":"oc.devolucion",'"$DEVOC"',"devolucion":{"folio":"DEV-2026-0009","renglon":2,"cantidad":10,"tipo":"Dañado","resolucion":"Tirarlo"}}')"
++check "renglón que no existe: 400" 'no existe' "$(post '{"evento_id":"OC-2026-0012:oc.devolucion:8","tipo":"oc.devolucion",'"$DEVOC"',"devolucion":{"folio":"DEV-2026-0008","renglon":7,"cantidad":1,"tipo":"Dañado","resolucion":"Reponer"}}')"
++check "cantidad 0: 400" 'cantidad inv' "$(post '{"evento_id":"OC-2026-0012:oc.devolucion:7","tipo":"oc.devolucion",'"$DEVOC"',"devolucion":{"folio":"DEV-2026-0007","renglon":2,"cantidad":0,"tipo":"Dañado","resolucion":"Reponer"}}')"
++check "OC que el centro de mando no conoce: ok, sin aplicar" '"aplicado":false' "$(post '{"evento_id":"OC-2026-0999:oc.devolucion:1","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0999","sitio":"ZLO"},"devolucion":{"folio":"DEV-2026-0999","renglon":1,"cantidad":1,"tipo":"Dañado","resolucion":"Reponer"}}')"
++no "…y no la crea" 'OC-2026-0999' "$(sql "SELECT folio FROM ordenes")"
++
++echo
++echo "## Reponer: sale del sitio lo devuelto y el renglón vuelve a «en camino» por esa cantidad"
++check "antes: el pendiente sigue abierto (falta el renglón 3)" 'por-hacer' "$(tarea t-oc-oc-2026-0012)"
++D1='{"evento_id":"OC-2026-0012:oc.devolucion:1","tipo":"oc.devolucion","quien":"tania@helgen.tech",'"$DEVOC"',"devolucion":{"folio":"DEV-2026-0003","renglon":2,"cantidad":10,"tipo":"Dañado","resolucion":"Reponer","nota":"Proveedor manda otro rollo","importe":555555}}'
++R="$(post "$D1")"
++check "aplicada" '"resolucion":"Reponer"' "$R"
++check "CBL-10: 70 en TIMSA y 10 en camino (total 80)" 'CBL-10:sitio={"timsa":70}:camino={"timsa":10}:total=80' "$(inv)"
++check "movimiento «devolucion» de −10 en TIMSA, con el folio de la DEV" 'devolucion|-10|timsa|DEV-2026-0003' "$(as leo "$U/api/inventario/movimientos?sitio=timsa" | $PY -c "
++import sys,json;d=json.load(sys.stdin)
++print(' '.join('%s|%s|%s|%s' % (m['tipo'], m['delta_sitio'], m['sitio'], m['motivo'].split()[1]) for m in d['movimientos'] if m['tipo']=='devolucion'))")"
++check "el renglón 2 queda por recibir: 10 pendientes" '[(70.0, None, 10.0)]' "$(sql "SELECT recibido, recibido_en, cantidad-recibido FROM renglones WHERE oc_folio='OC-2026-0012' AND n=2")"
++check "la OC regresa a «recibida en parte»" 'recibida-parcial' "$(sql "SELECT estado FROM ordenes WHERE folio='OC-2026-0012'")"
++check "el pendiente de la OC se reabre con la nota de la DEV" 'por-hacer' "$(tarea t-oc-oc-2026-0012)"
++check "…y dice qué pasó" 'DEV-2026-0003' "$(tarea t-oc-oc-2026-0012)"
++check "mismo evento otra vez: repetido, sin efecto" '"repetido":true' "$(post "$D1")"
++check "…el inventario no cambió" 'CBL-10:sitio={"timsa":70}:camino={"timsa":10}:total=80' "$(inv)"
++check "misma DEV con otro evento_id: tampoco se aplica dos veces" '"repetida":true' "$(post "${D1/oc.devolucion:1/oc.devolucion:2}")"
++check "…el inventario no cambió" 'CBL-10:sitio={"timsa":70}:camino={"timsa":10}:total=80' "$(inv)"
++no "nunca montos (total del aviso)" '777777' "$(sql "SELECT * FROM eventos") $(sql "SELECT * FROM devoluciones")"
++no "nunca montos (importe dentro de la devolución)" '555555' "$(sql "SELECT * FROM eventos") $(sql "SELECT * FROM devoluciones")"
++check "la página Compras muestra la devolución en el renglón" 'DEV-2026-0003' "$(as leo $U/api/compras)"
++ENV2=$($PY -c "import sqlite3;c=sqlite3.connect('$T/drogheda.db');print(c.execute(\"SELECT envio_id FROM renglones WHERE oc_folio='OC-2026-0012' AND n=2\").fetchone()[0])")
++check "el envío nuevo es de la OC: Inventario manda a Compras" 'Compras' "$(as jesush -d "{\"tipo\":\"recepcion\",\"envio_id\":\"$ENV2\",\"cantidad\":10}" $U/api/inventario/movimiento)"
++
++echo
++echo "## llega la reposición: otra recepción del mismo renglón, con foto nueva"
++sleep 1.1
++H2=$(sget /api/integracion/cotizador/recepciones | $PY -c "import sys,json;print(json.load(sys.stdin)['hasta'])")
++sleep 1.1
++check "no pueden llegar más de los 10 que faltan" 'faltan por llegar 10' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":2,"recibido":11,'"$F"'}]}' $U/api/compras/recibir)"
++check "sin foto no" 'falta la foto' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":2,"recibido":10}]}' $U/api/compras/recibir)"
++check "se recibe la reposición" '"recibidos":[2]' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":2,"recibido":10,'"$F"'}]}' $U/api/compras/recibir | tr -d ' ')"
++check "CBL-10: 80 en TIMSA, nada en camino" 'CBL-10:sitio={"timsa":80}:camino={}:total=80' "$(inv)"
++R3="$(sget "/api/integracion/cotizador/recepciones?desde=$H2")"
++check "el cotizador la vuelve a ver (otra recepción del renglón)" 'OC-2026-0012' "$R3"
++check "…recibido 80 y una foto nueva sin archivar" 'recibido=80.0 nueva=True archivada=False' "$(echo "$R3" | $PY -c "
++import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_folio']=='OC-2026-0012'][0]
++r=o['renglones'][1];print('recibido=%s nueva=%s archivada=%s' % (r['recibido'], r['foto']['id'] != '$F1' and '-r2-' in r['foto']['id'], r['foto']['archivada']))")"
++
++echo
++echo "## Devolver al proveedor y Cancelar renglón: sale del sitio y el renglón queda cerrado con faltante"
++R="$(post '{"evento_id":"OC-2026-0012:oc.devolucion:3","tipo":"oc.devolucion","quien":"tania@helgen.tech",'"$DEVOC"',"devolucion":{"folio":"DEV-2026-0004","renglon":1,"cantidad":1,"tipo":"Incorrecto","resolucion":"Devolver al proveedor","nota":"Nota de crédito NC-55"}}')"
++check "aplicada" '"resolucion":"Devolver al proveedor"' "$R"
++check "SOP-RTG: 3 en TIMSA, total 3" 'SOP-RTG:sitio={"timsa":3}:camino={}:total=3' "$(inv)"
++check "renglón 1: recibido 3, faltante aceptado 1, sigue cerrado" "[(3.0, 1.0, 1)]" "$(sql "SELECT recibido, faltante_aceptado, recibido_en IS NOT NULL FROM renglones WHERE oc_folio='OC-2026-0012' AND n=1")"
++check "la OC sigue en parte (falta el renglón 3)" 'recibida-parcial' "$(sql "SELECT estado FROM ordenes WHERE folio='OC-2026-0012'")"
++R="$(post '{"evento_id":"OC-2026-0012:oc.devolucion:4","tipo":"oc.devolucion","quien":"tania@helgen.tech",'"$DEVOC"',"devolucion":{"folio":"DEV-2026-0005","renglon":3,"cantidad":10,"tipo":"Faltante","resolucion":"Cancelar renglón"}}')"
++check "Cancelar renglón (faltante): aplicada" '"resolucion":"Cancelar renglón"' "$R"
++check "…un faltante no mueve existencias" '"movimiento_id":null' "$(echo "$R" | tr -d ' ')"
++check "renglón 3 cerrado con faltante 10" "[(0.0, 10.0, 1)]" "$(sql "SELECT recibido, faltante_aceptado, recibido_en IS NOT NULL FROM renglones WHERE oc_folio='OC-2026-0012' AND n=3")"
++check "ya no se espera nada: la OC queda recibida" 'recibida' "$(sql "SELECT estado FROM ordenes WHERE folio='OC-2026-0012'")"
++check "…y su pendiente se cierra" 'hecho' "$(tarea t-oc-oc-2026-0012)"
++check "el cotizador la ve completa" '"completa":true' "$(sget /api/integracion/cotizador/recepciones | $PY -c "
++import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_folio']=='OC-2026-0012'][0];print(json.dumps({'completa':o['completa']}).replace(' ',''))")"
++
++echo
++echo "## Conservar: nada cambia · Sobrante: nunca se contó, nada sale · Faltante + Reponer: vuelve en camino sin sacar nada"
++OC21='"oc":{"folio":"OC-2026-0021","sitio":"LZC","renglones":[{"n":1,"descripcion":"Soporte para RTG","unidad":"pza","cantidad":10,"item":"SOP-RTG"}]}'
++post '{"evento_id":"OC-2026-0021:oc.autorizada:1","tipo":"oc.autorizada",'"$OC21"'}' > /dev/null
++post '{"evento_id":"OC-2026-0021:oc.en_camino:1","tipo":"oc.en_camino",'"$OC21"'}' > /dev/null
++check "llegan 7 de 10 con faltante de 3" '"ok":true' "$(as antonio -d '{"oc":"OC-2026-0021","renglones":[{"n":1,"recibido":7,'"$F"',"problema":{"tipo":"Faltante","cantidad":3,"comentario":"Solo venían 7"}}]}' $U/api/compras/recibir)"
++check "SOP-RTG: 7 en LCT" 'SOP-RTG:sitio={"lzc":7,"timsa":3}:camino={}:total=10' "$(inv)"
++post '{"evento_id":"OC-2026-0021:oc.devolucion:1","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0021","sitio":"LZC"},"devolucion":{"folio":"DEV-2026-0010","renglon":1,"cantidad":2,"tipo":"Dañado","resolucion":"Conservar"}}' > /dev/null
++check "Conservar: el inventario no cambia" 'SOP-RTG:sitio={"lzc":7,"timsa":3}:camino={}:total=10' "$(inv)"
++check "…y queda registrada" 'Conservar' "$(sql "SELECT resolucion FROM devoluciones WHERE folio='DEV-2026-0010'")"
++post '{"evento_id":"OC-2026-0021:oc.devolucion:2","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0021","sitio":"LZC"},"devolucion":{"folio":"DEV-2026-0011","renglon":1,"cantidad":2,"tipo":"Sobrante","resolucion":"Devolver al proveedor"}}' > /dev/null
++check "Sobrante devuelto: no sale nada (no se había contado)" 'SOP-RTG:sitio={"lzc":7,"timsa":3}:camino={}:total=10' "$(inv)"
++R="$(post '{"evento_id":"OC-2026-0021:oc.devolucion:3","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0021","sitio":"LZC"},"devolucion":{"folio":"DEV-2026-0012","renglon":1,"cantidad":3,"tipo":"Faltante","resolucion":"Reponer"}}')"
++check "Faltante + Reponer: 3 en camino a LCT, nada salió" 'SOP-RTG:sitio={"lzc":7,"timsa":3}:camino={"lzc":3}:total=13' "$(inv)"
++check "…el renglón espera 3" "[(7.0, None)]" "$(sql "SELECT recibido, recibido_en FROM renglones WHERE oc_folio='OC-2026-0021' AND n=1")"
++check "…y la OC vuelve a «recibida en parte»" 'recibida-parcial' "$(echo "$R" | tr -d ' ')"
++check "llegan los 3: 10 en LCT y la OC queda recibida" 'recibida' "$(as antonio -d '{"oc":"OC-2026-0021","renglones":[{"n":1,"recibido":3,'"$F"'}]}' $U/api/compras/recibir | $PY -c "import sys,json;print(json.load(sys.stdin)['orden']['estado'])")"
++check "…y el inventario cuadra" 'SOP-RTG:sitio={"lzc":10,"timsa":3}:camino={}:total=13' "$(inv)"
++
++echo
++echo "## nunca deja un sitio en negativo"
++OC22='"oc":{"folio":"OC-2026-0022","sitio":"QRO","renglones":[{"n":1,"descripcion":"Cable calibre 10","unidad":"m","cantidad":5,"item":"CBL-10"}]}'
++post '{"evento_id":"OC-2026-0022:oc.autorizada:1","tipo":"oc.autorizada",'"$OC22"'}' > /dev/null
++post '{"evento_id":"OC-2026-0022:oc.en_camino:1","tipo":"oc.en_camino",'"$OC22"'}' > /dev/null
++as jesus -d '{"oc":"OC-2026-0022","renglones":[{"n":1,"recibido":5,'"$F"'}]}' $U/api/compras/recibir > /dev/null
++ITEM=$(as leo $U/api/inventario | $PY -c "import sys,json;print([i['id'] for i in json.load(sys.stdin)['items'] if i['codigo']=='CBL-10'][0])")
++as jesus -d "{\"item_id\":\"$ITEM\",\"tipo\":\"salida\",\"cantidad\":4,\"sitio\":\"qro\",\"motivo\":\"se usó en el taller\"}" $U/api/inventario/movimiento > /dev/null
++R="$(post '{"evento_id":"OC-2026-0022:oc.devolucion:1","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0022","sitio":"QRO"},"devolucion":{"folio":"DEV-2026-0013","renglon":1,"cantidad":5,"tipo":"Dañado","resolucion":"Devolver al proveedor"}}')"
++check "solo sale lo que hay (1) y lo avisa" 'solo había 1' "$R"
++check "Querétaro queda en 0, no en negativo" 'qro=0' "$(as leo $U/api/inventario | $PY -c "
++import sys,json;d=json.load(sys.stdin);i=[x for x in d['items'] if x['codigo']=='CBL-10'][0];print('qro=%s' % i['por_sitio'].get('qro', 0))")"
++
++echo
++echo "## las rondas de PRUEBA no tocan el inventario"
++OCP='"oc":{"folio":"OC-PRUEBA-5","sitio":"QRO","renglones":[{"n":1,"descripcion":"Soporte","unidad":"pza","cantidad":5,"item":"SOP-RTG"}]}'
++post '{"evento_id":"OC-PRUEBA-5:oc.autorizada:1","tipo":"oc.autorizada","prueba":true,'"$OCP"'}' > /dev/null
++ANTES="$(inv)"
++check "devolución de prueba: ok, marcada como prueba" '"prueba":true' "$(post '{"evento_id":"OC-PRUEBA-5:oc.devolucion:1","tipo":"oc.devolucion","prueba":true,'"$OCP"',"devolucion":{"folio":"DEV-PRUEBA-1","renglon":1,"cantidad":1,"tipo":"Dañado","resolucion":"Reponer"}}' | tr -d ' ')"
++check "…sin tocar el inventario" "$ANTES" "$(inv)"
++
++echo
++echo "## la otra puerta: un envío viejo recibido desde Inventario antes de este cambio se sigue conciliando"
++OC23='"oc":{"folio":"OC-2026-0023","sitio":"VER","renglones":[{"n":1,"descripcion":"Soporte para RTG","unidad":"pza","cantidad":2,"item":"SOP-RTG"}]}'
++post '{"evento_id":"OC-2026-0023:oc.autorizada:1","tipo":"oc.autorizada",'"$OC23"'}' > /dev/null
++post '{"evento_id":"OC-2026-0023:oc.en_camino:1","tipo":"oc.en_camino",'"$OC23"'}' > /dev/null
++ENV=$($PY -c "import sqlite3;c=sqlite3.connect('$T/drogheda.db');print(c.execute(\"SELECT envio_id FROM renglones WHERE oc_folio='OC-2026-0023'\").fetchone()[0])")
++$PY - "$T/inventario/movimientos/$ENV.json" <<'EOF'
++import json, sys
++p = sys.argv[1]; m = json.load(open(p))
++m.update(estado="recibido", recibido=2, recibido_por="alan", recibido_en="2026-10-28T18:00:00")   # como lo dejaba Inventario
++json.dump(m, open(p, "w"))
++EOF
++check "Compras la concilia (sin foto: era de antes)" 'OC-2026-0023=recibida' "$(as leo $U/api/compras | $PY -c "
++import sys,json;d=json.load(sys.stdin);print(' '.join(o['folio']+'='+o['estado'] for o in d['ordenes']))")"
++check "…y el cotizador la ve con foto: null" 'foto=None recibido=2.0' "$(sget /api/integracion/cotizador/recepciones | $PY -c "
++import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_folio']=='OC-2026-0023'][0]
++print('foto=%s recibido=%s' % (o['renglones'][0]['foto'], o['renglones'][0]['recibido']))")"
++
++echo
++echo "## sin secreto: las rutas nuevas también contestan 503 y la página sigue"
++kill $APP 2>/dev/null; sleep 0.5
++unset COTIZADOR_SECRETO
++$PY $REPO/backend/app.py > $T/app2.log 2>&1 &
++APP=$!
++for _ in $(seq 1 30); do curl -fsS -o /dev/null "$U/api/salud" 2>/dev/null && break; sleep 0.5; done
++check "foto: 503" '503' "$(curl -s -o /dev/null -w '%{http_code}' "$U/api/integracion/cotizador/foto?id=$FP2")"
++check "foto-archivada: 503" 'COTIZADOR_SECRETO' "$(curl -s -H 'Content-Type: application/json' -d '{"id":"x","url":"y"}' $U/api/integracion/cotizador/foto-archivada)"
++check "la página Compras sigue mostrando las fotos" '"foto":{' "$(as leo $U/api/compras | tr -d ' ')"
++
++echo
++echo "────────────────────────────────────────"
++echo "  $ok bien · $fail mal"
++[[ $fail -eq 0 ]] || echo "  log: $T/app.log"
++[[ $fail -eq 0 ]]
+-- 
+2.43.0
+

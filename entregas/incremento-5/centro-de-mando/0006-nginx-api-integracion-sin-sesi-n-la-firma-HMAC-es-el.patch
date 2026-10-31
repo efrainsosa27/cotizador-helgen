@@ -1,0 +1,135 @@
+From 092e77474ec35386c1f0c2d07120e509c0e1357f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 14:33:49 -0600
+Subject: [PATCH 06/11] =?UTF-8?q?nginx:=20/api/integracion/=20sin=20sesi?=
+ =?UTF-8?q?=C3=B3n=20(la=20firma=20HMAC=20es=20el=20candado);=20pruebas=20?=
+ =?UTF-8?q?en=20cambiar-entrada.sh=20y=20D5?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013SfRStBeRbueu9grrfatQU
+---
+ DESPLIEGUE.md                             | 35 ++++++++++++++++-------
+ backend/nginx/cambiar-entrada.sh          |  7 +++++
+ backend/nginx/drogheda.helgen.online.conf | 20 +++++++++++++
+ 3 files changed, 52 insertions(+), 10 deletions(-)
+
+diff --git a/DESPLIEGUE.md b/DESPLIEGUE.md
+index 5b743cc..591c910 100644
+--- a/DESPLIEGUE.md
++++ b/DESPLIEGUE.md
+@@ -691,8 +691,7 @@ sudo systemctl edit actas-hbox           # o descomenta la línea en el .service
+ ```
+ 
+ La base `/srv/projects/drogheda/drogheda.db` se crea sola al arrancar (SQLite en modo WAL) y se respalda con el
+-resto de `/srv/projects/drogheda`. nginx **no** necesita cambios: `/api/integracion/` entra por el `location /api/`
+-que ya existe y la firma la revisa el backend, no la sesión.
++resto de `/srv/projects/drogheda`. nginx: ver D5 (desde la entrada del 27-oct, `/api/integracion/` necesita su propio bloque sin sesión).
+ 
+ Pruebas antes de publicar: `bash backend/tests-1028.sh ~/Documents/Claude/Projects/Drogheda/hbox-docs` (58).
+ 
+@@ -753,19 +752,35 @@ ssh -t leo@git.helgen.online '
+   renglón tras «Reponer» mientras la foto de la recepción anterior no se archive. La página lo dice y pide esperar
+   (el cotizador consulta cada 15 min): así nada de lo reportado se tapa antes de llegar a CAPRI.
+ 
+-**Antes de encender la integración, revisa que nginx deje pasar al cotizador.** El cotizador (Apps Script) llama sin
+-cookie y `drogheda.helgen.online.conf` pone `auth_request` en todo el `server`, también en `/api/integracion/`:
++**nginx: dejar pasar al cotizador (29-oct, confirmado).** El cotizador (Apps Script) llama sin cookie y el nginx de
++la entrada (27-oct) pedía sesión también en `/api/integracion/`; Leo lo comprobó el 29-oct:
+ 
+ ```bash
+ curl -s https://drogheda.helgen.online/api/integracion/inventario/items; echo
+-#  {"error":"Firma inválida o vencida"…}  o  {…COTIZADOR_SECRETO…}  → bien: llega al backend, que revisa la firma
+-#  {"ok":false,"sesion":false,"error":"Tu sesión terminó…"}           → nginx lo para antes: el cotizador no puede
+-#                                                                      mandar avisos ni llevarse las fotos
++#  {"ok":false,"sesion":false,"error":"Tu sesión terminó…"}   → así estaba: nginx lo para y el cotizador no puede
++#                                                              mandar avisos ni llevarse las fotos
++#  {…"Firma inválida o vencida"…}  o  {…COTIZADOR_SECRETO…}    → así debe quedar: llega al backend, que revisa la firma
+ ```
+ 
+-Si sale lo segundo, falta en nginx un `location ^~ /api/integracion/` sin `auth_request` (la firma HMAC del backend
+-hace de candado). **Es una decisión de seguridad de Leo:** no está en este cambio; mientras tanto el sitio funciona,
+-las recepciones se guardan con sus fotos y nada se pierde, pero no viajan al cotizador.
++Arreglo (decisión de Leo, 29-oct): `backend/nginx/drogheda.helgen.online.conf` trae un `location ^~ /api/integracion/`
++**sin sesión y sin usuario** (`X-Remote-User` vacío; el candado es la firma HMAC que `compras.py` revisa en las cuatro
++rutas), límite de 120 peticiones/min por IP con ráfaga de 120 (el cotizador baja recepciones y fotos cada 15 min) y
++cuerpo de hasta 300 KB. `^~` gana sobre `location /api/`, y `..`/`%2e%2e` se resuelven antes de elegir el bloque, así
++que `/api/integracion/../tareas` sigue pidiendo sesión (probado en un nginx local). Se instala con el mismo script de
++la entrada, que respalda, corre `nginx -t`, prueba y regresa solo si algo falla; ahora también prueba que el
++cotizador llegue al backend y que sin firma no vea datos:
++
++```bash
++ssh -t leo@git.helgen.online '
++  CONF=$(readlink -f $(grep -l "server_name drogheda.helgen.online" /etc/nginx/sites-enabled/* | head -1)) &&
++  sudo diff -u "$CONF" /srv/projects/drogheda/hbox-docs/backend/nginx/drogheda.helgen.online.conf'
++#  el diff debe mostrar SOLO el bloque nuevo (+ la zona hbox_cotizador). Si sale algo más, el servidor tiene un
++#  cambio a mano que este archivo no trae: pásalo al archivo del repo antes de aplicar.
++ssh -t leo@git.helgen.online 'sudo bash /srv/projects/drogheda/hbox-docs/backend/nginx/cambiar-entrada.sh aplicar'
++curl -s https://drogheda.helgen.online/api/integracion/inventario/items; echo     # ya no dice "sesion":false
++```
++
++Para regresar: `sudo bash …/cambiar-entrada.sh deshacer` (vuelve al respaldo más reciente).
+ 
+ Verificación en el teléfono (claro y oscuro): Compras → una OC en camino → **Recibir…** → un renglón con «Tomar foto»,
+ otro en 0, «Reportar problema» con foto → Recibir. La tarjeta muestra «foto», el problema y el renglón en 0 sigue en
+diff --git a/backend/nginx/cambiar-entrada.sh b/backend/nginx/cambiar-entrada.sh
+index de441ce..6d2bbb6 100755
+--- a/backend/nginx/cambiar-entrada.sh
++++ b/backend/nginx/cambiar-entrada.sh
+@@ -56,6 +56,13 @@ probar_nginx() {
+   prueba "X-Remote-User falso no entra" '"sesion":false' "$C -H 'X-Remote-User: leo' https://$HOST/api/tareas"
+   prueba "entrar con contraseña mala → 401" '"codigo":"' "$C -H 'Content-Type: application/json' -d '{\"usuario\":\"vigia-prueba\",\"password\":\"x\"}' https://$HOST/api/entrar"
+   prueba "curl -u (Basic) ya no entra" '"sesion":false' "$C -A curl -u leo:x https://$HOST/api/whoami"
++  # 29-oct: el cotizador llega al backend sin sesión (lo para la firma, no nginx) y sin firma no ve nada
++  prueba "cotizador sin sesión llega al backend" "PASA" \
++    "$C https://$HOST/api/integracion/inventario/items | grep -q '\"sesion\":false' && echo BLOQUEADO || echo PASA"
++  prueba "cotizador sin firma no ve datos" "SIN-DATOS" \
++    "$C -H 'X-Remote-User: leo' https://$HOST/api/integracion/inventario/items | grep -q '\"items\"' && echo FUGA || echo SIN-DATOS"
++  prueba "cotizador sin firma → 401 o 503" "OK" \
++    "$C -o /dev/null -w '%{http_code}' https://$HOST/api/integracion/cotizador/recepciones | grep -qE '^(401|503)$' && echo OK || echo MAL"
+   local CK; CK="$(cookie_de_prueba 2>/dev/null)"
+   if [[ ! "$CK" =~ ^leo~[0-9]+~[0-9a-f]{12}~[0-9a-f]{40}$ ]]; then
+     mal=$((mal+1)); echo "  ✕ no pude armar la sesión de prueba de leo: ¿existe $DATOS/.sesion-secreto? ¿está leo en $HTP?"
+diff --git a/backend/nginx/drogheda.helgen.online.conf b/backend/nginx/drogheda.helgen.online.conf
+index 2c3b8eb..cb1b35d 100644
+--- a/backend/nginx/drogheda.helgen.online.conf
++++ b/backend/nginx/drogheda.helgen.online.conf
+@@ -6,6 +6,8 @@
+ # Límites por IP (la oficina de Querétaro sale por una sola IP: holgados). Además, acceso.py frena por usuario.
+ limit_req_zone $binary_remote_addr zone=hbox_entrar:1m rate=30r/m;
+ limit_req_zone $binary_remote_addr zone=hbox_reporte:1m rate=6r/m;
++# 29-oct-2026: el cotizador (CAPRI, Apps Script) sale por IPs de Google; cada 15 min baja recepciones y fotos en ráfaga
++limit_req_zone $binary_remote_addr zone=hbox_cotizador:1m rate=120r/m;
+ 
+ server {
+     server_name drogheda.helgen.online;
+@@ -92,6 +94,24 @@ server {
+         proxy_set_header X-Remote-User "";
+     }
+ 
++    # ---- API del cotizador (CAPRI, 29-oct-2026): sin sesión y SIN usuario. El candado es la firma HMAC que revisa
++    #      backend/compras.py en cada ruta (COTIZADOR_SECRETO, ventana de 5 min; sin secreto contesta 503).
++    #      «^~» gana sobre «location /api/», así que aquí nunca se pide la cookie ni se pasa $hbox_user.
++    location ^~ /api/integracion/ {
++        auth_request off;
++        limit_req zone=hbox_cotizador burst=120 nodelay;
++        limit_req_status 429;
++        error_page 429 = @lento;
++        client_max_body_size 300k;
++        proxy_read_timeout   60s;
++        proxy_pass http://127.0.0.1:8081;
++        proxy_set_header Host $host;
++        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
++        proxy_set_header X-Forwarded-Proto $scheme;
++        proxy_set_header X-Real-IP $remote_addr;
++        proxy_set_header X-Remote-User "";
++    }
++
+     # ---- API con sesión: el usuario lo pone nginx (de la sesión), nunca el navegador
+     location /api/ {
+         error_page 401 = @api401;
+-- 
+2.43.0
+

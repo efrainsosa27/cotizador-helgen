@@ -1,0 +1,222 @@
+From 5292731cac230b678b6cdc608802ec38a218a98e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 14:49:01 -0600
+Subject: [PATCH 07/11] =?UTF-8?q?oc.devolucion:=20=C2=ABorigen=C2=BB=20(ce?=
+ =?UTF-8?q?ntro=20=C2=B7=20capri)=20=E2=80=94=20un=20Faltante=20reportado?=
+ =?UTF-8?q?=20en=20CAPRI=20sale=20del=20inventario?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Contrato (29-oct, prueba en vivo con CAPRI): devolucion.origen = 'centro' | 'capri'. Un Faltante
+  con origen 'capri' es material que el sitio dio por recibido y no tiene: sale del stock del sitio
+  como un Dañado y luego Reponer reabre el renglón por esa cantidad en camino, o Devolver/Cancelar lo
+  cierran con faltante. Antes reabría «por 0» (el sitio recibía 400 «faltan por llegar 0» y la
+  requisición se atoraba) o dejaba el stock del sitio inflado. Sin origen o 'centro': igual que antes.
+- Reponer cuando ya no falta nada no reabre el renglón (lo avisa).
+- devoluciones.origen (columna nueva, migración al arrancar); el pendiente dice «reportado en CAPRI».
+- Pruebas: tests-1029.sh (Reponer, Devolver y el caso sin nada por reponer). D5 y la página del proceso.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013SfRStBeRbueu9grrfatQU
+---
+ DESPLIEGUE.md                               |  8 +++-
+ backend/compras.py                          | 51 +++++++++++++++------
+ backend/tests-1029.sh                       | 26 +++++++++++
+ docs/inventario/fotos-devoluciones-29oct.md |  9 +++-
+ 4 files changed, 76 insertions(+), 18 deletions(-)
+
+diff --git a/DESPLIEGUE.md b/DESPLIEGUE.md
+index 591c910..9266b0e 100644
+--- a/DESPLIEGUE.md
++++ b/DESPLIEGUE.md
+@@ -710,7 +710,7 @@ equipo: `docs/inventario/fotos-devoluciones-29oct.md`.
+ ```bash
+ cd ~/Documents/Claude/Projects/Drogheda/hbox-docs
+ bash backend/tests-1028.sh .              # 61 (eran 58: la foto ahora es obligatoria y la puerta de Inventario cambió)
+-bash backend/tests-1029.sh .              # 195: fotos, problemas, rutas firmadas, oc.devolucion, concurrencia
++bash backend/tests-1029.sh .              # fotos, problemas, rutas firmadas, oc.devolucion, concurrencia (todas en verde)
+ ./scripts/deploy.sh                       # sitio + backend; revisa enlaces antes de publicar
+ ssh -t leo@git.helgen.online '
+   python3 -c "import sqlite3;s=sqlite3.connect(\"/srv/projects/drogheda/drogheda.db\");s.backup(sqlite3.connect(\"/srv/projects/drogheda/drogheda-antes-1029.db\"))" &&
+@@ -737,6 +737,12 @@ ssh -t leo@git.helgen.online '
+   `foto` y `problema` por renglón. Con sesión: `GET /api/compras/foto?id=` y `POST /api/compras/problema`.
+   La liga que guarda `foto-archivada` solo puede ser `https://drive.google.com/…` o `https://docs.google.com/…` (sin
+   usuario, puerto, `@` ni `\`), y la página siempre abre la foto por `/api/compras/foto?id=`.
++- **`oc.devolucion` trae `devolucion.origen`** (`'centro'` · `'capri'`, cambio de contrato del 29-oct): un «Faltante»
++  reportado **en CAPRI** es material que el sitio dio por recibido y no tiene, así que sale del inventario del sitio
++  como un «Dañado» y luego se aplica la resolución (Reponer reabre el renglón por esa cantidad en camino; Devolver o
++  Cancelar lo cierran con faltante). Sin `origen`, o `'centro'`, es el de siempre: un faltante del sitio nunca se contó y
++  no mueve existencias. Si ya no queda nada por llegar, «Reponer» no reabre el renglón (antes lo reabría «por 0» y la
++  requisición se atoraba). La tabla `devoluciones` guarda el origen (columna nueva, se agrega sola).
+ - **Limitación conocida de la firma (se corrige en un contrato posterior):** el HMAC firma solo la hora y el cuerpo,
+   no el método ni la ruta. En un GET el cuerpo va vacío, así que una firma tomada de una consulta firmada sirve para
+   cualquier otra ruta GET firmada (por ejemplo `/foto?id=`) durante sus 5 minutos. Mitiga: HTTPS de punta a punta y
+diff --git a/backend/compras.py b/backend/compras.py
+index 3d4ae5c..66de2e1 100644
+--- a/backend/compras.py
++++ b/backend/compras.py
+@@ -116,6 +116,11 @@ COLUMNAS_NUEVAS = (
+     ("renglones", "actualizado_en", "TEXT"),                # cambió la recepción, la foto o el problema
+     ("renglones", "problema_entregado_en", "TEXT"),         # el cotizador ya lo vio en recepciones (sin foto)
+ )
++# Columnas de tablas que crea ESQUEMA_5 (se agregan después de crearla)
++COLUMNAS_5B = (
++    ("devoluciones", "origen", "TEXT"),                     # 'centro' (se reportó en el sitio) o 'capri'
++)
++ORIGENES_DEV = ("centro", "capri")
+ ESQUEMA_5 = """
+ CREATE INDEX IF NOT EXISTS ix_renglones_foto ON renglones (foto_id);
+ CREATE INDEX IF NOT EXISTS ix_renglones_pfoto ON renglones (problema_foto_id);
+@@ -267,15 +272,20 @@ class Compras:
+         os.makedirs(os.path.dirname(self.ruta) or ".", exist_ok=True)
+         with self.con() as c:
+             c.executescript(ESQUEMA)
+-            for tabla, col, tipo in COLUMNAS_NUEVAS:
+-                if col in {r[1] for r in c.execute(f"PRAGMA table_info({tabla})")}:
+-                    continue
+-                try:
+-                    c.execute(f"ALTER TABLE {tabla} ADD COLUMN {col} {tipo}")
+-                except sqlite3.OperationalError as e:      # el otro trabajador la agregó primero
+-                    if "duplicate column" not in str(e).lower():
+-                        raise
++            self.agregar_columnas(c, COLUMNAS_NUEVAS)
+             c.executescript(ESQUEMA_5)
++            self.agregar_columnas(c, COLUMNAS_5B)
++
++    @staticmethod
++    def agregar_columnas(c, columnas):
++        for tabla, col, tipo in columnas:
++            if col in {r[1] for r in c.execute(f"PRAGMA table_info({tabla})")}:
++                continue
++            try:
++                c.execute(f"ALTER TABLE {tabla} ADD COLUMN {col} {tipo}")
++            except sqlite3.OperationalError as e:          # el otro trabajador la agregó primero
++                if "duplicate column" not in str(e).lower():
++                    raise
+ 
+     # ---------------------------------------------------------------- sitios y equipo
+     def sitio_portal(self, codigo):
+@@ -826,7 +836,9 @@ class Compras:
+         if not DEV_RE.match(folio):          # el folio es lo que hace idempotente la devolución: sin él no se aplica
+             return None, "Falta el folio de la devolución (DEV-AAAA-NNNN)." if not folio else \
+                 f"Folio de devolución inválido: {folio} (va como DEV-AAAA-NNNN)."
+-        return {"folio": folio, "n": n, "cantidad": q,
++        # origen (contrato §5d, 29-oct): 'capri' = el problema se reportó en el cotizador; sin origen = 'centro'
++        origen = "capri" if _plano(dv.get("origen")).startswith("capri") else "centro"
++        return {"folio": folio, "n": n, "cantidad": q, "origen": origen,
+                 "tipo": _de_lista(dv.get("tipo"), TIPOS_PROBLEMA) or "Otro", "resolucion": res,
+                 "nota": g["_texto"](dv.get("nota"), 300)}, None
+ 
+@@ -835,8 +847,10 @@ class Compras:
+           Reponer → sale del sitio lo devuelto y el renglón vuelve a «en camino» por esa cantidad (pendiente reabierto).
+           Devolver al proveedor / Cancelar renglón → sale del sitio y el renglón queda cerrado con faltante aceptado.
+           Conservar → nada.
+-        Solo sale del inventario lo que sí se contó: un «Faltante» nunca llegó y un «Sobrante» nunca se contó (al
+-        recibir no se acepta más de lo pedido), así que esos dos no mueven existencias."""
++        Solo sale del inventario lo que sí se contó: un «Faltante» reportado en el sitio nunca llegó y un «Sobrante»
++        nunca se contó (al recibir no se acepta más de lo pedido), así que esos dos no mueven existencias. Un «Faltante»
++        reportado en CAPRI (origen 'capri') es otra cosa: el sitio lo dio por recibido y no lo tiene, así que sale
++        del inventario como un «Dañado»."""
+         g = self.g
+         folio = oc["folio"]
+         r = c.execute("SELECT * FROM renglones WHERE oc_folio=? AND n=?", (folio, dv["n"])).fetchone()
+@@ -856,7 +870,8 @@ class Compras:
+         elif tipo == "Sobrante":
+             efecto = "el sobrante no se había contado en el inventario: nada cambia"
+         else:
+-            sale = min(q, neto) if tipo != "Faltante" else 0.0
++            contado = tipo != "Faltante" or dv["origen"] == "capri"   # el sitio lo contó como recibido
++            sale = min(q, neto) if contado else 0.0
+             if sale > 0:
+                 mov_id, salio, aviso = self.sacar_devolucion(r, oc, sale, dev, tipo, res, quien)
+                 if aviso:
+@@ -870,6 +885,11 @@ class Compras:
+                 c.execute("UPDATE renglones SET recibido=? WHERE oc_folio=? AND n=?", (neto2, folio, r["n"]))
+                 avisos.append(f"{folio} está cancelada en el cotizador: no se reabre el renglón ni se pone nada en "
+                               "camino; si el proveedor repone, compras tiene que hacer otra orden")
++            elif res == "Reponer" and min(q, hueco) <= 1e-9:
++                # ya llegó todo lo que falta (p. ej. el resto llegó después del reporte): no hay nada que reponer, y
++                # reabrir el renglón «por 0» dejaría la requisición atorada
++                c.execute("UPDATE renglones SET recibido=? WHERE oc_folio=? AND n=?", (neto2, folio, r["n"]))
++                avisos.append("no queda nada por reponer en ese renglón: no se reabre")
+             elif res == "Reponer":
+                 vuelve = min(q, hueco)
+                 env = self.envio(r["envio_id"])
+@@ -901,12 +921,13 @@ class Compras:
+                 efecto = ((efecto + "; ") if efecto else "") + (f"el renglón queda cerrado con faltante de "
+                                                                 f"{falt2:g} {unidad}").rstrip()
+         c.execute("INSERT INTO devoluciones (evento_id, folio, oc_folio, n, cantidad, tipo, resolucion, nota, efecto, "
+-                  "movimiento_id, envio_id, quien, aplicado_en) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
++                  "movimiento_id, envio_id, quien, aplicado_en, origen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (evento_id, dv["folio"], folio, r["n"], q, tipo, res, dv["nota"],
+-                   "; ".join([efecto] + avisos)[:500], mov_id, env_id, quien, ahora))
++                   "; ".join([efecto] + avisos)[:500], mov_id, env_id, quien, ahora, dv["origen"]))
+         antes = oc["estado"]
+         despues = self.recalcular_estado(c, folio)
+-        linea = (f"{dev} · renglón {r['n']} ({r['descripcion'] or '—'}), {tipo} {q:g}: compras resolvió «{res}» — "
++        linea = (f"{dev} · renglón {r['n']} ({r['descripcion'] or '—'}), {tipo} {q:g}"
++                 + (" (reportado en CAPRI)" if dv["origen"] == "capri" else "") + f": compras resolvió «{res}» — "
+                  + "; ".join([efecto] + avisos) + (f". Nota: {dv['nota']}" if dv["nota"] else ""))[:600]
+         if res == "Reponer" and despues != "recibida" and not cancelada:
+             self.nota_pendiente(oc["tarea_id"], linea, quien, estado="por-hacer")
+diff --git a/backend/tests-1029.sh b/backend/tests-1029.sh
+index f4758ee..d91c937 100644
+--- a/backend/tests-1029.sh
++++ b/backend/tests-1029.sh
+@@ -490,6 +490,32 @@ check "el renglón sigue cerrado" '[(7.0, 1)]' "$(sql "SELECT recibido, recibido
+ check "el pendiente no se reabre y lo anota" 'hecho | ' "$(tarea t-oc-oc-2026-0500)"
+ check "…con el aviso" 'cancelada en el cotizador: no se reabre' "$(tarea t-oc-oc-2026-0500)"
+ 
++echo
++echo "## (en vivo) «Faltante» reportado EN CAPRI (origen capri): el sitio lo contó y no lo tiene → sale del inventario"
++as leo -d '{"codigo":"FAL-1","descripcion":"Cable faltante 1","categoria":"cable","unidad":"m"}' $U/api/inventario > /dev/null
++as leo -d '{"codigo":"FAL-2","descripcion":"Cable faltante 2","categoria":"cable","unidad":"m"}' $U/api/inventario > /dev/null
++fal() { $PY -c "import sys,json;d=json.load(sys.stdin);print(' '.join('%s:%s:%s' % (i['codigo'], json.dumps(i['por_sitio']).replace(' ',''), json.dumps(i['en_camino']).replace(' ','')) for i in d['items'] if i['codigo']=='$1'))"; }
++for k in 600:FAL-1 601:FAL-2 602:FAL-1; do f=${k%%:*}; it=${k##*:}
++  O='"oc":{"folio":"OC-2026-0'$f'","sitio":"ZLO","renglones":[{"n":1,"descripcion":"Cable","unidad":"m","cantidad":20,"item":"'$it'"}]}'
++  post '{"evento_id":"OC-2026-0'$f':oc.autorizada:1","tipo":"oc.autorizada",'"$O"'}' > /dev/null
++  post '{"evento_id":"OC-2026-0'$f':oc.en_camino:1","tipo":"oc.en_camino",'"$O"'}' > /dev/null
++  as jesush -d '{"oc":"OC-2026-0'$f'","renglones":[{"n":1,"recibido":20,'"$F"'}]}' $U/api/compras/recibir > /dev/null
++done
++R="$(post '{"evento_id":"OC-2026-0600:oc.devolucion:1","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0600"},"devolucion":{"folio":"DEV-2026-0600","renglon":1,"cantidad":5,"tipo":"Faltante","resolucion":"Reponer","origen":"capri"}}')"
++check "Faltante de CAPRI + Reponer: salen 5 del sitio y 5 vuelven en camino (FAL-1: 20 de OC-0602 + 20 − 5)" 'FAL-1:{"timsa":35}:{"timsa":5}' "$(as leo $U/api/inventario | fal FAL-1)"
++check "…el renglón espera 5 (no «por 0»)" '[(15.0, None, 5.0)]' "$(sql "SELECT recibido, recibido_en, cantidad-recibido-faltante_aceptado FROM renglones WHERE oc_folio='OC-2026-0600'")"
++check "…la devolución guarda el origen" "[('capri',)]" "$(sql "SELECT origen FROM devoluciones WHERE folio='DEV-2026-0600'")"
++check "…y el pendiente dice que se reportó en CAPRI" 'reportado en CAPRI' "$(tarea t-oc-oc-2026-0600)"
++archivar OC-2026-0600
++check "llegan los 5 de la reposición" '"estado":"recibida"' "$(as jesush -d '{"oc":"OC-2026-0600","renglones":[{"n":1,"recibido":5,'"$F"'}]}' $U/api/compras/recibir | tr -d ' ')"
++check "…FAL-1: 40 en TIMSA (20 + 20), nada en camino" 'FAL-1:{"timsa":40}:{}' "$(as leo $U/api/inventario | fal FAL-1)"
++post '{"evento_id":"OC-2026-0601:oc.devolucion:1","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0601"},"devolucion":{"folio":"DEV-2026-0601","renglon":1,"cantidad":5,"tipo":"Faltante","resolucion":"Devolver al proveedor","origen":"capri"}}' > /dev/null
++check "Faltante de CAPRI + Devolver: el sitio queda en 15 (no sobrado en 20)" 'FAL-2:{"timsa":15}:{}' "$(as leo $U/api/inventario | fal FAL-2)"
++check "…y el renglón queda cerrado con faltante de 5" '[(15.0, 5.0, 1)]' "$(sql "SELECT recibido, faltante_aceptado, recibido_en IS NOT NULL FROM renglones WHERE oc_folio='OC-2026-0601'")"
++R="$(post '{"evento_id":"OC-2026-0602:oc.devolucion:1","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0602"},"devolucion":{"folio":"DEV-2026-0602","renglon":1,"cantidad":5,"tipo":"Faltante","resolucion":"Reponer"}}')"
++check "sin origen (= centro) y ya llegó todo: Reponer no reabre «por 0» y lo avisa" 'no queda nada por reponer' "$R"
++check "…el renglón sigue cerrado y el inventario igual" '[(20.0, 1)] FAL-1:{"timsa":40}:{}' "$(sql "SELECT recibido, recibido_en IS NOT NULL FROM renglones WHERE oc_folio='OC-2026-0602'") $(as leo $U/api/inventario | fal FAL-1)"
++
+ echo
+ echo "## sin secreto: las rutas nuevas también contestan 503 y la página sigue"
+ kill $APP 2>/dev/null; sleep 0.5
+diff --git a/docs/inventario/fotos-devoluciones-29oct.md b/docs/inventario/fotos-devoluciones-29oct.md
+index 50314be..f8688f5 100644
+--- a/docs/inventario/fotos-devoluciones-29oct.md
++++ b/docs/inventario/fotos-devoluciones-29oct.md
+@@ -63,8 +63,13 @@ se ve aquí solo, en el renglón de la orden y en el inventario del sitio:
+ 
+ Dos aclaraciones para que el inventario no se descuadre:
+ 
+-- Un **faltante** nunca entró al inventario, así que al resolverlo **no sale nada**: con *Reponer* vuelve a venir en
+-  camino; con *Devolver* o *Cancelar* el renglón se cierra con faltante.
++- Un **faltante reportado aquí, al recibir,** nunca entró al inventario, así que al resolverlo **no sale nada**: con
++  *Reponer* vuelve a venir en camino; con *Devolver* o *Cancelar* el renglón se cierra con faltante.
++- Un **faltante reportado en el cotizador** (por quien pidió o por compras, después de que el sitio ya lo recibió
++  completo) es al revés: el sitio lo contó y no lo tiene. Ese **sí sale del inventario** del sitio, y luego se aplica
++  lo que decida compras (*Reponer* lo vuelve a poner en camino; *Devolver* o *Cancelar* cierran el renglón con
++  faltante).
++- Si cuando compras decide *Reponer* ya llegó todo lo que faltaba, el renglón no se reabre: no hay nada que esperar.
+ - Un **sobrante** tampoco se contó (al recibir no se acepta más de lo pedido). Si compras decide **conservarlo**,
+   registra tú la diferencia como **Entrada** en [Inventario](../tableros/inventario.md) con la `DEV` como referencia;
+   si lo regresan, no hay nada que mover.
+-- 
+2.43.0
+

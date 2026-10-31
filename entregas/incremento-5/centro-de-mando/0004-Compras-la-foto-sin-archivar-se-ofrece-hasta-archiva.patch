@@ -1,0 +1,208 @@
+From 3be3a1d0613b661084dccf07ff58933aa12e512c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 13:59:49 -0600
+Subject: [PATCH 04/11] =?UTF-8?q?Compras:=20la=20foto=20sin=20archivar=20s?=
+ =?UTF-8?q?e=20ofrece=20hasta=20archivarse;=20env=C3=ADos=20tras=20=C2=ABR?=
+ =?UTF-8?q?eponer=C2=BB?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Recepciones (contrato §5b): una OC con una foto sin archivar sale en cada consulta aunque «desde» ya
+  haya pasado; así el cotizador la reintenta si falló al llevársela a Drive.
+- Tras «Reponer» la OC queda «recibida en parte»: ligar un renglón o un oc.en_camino repetido ya crean
+  su envío en ese estado (antes solo en «en camino», y el material entraba sin tocar el inventario);
+  nunca para renglones ya cerrados.
+- oc.devolucion sin «sitio» en la OC: se toma el de la OC guardada.
+- Pruebas: tests-1029.sh 153, tests-1028.sh 61 (la de «desde en el futuro» dice la regla nueva).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013SfRStBeRbueu9grrfatQU
+---
+ CLAUDE.md                                   |  2 +-
+ DESPLIEGUE.md                               |  2 +-
+ backend/compras.py                          | 16 +++++++++----
+ backend/tests-1028.sh                       |  4 +++-
+ backend/tests-1029.sh                       | 25 ++++++++++++++++++++-
+ docs/inventario/fotos-devoluciones-29oct.md |  4 ++--
+ 6 files changed, 43 insertions(+), 10 deletions(-)
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index b1dc4fc..5a44dbf 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -31,7 +31,7 @@ Adriana, Michelle, Jesús and the field technicians work from it; Claude closes
+ | **Ruta a producción**, version cards, fase, pedido, próximas fechas, map pins | `docs/datos/proyecto.json` | Claude or Leo | edit by hand (keep the one-array-per-line format); step states `hecho · ahora · bloqueado · falta`, card tone `hecho · ahora · aviso · bloqueado`; bump `actualizado` |
+ | **Instalaciones** (per-site installation board, 22-oct) | `docs/tableros/instalaciones.md` + `.js`/`.css`; data: field actas via `GET /api/instalaciones` (`backend/instalaciones.py`, hooked at the end of `app.py`) | automatic | stages envío → recepción → instalación → **prueba en sitio** (acta `prueba-sitio`; only a passed test counts for the 1–2 per-site goal) → en operación (7 days after the test, no failure) + «con falla»; colour, nota and meta per site from `proyecto.json`; forms accept `?serie=&sitio=&<clave>=` prefill (`acta.js`) |
+ | **Inventario por sitio** (23-oct) | `docs/tableros/inventario.md` + `.js`/`.css`; data: server `/srv/projects/drogheda/inventario` via `/api/inventario` | everyone in the UI | tabs ICAVE · TIMSA · EIT · LCT · Querétaro + «Todo» (`?sitio=eit&n=2`); every movement carries `sitio` (none = qro); `envio` leaves a site (or `fuera`: purchase in transit / material shipped before counting) and stays «en camino» until the destination presses «Recibir» (`recepcion`); item `por_instalacion` = the installation kit; team rules in `docs/inventario/index.md`; tests `backend/tests-1023.sh` |
+-| **Compras** (28-oct) | `docs/tableros/compras.md` + `.js`/`.css`; datos: SQLite `/srv/projects/drogheda/drogheda.db` vía `backend/compras.py` (enganchado al final de `app.py`) | las OC entran solas desde el cotizador; el responsable del sitio da «Recibir» | las órdenes de compra de DROGHEDA **sin montos**, por sitio y estado (autorizada · pagada · en-camino · recibida-parcial · recibida · cancelada); «Ligar» un renglón a un ítem del inventario y «Recibir» completo o en parte; cada OC abre su pendiente `t-oc-<folio>` y se cierra sola al recibir todo; las dos puertas de recepción (Compras y el envío «en camino» de Inventario) se concilian. Las rutas `/api/integracion/…` van firmadas con `COTIZADOR_SECRETO` (HMAC del cuerpo y la hora, ventana 5 min), **sin sesión**: sin secreto contestan 503 y el resto del sitio sigue igual. Las rondas `"prueba": true` se guardan aparte. Flujo y decisiones: `docs/inventario/flujo-compras-28oct.md`; pruebas `backend/tests-1028.sh` (61). **29-oct (CAPRI incremento 5):** «Recibir» pide una foto JPEG por renglón (comprimida en el navegador) y acepta un problema por renglón (también después, ≤ 30 días); fotos temporales en `ADJUNTOS_DIR/compras/<OC>/` hasta que el cotizador las baja (`/api/integracion/cotizador/foto`) y avisa `foto-archivada` (se borran); aviso `oc.devolucion` → movimiento `devolucion` en el sitio y el renglón vuelve en camino o se cierra con faltante; los envíos de una OC ya no se reciben en Inventario (manda a Compras). Proceso: `docs/inventario/fotos-devoluciones-29oct.md`; pruebas `backend/tests-1029.sh` (147) |
++| **Compras** (28-oct) | `docs/tableros/compras.md` + `.js`/`.css`; datos: SQLite `/srv/projects/drogheda/drogheda.db` vía `backend/compras.py` (enganchado al final de `app.py`) | las OC entran solas desde el cotizador; el responsable del sitio da «Recibir» | las órdenes de compra de DROGHEDA **sin montos**, por sitio y estado (autorizada · pagada · en-camino · recibida-parcial · recibida · cancelada); «Ligar» un renglón a un ítem del inventario y «Recibir» completo o en parte; cada OC abre su pendiente `t-oc-<folio>` y se cierra sola al recibir todo; las dos puertas de recepción (Compras y el envío «en camino» de Inventario) se concilian. Las rutas `/api/integracion/…` van firmadas con `COTIZADOR_SECRETO` (HMAC del cuerpo y la hora, ventana 5 min), **sin sesión**: sin secreto contestan 503 y el resto del sitio sigue igual. Las rondas `"prueba": true` se guardan aparte. Flujo y decisiones: `docs/inventario/flujo-compras-28oct.md`; pruebas `backend/tests-1028.sh` (61). **29-oct (CAPRI incremento 5):** «Recibir» pide una foto JPEG por renglón (comprimida en el navegador) y acepta un problema por renglón (también después, ≤ 30 días); fotos temporales en `ADJUNTOS_DIR/compras/<OC>/` hasta que el cotizador las baja (`/api/integracion/cotizador/foto`) y avisa `foto-archivada` (se borran); aviso `oc.devolucion` → movimiento `devolucion` en el sitio y el renglón vuelve en camino o se cierra con faltante; los envíos de una OC ya no se reciben en Inventario (manda a Compras). Proceso: `docs/inventario/fotos-devoluciones-29oct.md`; pruebas `backend/tests-1029.sh` (153) |
+ | **Entrada al sitio** (27-oct) | `docs/entrar.html` + `docs/publico/` (public); `backend/acceso.py`; nginx `backend/nginx/drogheda.helgen.online.conf` installed by `backend/nginx/cambiar-entrada.sh` (backup, tests, auto-rollback; `deshacer`) | — | session = signed cookie `hbox_sesion` (30 days; version = hash of the user's htpasswd line, so a password change ends old sessions); login by user or Equipo email, case-insensitive; **no HTTP Basic** (only from `ACCESO_BASIC_IPS`, empty by default — server scripts use 127.0.0.1:8081); unsafe methods only same-origin (Origin/Sec-Fetch-Site); lockout per user+IP (8) and per IP (20) in 15 min; attempts in `/srv/projects/drogheda/acceso/intentos-AAAA-MM.jsonl` (no passwords); public paths: entrada, `/publico/`, `/fonts/`, `helgen.css`, `tema.js`, icon, `/api/{entrar,salir,sesion,salud,incidencias/publica(s)}` |
+ | **Incidencias del sitio** (27-oct) | server `/srv/projects/drogheda/incidencias` (INC-0001.json…, `_errores/`, `_vigia/`); `backend/incidencias.py`; page `docs/tableros/incidencias.md` + `incidencias-tablero.js/.css`; footer «Problemas del sitio» = `docs/js/incidencias.js` (in `overrides/main.html` head and in every standalone page) | everyone reports; `INCIDENCIAS_EDITORES` (leo, gibranlp, adriana, claude) triage; the daily agent through `scripts/agente-api.sh` | rules: `docs/agentes.md`; the agent's runbook: `agentes/agente-diario.md`; vigía `backend/vigia.py` (leo's crontab, minute 7); never put passwords or project data in `publica` notices |
+ | **Standup** (27-oct) | server `/srv/projects/drogheda/standup/AAAA-MM-DD/<user>.json`; `backend/standup.py`; `docs/tableros/standup.md` + `standup-tablero.js/.css`; banner `docs/js/standup.js` | the bot (`claude`) prepares; each person answers; Leo/Adriana see «Equipo» | answers can move the person's own cards (as them); everything else from the answers goes in a lote |
+diff --git a/DESPLIEGUE.md b/DESPLIEGUE.md
+index 76ceb94..f41b50d 100644
+--- a/DESPLIEGUE.md
++++ b/DESPLIEGUE.md
+@@ -711,7 +711,7 @@ equipo: `docs/inventario/fotos-devoluciones-29oct.md`.
+ ```bash
+ cd ~/Documents/Claude/Projects/Drogheda/hbox-docs
+ bash backend/tests-1028.sh .              # 61 (eran 58: la foto ahora es obligatoria y la puerta de Inventario cambió)
+-bash backend/tests-1029.sh .              # 147: fotos, problemas, rutas firmadas, oc.devolucion
++bash backend/tests-1029.sh .              # 153: fotos, problemas, rutas firmadas, oc.devolucion
+ ./scripts/deploy.sh                       # sitio + backend; revisa enlaces antes de publicar
+ ssh -t leo@git.helgen.online '
+   python3 -c "import sqlite3;s=sqlite3.connect(\"/srv/projects/drogheda/drogheda.db\");s.backup(sqlite3.connect(\"/srv/projects/drogheda/drogheda-antes-1029.db\"))" &&
+diff --git a/backend/compras.py b/backend/compras.py
+index 4473f7f..1306aaf 100644
+--- a/backend/compras.py
++++ b/backend/compras.py
+@@ -318,11 +318,12 @@ class Compras:
+         """Pone en camino lo que se pueda de esa OC: un envío por renglón que ya tenga su ítem.
+         Los renglones sin ítem quedan en «por ligar» y se mandan cuando alguien los liga."""
+         oc = c.execute("SELECT * FROM ordenes WHERE folio=?", (folio,)).fetchone()
+-        if not oc or oc["estado"] not in ("en-camino", "pagada", "autorizada"):
++        # 29-oct: también «recibida en parte» (tras «Reponer» un renglón vuelve a venir en camino)
++        if not oc or oc["estado"] not in ("en-camino", "pagada", "autorizada", "recibida-parcial"):
+             return []
+         hechos = []
+         for r in c.execute("SELECT * FROM renglones WHERE oc_folio=? ORDER BY n", (folio,)).fetchall():
+-            if r["envio_id"] or not r["item_codigo"]:
++            if r["envio_id"] or not r["item_codigo"] or r["recibido_en"]:
+                 continue
+             env = self.crear_envio(c, oc, r, quien)
+             if env:
+@@ -966,6 +967,8 @@ def registrar(app, g):
+                                    aviso=f"{f0 or '(sin folio)'} no está en el centro de mando: no hay nada que devolver.")
+                 if not c.execute("SELECT 1 FROM renglones WHERE oc_folio=? AND n=?", (f0, dev["n"])).fetchone():
+                     return jsonify(ok=False, error=f"El renglón {dev['n']} no existe en {f0}."), 400
++                if not oc_in.get("sitio"):        # la OC ya está aquí: su sitio no cambia con una devolución
++                    oc_in = dict(oc_in, sitio=c.execute("SELECT sitio FROM ordenes WHERE folio=?", (f0,)).fetchone()[0])
+             oc, error = C.guardar_oc(c, oc_in, tipo, quien, prueba)
+             if error:
+                 return jsonify(ok=False, error=error), 400
+@@ -1033,8 +1036,13 @@ def registrar(app, g):
+             # 29-oct (contrato §5a): una OC vuelve a salir si uno de sus renglones cambió después de «desde» (otra
+             # recepción, foto archivada, problema), aunque se haya recibido antes. «>=»: lo que cambió en el mismo
+             # segundo que la consulta anterior sale otra vez (el cotizador lo aplica una sola vez) en vez de perderse.
++            # Y (§5b) mientras tenga una foto sin archivar sale SIEMPRE: si el cotizador no pudo llevársela, se le
++            # vuelve a ofrecer aunque ya haya avanzado su «desde».
+             q = ("SELECT DISTINCT oc_folio FROM renglones WHERE (recibido_en IS NOT NULL OR foto_id IS NOT NULL "
+-                 "OR problema_tipo IS NOT NULL)" + (" AND COALESCE(actualizado_en, recibido_en) >= ?" if desde else ""))
++                 "OR problema_tipo IS NOT NULL)"
++                 + (" AND (COALESCE(actualizado_en, recibido_en) >= ? "
++                    "OR (foto_id IS NOT NULL AND COALESCE(foto_archivada, 0) = 0) "
++                    "OR (problema_foto_id IS NOT NULL AND COALESCE(problema_foto_archivada, 0) = 0))" if desde else ""))
+             folios = [r[0] for r in c.execute(q, (desde,) if desde else ()).fetchall()]
+             out = []
+             for f in sorted(folios):
+@@ -1161,7 +1169,7 @@ def registrar(app, g):
+                 return jsonify(ok=False, error="Ese renglón ya se recibió."), 409
+             c.execute("UPDATE renglones SET item_codigo=?, nota=NULL WHERE oc_folio=? AND n=?",
+                       (codigo, folio, n))
+-            if oc["estado"] == "en-camino":    # ya venía en camino: se manda ahora que ya tiene ítem
++            if oc["estado"] in ("en-camino", "recibida-parcial"):    # ya venía en camino: se manda ahora que ya tiene ítem
+                 C.crear_envio(c, oc, c.execute("SELECT * FROM renglones WHERE oc_folio=? AND n=?",
+                                                (folio, n)).fetchone(), u)
+             ficha = C.ficha(c, c.execute("SELECT * FROM ordenes WHERE folio=?", (folio,)).fetchone())
+diff --git a/backend/tests-1028.sh b/backend/tests-1028.sh
+index 0e69f89..b1254a1 100644
+--- a/backend/tests-1028.sh
++++ b/backend/tests-1028.sh
+@@ -146,7 +146,9 @@ check "…con quién recibió" '"recibio":"jesush"' "$(echo $REC | tr -d ' ')"
+ check "…y cuánto llegó por renglón" 'r2:32.0/20.0' "$(echo "$REC" | $PY -c "
+ import sys,json;d=json.load(sys.stdin)
+ print(' '.join('r%d:%s/%s' % (x['n'], x['pedido'], x['recibido']) for o in d['recepciones'] for x in o['renglones']))")"
+-check "con «desde» en el futuro no trae nada" '"recepciones":[]' "$(get '/api/integracion/cotizador/recepciones?desde=2030-01-01T00:00:00-06:00' | tr -d ' ')"
++# (29-oct, contrato CAPRI §5b) lo que tiene fotos sin archivar se ofrece siempre, aunque «desde» ya haya pasado
++check "con «desde» en el futuro solo vuelve lo que tiene fotos sin archivar" 'OC-2026-0012|' "$(get '/api/integracion/cotizador/recepciones?desde=2030-01-01T00:00:00-06:00' | $PY -c "
++import sys,json;d=json.load(sys.stdin);print('|'.join(o['oc_folio'] for o in d['recepciones']) + '|')")"
+ 
+ echo
+ echo "## una OC que llega completa cierra su pendiente"
+diff --git a/backend/tests-1029.sh b/backend/tests-1029.sh
+index 94c21d2..5126bff 100644
+--- a/backend/tests-1029.sh
++++ b/backend/tests-1029.sh
+@@ -168,11 +168,14 @@ H1=$(echo "$REC" | $PY -c "import sys,json;print(json.load(sys.stdin)['hasta'])"
+ F1=$(echo "$REC" | $PY -c "
+ import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_folio']=='OC-2026-0012'][0]
+ print(o['renglones'][0]['foto']['id'])")
++F2=$(echo "$REC" | $PY -c "
++import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_folio']=='OC-2026-0012'][0]
++print(o['renglones'][1]['foto']['id'])")
+ FP2=$(echo "$REC" | $PY -c "
+ import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_folio']=='OC-2026-0012'][0]
+ print(o['renglones'][1]['problema']['foto']['id'])")
+ sleep 1.1
+-check "con desde = la consulta anterior y sin cambios: nada" '"recepciones":[]' "$(sget "/api/integracion/cotizador/recepciones?desde=$H1" | tr -d ' ')"
++check "sin cambios desde la consulta anterior, pero con fotos sin archivar: se vuelve a ofrecer (§5b)" 'OC-2026-0012' "$(sget "/api/integracion/cotizador/recepciones?desde=$H1")"
+ 
+ echo
+ echo "## bajar la foto (firmada) — contrato §5b"
+@@ -217,6 +220,12 @@ import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_f
+ f=o['renglones'][0]['foto'];print('archivada=%s url=%s' % (f['archivada'], f['url']))")"
+ spost /api/integracion/cotizador/foto-archivada '{"id":"'$FP2'","url":"'$DRIVE'"}' > /dev/null
+ check "la foto del problema también se archiva" '1,' "$(sql "SELECT problema_foto_archivada=1 AND problema_foto_url IS NOT NULL FROM renglones WHERE oc_folio='OC-2026-0012' AND n=2" | tr -d '[]()')"
++spost /api/integracion/cotizador/foto-archivada '{"id":"'$F2'","url":"'$DRIVE'"}' > /dev/null
++check "todas archivadas: ya no queda ninguna foto en el servidor" "0" "$(ls $T/adjuntos/compras/OC-2026-0012 | wc -l | tr -d ' ')"
++sleep 1.1
++H1B=$(sget /api/integracion/cotizador/recepciones | $PY -c "import sys,json;print(json.load(sys.stdin)['hasta'])")
++sleep 1.1
++check "sin cambios y todo archivado: la consulta siguiente no trae nada" '"recepciones":[]' "$(sget "/api/integracion/cotizador/recepciones?desde=$H1B" | tr -d ' ')"
+ 
+ echo
+ echo "## reportar un problema después de recibir (≤ 30 días)"
+@@ -302,6 +311,7 @@ check "SOP-RTG: 7 en LCT" 'SOP-RTG:sitio={"lzc":7,"timsa":3}:camino={}:total=10'
+ post '{"evento_id":"OC-2026-0021:oc.devolucion:1","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0021","sitio":"LZC"},"devolucion":{"folio":"DEV-2026-0010","renglon":1,"cantidad":2,"tipo":"Dañado","resolucion":"Conservar"}}' > /dev/null
+ check "Conservar: el inventario no cambia" 'SOP-RTG:sitio={"lzc":7,"timsa":3}:camino={}:total=10' "$(inv)"
+ check "…y queda registrada" 'Conservar' "$(sql "SELECT resolucion FROM devoluciones WHERE folio='DEV-2026-0010'")"
++check "un aviso sin «sitio» en la OC también entra (se toma el de la OC guardada)" '"resolucion":"Conservar"' "$(post '{"evento_id":"OC-2026-0021:oc.devolucion:9","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0021"},"devolucion":{"folio":"DEV-2026-0019","renglon":1,"cantidad":1,"tipo":"Otro","resolucion":"Conservar"}}' | tr -d ' ')"
+ post '{"evento_id":"OC-2026-0021:oc.devolucion:2","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0021","sitio":"LZC"},"devolucion":{"folio":"DEV-2026-0011","renglon":1,"cantidad":2,"tipo":"Sobrante","resolucion":"Devolver al proveedor"}}' > /dev/null
+ check "Sobrante devuelto: no sale nada (no se había contado)" 'SOP-RTG:sitio={"lzc":7,"timsa":3}:camino={}:total=10' "$(inv)"
+ R="$(post '{"evento_id":"OC-2026-0021:oc.devolucion:3","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0021","sitio":"LZC"},"devolucion":{"folio":"DEV-2026-0012","renglon":1,"cantidad":3,"tipo":"Faltante","resolucion":"Reponer"}}')"
+@@ -311,6 +321,19 @@ check "…y la OC vuelve a «recibida en parte»" 'recibida-parcial' "$(echo "$R
+ check "llegan los 3: 10 en LCT y la OC queda recibida" 'recibida' "$(as antonio -d '{"oc":"OC-2026-0021","renglones":[{"n":1,"recibido":3,'"$F"'}]}' $U/api/compras/recibir | $PY -c "import sys,json;print(json.load(sys.stdin)['orden']['estado'])")"
+ check "…y el inventario cuadra" 'SOP-RTG:sitio={"lzc":10,"timsa":3}:camino={}:total=13' "$(inv)"
+ 
++echo
++echo "## Reponer en un renglón sin ítem: al ligarlo se va en camino aunque la OC esté «recibida en parte»"
++OC24='"oc":{"folio":"OC-2026-0024","sitio":"ESE","renglones":[{"n":1,"descripcion":"Soporte para RTG","unidad":"pza","cantidad":2,"item":"SOP-RTG"},{"n":2,"descripcion":"Cinta","unidad":"pza","cantidad":5,"item":null}]}'
++post '{"evento_id":"OC-2026-0024:oc.autorizada:1","tipo":"oc.autorizada",'"$OC24"'}' > /dev/null
++post '{"evento_id":"OC-2026-0024:oc.en_camino:1","tipo":"oc.en_camino",'"$OC24"'}' > /dev/null
++as miguel -d '{"oc":"OC-2026-0024","renglones":[{"n":1,"recibido":2,'"$F"'},{"n":2,"recibido":5,'"$F"'}]}' $U/api/compras/recibir > /dev/null
++post '{"evento_id":"OC-2026-0024:oc.devolucion:1","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0024","sitio":"ESE"},"devolucion":{"folio":"DEV-2026-0014","renglon":2,"cantidad":5,"tipo":"Incorrecto","resolucion":"Reponer"}}' > /dev/null
++check "la OC queda «recibida en parte» con el renglón 2 por recibir" "[('recibida-parcial', None)]" "$(sql "SELECT o.estado, r.recibido_en FROM ordenes o JOIN renglones r ON r.oc_folio=o.folio WHERE o.folio='OC-2026-0024' AND r.n=2")"
++as miguel -d '{"oc":"OC-2026-0024","n":2,"item":"SOP-RTG"}' $U/api/compras/ligar > /dev/null
++check "al ligarlo, 5 en camino a EIT" '"eit":5' "$(as leo $U/api/inventario | tr -d ' ' | grep -o '"en_camino":{[^}]*}' | head -3)"
++as miguel -d '{"oc":"OC-2026-0024","renglones":[{"n":2,"recibido":5,'"$F"'}]}' $U/api/compras/recibir > /dev/null
++check "y al recibirlo entra al inventario de EIT" 'SOP-RTG:sitio={"eit":7' "$(inv)"
++
+ echo
+ echo "## nunca deja un sitio en negativo"
+ OC22='"oc":{"folio":"OC-2026-0022","sitio":"QRO","renglones":[{"n":1,"descripcion":"Cable calibre 10","unidad":"m","cantidad":5,"item":"CBL-10"}]}'
+diff --git a/docs/inventario/fotos-devoluciones-29oct.md b/docs/inventario/fotos-devoluciones-29oct.md
+index 2982665..ac52daa 100644
+--- a/docs/inventario/fotos-devoluciones-29oct.md
++++ b/docs/inventario/fotos-devoluciones-29oct.md
+@@ -2,7 +2,7 @@
+ title: "Recibir con foto y reportar problemas: devoluciones de compras"
+ date: 2026-10-29
+ tags: [project-drogheda, hbox, compras, inventario, cotizador, recepcion, devoluciones, portal]
+-estado: construido y probado (147 pruebas del servidor + 61 de compras); se publica con el despliegue del 29-oct
++estado: construido y probado (153 pruebas del servidor + 61 de compras); se publica con el despliegue del 29-oct
+ ---
+ 
+ # Recibir con foto y reportar problemas
+@@ -102,7 +102,7 @@ se siguen recibiendo en Inventario como siempre.
+ - **Servidor** (`backend/compras.py`): foto por renglón obligatoria al recibir (todo o nada), problema por renglón,
+   fotos temporales en `adjuntos/compras/<OC>/`, las rutas firmadas con las que el cotizador baja cada foto y avisa
+   que ya la archivó (entonces se borra aquí), y el aviso `oc.devolucion` con el efecto de cada decisión en el
+-  inventario y en el pendiente. Nunca guarda montos. Pruebas: `backend/tests-1029.sh` (147) y
++  inventario y en el pendiente. Nunca guarda montos. Pruebas: `backend/tests-1029.sh` (153) y
+   `backend/tests-1028.sh` (61).
+ - **Página [Compras](../tableros/compras.md)**: el diálogo de Recibir con un bloque por renglón (cantidad, foto,
+   problema), las fotos y devoluciones en cada renglón y «Reportar problema» después de recibir.
+-- 
+2.43.0
+

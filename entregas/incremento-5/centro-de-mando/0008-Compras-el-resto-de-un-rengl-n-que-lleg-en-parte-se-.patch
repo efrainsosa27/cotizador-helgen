@@ -1,0 +1,198 @@
+From a98e2967794a6841085854f55c326ddd852b6435 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 14:50:27 -0600
+Subject: [PATCH 08/11] =?UTF-8?q?Compras:=20el=20resto=20de=20un=20rengl?=
+ =?UTF-8?q?=C3=B3n=20que=20lleg=C3=B3=20en=20parte=20se=20puede=20recibir?=
+ =?UTF-8?q?=20despu=C3=A9s?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Recibir solo rechaza renglones cerrados (llegó todo o compras aceptó el faltante); antes rechazaba
+  cualquier renglón con recibido_en y lo que faltaba de una recepción parcial se quedaba varado.
+- Lo que llega después entra al sitio como «entrada» con el folio de la OC (el envío se cerró con lo
+  que llegó la primera vez y la diferencia bajó del total). Se mantiene la espera por la foto anterior
+  sin archivar.
+- La página lista y cuenta los renglones por «cerrado» (campo nuevo en la ficha), no por «ya llegó algo».
+- Prueba: 15 de 20 sin problema, espera por la foto, los últimos 5, inventario 20 y OC recibida.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013SfRStBeRbueu9grrfatQU
+---
+ DESPLIEGUE.md                               |  3 +++
+ backend/compras.py                          | 20 ++++++++++++++++---
+ backend/tests-1029.sh                       | 22 +++++++++++++++++++++
+ docs/inventario/fotos-devoluciones-29oct.md |  4 +++-
+ docs/tableros/compras.js                    | 12 +++++------
+ 5 files changed, 51 insertions(+), 10 deletions(-)
+
+diff --git a/DESPLIEGUE.md b/DESPLIEGUE.md
+index 9266b0e..7462672 100644
+--- a/DESPLIEGUE.md
++++ b/DESPLIEGUE.md
+@@ -743,6 +743,9 @@ ssh -t leo@git.helgen.online '
+   Cancelar lo cierran con faltante). Sin `origen`, o `'centro'`, es el de siempre: un faltante del sitio nunca se contó y
+   no mueve existencias. Si ya no queda nada por llegar, «Reponer» no reabre el renglón (antes lo reabría «por 0» y la
+   requisición se atoraba). La tabla `devoluciones` guarda el origen (columna nueva, se agrega sola).
++- **Recepción en partes:** un renglón que llegó en parte (15 de 20) se puede volver a recibir por lo que falta; esos 5
++  entran al sitio como «entrada» con el folio de la OC (su envío se cerró con lo que llegó la primera vez). Solo se
++  rechaza un renglón cerrado (llegó todo o compras aceptó el faltante).
+ - **Limitación conocida de la firma (se corrige en un contrato posterior):** el HMAC firma solo la hora y el cuerpo,
+   no el método ni la ruta. En un GET el cuerpo va vacío, así que una firma tomada de una consulta firmada sirve para
+   cualquier otra ruta GET firmada (por ejemplo `/foto?id=`) durante sus 5 minutos. Mitiga: HTTPS de punta a punta y
+diff --git a/backend/compras.py b/backend/compras.py
+index 66de2e1..1b95649 100644
+--- a/backend/compras.py
++++ b/backend/compras.py
+@@ -668,8 +668,8 @@ class Compras:
+             if not r:
+                 errores.append(f"El renglón {n} no existe en {folio}.")
+                 continue
+-            if r["recibido_en"]:
+-                ya.append(r)                   # ya se había recibido: no se recibe dos veces
++            if self.cerrado(r):
++                ya.append(r)                   # ya llegó todo (o compras aceptó el faltante): no se recibe dos veces
+                 continue
+             falta = self.pendiente(r)
+             cant = _num(ln.get("recibido"), -1)
+@@ -712,6 +712,16 @@ class Compras:
+                     continue
+             else:
+                 env = None
++                if r["recibido_en"] and cant > 0 and r["item_codigo"]:
++                    # el resto de un renglón que llegó en parte: su envío ya se cerró con lo que llegó la primera vez
++                    # (la diferencia bajó del total), así que lo que llega ahora entra como «entrada» al sitio
++                    entero = _entero_exacto(cant)
++                    it = (g["_leer_json"](g["_ruta_registro"](g["INV_ITEMS"](), r["item_id"])) if r["item_id"]
++                          else None) or self.item_por_codigo(r["item_codigo"])
++                    if entero is None or not it:
++                        errores.append(f"Renglón {n}: el inventario cuenta enteros." if entero is None
++                                       else f"Renglón {n}: ya no existe el ítem {r['item_codigo']}.")
++                        continue
+             plan.append((r, cant, foto, prob, env, it, entero))
+         if errores:
+             return [], errores + ([ESPERA_COTIZADOR] if espera else []), [], (409 if espera else 400)
+@@ -739,6 +749,9 @@ class Compras:
+                         raise RuntimeError(f"El envío del renglón {n} ya se había recibido.")
+                     g["_registrar_movimiento"](it, "recepcion", entero, f"llegó la compra {folio}"[:200], folio, quien,
+                                                sitio=fresco.get("destino"), envio=fresco)
++                elif it and entero:                     # el resto de un renglón que había llegado en parte
++                    g["_registrar_movimiento"](it, "entrada", entero, f"llegó el resto de la compra {folio}"[:200],
++                                               folio, quien, sitio=oc["sitio_portal"])
+                 if fid:
+                     c.execute("UPDATE renglones SET foto_id=?, foto_archivada=0, foto_url=NULL WHERE oc_folio=? AND n=?",
+                               (fid, folio, n))
+@@ -1050,7 +1063,8 @@ class Compras:
+                 r["devoluciones"] = devs.get(f["n"], [])
+                 r["problema_reportable"] = bool(f["recibido_en"]) and f["recibido_en"] >= limite
+                 r["problema_en_espera"] = self.problema_en_espera(f)      # no se acepta otro hasta que lo recojan
+-                r["recepcion_en_espera"] = not f["recibido_en"] and self.foto_en_espera(f)
++                r["cerrado"] = self.cerrado(f)          # ya no se espera nada de este renglón
++                r["recepcion_en_espera"] = not r["cerrado"] and self.foto_en_espera(f)
+                 rs.append(r)
+             d["renglones"] = rs
+             d["por_ligar"] = [r["n"] for r in rs if not r["item_codigo"]]
+diff --git a/backend/tests-1029.sh b/backend/tests-1029.sh
+index d91c937..19b1942 100644
+--- a/backend/tests-1029.sh
++++ b/backend/tests-1029.sh
+@@ -516,6 +516,28 @@ R="$(post '{"evento_id":"OC-2026-0602:oc.devolucion:1","tipo":"oc.devolucion","o
+ check "sin origen (= centro) y ya llegó todo: Reponer no reabre «por 0» y lo avisa" 'no queda nada por reponer' "$R"
+ check "…el renglón sigue cerrado y el inventario igual" '[(20.0, 1)] FAL-1:{"timsa":40}:{}' "$(sql "SELECT recibido, recibido_en IS NOT NULL FROM renglones WHERE oc_folio='OC-2026-0602'") $(as leo $U/api/inventario | fal FAL-1)"
+ 
++echo
++echo "## (en vivo) recepción parcial sin problema: el resto del renglón se recibe después"
++as leo -d '{"codigo":"PAR-1","descripcion":"Cable parcial","categoria":"cable","unidad":"m"}' $U/api/inventario > /dev/null
++O='"oc":{"folio":"OC-2026-0700","sitio":"ESE","renglones":[{"n":1,"descripcion":"Cable parcial","unidad":"m","cantidad":20,"item":"PAR-1"}]}'
++post '{"evento_id":"OC-2026-0700:oc.autorizada:1","tipo":"oc.autorizada",'"$O"'}' > /dev/null
++post '{"evento_id":"OC-2026-0700:oc.en_camino:1","tipo":"oc.en_camino",'"$O"'}' > /dev/null
++check "llegan 15 de 20, sin problema" '"estado":"recibida-parcial"' "$(as miguel -d '{"oc":"OC-2026-0700","renglones":[{"n":1,"recibido":15,'"$F"'}]}' $U/api/compras/recibir | tr -d ' ')"
++check "…el renglón no está cerrado y faltan 5" '"cerrado":false' "$(as leo $U/api/compras | $PY -c "
++import sys,json;d=json.load(sys.stdin);r=[o for o in d['ordenes'] if o['folio']=='OC-2026-0700'][0]['renglones'][0]
++print(json.dumps({'cerrado': r['cerrado'], 'pendiente': r['pendiente']}).replace(' ',''))")"
++check "el resto, mientras la foto de los 15 no se archiva: espera" 'Espera unos minutos' "$(as miguel -d '{"oc":"OC-2026-0700","renglones":[{"n":1,"recibido":5,'"$F"'}]}' $U/api/compras/recibir)"
++archivar OC-2026-0700
++check "no pueden llegar más de los 5 que faltan" 'faltan por llegar 5' "$(as miguel -d '{"oc":"OC-2026-0700","renglones":[{"n":1,"recibido":6,'"$F"'}]}' $U/api/compras/recibir)"
++check "llegan los últimos 5: la orden queda recibida" '"estado":"recibida"' "$(as miguel -d '{"oc":"OC-2026-0700","renglones":[{"n":1,"recibido":5,'"$F"'}]}' $U/api/compras/recibir | tr -d ' ')"
++check "…PAR-1: 20 en EIT" 'PAR-1:{"eit":20}' "$(as leo $U/api/inventario | $PY -c "
++import sys,json;d=json.load(sys.stdin);print(' '.join('%s:%s' % (i['codigo'], json.dumps(i['por_sitio']).replace(' ','')) for i in d['items'] if i['codigo']=='PAR-1'))")"
++check "…y su pendiente se cerró" 'hecho' "$(tarea t-oc-oc-2026-0700)"
++check "el cotizador ve 20 de 20, completa" 'recibido=20.0 completa=True' "$(sget /api/integracion/cotizador/recepciones | $PY -c "
++import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_folio']=='OC-2026-0700'][0]
++print('recibido=%s completa=%s' % (o['renglones'][0]['recibido'], o['completa']))")"
++check "ya completo, no se recibe más" 'Eso ya se recibió' "$(as miguel -d '{"oc":"OC-2026-0700","renglones":[{"n":1,"recibido":1,'"$F"'}]}' $U/api/compras/recibir)"
++
+ echo
+ echo "## sin secreto: las rutas nuevas también contestan 503 y la página sigue"
+ kill $APP 2>/dev/null; sleep 0.5
+diff --git a/docs/inventario/fotos-devoluciones-29oct.md b/docs/inventario/fotos-devoluciones-29oct.md
+index f8688f5..f4f95fb 100644
+--- a/docs/inventario/fotos-devoluciones-29oct.md
++++ b/docs/inventario/fotos-devoluciones-29oct.md
+@@ -23,7 +23,9 @@ Jesús Romero · Querétaro), desde el celular:
+ 
+ 1. Abre [Compras](../tableros/compras.md), busca la orden y dale **Recibir…** (con la cámara en el botón).
+ 2. En cada renglón anota **lo que llegó de verdad**. Si todavía no llega nada de ese renglón, déjalo en **0**: sigue
+-   en camino y no pide foto.
++   en camino y no pide foto. Si llegó **solo una parte** (15 de 20), recibe esa parte; cuando llegue el resto, vuelve a
++   darle **Recibir** a la orden y anota lo que falta (con su foto). Si el resto ya no va a llegar, repórtalo como
++   **Faltante**.
+ 3. Toma **una foto por renglón** con **Tomar foto** (abre la cámara) o elígela con **Galería**. Que se vea el
+    material **y** su etiqueta o la cantidad (el bulto completo, no un detalle). La página la comprime sola antes de
+    mandarla: no gasta tus datos.
+diff --git a/docs/tableros/compras.js b/docs/tableros/compras.js
+index e1afed9..65fe2d4 100644
+--- a/docs/tableros/compras.js
++++ b/docs/tableros/compras.js
+@@ -240,7 +240,7 @@
+       el('th', { class: 'num', text: 'Pedido' }), el('th', { text: 'Ítem del inventario' }), el('th', { class: 'num', text: 'Llegó' }))));
+     const tb = el('tbody');
+     (o.renglones || []).forEach(r => {
+-      const tr = el('tr', { class: r.recibido_en ? 'recibido' : '' });
++      const tr = el('tr', { class: r.cerrado ? 'recibido' : '' });
+       tr.append(el('td', { class: 'num', text: r.n }));
+       const td = el('td', {}, el('span', { class: 'desc', text: r.descripcion || '—' }));
+       if (r.nota) td.append(el('div', { class: 'mini aviso-t', text: r.nota }));
+@@ -276,7 +276,7 @@
+       }
+       tr.append(tdI);
+       const tdL = el('td', { class: 'num' });
+-      if (r.recibido_en) tdL.append(num(r.recibido));
++      if (r.cerrado) tdL.append(num(r.recibido));
+       else if (+r.recibido > 0) tdL.append(num(r.recibido), el('div', { class: 'mini', text: 'faltan ' + num(r.pendiente) }));
+       else tdL.append(el('span', { class: 'mini', text: '—' }));
+       if (+r.faltante_aceptado > 0) tdL.append(el('div', { class: 'mini', text: 'faltante ' + num(r.faltante_aceptado) }));
+@@ -292,7 +292,7 @@
+       const b = el('button', { type: 'button', html: CAMARA + 'Recibir…' });
+       b.onclick = () => recibir(o);
+       acc.append(b);
+-      const falta = (o.renglones || []).filter(r => !r.recibido_en).length;
++      const falta = (o.renglones || []).filter(r => !r.cerrado).length;
+       if (falta) acc.append(el('span', { class: 'mini', text: (falta === 1 ? 'falta 1 renglón por recibir' : 'faltan ' + falta + ' renglones por recibir') + ' · una foto por renglón' }));
+       c.append(acc);
+     } else if (o.recepcion_en) {
+@@ -346,7 +346,7 @@
+     abrirDialogo('Recibir ' + o.folio + ' en ' + corto(o.sitio_portal), c => {
+       c.append(el('p', { class: 'mini', text: 'Anota lo que llegó DE VERDAD y toma una foto de cada renglón que llegó (obligatoria). ' +
+         'Si un renglón todavía no llega, déjalo en 0: sigue en camino. Si algo llegó mal o falta, ábrelo en «Reportar problema» y compras lo resuelve.' }));
+-      const pend = (o.renglones || []).filter(r => !r.recibido_en);
++      const pend = (o.renglones || []).filter(r => !r.cerrado);     // también el resto de lo que llegó en parte
+       pend.forEach(r => {
+         const sec = el('section', { class: 'cmp-rl' });
+         const falta = +r.pendiente;
+@@ -369,10 +369,10 @@
+         lineas.push({ r, falta, fCant, foto, prob, sec });
+         c.append(sec);
+       });
+-      const hechos = (o.renglones || []).filter(r => r.recibido_en);
++      const hechos = (o.renglones || []).filter(r => r.cerrado);
+       if (hechos.length) c.append(el('p', { class: 'mini', text: 'Ya recibidos: ' + hechos.map(r => '#' + r.n + ' ' + (r.descripcion || '') + ' (' + num(r.recibido) + ')').join(' · ') }));
+       if (!pend.length) c.append(el('p', { class: 'mini', text: 'Todos los renglones ya se recibieron.' }));
+-    }, (o.renglones || []).some(r => !r.recibido_en) ? [['Recibir', async (m, boton) => {
++    }, (o.renglones || []).some(r => !r.cerrado) ? [['Recibir', async (m, boton) => {
+       boton.textContent = 'Preparando fotos…';
+       await Promise.all(lineas.map(l => Promise.all([l.foto.espera(), l.prob.espera()])));
+       const renglones = [], errores = [];
+-- 
+2.43.0
+

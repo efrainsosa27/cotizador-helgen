@@ -1,0 +1,225 @@
+From 41dc9d6cd10d2baa76d1acef1af3ce5f5e7d41c8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 14:52:44 -0600
+Subject: [PATCH 10/11] =?UTF-8?q?Compras:=20las=20=C3=B3rdenes=20de=20PRUE?=
+ =?UTF-8?q?BA=20no=20esperan=20al=20cotizador=20ni=20acumulan=20fotos?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Una orden de prueba nunca sale en recepciones, así que nadie archiva sus fotos: las esperas por la
+  foto anterior y por el problema anterior no aplican a ella (antes la bloqueaban para siempre), y
+  /api/compras/problema ya no la rechaza.
+- limpiar_pruebas: borra las fotos (y lo que haya en su carpeta) de una orden de prueba al cerrarse
+  (recibida o cancelada) o a los 7 días; corre al arrancar, en cada consulta del cotizador, después de
+  recibir una orden de prueba y con cada aviso de prueba.
+- Pruebas: recibir en partes y dos problemas seguidos sin esperar, borrado al cerrar y a los 7 días.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013SfRStBeRbueu9grrfatQU
+---
+ DESPLIEGUE.md         |  3 +++
+ backend/compras.py    | 56 +++++++++++++++++++++++++++++++++----------
+ backend/tests-1029.sh | 21 ++++++++++++++++
+ 3 files changed, 67 insertions(+), 13 deletions(-)
+
+diff --git a/DESPLIEGUE.md b/DESPLIEGUE.md
+index 0a5884a..8ae36cf 100644
+--- a/DESPLIEGUE.md
++++ b/DESPLIEGUE.md
+@@ -745,6 +745,9 @@ ssh -t leo@git.helgen.online '
+   requisición se atoraba). La tabla `devoluciones` guarda el origen (columna nueva, se agrega sola).
+ - **`recepciones`: `problema.por`** — el usuario del sitio que reportó el problema (CAPRI lo pone como quien reporta la
+   DEV). Es un campo más dentro de `problema`; lo demás del contrato no cambia.
++- **Órdenes de PRUEBA** (`"prueba": true`): nunca salen en recepciones, así que nadie archiva sus fotos. No esperan
++  al cotizador (ni para volver a recibir ni para otro problema) y sus fotos se borran solas cuando la orden se cierra
++  (recibida o cancelada) o a los 7 días (al arrancar el servicio y en cada consulta del cotizador).
+ - **Recepción en partes:** un renglón que llegó en parte (15 de 20) se puede volver a recibir por lo que falta; esos 5
+   entran al sitio como «entrada» con el folio de la OC (su envío se cerró con lo que llegó la primera vez). Solo se
+   rechaza un renglón cerrado (llegó todo o compras aceptó el faltante).
+diff --git a/backend/compras.py b/backend/compras.py
+index cb15226..4c1105d 100644
+--- a/backend/compras.py
++++ b/backend/compras.py
+@@ -55,6 +55,7 @@ import json
+ import os
+ import re
+ import sqlite3
++import time
+ import unicodedata
+ import uuid
+ from urllib.parse import urlsplit
+@@ -72,6 +73,7 @@ TIPOS_PROBLEMA = ("Incorrecto", "Dañado", "Faltante", "Sobrante", "Otro")
+ RESOLUCIONES = ("Reponer", "Devolver al proveedor", "Cancelar renglón", "Conservar")
+ FOTO_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")     # contrato §5a: [A-Za-z0-9._-], ≤ 80
+ DIAS_PROBLEMA = 30            # un problema se puede reportar hasta 30 días después de recibir (contrato §4)
++DIAS_FOTOS_PRUEBA = 7         # órdenes de prueba: nunca van al cotizador, sus fotos se borran al cerrar o a los 7 días
+ MIN_COMENTARIO = 3
+ DEV_RE = re.compile(r"^DEV-[A-Z0-9][A-Z0-9-]{0,35}$")              # folio de la devolución: DEV-AAAA-NNNN
+ HOSTS_DRIVE = ("drive.google.com", "docs.google.com")
+@@ -275,6 +277,7 @@ class Compras:
+             self.agregar_columnas(c, COLUMNAS_NUEVAS)
+             c.executescript(ESQUEMA_5)
+             self.agregar_columnas(c, COLUMNAS_5B)
++            self.limpiar_pruebas(c)
+ 
+     @staticmethod
+     def agregar_columnas(c, columnas):
+@@ -626,21 +629,44 @@ class Compras:
+                 pass
+ 
+     @staticmethod
+-    def problema_en_espera(r):
++    def problema_en_espera(r, prueba=False):
+         """Un problema que el cotizador todavía no recoge: su foto sin archivar o, sin foto (Faltante), sin haber
+         salido todavía en una consulta de recepciones. Mientras tanto no se acepta otro en ese renglón: el contrato
+-        tiene UN problema por renglón y uno nuevo taparía al anterior antes de que se convierta en su DEV."""
+-        if not r["problema_tipo"]:
++        tiene UN problema por renglón y uno nuevo taparía al anterior antes de que se convierta en su DEV.
++        Una orden de PRUEBA nunca va al cotizador: ahí nunca se espera."""
++        if prueba or not r["problema_tipo"]:
+             return False
+         if r["problema_foto_id"]:
+             return not r["problema_foto_archivada"]
+         return not r["problema_entregado_en"]
+ 
+     @staticmethod
+-    def foto_en_espera(r):
+-        """La foto de la recepción anterior que el cotizador todavía no se lleva (tras «Reponer» el renglón se puede
+-        volver a recibir, y la foto nueva taparía a la anterior)."""
+-        return bool(r["foto_id"]) and not r["foto_archivada"]
++    def foto_en_espera(r, prueba=False):
++        """La foto de la recepción anterior que el cotizador todavía no se lleva (tras «Reponer» o en una recepción en
++        partes el renglón se vuelve a recibir, y la foto nueva taparía a la anterior). En PRUEBA nunca se espera."""
++        return not prueba and bool(r["foto_id"]) and not r["foto_archivada"]
++
++    def limpiar_pruebas(self, c, folio=None):
++        """Las órdenes de PRUEBA nunca salen en recepciones, así que el cotizador nunca archiva sus fotos: se borran
++        aquí cuando la orden se cierra (recibida o cancelada) o a los DIAS_FOTOS_PRUEBA días. Devuelve cuántas."""
++        limite = time.time() - DIAS_FOTOS_PRUEBA * 86400
++        q = "SELECT folio, estado FROM ordenes WHERE prueba=1" + (" AND folio=?" if folio else "")
++        borradas = 0
++        for oc in c.execute(q, (folio,) if folio else ()).fetchall():
++            d = self.dir_fotos(oc["folio"])
++            if not os.path.isdir(d):
++                continue
++            cerrada = oc["estado"] in ("recibida", "cancelada")
++            for raiz, _, archivos in os.walk(d):
++                for a in archivos:
++                    ruta = os.path.join(raiz, a)
++                    try:
++                        if cerrada or os.path.getmtime(ruta) < limite:
++                            os.remove(ruta)
++                            borradas += 1
++                    except OSError:
++                        pass
++        return borradas
+ 
+     # ---------------------------------------------------------------- recibir desde el centro de mando
+     def recibir(self, c, folio, lineas, quien):
+@@ -684,13 +710,13 @@ class Compras:
+             if cant == 0 and not prob:
+                 sin_llegar.append(n)           # todavía no llega: sigue en camino, sin foto
+                 continue
+-            if prob and self.problema_en_espera(r):
++            if prob and self.problema_en_espera(r, oc["prueba"]):
+                 errores.append(f"Renglón {n}: ya tiene un problema reportado que el cotizador todavía no recoge.")
+                 espera = True
+                 continue
+             foto = None
+             if cant > 0:
+-                if self.foto_en_espera(r):
++                if self.foto_en_espera(r, oc["prueba"]):
+                     errores.append(f"Renglón {n}: el cotizador todavía no se lleva la foto de la recepción anterior "
+                                    "de este renglón.")
+                     espera = True
+@@ -769,6 +795,8 @@ class Compras:
+             self.nota_pendiente(oc["tarea_id"], ("problema al recibir: " + "; ".join(problemas)
+                                                  + ". Compras lo resuelve en el cotizador.")[:600], quien)
+         self.cerrar_si_llego_todo(c, folio)
++        if oc["prueba"]:
++            self.limpiar_pruebas(c, folio)
+         return hechos, [], sin_llegar, 200
+ 
+     # ---------------------------------------------------------------- devoluciones (contrato §5d)
+@@ -1063,9 +1091,9 @@ class Compras:
+                 r["problema"] = self.problema_json(f)
+                 r["devoluciones"] = devs.get(f["n"], [])
+                 r["problema_reportable"] = bool(f["recibido_en"]) and f["recibido_en"] >= limite
+-                r["problema_en_espera"] = self.problema_en_espera(f)      # no se acepta otro hasta que lo recojan
++                r["problema_en_espera"] = self.problema_en_espera(f, oc["prueba"])   # no otro hasta que lo recojan
+                 r["cerrado"] = self.cerrado(f)          # ya no se espera nada de este renglón
+-                r["recepcion_en_espera"] = not r["cerrado"] and self.foto_en_espera(f)
++                r["recepcion_en_espera"] = not r["cerrado"] and self.foto_en_espera(f, oc["prueba"])
+                 rs.append(r)
+             d["renglones"] = rs
+             d["por_ligar"] = [r["n"] for r in rs if not r["item_codigo"]]
+@@ -1170,6 +1198,7 @@ def registrar(app, g):
+             folio = oc["folio"]
+             if prueba:
+                 # las rondas del proyecto de PRUEBAS no tocan el inventario ni el tablero (contrato §prueba)
++                C.limpiar_pruebas(c, folio)
+                 c.execute("INSERT INTO eventos (evento_id, oc_folio, tipo, cuando, quien, origen, datos) "
+                           "VALUES (?,?,?,?,?,?,?)",
+                           (evento_id, folio, tipo, g["ahora"](), quien, "cotizador", json.dumps(d)[:20000]))
+@@ -1228,6 +1257,7 @@ def registrar(app, g):
+         hasta = g["ahora"]()
+         with C.con() as c:
+             C.conciliar(c)
++            C.limpiar_pruebas(c)          # cada consulta (≈ 15 min) barre las fotos de órdenes de prueba
+             # 29-oct (contrato §5a): una OC vuelve a salir si uno de sus renglones cambió después de «desde» (otra
+             # recepción, foto archivada, problema), aunque se haya recibido antes. «>=»: lo que cambió en el mismo
+             # segundo que la consulta anterior sale otra vez (el cotizador lo aplica una sola vez) en vez de perderse.
+@@ -1419,7 +1449,7 @@ def registrar(app, g):
+             C.candado(c)
+             oc = c.execute("SELECT * FROM ordenes WHERE folio=?", (folio,)).fetchone()
+             r = c.execute("SELECT * FROM renglones WHERE oc_folio=? AND n=?", (folio, n)).fetchone()
+-            if not oc or not r or oc["prueba"]:
++            if not oc or not r:
+                 return jsonify(ok=False, error=f"No existe el renglón {n} de {folio}."), 404
+             if not r["recibido_en"]:
+                 return jsonify(ok=False, error="Ese renglón todavía no se recibe: repórtalo al darle «Recibir»."), 409
+@@ -1427,7 +1457,7 @@ def registrar(app, g):
+             if r["recibido_en"] < limite.isoformat():
+                 return jsonify(ok=False, error=f"Se recibió hace más de {DIAS_PROBLEMA} días: avísale a compras "
+                                                "directamente."), 409
+-            if C.problema_en_espera(r):
++            if C.problema_en_espera(r, oc["prueba"]):
+                 return jsonify(ok=False, error="Ese renglón ya tiene un problema reportado que el cotizador todavía no "
+                                                "recoge. " + ESPERA_COTIZADOR), 409
+             p, e = C.leer_problema(d.get("problema"), r, 0, C.pendiente(r), f"Renglón {n}")
+diff --git a/backend/tests-1029.sh b/backend/tests-1029.sh
+index 26f0dad..90a5de6 100644
+--- a/backend/tests-1029.sh
++++ b/backend/tests-1029.sh
+@@ -540,6 +540,27 @@ import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_f
+ print('recibido=%s completa=%s' % (o['renglones'][0]['recibido'], o['completa']))")"
+ check "ya completo, no se recibe más" 'Eso ya se recibió' "$(as miguel -d '{"oc":"OC-2026-0700","renglones":[{"n":1,"recibido":1,'"$F"'}]}' $U/api/compras/recibir)"
+ 
++echo
++echo "## (en vivo) órdenes de PRUEBA: nunca esperan al cotizador y sus fotos no se acumulan"
++OP='"oc":{"folio":"OC-PRUEBA-7","sitio":"QRO","renglones":[{"n":1,"descripcion":"Cinta","unidad":"pza","cantidad":10,"item":null},{"n":2,"descripcion":"Cinchos","unidad":"pza","cantidad":5,"item":null}]}'
++post '{"evento_id":"OC-PRUEBA-7:oc.autorizada:1","tipo":"oc.autorizada","prueba":true,'"$OP"'}' > /dev/null
++check "se reciben 6 de 10 del renglón 1" '"ok":true' "$(as jesus -d '{"oc":"OC-PRUEBA-7","renglones":[{"n":1,"recibido":6,'"$F"'}]}' $U/api/compras/recibir)"
++check "el resto, sin esperar a que se archive la foto (nadie la va a archivar)" '"ok":true' "$(as jesus -d '{"oc":"OC-PRUEBA-7","renglones":[{"n":1,"recibido":4,'"$F"'}]}' $U/api/compras/recibir)"
++check "un problema en una orden de prueba sí se acepta" '"ok":true' "$(as jesus -d '{"oc":"OC-PRUEBA-7","n":1,"problema":{"tipo":"Dañado","cantidad":1,"comentario":"una rota",'"$FP"'}}' $U/api/compras/problema)"
++check "…y otro enseguida (no espera al cotizador)" '"ok":true' "$(as jesus -d '{"oc":"OC-PRUEBA-7","n":1,"problema":{"tipo":"Otro","cantidad":1,"comentario":"otra cosa",'"$FP"'}}' $U/api/compras/problema)"
++check "mientras está abierta, sus fotos siguen en el servidor" 'si' "$([ -n "$(ls -A $T/adjuntos/compras/OC-PRUEBA-7 2>/dev/null)" ] && echo si || echo no)"
++check "se recibe el renglón 2 y la orden de prueba se cierra" '"estado":"recibida"' "$(as jesus -d '{"oc":"OC-PRUEBA-7","renglones":[{"n":2,"recibido":5,'"$F"'}]}' $U/api/compras/recibir | tr -d ' ')"
++check "…y sus fotos se borran (no van a ir nunca a Drive)" '0' "$(find $T/adjuntos/compras/OC-PRUEBA-7 -type f | wc -l | tr -d ' ')"
++no "nunca sale en recepciones" 'OC-PRUEBA-7' "$(sget /api/integracion/cotizador/recepciones)"
++post '{"evento_id":"OC-PRUEBA-8:oc.autorizada:1","tipo":"oc.autorizada","prueba":true,"oc":{"folio":"OC-PRUEBA-8","sitio":"QRO","renglones":[{"n":1,"descripcion":"Cinta","unidad":"pza","cantidad":10,"item":null}]}}' > /dev/null
++as jesus -d '{"oc":"OC-PRUEBA-8","renglones":[{"n":1,"recibido":3,'"$F"'}]}' $U/api/compras/recibir > /dev/null
++$PY -c "
++import os,time
++d='$T/adjuntos/compras/OC-PRUEBA-8'
++for f in os.listdir(d): p=os.path.join(d,f); os.path.isfile(p) and os.utime(p,(time.time()-8*86400,)*2)"
++sget /api/integracion/cotizador/recepciones > /dev/null
++check "una orden de prueba abierta: sus fotos de hace más de 7 días se borran en la siguiente consulta" '0' "$(find $T/adjuntos/compras/OC-PRUEBA-8 -type f | wc -l | tr -d ' ')"
++
+ echo
+ echo "## sin secreto: las rutas nuevas también contestan 503 y la página sigue"
+ kill $APP 2>/dev/null; sleep 0.5
+-- 
+2.43.0
+

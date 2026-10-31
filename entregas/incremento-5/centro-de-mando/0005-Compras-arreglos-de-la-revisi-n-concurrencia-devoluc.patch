@@ -1,0 +1,918 @@
+From 7a03cb08c03a3bc9d84eecc41a51c6e976d80304 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 14:33:00 -0600
+Subject: [PATCH 05/11] =?UTF-8?q?Compras:=20arreglos=20de=20la=20revisi?=
+ =?UTF-8?q?=C3=B3n=20(concurrencia,=20devoluciones=20repetidas,=20problema?=
+ =?UTF-8?q?s=20tapados,=20OC=20cancelada,=20ligas)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Recibir toma el candado de la base (BEGIN IMMEDIATE) antes de leer: dos «Recibir» de la misma OC
+  a la vez ya no cuentan doble; el segundo contesta 409 «Eso ya se recibió». El envío se relee justo
+  antes de registrar su recepción (y app.py lo vuelve a revisar en _registrar_movimiento: 409 en
+  Inventario si ya se recibió). Si algo falla después de escribir fotos, se borran y la base se deshace.
+- Avisos del cotizador: candado antes de buscar el evento repetido (dos copias a la vez ya no dan 500);
+  oc.devolucion exige folio DEV-… (400 sin él); su movimiento de inventario y su envío de reposición
+  quedan marcados con la DEV y no se repiten aunque el aviso se reintente tras una falla.
+- Un problema no tapa a otro que el cotizador no ha recogido (foto sin archivar o, sin foto, sin haber
+  salido en recepciones: columna problema_entregado_en); un renglón no se vuelve a recibir tras
+  «Reponer» mientras la foto anterior no se archive. Mensajes que piden esperar unos minutos.
+- «Reponer» en una OC cancelada: descuenta lo devuelto pero no reabre el renglón ni crea envío; lo avisa.
+- foto-archivada solo acepta https://drive.google.com o docs.google.com (sin usuario, puerto, @ ni \);
+  la página abre siempre la foto por /api/compras/foto. JPEG: además del inicio, el final (EOI) y un SOF
+  con medidas de hasta 6000 px. conciliar no toca un renglón que alguien recibió mientras tanto.
+- Pruebas: tests-1029.sh 195 (una por hallazgo, incluidas dos recepciones y dos avisos simultáneos y
+  fallas a la mitad), tests-1028.sh 61. DESPLIEGUE D5: limitación conocida de la firma HMAC.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013SfRStBeRbueu9grrfatQU
+---
+ CLAUDE.md                                   |   2 +-
+ DESPLIEGUE.md                               |  18 +-
+ backend/app.py                              |  21 +-
+ backend/compras.py                          | 305 ++++++++++++++++----
+ backend/tests-1029.sh                       | 121 +++++++-
+ docs/inventario/fotos-devoluciones-29oct.md |   9 +-
+ docs/tableros/compras.js                    |  14 +-
+ 7 files changed, 416 insertions(+), 74 deletions(-)
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 5a44dbf..9dd72dc 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -31,7 +31,7 @@ Adriana, Michelle, Jesús and the field technicians work from it; Claude closes
+ | **Ruta a producción**, version cards, fase, pedido, próximas fechas, map pins | `docs/datos/proyecto.json` | Claude or Leo | edit by hand (keep the one-array-per-line format); step states `hecho · ahora · bloqueado · falta`, card tone `hecho · ahora · aviso · bloqueado`; bump `actualizado` |
+ | **Instalaciones** (per-site installation board, 22-oct) | `docs/tableros/instalaciones.md` + `.js`/`.css`; data: field actas via `GET /api/instalaciones` (`backend/instalaciones.py`, hooked at the end of `app.py`) | automatic | stages envío → recepción → instalación → **prueba en sitio** (acta `prueba-sitio`; only a passed test counts for the 1–2 per-site goal) → en operación (7 days after the test, no failure) + «con falla»; colour, nota and meta per site from `proyecto.json`; forms accept `?serie=&sitio=&<clave>=` prefill (`acta.js`) |
+ | **Inventario por sitio** (23-oct) | `docs/tableros/inventario.md` + `.js`/`.css`; data: server `/srv/projects/drogheda/inventario` via `/api/inventario` | everyone in the UI | tabs ICAVE · TIMSA · EIT · LCT · Querétaro + «Todo» (`?sitio=eit&n=2`); every movement carries `sitio` (none = qro); `envio` leaves a site (or `fuera`: purchase in transit / material shipped before counting) and stays «en camino» until the destination presses «Recibir» (`recepcion`); item `por_instalacion` = the installation kit; team rules in `docs/inventario/index.md`; tests `backend/tests-1023.sh` |
+-| **Compras** (28-oct) | `docs/tableros/compras.md` + `.js`/`.css`; datos: SQLite `/srv/projects/drogheda/drogheda.db` vía `backend/compras.py` (enganchado al final de `app.py`) | las OC entran solas desde el cotizador; el responsable del sitio da «Recibir» | las órdenes de compra de DROGHEDA **sin montos**, por sitio y estado (autorizada · pagada · en-camino · recibida-parcial · recibida · cancelada); «Ligar» un renglón a un ítem del inventario y «Recibir» completo o en parte; cada OC abre su pendiente `t-oc-<folio>` y se cierra sola al recibir todo; las dos puertas de recepción (Compras y el envío «en camino» de Inventario) se concilian. Las rutas `/api/integracion/…` van firmadas con `COTIZADOR_SECRETO` (HMAC del cuerpo y la hora, ventana 5 min), **sin sesión**: sin secreto contestan 503 y el resto del sitio sigue igual. Las rondas `"prueba": true` se guardan aparte. Flujo y decisiones: `docs/inventario/flujo-compras-28oct.md`; pruebas `backend/tests-1028.sh` (61). **29-oct (CAPRI incremento 5):** «Recibir» pide una foto JPEG por renglón (comprimida en el navegador) y acepta un problema por renglón (también después, ≤ 30 días); fotos temporales en `ADJUNTOS_DIR/compras/<OC>/` hasta que el cotizador las baja (`/api/integracion/cotizador/foto`) y avisa `foto-archivada` (se borran); aviso `oc.devolucion` → movimiento `devolucion` en el sitio y el renglón vuelve en camino o se cierra con faltante; los envíos de una OC ya no se reciben en Inventario (manda a Compras). Proceso: `docs/inventario/fotos-devoluciones-29oct.md`; pruebas `backend/tests-1029.sh` (153) |
++| **Compras** (28-oct) | `docs/tableros/compras.md` + `.js`/`.css`; datos: SQLite `/srv/projects/drogheda/drogheda.db` vía `backend/compras.py` (enganchado al final de `app.py`) | las OC entran solas desde el cotizador; el responsable del sitio da «Recibir» | las órdenes de compra de DROGHEDA **sin montos**, por sitio y estado (autorizada · pagada · en-camino · recibida-parcial · recibida · cancelada); «Ligar» un renglón a un ítem del inventario y «Recibir» completo o en parte; cada OC abre su pendiente `t-oc-<folio>` y se cierra sola al recibir todo; las dos puertas de recepción (Compras y el envío «en camino» de Inventario) se concilian. Las rutas `/api/integracion/…` van firmadas con `COTIZADOR_SECRETO` (HMAC del cuerpo y la hora, ventana 5 min), **sin sesión**: sin secreto contestan 503 y el resto del sitio sigue igual. Las rondas `"prueba": true` se guardan aparte. Flujo y decisiones: `docs/inventario/flujo-compras-28oct.md`; pruebas `backend/tests-1028.sh` (61). **29-oct (CAPRI incremento 5):** «Recibir» pide una foto JPEG por renglón (comprimida en el navegador) y acepta un problema por renglón (también después, ≤ 30 días); fotos temporales en `ADJUNTOS_DIR/compras/<OC>/` hasta que el cotizador las baja (`/api/integracion/cotizador/foto`) y avisa `foto-archivada` (se borran); aviso `oc.devolucion` → movimiento `devolucion` en el sitio y el renglón vuelve en camino o se cierra con faltante; los envíos de una OC ya no se reciben en Inventario (manda a Compras). Proceso: `docs/inventario/fotos-devoluciones-29oct.md`; pruebas `backend/tests-1029.sh` (195) |
+ | **Entrada al sitio** (27-oct) | `docs/entrar.html` + `docs/publico/` (public); `backend/acceso.py`; nginx `backend/nginx/drogheda.helgen.online.conf` installed by `backend/nginx/cambiar-entrada.sh` (backup, tests, auto-rollback; `deshacer`) | — | session = signed cookie `hbox_sesion` (30 days; version = hash of the user's htpasswd line, so a password change ends old sessions); login by user or Equipo email, case-insensitive; **no HTTP Basic** (only from `ACCESO_BASIC_IPS`, empty by default — server scripts use 127.0.0.1:8081); unsafe methods only same-origin (Origin/Sec-Fetch-Site); lockout per user+IP (8) and per IP (20) in 15 min; attempts in `/srv/projects/drogheda/acceso/intentos-AAAA-MM.jsonl` (no passwords); public paths: entrada, `/publico/`, `/fonts/`, `helgen.css`, `tema.js`, icon, `/api/{entrar,salir,sesion,salud,incidencias/publica(s)}` |
+ | **Incidencias del sitio** (27-oct) | server `/srv/projects/drogheda/incidencias` (INC-0001.json…, `_errores/`, `_vigia/`); `backend/incidencias.py`; page `docs/tableros/incidencias.md` + `incidencias-tablero.js/.css`; footer «Problemas del sitio» = `docs/js/incidencias.js` (in `overrides/main.html` head and in every standalone page) | everyone reports; `INCIDENCIAS_EDITORES` (leo, gibranlp, adriana, claude) triage; the daily agent through `scripts/agente-api.sh` | rules: `docs/agentes.md`; the agent's runbook: `agentes/agente-diario.md`; vigía `backend/vigia.py` (leo's crontab, minute 7); never put passwords or project data in `publica` notices |
+ | **Standup** (27-oct) | server `/srv/projects/drogheda/standup/AAAA-MM-DD/<user>.json`; `backend/standup.py`; `docs/tableros/standup.md` + `standup-tablero.js/.css`; banner `docs/js/standup.js` | the bot (`claude`) prepares; each person answers; Leo/Adriana see «Equipo» | answers can move the person's own cards (as them); everything else from the answers goes in a lote |
+diff --git a/DESPLIEGUE.md b/DESPLIEGUE.md
+index f41b50d..5b743cc 100644
+--- a/DESPLIEGUE.md
++++ b/DESPLIEGUE.md
+@@ -711,7 +711,7 @@ equipo: `docs/inventario/fotos-devoluciones-29oct.md`.
+ ```bash
+ cd ~/Documents/Claude/Projects/Drogheda/hbox-docs
+ bash backend/tests-1028.sh .              # 61 (eran 58: la foto ahora es obligatoria y la puerta de Inventario cambió)
+-bash backend/tests-1029.sh .              # 153: fotos, problemas, rutas firmadas, oc.devolucion
++bash backend/tests-1029.sh .              # 195: fotos, problemas, rutas firmadas, oc.devolucion, concurrencia
+ ./scripts/deploy.sh                       # sitio + backend; revisa enlaces antes de publicar
+ ssh -t leo@git.helgen.online '
+   python3 -c "import sqlite3;s=sqlite3.connect(\"/srv/projects/drogheda/drogheda.db\");s.backup(sqlite3.connect(\"/srv/projects/drogheda/drogheda-antes-1029.db\"))" &&
+@@ -736,6 +736,22 @@ ssh -t leo@git.helgen.online '
+ - **Rutas nuevas firmadas** (mismo `COTIZADOR_SECRETO`, misma ventana de 5 min, 503 sin secreto):
+   `GET /api/integracion/cotizador/foto?id=` y `POST /api/integracion/cotizador/foto-archivada`; las recepciones traen
+   `foto` y `problema` por renglón. Con sesión: `GET /api/compras/foto?id=` y `POST /api/compras/problema`.
++  La liga que guarda `foto-archivada` solo puede ser `https://drive.google.com/…` o `https://docs.google.com/…` (sin
++  usuario, puerto, `@` ni `\`), y la página siempre abre la foto por `/api/compras/foto?id=`.
++- **Limitación conocida de la firma (se corrige en un contrato posterior):** el HMAC firma solo la hora y el cuerpo,
++  no el método ni la ruta. En un GET el cuerpo va vacío, así que una firma tomada de una consulta firmada sirve para
++  cualquier otra ruta GET firmada (por ejemplo `/foto?id=`) durante sus 5 minutos. Mitiga: HTTPS de punta a punta y
++  el secreto solo en el servicio y en el cotizador; arreglarlo (firmar método + ruta + consulta) cambia el contrato
++  con CAPRI y no entra hoy.
++- **Concurrencia:** cada «Recibir», «Reportar problema», «Ligar» y cada aviso del cotizador toma el candado de
++  escritura de la base (`BEGIN IMMEDIATE`) antes de leer: dos recepciones de la misma OC a la vez se forman y la
++  segunda contesta «Eso ya se recibió» (409); dos copias del mismo aviso, «repetido». Una devolución trae siempre su
++  folio `DEV-…` (sin él, 400) y su movimiento de inventario y su envío de reposición se escriben una sola vez por folio
++  aunque el cotizador reintente. Si una recepción falla a la mitad, borra las fotos que alcanzó a escribir.
++- **Esperas a propósito:** no se acepta un segundo problema en un renglón mientras el cotizador no recoja el primero
++  (su foto archivada o, sin foto, que ya haya salido en una consulta de recepciones), ni se vuelve a recibir un
++  renglón tras «Reponer» mientras la foto de la recepción anterior no se archive. La página lo dice y pide esperar
++  (el cotizador consulta cada 15 min): así nada de lo reportado se tapa antes de llegar a CAPRI.
+ 
+ **Antes de encender la integración, revisa que nginx deje pasar al cotizador.** El cotizador (Apps Script) llama sin
+ cookie y `drogheda.helgen.online.conf` pone `auth_request` en todo el `server`, también en `/api/integracion/`:
+diff --git a/backend/app.py b/backend/app.py
+index e6fe57b..c76f3df 100644
+--- a/backend/app.py
++++ b/backend/app.py
+@@ -1984,13 +1984,27 @@ def inventario_modificar():
+     return jsonify(ok=True, item=t)
+ 
+ 
++class EnvioYaRecibido(Exception):
++    """(29-oct) El envío ya no estaba en camino cuando se iba a registrar su recepción."""
++    def __init__(self, envio_id, por=None, en=None):
++        super().__init__(f"el envío {envio_id} ya se recibió")
++        self.por, self.en = por, en
++
++
+ def _registrar_movimiento(item, tipo, cantidad, motivo, referencia, u, sitio=SITIO_INV_OMISION, destino=None, envio=None):
+     """Escribe el movimiento y recalcula el stock del ítem como suma de todos sus movimientos.
+ 
+     Dos cuentas (23-oct): «delta» mueve el total del ítem (lo que tenemos, esté donde esté, incluido lo que va en
+     camino) y «delta_sitio» mueve lo que hay en «sitio». Un envío no cambia el total: sale del sitio de origen y queda
+     en camino; su recepción lo pone en el destino (si llegó menos, la diferencia baja del total). Un envío desde
+-    ORIGEN_FUERA (compra en camino) sí sube el total desde que se registra y no descuenta de ningún sitio."""
++    ORIGEN_FUERA (compra en camino) sí sube el total desde que se registra y no descuenta de ningún sitio.
++
++    (29-oct) Una recepción relee el envío del disco justo antes de escribir: si ya no está en camino (otra persona u
++    otra petición lo recibió primero) levanta EnvioYaRecibido en vez de contarlo dos veces."""
++    if envio is not None:
++        fresco = _leer_json(_ruta_registro(INV_MOVS(), envio.get("id") or ""))
++        if not isinstance(fresco, dict) or fresco.get("estado") != "en-camino":
++            raise EnvioYaRecibido(envio.get("id"), (fresco or {}).get("recibido_por"), (fresco or {}).get("recibido_en"))
+     actual = _stock_desde_movimientos(item["id"])
+     en_sitio = 0 if sitio == ORIGEN_FUERA else _stock_en_sitio(item["id"], sitio)
+     if tipo == "entrada":
+@@ -2104,7 +2118,10 @@ def inventario_movimiento():
+                 return jsonify(ok=False, error=falta + "Si ese material salió antes de que se contara, en «Sale de» elige "
+                                                        f"«Proveedor o fuera del inventario»; si no, registra primero el conteo físico de {s}."), 409
+             return jsonify(ok=False, error=falta + "Registra primero la entrada o el conteo físico de ese sitio."), 409
+-    m = _registrar_movimiento(item, tipo, cantidad, motivo, referencia, u, sitio=sitio, destino=destino, envio=envio)
++    try:
++        m = _registrar_movimiento(item, tipo, cantidad, motivo, referencia, u, sitio=sitio, destino=destino, envio=envio)
++    except EnvioYaRecibido as e:   # alguien lo recibió entre que se abrió el diálogo y ahora
++        return jsonify(ok=False, error="Ese envío ya se recibió" + (f" ({e.por}, {e.en})." if e.por else ".")), 409
+     return jsonify(ok=True, movimiento=m, item=item), 201
+ 
+ 
+diff --git a/backend/compras.py b/backend/compras.py
+index 1306aaf..3d4ae5c 100644
+--- a/backend/compras.py
++++ b/backend/compras.py
+@@ -73,6 +73,12 @@ RESOLUCIONES = ("Reponer", "Devolver al proveedor", "Cancelar renglón", "Conser
+ FOTO_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")     # contrato §5a: [A-Za-z0-9._-], ≤ 80
+ DIAS_PROBLEMA = 30            # un problema se puede reportar hasta 30 días después de recibir (contrato §4)
+ MIN_COMENTARIO = 3
++DEV_RE = re.compile(r"^DEV-[A-Z0-9][A-Z0-9-]{0,35}$")              # folio de la devolución: DEV-AAAA-NNNN
++HOSTS_DRIVE = ("drive.google.com", "docs.google.com")
++FOTO_LADO_MAX = 6000          # px: el navegador manda 1600; una foto de más de 6000 de lado no es de este flujo
++ESPERA_CANDADO_MS = 25000     # una recepción grande espera a la otra (gunicorn corta a los 30 s)
++ESPERA_COTIZADOR = ("Espera unos minutos: el cotizador recoge lo del centro de mando cada 15 min. "
++                    "Vuelve a intentarlo después.")
+ # Quién recibe el material en cada sitio (el que da «Recibir» y a quien se le abre el pendiente).
+ # Se puede cambiar sin tocar el código con COMPRAS_RESPONSABLES="VER:alan,ZLO:jesush,…".
+ RESPONSABLES = {"VER": "alan", "ZLO": "jesush", "ESE": "miguel", "LZC": "antonio", "QRO": "jesus"}
+@@ -108,6 +114,7 @@ COLUMNAS_NUEVAS = (
+     ("renglones", "problema_en", "TEXT"), ("renglones", "problema_por", "TEXT"),
+     ("renglones", "faltante_aceptado", "REAL DEFAULT 0"),   # lo que compras dio por perdido (devolver/cancelar)
+     ("renglones", "actualizado_en", "TEXT"),                # cambió la recepción, la foto o el problema
++    ("renglones", "problema_entregado_en", "TEXT"),         # el cotizador ya lo vio en recepciones (sin foto)
+ )
+ ESQUEMA_5 = """
+ CREATE INDEX IF NOT EXISTS ix_renglones_foto ON renglones (foto_id);
+@@ -181,13 +188,54 @@ def carpeta_oc(folio):
+ 
+ 
+ def url_archivo_valida(url):
+-    """La liga que guarda el cotizador al archivar: https y de Google (Drive). Nada de javascript: ni otros sitios."""
++    """La liga que guarda el cotizador al archivar: solo https://drive.google.com/… o https://docs.google.com/…
++    Sin usuario, sin puerto, sin «@», sin «\\» ni caracteres de control (un navegador podría leer otro host)."""
++    if not isinstance(url, str) or not url or len(url) > 500 or "@" in url or "\\" in url:
++        return False
++    if any(ord(ch) < 0x21 or ord(ch) == 0x7f for ch in url):
++        return False
+     try:
+         u = urlsplit(url)
++        puerto = u.port
+     except ValueError:
+         return False
+-    host = (u.hostname or "").lower()
+-    return u.scheme == "https" and (host == "google.com" or host.endswith(".google.com")) and len(url) <= 500
++    return (u.scheme == "https" and u.username is None and u.password is None and puerto is None
++            and u.netloc.lower() in HOSTS_DRIVE)
++
++
++def _error_jpeg(b):
++    """None si los bytes parecen un JPEG completo; si no, por qué. Barato: SOI al principio, EOI al final y un
++    segmento SOFn con medidas de 1 a FOTO_LADO_MAX px antes de los datos (SOS)."""
++    if len(b) < 128 or b[:3] != b"\xff\xd8\xff":
++        return "no es JPG"
++    if b"\xff\xd9" not in b[-64:]:
++        return "está incompleta (se cortó al subir)"
++    i, n = 2, len(b)
++    while i + 4 <= n:
++        if b[i] != 0xFF:
++            return "está dañada"
++        m = b[i + 1]
++        if m == 0xFF:                                   # relleno entre marcadores
++            i += 1
++            continue
++        if m == 0x01 or 0xD0 <= m <= 0xD7:              # marcadores sin longitud
++            i += 2
++            continue
++        largo = int.from_bytes(b[i + 2:i + 4], "big")
++        if largo < 2 or i + 2 + largo > n:
++            return "está dañada"
++        if m in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
++            if largo < 7:
++                return "está dañada"
++            alto = int.from_bytes(b[i + 5:i + 7], "big")
++            ancho = int.from_bytes(b[i + 7:i + 9], "big")
++            if not (1 <= alto <= FOTO_LADO_MAX and 1 <= ancho <= FOTO_LADO_MAX):
++                return f"mide {ancho}×{alto} px (máximo {FOTO_LADO_MAX})"
++            return None
++        if m == 0xDA:                                   # empiezan los datos sin haber dicho las medidas
++            return "está dañada"
++        i += 2 + largo
++    return "está dañada"
+ 
+ 
+ class Compras:
+@@ -206,6 +254,15 @@ class Compras:
+         c.execute("PRAGMA foreign_keys=ON")
+         return c
+ 
++    @staticmethod
++    def candado(c, espera_ms=ESPERA_CANDADO_MS):
++        """BEGIN IMMEDIATE: toma el candado de escritura de la base ANTES de leer. Con dos trabajadores de gunicorn,
++        dos «Recibir» (o dos avisos repetidos) a la vez se forman: el segundo espera y luego ve lo que hizo el
++        primero. Sin esto los dos validaban con la misma foto de la base y el inventario (JSON) contaba doble."""
++        c.execute(f"PRAGMA busy_timeout={int(espera_ms)}")
++        if not c.in_transaction:
++            c.execute("BEGIN IMMEDIATE")
++
+     def arrancar(self):
+         os.makedirs(os.path.dirname(self.ruta) or ".", exist_ok=True)
+         with self.con() as c:
+@@ -330,7 +387,7 @@ class Compras:
+                 hechos.append(env)
+         return hechos
+ 
+-    def crear_envio(self, c, oc, r, quien, cantidad=None, motivo=None):
++    def crear_envio(self, c, oc, r, quien, cantidad=None, motivo=None, devolucion=None):
+         """Un envío «en camino» desde fuera del inventario por lo que falta de ese renglón (29-oct: lo que falta, no lo
+         pedido: tras «Reponer» un renglón vuelve a venir solo por lo devuelto)."""
+         it = self.item_por_codigo(r["item_codigo"])
+@@ -353,6 +410,8 @@ class Compras:
+                             + (f", guía {oc['guia']}" if oc["guia"] else ""))
+         m = self.g["_registrar_movimiento"](it, "envio", cant, motivo[:200], oc["folio"], quien,
+                                             sitio=self.g["ORIGEN_FUERA"], destino=oc["sitio_portal"])
++        if devolucion:                         # reposición de una DEV: se marca para no crearla dos veces
++            self.marcar_dev(m, devolucion)
+         c.execute("UPDATE renglones SET envio_id=?, item_id=?, nota=NULL WHERE oc_folio=? AND n=?",
+                   (m["id"], it["id"], oc["folio"], r["n"]))
+         return m["id"]
+@@ -383,7 +442,7 @@ class Compras:
+                 continue
+             # se suma: tras «Reponer» el renglón ya traía lo que se quedó de la primera vez
+             c.execute("UPDATE renglones SET recibido=?, recibido_en=?, recibido_por=?, actualizado_en=? "
+-                      "WHERE oc_folio=? AND n=?",
++                      "WHERE oc_folio=? AND n=? AND recibido_en IS NULL",      # si alguien lo recibió mientras, no
+                       (_num(r["recibido"]) + _num(env.get("recibido"), 0), env.get("recibido_en") or self.g["ahora"](),
+                        env.get("recibido_por") or "", self.g["ahora"](), r["oc_folio"], r["n"]))
+             tocadas.add(r["oc_folio"])
+@@ -460,6 +519,9 @@ class Compras:
+         if b[:3] != b"\xff\xd8\xff":
+             return None, (f"{que}: la foto tiene que ser JPG. Si tu teléfono la guarda en HEIC, tómala con "
+                           "«Tomar foto» (la cámara la entrega en JPG).")
++        e = _error_jpeg(b)
++        if e:
++            return None, f"{que}: la foto {e}. Vuelve a tomarla."
+         return b, None
+ 
+     def nuevo_foto_id(self, c, folio, n, problema=False):
+@@ -477,9 +539,16 @@ class Compras:
+         d = self.dir_fotos(folio)
+         os.makedirs(d, exist_ok=True)
+         tmp = os.path.join(d, ".tmp-" + uuid.uuid4().hex[:8] + ".jpg")
+-        with open(tmp, "wb") as f:
+-            f.write(datos)
+-        os.replace(tmp, os.path.join(d, fid + ".jpg"))
++        try:
++            with open(tmp, "wb") as f:
++                f.write(datos)
++            os.replace(tmp, os.path.join(d, fid + ".jpg"))
++        except OSError:
++            try:
++                os.remove(tmp)
++            except OSError:
++                pass
++            raise
+ 
+     def renglon_de_foto(self, c, fid):
+         """(renglón, clase) de una foto por su id; clase = 'foto' o 'problema_foto' (el prefijo de sus columnas)."""
+@@ -523,31 +592,61 @@ class Compras:
+                 return None, e
+         return {"tipo": tipo, "cantidad": q, "comentario": com, "foto": foto}, None
+ 
+-    def anotar_problema(self, c, folio, r, p, quien, ahora):
+-        """Guarda la foto del problema y sus columnas. La foto anterior, si no se había archivado, se queda en disco."""
+-        pfid = None
+-        if p["foto"]:
+-            pfid = self.nuevo_foto_id(c, folio, r["n"], problema=True)
+-            self.guardar_foto(folio, pfid, p["foto"])
++    def anotar_problema(self, c, folio, r, p, quien, ahora, pfid=None):
++        """Columnas del problema (su foto ya se escribió con escribir_foto). problema_entregado_en vuelve a NULL:
++        el cotizador todavía no lo ha visto."""
+         c.execute("UPDATE renglones SET problema_tipo=?, problema_cantidad=?, problema_comentario=?, "
+                   "problema_foto_id=?, problema_foto_archivada=0, problema_foto_url=NULL, problema_en=?, "
+-                  "problema_por=?, actualizado_en=? WHERE oc_folio=? AND n=?",
++                  "problema_por=?, problema_entregado_en=NULL, actualizado_en=? WHERE oc_folio=? AND n=?",
+                   (p["tipo"], p["cantidad"], p["comentario"], pfid, ahora, quien, ahora, folio, r["n"]))
+-        return pfid
++
++    def escribir_foto(self, c, folio, n, datos, escritas, problema=False):
++        """Escribe la foto y anota su ruta en «escritas», para borrarla si la operación falla después."""
++        fid = self.nuevo_foto_id(c, folio, n, problema=problema)
++        self.guardar_foto(folio, fid, datos)
++        escritas.append(os.path.join(self.dir_fotos(folio), fid + ".jpg"))
++        return fid
++
++    @staticmethod
++    def borrar_fotos(escritas):
++        for ruta in escritas:
++            try:
++                os.remove(ruta)
++            except OSError:
++                pass
++
++    @staticmethod
++    def problema_en_espera(r):
++        """Un problema que el cotizador todavía no recoge: su foto sin archivar o, sin foto (Faltante), sin haber
++        salido todavía en una consulta de recepciones. Mientras tanto no se acepta otro en ese renglón: el contrato
++        tiene UN problema por renglón y uno nuevo taparía al anterior antes de que se convierta en su DEV."""
++        if not r["problema_tipo"]:
++            return False
++        if r["problema_foto_id"]:
++            return not r["problema_foto_archivada"]
++        return not r["problema_entregado_en"]
++
++    @staticmethod
++    def foto_en_espera(r):
++        """La foto de la recepción anterior que el cotizador todavía no se lleva (tras «Reponer» el renglón se puede
++        volver a recibir, y la foto nueva taparía a la anterior)."""
++        return bool(r["foto_id"]) and not r["foto_archivada"]
+ 
+     # ---------------------------------------------------------------- recibir desde el centro de mando
+     def recibir(self, c, folio, lineas, quien):
+-        """lineas = [{n, recibido, foto, problema}]. Primero se revisa TODO (cantidades, fotos, problemas) y si algo
+-        falla no se escribe nada; luego se reciben por el inventario los renglones que tienen envío y los demás se
+-        anotan aquí (así la requisición se puede cerrar igual). Un renglón en 0 sin problema se queda por recibir.
+-        Devuelve (hechos, errores, sin_llegar)."""
++        """lineas = [{n, recibido, foto, problema}]. Toma el candado de la base primero (dos «Recibir» a la vez se
++        forman); luego revisa TODO (cantidades, fotos, problemas) y si algo falla no escribe nada; luego escribe las
++        fotos, recibe por el inventario lo que tiene envío (releyendo el envío: tiene que seguir en camino) y anota los
++        renglones. Si algo falla después de escribir fotos, las borra (no quedan huérfanas) y la base se deshace.
++        Un renglón en 0 sin problema se queda por recibir. Devuelve (hechos, errores, sin_llegar, código HTTP)."""
+         g = self.g
++        self.candado(c)
+         oc = c.execute("SELECT * FROM ordenes WHERE folio=?", (folio,)).fetchone()
+         if not oc:
+-            return [], [f"No existe {folio}."], []
++            return [], [f"No existe {folio}."], [], 404
+         if oc["estado"] == "cancelada":
+-            return [], [f"{folio} está cancelada en el cotizador."], []
+-        plan, errores, sin_llegar, vistos = [], [], [], set()
++            return [], [f"{folio} está cancelada en el cotizador."], [], 409
++        plan, errores, sin_llegar, ya, vistos, espera = [], [], [], [], set(), False
+         for ln in lineas:
+             if not isinstance(ln, dict):
+                 continue
+@@ -560,7 +659,8 @@ class Compras:
+                 errores.append(f"El renglón {n} no existe en {folio}.")
+                 continue
+             if r["recibido_en"]:
+-                continue                       # ya se había recibido: no se recibe dos veces
++                ya.append(r)                   # ya se había recibido: no se recibe dos veces
++                continue
+             falta = self.pendiente(r)
+             cant = _num(ln.get("recibido"), -1)
+             if cant < 0 or cant > falta + 1e-9:
+@@ -574,8 +674,17 @@ class Compras:
+             if cant == 0 and not prob:
+                 sin_llegar.append(n)           # todavía no llega: sigue en camino, sin foto
+                 continue
++            if prob and self.problema_en_espera(r):
++                errores.append(f"Renglón {n}: ya tiene un problema reportado que el cotizador todavía no recoge.")
++                espera = True
++                continue
+             foto = None
+             if cant > 0:
++                if self.foto_en_espera(r):
++                    errores.append(f"Renglón {n}: el cotizador todavía no se lleva la foto de la recepción anterior "
++                                   "de este renglón.")
++                    espera = True
++                    continue
+                 foto, e = self.leer_foto(ln.get("foto"), f"Renglón {n} ({r['descripcion'] or 'sin descripción'})")
+                 if e:
+                     errores.append(e)
+@@ -595,33 +704,49 @@ class Compras:
+                 env = None
+             plan.append((r, cant, foto, prob, env, it, entero))
+         if errores:
+-            return [], errores, []
++            return [], errores + ([ESPERA_COTIZADOR] if espera else []), [], (409 if espera else 400)
+         if not plan:
++            if ya:
++                quien_ya = ", ".join(sorted({f"{r['recibido_por'] or '—'} ({str(r['recibido_en'])[11:16]})" for r in ya}))
++                return [], [f"Eso ya se recibió: lo registró {quien_ya}. Recarga la página para verlo."], [], 409
+             return [], ["No anotaste nada que haya llegado. Si no llegó nada, no hay que recibir; si falta material "
+-                        "que ya debía llegar, repórtalo con «Reportar problema» → Faltante."], sin_llegar
+-        hechos, problemas = [], []
+-        for r, cant, foto, prob, env, it, entero in plan:
+-            n, ahora = r["n"], g["ahora"]()
+-            if foto:
+-                fid = self.nuevo_foto_id(c, folio, n)
+-                self.guardar_foto(folio, fid, foto)
+-                c.execute("UPDATE renglones SET foto_id=?, foto_archivada=0, foto_url=NULL WHERE oc_folio=? AND n=?",
+-                          (fid, folio, n))
+-            if env:
+-                g["_registrar_movimiento"](it, "recepcion", entero, f"llegó la compra {folio}"[:200], folio, quien,
+-                                           sitio=env.get("destino"), envio=env)
+-            c.execute("UPDATE renglones SET recibido=?, recibido_en=?, recibido_por=?, actualizado_en=? "
+-                      "WHERE oc_folio=? AND n=?", (_num(r["recibido"]) + cant, ahora, quien, ahora, folio, n))
+-            if prob:
+-                self.anotar_problema(c, folio, r, prob, quien, ahora)
+-                problemas.append(f"renglón {n} ({r['descripcion'] or '—'}) — {prob['tipo']} {prob['cantidad']:g}: "
+-                                 f"«{prob['comentario'][:120]}»")
+-            hechos.append(n)
++                        "que ya debía llegar, repórtalo con «Reportar problema» → Faltante."], sin_llegar, 400
++        hechos, problemas, escritas = [], [], []
++        try:
++            # 1) las fotos de todos los renglones
++            fotos = {}
++            for r, cant, foto, prob, env, it, entero in plan:
++                fotos[r["n"]] = (self.escribir_foto(c, folio, r["n"], foto, escritas) if foto else None,
++                                 self.escribir_foto(c, folio, r["n"], prob["foto"], escritas, problema=True)
++                                 if prob and prob["foto"] else None)
++            # 2) inventario y renglones
++            for r, cant, foto, prob, env, it, entero in plan:
++                n, ahora = r["n"], g["ahora"]()
++                fid, pfid = fotos[n]
++                if env:
++                    fresco = self.envio(env["id"])     # releído justo antes: tiene que seguir en camino
++                    if not fresco or fresco.get("estado") != "en-camino":
++                        raise RuntimeError(f"El envío del renglón {n} ya se había recibido.")
++                    g["_registrar_movimiento"](it, "recepcion", entero, f"llegó la compra {folio}"[:200], folio, quien,
++                                               sitio=fresco.get("destino"), envio=fresco)
++                if fid:
++                    c.execute("UPDATE renglones SET foto_id=?, foto_archivada=0, foto_url=NULL WHERE oc_folio=? AND n=?",
++                              (fid, folio, n))
++                c.execute("UPDATE renglones SET recibido=?, recibido_en=?, recibido_por=?, actualizado_en=? "
++                          "WHERE oc_folio=? AND n=?", (_num(r["recibido"]) + cant, ahora, quien, ahora, folio, n))
++                if prob:
++                    self.anotar_problema(c, folio, r, prob, quien, ahora, pfid)
++                    problemas.append(f"renglón {n} ({r['descripcion'] or '—'}) — {prob['tipo']} {prob['cantidad']:g}: "
++                                     f"«{prob['comentario'][:120]}»")
++                hechos.append(n)
++        except Exception:
++            self.borrar_fotos(escritas)        # la base se deshace sola (with); las fotos no
++            raise
+         if problemas:
+             self.nota_pendiente(oc["tarea_id"], ("problema al recibir: " + "; ".join(problemas)
+                                                  + ". Compras lo resuelve en el cotizador.")[:600], quien)
+         self.cerrar_si_llego_todo(c, folio)
+-        return hechos, [], sin_llegar
++        return hechos, [], sin_llegar, 200
+ 
+     # ---------------------------------------------------------------- devoluciones (contrato §5d)
+     def recalcular_estado(self, c, folio):
+@@ -645,10 +770,26 @@ class Compras:
+             c.execute("UPDATE ordenes SET estado=?, actualizado_en=? WHERE folio=?", (estado, self.g["ahora"](), folio))
+         return estado
+ 
++    def marcar_dev(self, m, dev):
++        """Anota en el movimiento (JSON del inventario) de qué devolución salió."""
++        m["devolucion"] = dev
++        self.g["_escribir_json"](self.g["_ruta_registro"](self.g["INV_MOVS"](), m["id"]), m)
++
++    def movimiento_de_dev(self, dev, tipo):
++        """El movimiento de inventario que ya escribió esa DEV, si lo hay. El inventario vive en JSON, fuera de la
++        transacción de la base: si un aviso falló después de escribirlo y el cotizador lo reintenta, no se repite."""
++        for m in self.g["_listar_json"](self.g["INV_MOVS"]()):
++            if m.get("devolucion") == dev and m.get("tipo") == tipo:
++                return m
++        return None
++
+     def sacar_devolucion(self, r, oc, sale, dev, tipo, res, quien):
+         """Movimiento «devolucion» en el sitio de entrega: sale del sitio y del total. Nunca deja el sitio en negativo.
+-        Devuelve (movimiento_id|None, cuánto salió, aviso)."""
++        Una sola vez por DEV. Devuelve (movimiento_id|None, cuánto salió, aviso)."""
+         g = self.g
++        previo = self.movimiento_de_dev(dev, "devolucion")
++        if previo:
++            return previo["id"], _num(previo.get("cantidad")), f"ya se había descontado ({previo['id']})"
+         it = (g["_leer_json"](g["_ruta_registro"](g["INV_ITEMS"](), r["item_id"])) if r["item_id"] else None) \
+             or self.item_por_codigo(r["item_codigo"])
+         if not it:
+@@ -663,6 +804,7 @@ class Compras:
+             return None, 0, f"en {self.codigo(sitio)} ya no había {it.get('codigo')} que descontar"
+         m = g["_registrar_movimiento"](it, "devolucion", sale_i, f"devolución {dev} ({tipo}): {res}"[:200],
+                                        oc["folio"], quien, sitio=sitio)
++        self.marcar_dev(m, dev)
+         aviso = "" if sale_i == entero else f"en {self.codigo(sitio)} solo había {hay}: se descontaron {sale_i}"
+         return m["id"], sale_i, aviso
+ 
+@@ -680,7 +822,11 @@ class Compras:
+             return None, "La devolución trae una cantidad inválida."
+         if not res:
+             return None, "Resolución inválida: usa " + ", ".join(RESOLUCIONES) + "."
+-        return {"folio": g["_texto"](dv.get("folio"), 40).upper(), "n": n, "cantidad": q,
++        folio = g["_texto"](dv.get("folio"), 40).upper()
++        if not DEV_RE.match(folio):          # el folio es lo que hace idempotente la devolución: sin él no se aplica
++            return None, "Falta el folio de la devolución (DEV-AAAA-NNNN)." if not folio else \
++                f"Folio de devolución inválido: {folio} (va como DEV-AAAA-NNNN)."
++        return {"folio": folio, "n": n, "cantidad": q,
+                 "tipo": _de_lista(dv.get("tipo"), TIPOS_PROBLEMA) or "Otro", "resolucion": res,
+                 "nota": g["_texto"](dv.get("nota"), 300)}, None
+ 
+@@ -696,9 +842,10 @@ class Compras:
+         r = c.execute("SELECT * FROM renglones WHERE oc_folio=? AND n=?", (folio, dv["n"])).fetchone()
+         if not r:
+             return None, f"El renglón {dv['n']} no existe en {folio}."
+-        if dv["folio"] and c.execute("SELECT 1 FROM devoluciones WHERE folio=?", (dv["folio"],)).fetchone():
++        if c.execute("SELECT 1 FROM devoluciones WHERE folio=?", (dv["folio"],)).fetchone():
+             return {"repetida": True, "folio": dv["folio"]}, None
+-        q, tipo, res, dev = dv["cantidad"], dv["tipo"], dv["resolucion"], dv["folio"] or "DEV"
++        q, tipo, res, dev = dv["cantidad"], dv["tipo"], dv["resolucion"], dv["folio"]
++        cancelada = oc["estado"] == "cancelada"
+         pedido, neto, falt = _num(r["cantidad"]), _num(r["recibido"]), _num(r["faltante_aceptado"])
+         ahora = g["ahora"]()
+         mov_id = env_id = None
+@@ -717,16 +864,25 @@ class Compras:
+                 efecto = f"salieron {salio:g} {unidad} del inventario de {self.codigo(oc['sitio_portal'])}".rstrip()
+             neto2 = neto - sale            # el renglón deja de contar lo devuelto
+             hueco = max(0.0, pedido - neto2 - falt)
+-            if res == "Reponer":
++            if res == "Reponer" and cancelada:
++                # la OC ya no existe en el cotizador: nadie podría recibir una reposición. Se descuenta lo devuelto y
++                # el renglón se queda como está (cerrado); si el proveedor sí repone, compras hace otra orden.
++                c.execute("UPDATE renglones SET recibido=? WHERE oc_folio=? AND n=?", (neto2, folio, r["n"]))
++                avisos.append(f"{folio} está cancelada en el cotizador: no se reabre el renglón ni se pone nada en "
++                              "camino; si el proveedor repone, compras tiene que hacer otra orden")
++            elif res == "Reponer":
+                 vuelve = min(q, hueco)
+                 env = self.envio(r["envio_id"])
+                 ya_viene = env and env.get("estado") == "en-camino"
++                previo = None if ya_viene else self.movimiento_de_dev(dev, "envio")
++                if previo and previo.get("estado") == "en-camino":
++                    ya_viene, env_id = True, previo["id"]          # un reintento: el envío de esa DEV ya existe
+                 c.execute("UPDATE renglones SET recibido=?, recibido_en=NULL, envio_id=? WHERE oc_folio=? AND n=?",
+-                          (neto2, r["envio_id"] if ya_viene else None, folio, r["n"]))
++                          (neto2, (env_id or r["envio_id"]) if ya_viene else None, folio, r["n"]))
+                 if vuelve > 0 and not ya_viene and r["item_codigo"]:
+                     r2 = c.execute("SELECT * FROM renglones WHERE oc_folio=? AND n=?", (folio, r["n"])).fetchone()
+                     env_id = self.crear_envio(c, oc, r2, quien, cantidad=vuelve,
+-                                              motivo=f"reposición de {dev} ({folio})")
++                                              motivo=f"reposición de {dev} ({folio})", devolucion=dev)
+                 efecto = ((efecto + "; ") if efecto else "") + f"el renglón vuelve a «en camino» por {vuelve:g} {unidad}".rstrip()
+             else:
+                 acepta = min(q, hueco)
+@@ -752,7 +908,7 @@ class Compras:
+         despues = self.recalcular_estado(c, folio)
+         linea = (f"{dev} · renglón {r['n']} ({r['descripcion'] or '—'}), {tipo} {q:g}: compras resolvió «{res}» — "
+                  + "; ".join([efecto] + avisos) + (f". Nota: {dv['nota']}" if dv["nota"] else ""))[:600]
+-        if res == "Reponer" and despues != "recibida":
++        if res == "Reponer" and despues != "recibida" and not cancelada:
+             self.nota_pendiente(oc["tarea_id"], linea, quien, estado="por-hacer")
+         elif despues == "recibida" and antes != "recibida":
+             self.nota_pendiente(oc["tarea_id"], linea + ". Ya no se espera nada de esta orden.", quien, estado="hecho")
+@@ -872,6 +1028,8 @@ class Compras:
+                 r["problema"] = self.problema_json(f)
+                 r["devoluciones"] = devs.get(f["n"], [])
+                 r["problema_reportable"] = bool(f["recibido_en"]) and f["recibido_en"] >= limite
++                r["problema_en_espera"] = self.problema_en_espera(f)      # no se acepta otro hasta que lo recojan
++                r["recepcion_en_espera"] = not f["recibido_en"] and self.foto_en_espera(f)
+                 rs.append(r)
+             d["renglones"] = rs
+             d["por_ligar"] = [r["n"] for r in rs if not r["item_codigo"]]
+@@ -954,6 +1112,7 @@ def registrar(app, g):
+             if error:
+                 return jsonify(ok=False, error=error), 400
+         with C.con() as c:
++            C.candado(c)            # antes de buscar el evento: dos copias del mismo aviso a la vez se forman
+             if c.execute("SELECT 1 FROM eventos WHERE evento_id=?", (evento_id,)).fetchone():
+                 return jsonify(ok=True, repetido=True)
+             if dev and not prueba:
+@@ -1051,6 +1210,11 @@ def registrar(app, g):
+                     continue
+                 rs = c.execute("SELECT * FROM renglones WHERE oc_folio=? ORDER BY n", (f,)).fetchall()
+                 con_algo = sorted((r for r in rs if r["recibido_en"]), key=lambda r: r["recibido_en"])
++                for r in rs:   # un problema sin foto se da por recogido cuando sale aquí (ver problema_en_espera)
++                    if r["problema_tipo"] and not r["problema_entregado_en"]:
++                        c.execute("UPDATE renglones SET problema_entregado_en=? WHERE oc_folio=? AND n=? "
++                                  "AND problema_entregado_en IS NULL AND problema_en IS ?",
++                                  (hasta, r["oc_folio"], r["n"], r["problema_en"]))
+                 out.append({"oc_folio": f, "req_folio": oc["req_folio"], "sitio": oc["sitio"],
+                             "completa": all(C.cerrado(r) for r in rs),
+                             "recibio": (con_algo[-1]["recibido_por"] if con_algo else ""),
+@@ -1159,6 +1323,7 @@ def registrar(app, g):
+         if not C.item_por_codigo(codigo):
+             return jsonify(ok=False, error=f"No existe el ítem {codigo} en el inventario."), 404
+         with C.con() as c:
++            C.candado(c)
+             oc = c.execute("SELECT * FROM ordenes WHERE folio=?", (folio,)).fetchone()
+             r = c.execute("SELECT * FROM renglones WHERE oc_folio=? AND n=?", (folio, n)).fetchone()
+             if not oc or not r:
+@@ -1187,11 +1352,20 @@ def registrar(app, g):
+         lineas = d.get("renglones")
+         if not isinstance(lineas, list) or not lineas:
+             return jsonify(ok=False, error="Dime qué llegó: al menos un renglón."), 400
+-        with C.con() as c:
+-            hechos, errores, sin_llegar = C.recibir(c, folio, lineas, u)
+-            if errores:
+-                return jsonify(ok=False, error=" ".join(errores), errores=errores), 400
+-            ficha = C.ficha(c, c.execute("SELECT * FROM ordenes WHERE folio=?", (folio,)).fetchone())
++        try:
++            with C.con() as c:
++                hechos, errores, sin_llegar, codigo = C.recibir(c, folio, lineas, u)
++                if errores:
++                    return jsonify(ok=False, error=" ".join(errores), errores=errores), codigo
++                ficha = C.ficha(c, c.execute("SELECT * FROM ordenes WHERE folio=?", (folio,)).fetchone())
++        except sqlite3.OperationalError as e:      # el candado no se soltó a tiempo
++            app.logger.warning("compras.py: recibir %s: %s", folio, e)
++            return jsonify(ok=False, error="El centro de mando está guardando otra recepción. Espera unos segundos "
++                                           "y vuelve a dar «Recibir»."), 503
++        except Exception:                          # noqa: BLE001 — las fotos que escribió ya se borraron
++            app.logger.exception("compras.py: recibir %s falló", folio)
++            return jsonify(ok=False, error="No se pudo guardar la recepción. Vuelve a intentarlo; si sigue, "
++                                           "avisa a Leo."), 500
+         return jsonify(ok=True, orden=ficha, recibidos=hechos, sin_llegar=sin_llegar, avisos=[])
+ 
+     @app.post("/api/compras/problema")
+@@ -1206,6 +1380,7 @@ def registrar(app, g):
+         folio = g["_texto"](d.get("oc"), 40).upper()
+         n = g["_entero"](d.get("n"), -1)
+         with C.con() as c:
++            C.candado(c)
+             oc = c.execute("SELECT * FROM ordenes WHERE folio=?", (folio,)).fetchone()
+             r = c.execute("SELECT * FROM renglones WHERE oc_folio=? AND n=?", (folio, n)).fetchone()
+             if not oc or not r or oc["prueba"]:
+@@ -1216,13 +1391,21 @@ def registrar(app, g):
+             if r["recibido_en"] < limite.isoformat():
+                 return jsonify(ok=False, error=f"Se recibió hace más de {DIAS_PROBLEMA} días: avísale a compras "
+                                                "directamente."), 409
+-            if r["problema_foto_id"] and not r["problema_foto_archivada"]:
++            if C.problema_en_espera(r):
+                 return jsonify(ok=False, error="Ese renglón ya tiene un problema reportado que el cotizador todavía no "
+-                                               "recoge. Espera unos minutos y vuelve a intentar."), 409
++                                               "recoge. " + ESPERA_COTIZADOR), 409
+             p, e = C.leer_problema(d.get("problema"), r, 0, C.pendiente(r), f"Renglón {n}")
+             if e or not p:
+                 return jsonify(ok=False, error=e or "Dime qué pasó con ese renglón."), 400
+-            C.anotar_problema(c, folio, r, p, u, g["ahora"]())
++            escritas = []
++            try:
++                pfid = C.escribir_foto(c, folio, n, p["foto"], escritas, problema=True) if p["foto"] else None
++                C.anotar_problema(c, folio, r, p, u, g["ahora"](), pfid)
++            except Exception:                      # noqa: BLE001
++                C.borrar_fotos(escritas)
++                app.logger.exception("compras.py: problema %s r%s falló", folio, n)
++                c.rollback()
++                return jsonify(ok=False, error="No se pudo guardar el problema. Vuelve a intentarlo."), 500
+             C.nota_pendiente(oc["tarea_id"], (f"problema reportado después de recibir: renglón {n} "
+                                               f"({r['descripcion'] or '—'}) — {p['tipo']} {p['cantidad']:g}: "
+                                               f"«{p['comentario'][:200]}». Compras lo resuelve en el cotizador.")[:600], u)
+diff --git a/backend/tests-1029.sh b/backend/tests-1029.sh
+index 5126bff..f4758ee 100644
+--- a/backend/tests-1029.sh
++++ b/backend/tests-1029.sh
+@@ -79,6 +79,15 @@ print(hmac.new(sys.argv[1].encode(), sys.argv[3].encode() + b"\n" + sys.argv[2].
+ spost() { local t f; t=$(firma_t "${4:-0}"); f=$(firma_f "$2" "$t" "${3:-$SEC}")
+           curl -s -H "Content-Type: application/json" -H "X-Hbox-Tiempo: $t" -H "X-Hbox-Firma: sha256=$f" -d "$2" "$U$1"; }
+ post()  { spost /api/integracion/cotizador/evento "$1"; }
++# postc <cuerpo> → solo el código HTTP del aviso (para los que deben fallar con 500 a propósito)
++postc() { local t f; t=$(firma_t 0); f=$(firma_f "$1" "$t")
++          curl -s -o /dev/null -w '%{http_code}' -H "Content-Type: application/json" -H "X-Hbox-Tiempo: $t" \
++               -H "X-Hbox-Firma: sha256=$f" -d "$1" "$U/api/integracion/cotizador/evento"; }
++# archivar <OC> → el cotizador «se lleva» a Drive todas las fotos sin archivar de esa OC
++archivar() { local id; for id in $($PY -c "import sqlite3;c=sqlite3.connect('$T/drogheda.db')
++for a, b in c.execute(\"SELECT CASE WHEN foto_archivada=0 THEN foto_id END, CASE WHEN problema_foto_archivada=0 THEN problema_foto_id END FROM renglones WHERE oc_folio='$1'\"):
++    print(*(x for x in (a, b) if x))"); do
++  spost /api/integracion/cotizador/foto-archivada '{"id":"'$id'","url":"'$DRIVE'"}' > /dev/null; done; }
+ sget()  { local t f; t=$(firma_t "${3:-0}"); f=$(firma_f "" "$t" "${2:-$SEC}")
+           curl -s -H "X-Hbox-Tiempo: $t" -H "X-Hbox-Firma: sha256=$f" "${@:4}" "$U$1"; }
+ 
+@@ -114,6 +123,11 @@ R="$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4}]}' $U/
+ check "sin foto: 400 y dice cuál" 'Renglón 1 (Soporte para RTG): falta la foto' "$R"
+ check "…y no se recibió nada" 'SOP-RTG:sitio={}:camino={"timsa":4}' "$(inv)"
+ check "una foto PNG no sirve (tiene que ser JPG)" 'tiene que ser JPG' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4,"foto":{"datos":"'$PNG'","mime":"image/png"}}]}' $U/api/compras/recibir)"
++FOTO_CORTA=$(printf '%s' "$FOTO" | $PY -c "import sys,base64;b=base64.b64decode(sys.stdin.read());print(base64.b64encode(b[:-40]).decode())")
++FOTO_ENORME=$(printf '%s' "$FOTO" | $PY -c "
++import sys,base64;b=bytearray(base64.b64decode(sys.stdin.read()));i=b.index(b'\xff\xc0');b[i+5:i+7]=(7000).to_bytes(2,'big');print(base64.b64encode(bytes(b)).decode())")
++check "JPEG cortado (sin el final): no" 'incompleta' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4,"foto":{"datos":"'$FOTO_CORTA'"}}]}' $U/api/compras/recibir)"
++check "JPEG que dice medir 7000 px: no" 'mide 8×7000 px' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4,"foto":{"datos":"'$FOTO_ENORME'"}}]}' $U/api/compras/recibir)"
+ check "base64 dañado" 'llegó dañada' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4,"foto":{"datos":"@@no-es-base64@@"}}]}' $U/api/compras/recibir)"
+ R="$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4,'"$F"'},{"n":2,"recibido":80}]}' $U/api/compras/recibir)"
+ check "todo o nada: un renglón sin foto detiene la recepción" 'Renglón 2' "$R"
+@@ -139,7 +153,7 @@ check "el pendiente anota el problema" 'problema al recibir: rengl' "$(tarea t-o
+ check "…con lo que pasó" 'Rollo aplastado' "$(tarea t-oc-oc-2026-0012)"
+ check "la página Compras trae foto y problema del renglón" '"tipo":"Dañado"' "$(as leo "$U/api/compras" | tr -d ' ')"
+ check "…y una foto que se puede ver" '"archivada":false' "$(as leo "$U/api/compras" | tr -d ' ')"
+-check "un renglón ya recibido no se vuelve a recibir" 'No anotaste nada' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4,'"$F"'}]}' $U/api/compras/recibir)"
++check "un renglón ya recibido no se vuelve a recibir (409, dice quién)" 'Eso ya se recibió: lo registró jesush' "$(as jesush -d '{"oc":"OC-2026-0012","renglones":[{"n":1,"recibido":4,'"$F"'}]}' $U/api/compras/recibir)"
+ 
+ sleep 1.1   # que la primera consulta del cotizador caiga en otro segundo que la recepción
+ echo
+@@ -201,6 +215,10 @@ check "sin firma: 401" '401' "$(curl -s -o /dev/null -w '%{http_code}' -H 'Conte
+ check "url que no es https de Google: 400" 'https de Google Drive' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"'$F1'","url":"http://drive.google.com/x"}')"
+ check "javascript: no" 'https de Google Drive' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"'$F1'","url":"javascript:alert(1)"}')"
+ check "otro dominio no" 'https de Google Drive' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"'$F1'","url":"https://drive.google.com.malo.example/x"}')"
++check "«\\@» (el navegador iría a otro host): no" 'https de Google Drive' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"'$F1'","url":"https://malo.example\\@drive.google.com/x"}')"
++check "con usuario: no" 'https de Google Drive' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"'$F1'","url":"https://u@drive.google.com/x"}')"
++check "con puerto: no" 'https de Google Drive' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"'$F1'","url":"https://drive.google.com:8443/x"}')"
++check "otro *.google.com (www): no" 'https de Google Drive' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"'$F1'","url":"https://www.google.com/x"}')"
+ check "id inválido: 400" 'id de foto inv' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"../x","url":"'$DRIVE'"}')"
+ check "id que no existe: 404" 'No existe esa foto' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"OC-9-r1-20261029T000000","url":"'$DRIVE'"}')"
+ check "el archivo está antes de archivar" "$F1.jpg" "$(ls $T/adjuntos/compras/OC-2026-0012)"
+@@ -220,7 +238,7 @@ import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_f
+ f=o['renglones'][0]['foto'];print('archivada=%s url=%s' % (f['archivada'], f['url']))")"
+ spost /api/integracion/cotizador/foto-archivada '{"id":"'$FP2'","url":"'$DRIVE'"}' > /dev/null
+ check "la foto del problema también se archiva" '1,' "$(sql "SELECT problema_foto_archivada=1 AND problema_foto_url IS NOT NULL FROM renglones WHERE oc_folio='OC-2026-0012' AND n=2" | tr -d '[]()')"
+-spost /api/integracion/cotizador/foto-archivada '{"id":"'$F2'","url":"'$DRIVE'"}' > /dev/null
++check "docs.google.com también es de Drive" '"archivada":true' "$(spost /api/integracion/cotizador/foto-archivada '{"id":"'$F2'","url":"https://docs.google.com/file/d/2/view"}')"
+ check "todas archivadas: ya no queda ninguna foto en el servidor" "0" "$(ls $T/adjuntos/compras/OC-2026-0012 | wc -l | tr -d ' ')"
+ sleep 1.1
+ H1B=$(sget /api/integracion/cotizador/recepciones | $PY -c "import sys,json;print(json.load(sys.stdin)['hasta'])")
+@@ -318,6 +336,11 @@ R="$(post '{"evento_id":"OC-2026-0021:oc.devolucion:3","tipo":"oc.devolucion","o
+ check "Faltante + Reponer: 3 en camino a LCT, nada salió" 'SOP-RTG:sitio={"lzc":7,"timsa":3}:camino={"lzc":3}:total=13' "$(inv)"
+ check "…el renglón espera 3" "[(7.0, None)]" "$(sql "SELECT recibido, recibido_en FROM renglones WHERE oc_folio='OC-2026-0021' AND n=1")"
+ check "…y la OC vuelve a «recibida en parte»" 'recibida-parcial' "$(echo "$R" | tr -d ' ')"
++check "otro problema mientras el faltante (sin foto) no sale en recepciones: 409" 'todavía no recoge' "$(as antonio -d '{"oc":"OC-2026-0021","renglones":[{"n":1,"recibido":3,'"$F"',"problema":{"tipo":"Dañado","cantidad":1,"comentario":"uno golpeado",'"$FP"'}}]}' $U/api/compras/recibir)"
++check "re-recibir mientras la foto de la recepción anterior no se archiva: 409 y dice que espere" 'Espera unos minutos' "$(as antonio -d '{"oc":"OC-2026-0021","renglones":[{"n":1,"recibido":3,'"$F"'}]}' $U/api/compras/recibir)"
++check "…la página lo avisa en el renglón" '"recepcion_en_espera":true' "$(as leo $U/api/compras | tr -d ' ')"
++check "…y la foto anterior sigue intacta" 'OC-2026-0021-r1-' "$(sql "SELECT foto_id FROM renglones WHERE oc_folio='OC-2026-0021'")"
++archivar OC-2026-0021
+ check "llegan los 3: 10 en LCT y la OC queda recibida" 'recibida' "$(as antonio -d '{"oc":"OC-2026-0021","renglones":[{"n":1,"recibido":3,'"$F"'}]}' $U/api/compras/recibir | $PY -c "import sys,json;print(json.load(sys.stdin)['orden']['estado'])")"
+ check "…y el inventario cuadra" 'SOP-RTG:sitio={"lzc":10,"timsa":3}:camino={}:total=13' "$(inv)"
+ 
+@@ -331,6 +354,7 @@ post '{"evento_id":"OC-2026-0024:oc.devolucion:1","tipo":"oc.devolucion","oc":{"
+ check "la OC queda «recibida en parte» con el renglón 2 por recibir" "[('recibida-parcial', None)]" "$(sql "SELECT o.estado, r.recibido_en FROM ordenes o JOIN renglones r ON r.oc_folio=o.folio WHERE o.folio='OC-2026-0024' AND r.n=2")"
+ as miguel -d '{"oc":"OC-2026-0024","n":2,"item":"SOP-RTG"}' $U/api/compras/ligar > /dev/null
+ check "al ligarlo, 5 en camino a EIT" '"eit":5' "$(as leo $U/api/inventario | tr -d ' ' | grep -o '"en_camino":{[^}]*}' | head -3)"
++archivar OC-2026-0024
+ as miguel -d '{"oc":"OC-2026-0024","renglones":[{"n":2,"recibido":5,'"$F"'}]}' $U/api/compras/recibir > /dev/null
+ check "y al recibirlo entra al inventario de EIT" 'SOP-RTG:sitio={"eit":7' "$(inv)"
+ 
+@@ -373,6 +397,99 @@ check "…y el cotizador la ve con foto: null" 'foto=None recibido=2.0' "$(sget
+ import sys,json;d=json.load(sys.stdin);o=[x for x in d['recepciones'] if x['oc_folio']=='OC-2026-0023'][0]
+ print('foto=%s recibido=%s' % (o['renglones'][0]['foto'], o['renglones'][0]['recibido']))")"
+ 
++echo
++echo "## (revisión) dos «Recibir» de la misma OC a la vez: el segundo espera y ve que ya se recibió"
++for i in $(seq 1 15); do as leo -d '{"codigo":"IT-'$i'","descripcion":"item '$i'","categoria":"cable","unidad":"pza"}' $U/api/inventario > /dev/null; done
++OC100=$($PY -c "import json;print(json.dumps({'folio':'OC-2026-0100','sitio':'ZLO','renglones':[{'n':i,'descripcion':'item %d'%i,'unidad':'pza','cantidad':5,'item':'IT-%d'%i} for i in range(1,16)]}))")
++post '{"evento_id":"OC-2026-0100:oc.autorizada:1","tipo":"oc.autorizada","oc":'"$OC100"'}' > /dev/null
++post '{"evento_id":"OC-2026-0100:oc.en_camino:1","tipo":"oc.en_camino","oc":'"$OC100"'}' > /dev/null
++$PY -c "import json;print(json.dumps({'oc':'OC-2026-0100','renglones':[{'n':i,'recibido':5,'foto':{'nombre':'r.jpg','mime':'image/jpeg','datos':'$FOTO'}} for i in range(1,16)]}))" > $T/rec100.json
++as jesush -d @$T/rec100.json $U/api/compras/recibir > $T/rec100-a.out & P1=$!
++as jesush -d @$T/rec100.json $U/api/compras/recibir > $T/rec100-b.out & P2=$!
++wait $P1 $P2      # solo los dos curl: «wait» a secas esperaría también al servidor
++AB="$(cat $T/rec100-a.out) $(cat $T/rec100-b.out)"
++check "uno se recibe" '"ok":true' "$AB"
++check "el otro: «Eso ya se recibió»" 'Eso ya se recibió' "$AB"
++check "cada ítem quedó en 5 en TIMSA (no 10)" 'mal=0 de 15' "$(as leo $U/api/inventario | $PY -c "
++import sys,json;d=json.load(sys.stdin);it=[i for i in d['items'] if i['codigo'].startswith('IT-')]
++print('mal=%d de %d' % (sum(1 for i in it if i['por_sitio'] != {'timsa': 5} or i['stock'] != 5), len(it)))")"
++check "15 fotos en disco, todas en la base (ninguna huérfana)" '15/15/0' "$($PY -c "
++import os,sqlite3;c=sqlite3.connect('$T/drogheda.db');ids={r[0] for r in c.execute(\"SELECT foto_id FROM renglones WHERE oc_folio='OC-2026-0100'\")}
++f={x[:-4] for x in os.listdir('$T/adjuntos/compras/OC-2026-0100')};print('%d/%d/%d' % (len(f), len(ids), len(f-ids)))")"
++
++echo
++echo "## (revisión) si la recepción falla después de escribir fotos, se borran y la base no cambia"
++OC101='"oc":{"folio":"OC-2026-0101","sitio":"ZLO","renglones":[{"n":1,"descripcion":"item 1","unidad":"pza","cantidad":2,"item":"IT-1"},{"n":2,"descripcion":"item 2","unidad":"pza","cantidad":2,"item":"IT-2"}]}'
++post '{"evento_id":"OC-2026-0101:oc.autorizada:1","tipo":"oc.autorizada",'"$OC101"'}' > /dev/null
++post '{"evento_id":"OC-2026-0101:oc.en_camino:1","tipo":"oc.en_camino",'"$OC101"'}' > /dev/null
++rm -f $T/inventario/movimientos/_indice.csv && mkdir $T/inventario/movimientos/_indice.csv     # el disco «falla»
++R="$(as jesush -d '{"oc":"OC-2026-0101","renglones":[{"n":1,"recibido":2,'"$F"'},{"n":2,"recibido":2,'"$F"',"problema":{"tipo":"Dañado","cantidad":1,"comentario":"una golpeada",'"$FP"'}}]}' $U/api/compras/recibir)"
++rmdir $T/inventario/movimientos/_indice.csv
++check "contesta que no se pudo guardar" 'No se pudo guardar la recepción' "$R"
++check "…no quedó ninguna foto (ni la del problema)" "0" "$(ls $T/adjuntos/compras/OC-2026-0101 2>/dev/null | wc -l | tr -d ' ')"
++check "…y la base no cambió (ningún renglón recibido, sin fotos ni problema)" "[(0, 0, 0)]" "$(sql "SELECT COUNT(recibido_en), COUNT(foto_id), COUNT(problema_tipo) FROM renglones WHERE oc_folio='OC-2026-0101'")"
++check "al reintentar se recibe" '"recibidos":[1,2]' "$(as jesush -d '{"oc":"OC-2026-0101","renglones":[{"n":1,"recibido":2,'"$F"'},{"n":2,"recibido":2,'"$F"'}]}' $U/api/compras/recibir | tr -d ' ')"
++check "…y nada cuenta doble (IT-1 y IT-2: 7 en TIMSA)" 'IT-1:{"timsa":7} IT-2:{"timsa":7}' "$(as leo $U/api/inventario | $PY -c "
++import sys,json;d=json.load(sys.stdin);print(' '.join('%s:%s' % (i['codigo'], json.dumps(i['por_sitio']).replace(' ','')) for i in d['items'] if i['codigo'] in ('IT-1','IT-2')))")"
++
++echo
++echo "## (revisión) el mismo oc.devolucion dos veces a la vez, y siempre con folio DEV"
++OC300='"oc":{"folio":"OC-2026-0300","sitio":"ZLO","renglones":[{"n":1,"descripcion":"item 3","unidad":"pza","cantidad":10,"item":"IT-3"},{"n":2,"descripcion":"item 4","unidad":"pza","cantidad":10,"item":"IT-4"}]}'
++post '{"evento_id":"OC-2026-0300:oc.autorizada:1","tipo":"oc.autorizada",'"$OC300"'}' > /dev/null
++post '{"evento_id":"OC-2026-0300:oc.en_camino:1","tipo":"oc.en_camino",'"$OC300"'}' > /dev/null
++as jesush -d '{"oc":"OC-2026-0300","renglones":[{"n":1,"recibido":10,'"$F"'},{"n":2,"recibido":10,'"$F"'}]}' $U/api/compras/recibir > /dev/null
++check "sin folio DEV: 400" 'Falta el folio de la devolución' "$(post '{"evento_id":"OC-2026-0300:oc.devolucion:9","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0300"},"devolucion":{"renglon":1,"cantidad":3,"tipo":"Dañado","resolucion":"Devolver al proveedor"}}')"
++check "folio con otra forma: 400" 'Folio de devolución inválido' "$(post '{"evento_id":"OC-2026-0300:oc.devolucion:8","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0300"},"devolucion":{"folio":"X-1","renglon":1,"cantidad":3,"tipo":"Dañado","resolucion":"Devolver al proveedor"}}')"
++D3='{"evento_id":"OC-2026-0300:oc.devolucion:1","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0300"},"devolucion":{"folio":"DEV-2026-0300","renglon":1,"cantidad":3,"tipo":"Dañado","resolucion":"Devolver al proveedor"}}'
++post "$D3" > $T/dev-a.out & P1=$!; post "$D3" > $T/dev-b.out & P2=$!; wait $P1 $P2
++AB="$(cat $T/dev-a.out) $(cat $T/dev-b.out)"
++check "las dos copias contestan ok (ninguna 500)" '2' "$(echo "$AB" | grep -o '"ok":true' | wc -l | tr -d ' ')"
++check "…una de ellas como repetida" '"repetido":true' "$AB"
++check "IT-3 salió una sola vez (5 de OC-2026-0100 + 10 − 3 = 12 en TIMSA)" 'IT-3:{"timsa":12}' "$(as leo $U/api/inventario | $PY -c "
++import sys,json;d=json.load(sys.stdin);print(' '.join('%s:%s' % (i['codigo'], json.dumps(i['por_sitio']).replace(' ','')) for i in d['items'] if i['codigo']=='IT-3'))")"
++# Falla a la mitad: el inventario (JSON) ya se escribió pero la base se deshace; el cotizador reintenta el mismo aviso
++$PY -c "import sqlite3;c=sqlite3.connect('$T/drogheda.db');c.execute(\"CREATE TRIGGER falla_prueba BEFORE INSERT ON devoluciones WHEN NEW.folio='DEV-2026-0301' BEGIN SELECT RAISE(ABORT, 'falla de prueba'); END\");c.commit()"
++D4='{"evento_id":"OC-2026-0300:oc.devolucion:2","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0300"},"devolucion":{"folio":"DEV-2026-0301","renglon":2,"cantidad":4,"tipo":"Dañado","resolucion":"Reponer"}}'
++check "la base falla después de mover el inventario: 500" '500' "$(postc "$D4")"
++$PY -c "import sqlite3;c=sqlite3.connect('$T/drogheda.db');c.execute('DROP TRIGGER falla_prueba');c.commit()"
++R="$(post "$D4")"
++check "el reintento entra" '"resolucion":"Reponer"' "$R"
++check "…y dice que el inventario ya se había descontado" 'ya se había descontado' "$R"
++check "IT-4: salió una sola vez y hay UN solo envío de reposición (5 + 10 − 4 = 11 en TIMSA, 4 en camino, total 15)" 'IT-4:{"timsa":11}:{"timsa":4}:15' "$(as leo $U/api/inventario | $PY -c "
++import sys,json;d=json.load(sys.stdin);print(' '.join('%s:%s:%s:%s' % (i['codigo'], json.dumps(i['por_sitio']).replace(' ',''), json.dumps(i['en_camino']).replace(' ',''), i['stock']) for i in d['items'] if i['codigo']=='IT-4'))")"
++check "el renglón espera exactamente esos 4, con ese envío" '[(6.0, None, 1)]' "$(sql "SELECT r.recibido, r.recibido_en, r.envio_id IS NOT NULL FROM renglones r WHERE oc_folio='OC-2026-0300' AND n=2")"
++
++echo
++echo "## (revisión) un problema sin foto (Faltante) no se tapa antes de que el cotizador lo vea"
++OC200='"oc":{"folio":"OC-2026-0200","sitio":"ZLO","renglones":[{"n":1,"descripcion":"Cable calibre 10","unidad":"m","cantidad":80,"item":"CBL-10"}]}'
++post '{"evento_id":"OC-2026-0200:oc.autorizada:1","tipo":"oc.autorizada",'"$OC200"'}' > /dev/null
++post '{"evento_id":"OC-2026-0200:oc.en_camino:1","tipo":"oc.en_camino",'"$OC200"'}' > /dev/null
++as jesush -d '{"oc":"OC-2026-0200","renglones":[{"n":1,"recibido":70,'"$F"',"problema":{"tipo":"Faltante","cantidad":10,"comentario":"faltan 10 m"}}]}' $U/api/compras/recibir > /dev/null
++R="$(as jesush -d '{"oc":"OC-2026-0200","n":1,"problema":{"tipo":"Dañado","cantidad":2,"comentario":"2 m pelados",'"$FP"'}}' $U/api/compras/problema)"
++check "otro problema antes de que el cotizador consulte: 409 y dice que espere" 'Espera unos minutos' "$R"
++check "…la página lo dice en el renglón" '"problema_en_espera":true' "$(as leo $U/api/compras | tr -d ' ')"
++check "el cotizador sí ve el faltante" 'OC-2026-0200:Faltante' "$(sget /api/integracion/cotizador/recepciones | $PY -c "
++import sys,json;d=json.load(sys.stdin);print(' '.join(o['oc_folio']+':'+str((o['renglones'][0]['problema'] or {}).get('tipo')) for o in d['recepciones'] if o['oc_folio']=='OC-2026-0200'))")"
++check "…y queda marcado como entregado" '[(1,)]' "$(sql "SELECT problema_entregado_en IS NOT NULL FROM renglones WHERE oc_folio='OC-2026-0200'")"
++check "ahora sí se acepta el problema nuevo" '"ok":true' "$(as jesush -d '{"oc":"OC-2026-0200","n":1,"problema":{"tipo":"Dañado","cantidad":2,"comentario":"2 m pelados",'"$FP"'}}' $U/api/compras/problema)"
++check "…y vuelve a esperar al cotizador (su foto sin archivar)" '"problema_en_espera":true' "$(as leo $U/api/compras | tr -d ' ')"
++
++echo
++echo "## (revisión) «Reponer» en una OC cancelada no reabre nada ni pone nada en camino"
++OC500='"oc":{"folio":"OC-2026-0500","sitio":"ZLO","renglones":[{"n":1,"descripcion":"item 5","unidad":"pza","cantidad":10,"item":"IT-5"}]}'
++post '{"evento_id":"OC-2026-0500:oc.autorizada:1","tipo":"oc.autorizada",'"$OC500"'}' > /dev/null
++post '{"evento_id":"OC-2026-0500:oc.en_camino:1","tipo":"oc.en_camino",'"$OC500"'}' > /dev/null
++as jesush -d '{"oc":"OC-2026-0500","renglones":[{"n":1,"recibido":10,'"$F"',"problema":{"tipo":"Dañado","cantidad":3,"comentario":"golpeados",'"$FP"'}}]}' $U/api/compras/recibir > /dev/null
++post '{"evento_id":"OC-2026-0500:oc.cancelada:1","tipo":"oc.cancelada",'"$OC500"'}' > /dev/null
++R="$(post '{"evento_id":"OC-2026-0500:oc.devolucion:1","tipo":"oc.devolucion","oc":{"folio":"OC-2026-0500"},"devolucion":{"folio":"DEV-2026-0500","renglon":1,"cantidad":3,"tipo":"Dañado","resolucion":"Reponer"}}')"
++check "aplicada con aviso de OC cancelada" 'está cancelada en el cotizador: no se reabre' "$R"
++check "…sin envío nuevo" '"envio_id":null' "$(echo "$R" | tr -d ' ')"
++check "IT-5: salen los 3 devueltos (5 + 10 − 3 = 12) y nada queda en camino" 'IT-5:{"timsa":12}:{}' "$(as leo $U/api/inventario | $PY -c "
++import sys,json;d=json.load(sys.stdin);print(' '.join('%s:%s:%s' % (i['codigo'], json.dumps(i['por_sitio']).replace(' ',''), json.dumps(i['en_camino']).replace(' ','')) for i in d['items'] if i['codigo']=='IT-5'))")"
++check "el renglón sigue cerrado" '[(7.0, 1)]' "$(sql "SELECT recibido, recibido_en IS NOT NULL FROM renglones WHERE oc_folio='OC-2026-0500'")"
++check "el pendiente no se reabre y lo anota" 'hecho | ' "$(tarea t-oc-oc-2026-0500)"
++check "…con el aviso" 'cancelada en el cotizador: no se reabre' "$(tarea t-oc-oc-2026-0500)"
++
+ echo
+ echo "## sin secreto: las rutas nuevas también contestan 503 y la página sigue"
+ kill $APP 2>/dev/null; sleep 0.5
+diff --git a/docs/inventario/fotos-devoluciones-29oct.md b/docs/inventario/fotos-devoluciones-29oct.md
+index ac52daa..50314be 100644
+--- a/docs/inventario/fotos-devoluciones-29oct.md
++++ b/docs/inventario/fotos-devoluciones-29oct.md
+@@ -2,7 +2,7 @@
+ title: "Recibir con foto y reportar problemas: devoluciones de compras"
+ date: 2026-10-29
+ tags: [project-drogheda, hbox, compras, inventario, cotizador, recepcion, devoluciones, portal]
+-estado: construido y probado (153 pruebas del servidor + 61 de compras); se publica con el despliegue del 29-oct
++estado: construido y probado (195 pruebas del servidor + 61 de compras); se publica con el despliegue del 29-oct
+ ---
+ 
+ # Recibir con foto y reportar problemas
+@@ -94,7 +94,10 @@ se siguen recibiendo en Inventario como siempre.
+ |---|---|
+ | «No pude abrir esa foto (¿HEIC?)» | El iPhone guardó la foto en HEIC y el navegador no la lee: usa **Tomar foto** en vez de Galería. |
+ | «Son demasiadas fotos para un solo envío» | Órdenes muy largas: recibe primero unos renglones (deja los demás en 0) y luego el resto. |
+-| «Ese renglón ya tiene un problema reportado que el cotizador todavía no recoge» | Espera unos minutos (el cotizador consulta cada 15 min) y vuelve a reportar. |
++| «Ese renglón ya tiene un problema reportado que el cotizador todavía no recoge» | Espera unos minutos (el cotizador consulta cada 15 min) y vuelve a reportar. Así el primero no se pierde. |
++| «El cotizador todavía no se lleva la foto de la recepción anterior» (al recibir una reposición) | Igual: espera unos minutos, o deja ese renglón en 0 y recibe lo demás. |
++| «Eso ya se recibió: lo registró …» | Alguien más lo recibió hace un momento (o se mandó dos veces). Recarga la página: ya está. |
++| «La foto está incompleta» o «está dañada» | Se cortó al subir: vuelve a tomarla. |
+ | Se fue la señal al dar Recibir | El diálogo se queda abierto con tus fotos: vuelve a dar **Recibir**. Un toque fuera del diálogo no lo cierra. |
+ 
+ ## Lo que se construyó
+@@ -102,7 +105,7 @@ se siguen recibiendo en Inventario como siempre.
+ - **Servidor** (`backend/compras.py`): foto por renglón obligatoria al recibir (todo o nada), problema por renglón,
+   fotos temporales en `adjuntos/compras/<OC>/`, las rutas firmadas con las que el cotizador baja cada foto y avisa
+   que ya la archivó (entonces se borra aquí), y el aviso `oc.devolucion` con el efecto de cada decisión en el
+-  inventario y en el pendiente. Nunca guarda montos. Pruebas: `backend/tests-1029.sh` (153) y
++  inventario y en el pendiente. Nunca guarda montos. Pruebas: `backend/tests-1029.sh` (195) y
+   `backend/tests-1028.sh` (61).
+ - **Página [Compras](../tableros/compras.md)**: el diálogo de Recibir con un bloque por renglón (cantidad, foto,
+   problema), las fotos y devoluciones en cada renglón y «Reportar problema» después de recibir.
+diff --git a/docs/tableros/compras.js b/docs/tableros/compras.js
+index e053529..e1afed9 100644
+--- a/docs/tableros/compras.js
++++ b/docs/tableros/compras.js
+@@ -59,7 +59,8 @@
+   }
+   const json = (m, b) => ({ method: m, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
+   function campo(l, i, ayuda) { const d = el('div'); d.append(el('label', { text: l }), i); if (ayuda) d.append(el('div', { class: 'ayuda', text: ayuda })); return d; }
+-  const fotoUrl = f => (f && f.archivada && f.url ? f.url : '/api/compras/foto?id=' + encodeURIComponent((f && f.id) || ''));
++  // Siempre por el servidor: él abre la foto local o, ya archivada, manda a Drive (revisa que la liga sea de Drive).
++  const fotoUrl = f => '/api/compras/foto?id=' + encodeURIComponent((f && f.id) || '');
+   const ligaFoto = (f, txt) => el('a', { href: fotoUrl(f), target: '_blank', rel: 'noopener', class: 'cmp-ver-foto', title: f.archivada ? 'Ya está en Google Drive' : 'Todavía en el servidor; el cotizador la pasa a Drive' }, txt || 'foto');
+ 
+   Object.entries(ESTADOS).forEach(([k, v]) => $('fEstado').append(el('option', { value: k, text: v[0] })));
+@@ -252,9 +253,13 @@
+       (r.devoluciones || []).forEach(dv => td.append(el('div', { class: 'mini cmp-dev' },
+         el('b', { text: (dv.folio || 'DEV') + ' · ' + dv.resolucion }), (dv.efecto ? ' — ' + dv.efecto : '') + (dv.nota ? ' (' + dv.nota + ')' : ''))));
+       if (r.problema_reportable && o.estado !== 'cancelada') {
+-        const bp = el('button', { type: 'button', class: 'fantasma cmp-rep' }, 'Reportar problema');
+-        bp.onclick = () => reportar(o, r);
+-        td.append(bp);
++        if (r.problema_en_espera) {
++          td.append(el('div', { class: 'mini', text: 'Problema enviado: el cotizador lo recoge en unos minutos (cada 15 min). Después puedes reportar otro.' }));
++        } else {
++          const bp = el('button', { type: 'button', class: 'fantasma cmp-rep' }, 'Reportar problema');
++          bp.onclick = () => reportar(o, r);
++          td.append(bp);
++        }
+       }
+       tr.append(td);
+       tr.append(el('td', { class: 'num', text: num(r.cantidad) + ' ' + (r.unidad || '') }));
+@@ -357,6 +362,7 @@
+         const act = () => { const v = fCant.value === '' ? -1 : +fCant.value; foto.nodo.style.display = v === 0 ? 'none' : ''; nota.textContent = v === 0 ? 'No llegó nada de este renglón: se queda en camino (sin foto).' : ''; };
+         fCant.addEventListener('input', act);
+         sec.append(nota);
++        if (r.recepcion_en_espera) sec.append(el('div', { class: 'ayuda err-t', text: 'El cotizador todavía no se lleva la foto de la recepción anterior de este renglón: espera unos minutos (consulta cada 15 min) o déjalo en 0 por ahora.' }));
+         const det = el('details', { class: 'cmp-prob' }); det.append(el('summary', { text: 'Reportar problema' }));
+         const prob = formaProblema(() => det.open);
+         det.append(prob.nodo); sec.append(det);
+-- 
+2.43.0
+

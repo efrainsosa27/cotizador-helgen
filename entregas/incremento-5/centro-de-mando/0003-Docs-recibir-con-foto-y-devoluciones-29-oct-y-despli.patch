@@ -1,0 +1,283 @@
+From f443c1496e79ba84366e425a831b34491ec2b2f7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 13:56:20 -0600
+Subject: [PATCH 03/11] Docs: recibir con foto y devoluciones (29-oct) y
+ despliegue D5
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- docs/inventario/fotos-devoluciones-29oct.md (página del sitio, con fecha): cómo se recibe con foto,
+  cómo se reporta un problema, qué hace compras con cada devolución y su efecto en el inventario,
+  dónde quedan las fotos y qué hacer si algo falla. En el menú de Inventario, ligada desde la política
+  de inventario y desde «Cómo se usa» de Compras. flujo-compras-28oct.md es copia sincronizada: no se
+  toca aquí (la liga va en su fuente del repo Drogheda).
+- DESPLIEGUE.md D5: pruebas, deploy.sh, respaldo de la base, reinicio de actas-hbox, carpeta de fotos,
+  por qué nginx no necesita más client_max_body_size, y la revisión de que /api/integracion/ llegue al
+  backend sin sesión (decisión de Leo si nginx la para).
+- CLAUDE.md: la fila de Compras con lo del 29-oct.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013SfRStBeRbueu9grrfatQU
+---
+ CLAUDE.md                                   |   2 +-
+ DESPLIEGUE.md                               |  65 ++++++++++++
+ docs/inventario/fotos-devoluciones-29oct.md | 111 ++++++++++++++++++++
+ docs/inventario/index.md                    |   2 +
+ docs/tableros/compras.md                    |   2 +-
+ mkdocs.yml                                  |   1 +
+ 6 files changed, 181 insertions(+), 2 deletions(-)
+ create mode 100644 docs/inventario/fotos-devoluciones-29oct.md
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 0c8b62f..b1dc4fc 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -31,7 +31,7 @@ Adriana, Michelle, Jesús and the field technicians work from it; Claude closes
+ | **Ruta a producción**, version cards, fase, pedido, próximas fechas, map pins | `docs/datos/proyecto.json` | Claude or Leo | edit by hand (keep the one-array-per-line format); step states `hecho · ahora · bloqueado · falta`, card tone `hecho · ahora · aviso · bloqueado`; bump `actualizado` |
+ | **Instalaciones** (per-site installation board, 22-oct) | `docs/tableros/instalaciones.md` + `.js`/`.css`; data: field actas via `GET /api/instalaciones` (`backend/instalaciones.py`, hooked at the end of `app.py`) | automatic | stages envío → recepción → instalación → **prueba en sitio** (acta `prueba-sitio`; only a passed test counts for the 1–2 per-site goal) → en operación (7 days after the test, no failure) + «con falla»; colour, nota and meta per site from `proyecto.json`; forms accept `?serie=&sitio=&<clave>=` prefill (`acta.js`) |
+ | **Inventario por sitio** (23-oct) | `docs/tableros/inventario.md` + `.js`/`.css`; data: server `/srv/projects/drogheda/inventario` via `/api/inventario` | everyone in the UI | tabs ICAVE · TIMSA · EIT · LCT · Querétaro + «Todo» (`?sitio=eit&n=2`); every movement carries `sitio` (none = qro); `envio` leaves a site (or `fuera`: purchase in transit / material shipped before counting) and stays «en camino» until the destination presses «Recibir» (`recepcion`); item `por_instalacion` = the installation kit; team rules in `docs/inventario/index.md`; tests `backend/tests-1023.sh` |
+-| **Compras** (28-oct) | `docs/tableros/compras.md` + `.js`/`.css`; datos: SQLite `/srv/projects/drogheda/drogheda.db` vía `backend/compras.py` (enganchado al final de `app.py`) | las OC entran solas desde el cotizador; el responsable del sitio da «Recibir» | las órdenes de compra de DROGHEDA **sin montos**, por sitio y estado (autorizada · pagada · en-camino · recibida-parcial · recibida · cancelada); «Ligar» un renglón a un ítem del inventario y «Recibir» completo o en parte; cada OC abre su pendiente `t-oc-<folio>` y se cierra sola al recibir todo; las dos puertas de recepción (Compras y el envío «en camino» de Inventario) se concilian. Las rutas `/api/integracion/…` van firmadas con `COTIZADOR_SECRETO` (HMAC del cuerpo y la hora, ventana 5 min), **sin sesión**: sin secreto contestan 503 y el resto del sitio sigue igual. Las rondas `"prueba": true` se guardan aparte. Flujo y decisiones: `docs/inventario/flujo-compras-28oct.md`; pruebas `backend/tests-1028.sh` (58) |
++| **Compras** (28-oct) | `docs/tableros/compras.md` + `.js`/`.css`; datos: SQLite `/srv/projects/drogheda/drogheda.db` vía `backend/compras.py` (enganchado al final de `app.py`) | las OC entran solas desde el cotizador; el responsable del sitio da «Recibir» | las órdenes de compra de DROGHEDA **sin montos**, por sitio y estado (autorizada · pagada · en-camino · recibida-parcial · recibida · cancelada); «Ligar» un renglón a un ítem del inventario y «Recibir» completo o en parte; cada OC abre su pendiente `t-oc-<folio>` y se cierra sola al recibir todo; las dos puertas de recepción (Compras y el envío «en camino» de Inventario) se concilian. Las rutas `/api/integracion/…` van firmadas con `COTIZADOR_SECRETO` (HMAC del cuerpo y la hora, ventana 5 min), **sin sesión**: sin secreto contestan 503 y el resto del sitio sigue igual. Las rondas `"prueba": true` se guardan aparte. Flujo y decisiones: `docs/inventario/flujo-compras-28oct.md`; pruebas `backend/tests-1028.sh` (61). **29-oct (CAPRI incremento 5):** «Recibir» pide una foto JPEG por renglón (comprimida en el navegador) y acepta un problema por renglón (también después, ≤ 30 días); fotos temporales en `ADJUNTOS_DIR/compras/<OC>/` hasta que el cotizador las baja (`/api/integracion/cotizador/foto`) y avisa `foto-archivada` (se borran); aviso `oc.devolucion` → movimiento `devolucion` en el sitio y el renglón vuelve en camino o se cierra con faltante; los envíos de una OC ya no se reciben en Inventario (manda a Compras). Proceso: `docs/inventario/fotos-devoluciones-29oct.md`; pruebas `backend/tests-1029.sh` (147) |
+ | **Entrada al sitio** (27-oct) | `docs/entrar.html` + `docs/publico/` (public); `backend/acceso.py`; nginx `backend/nginx/drogheda.helgen.online.conf` installed by `backend/nginx/cambiar-entrada.sh` (backup, tests, auto-rollback; `deshacer`) | — | session = signed cookie `hbox_sesion` (30 days; version = hash of the user's htpasswd line, so a password change ends old sessions); login by user or Equipo email, case-insensitive; **no HTTP Basic** (only from `ACCESO_BASIC_IPS`, empty by default — server scripts use 127.0.0.1:8081); unsafe methods only same-origin (Origin/Sec-Fetch-Site); lockout per user+IP (8) and per IP (20) in 15 min; attempts in `/srv/projects/drogheda/acceso/intentos-AAAA-MM.jsonl` (no passwords); public paths: entrada, `/publico/`, `/fonts/`, `helgen.css`, `tema.js`, icon, `/api/{entrar,salir,sesion,salud,incidencias/publica(s)}` |
+ | **Incidencias del sitio** (27-oct) | server `/srv/projects/drogheda/incidencias` (INC-0001.json…, `_errores/`, `_vigia/`); `backend/incidencias.py`; page `docs/tableros/incidencias.md` + `incidencias-tablero.js/.css`; footer «Problemas del sitio» = `docs/js/incidencias.js` (in `overrides/main.html` head and in every standalone page) | everyone reports; `INCIDENCIAS_EDITORES` (leo, gibranlp, adriana, claude) triage; the daily agent through `scripts/agente-api.sh` | rules: `docs/agentes.md`; the agent's runbook: `agentes/agente-diario.md`; vigía `backend/vigia.py` (leo's crontab, minute 7); never put passwords or project data in `publica` notices |
+ | **Standup** (27-oct) | server `/srv/projects/drogheda/standup/AAAA-MM-DD/<user>.json`; `backend/standup.py`; `docs/tableros/standup.md` + `standup-tablero.js/.css`; banner `docs/js/standup.js` | the bot (`claude`) prepares; each person answers; Leo/Adriana see «Equipo» | answers can move the person's own cards (as them); everything else from the answers goes in a lote |
+diff --git a/DESPLIEGUE.md b/DESPLIEGUE.md
+index 7f22301..76ceb94 100644
+--- a/DESPLIEGUE.md
++++ b/DESPLIEGUE.md
+@@ -696,11 +696,76 @@ que ya existe y la firma la revisa el backend, no la sesión.
+ 
+ Pruebas antes de publicar: `bash backend/tests-1028.sh ~/Documents/Claude/Projects/Drogheda/hbox-docs` (58).
+ 
++## D5 · 29-oct: Compras con foto por renglón, problemas y devoluciones (CAPRI incremento 5)
++
++Qué cambia (rama `fotos-devoluciones`): «Recibir» en Compras pide **una foto por renglón** que llegó (el navegador la
++comprime: lado mayor 1600 px, JPEG 0.72) y deja **reportar un problema** por renglón; las fotos se guardan
++**temporalmente** en el servidor hasta que el cotizador se las lleva a Google Drive; el aviso nuevo `oc.devolucion`
++aplica en el inventario lo que compras resuelva (Reponer · Devolver al proveedor · Cancelar renglón · Conservar). Los
++envíos «en camino» que son de una OC ya no se reciben desde Inventario (el botón manda a Compras). Proceso para el
++equipo: `docs/inventario/fotos-devoluciones-29oct.md`.
++
++`backend/app.py` cambió (tipo de movimiento `devolucion`, la puerta de Inventario) y `backend/compras.py` también:
++**hay que reiniciar el servicio**. No hay variable de entorno nueva ni cambio en el `.service`.
++
++```bash
++cd ~/Documents/Claude/Projects/Drogheda/hbox-docs
++bash backend/tests-1028.sh .              # 61 (eran 58: la foto ahora es obligatoria y la puerta de Inventario cambió)
++bash backend/tests-1029.sh .              # 147: fotos, problemas, rutas firmadas, oc.devolucion
++./scripts/deploy.sh                       # sitio + backend; revisa enlaces antes de publicar
++ssh -t leo@git.helgen.online '
++  python3 -c "import sqlite3;s=sqlite3.connect(\"/srv/projects/drogheda/drogheda.db\");s.backup(sqlite3.connect(\"/srv/projects/drogheda/drogheda-antes-1029.db\"))" &&
++  sudo systemctl restart actas-hbox &&
++  sleep 2 && curl -s localhost:8081/api/compras -H "X-Remote-User: leo" | head -c 120; echo &&
++  ls -ld /srv/projects/drogheda/adjuntos'
++```
++
++- **La base se migra sola al arrancar** (`ALTER TABLE … ADD COLUMN` de las columnas que falten en `renglones` y la
++  tabla nueva `devoluciones`); no borra ni mueve nada, y el código anterior ignora las columnas nuevas, así que el
++  respaldo de arriba es solo por prudencia. Con dos trabajadores de gunicorn arrancando a la vez no pasa nada (el
++  segundo ve la columna ya creada y sigue).
++- **Fotos:** `/srv/projects/drogheda/adjuntos/compras/<OC>/<id>.jpg`. La carpeta se crea sola; basta con que
++  `adjuntos` sea de `leo` (el usuario del servicio), como para las fotos de las actas. Cada foto pesa ≈ 100–400 KB
++  ya comprimida; el límite por foto es el de siempre (`ADJUNTO_MAX_MB`, 8). **No borres esa carpeta a mano:** una foto
++  que el cotizador todavía no archiva es la única copia. Se borran solas cuando el cotizador avisa que ya están en
++  Drive (`foto-archivada`); se respaldan con el resto de `adjuntos/` (sección D).
++- **Tamaño de la subida en nginx: no cambia.** Las fotos van dentro del mismo «Recibir» (JSON) y `location /api/` ya
++  tiene `client_max_body_size 25m`; Flask acepta 22 MB y la página corta en 20 MB de fotos (≈ 50 fotos) pidiendo que se
++  reciba en dos partes. Recuerda que nginx guarda el cuerpo completo antes de pasarlo a gunicorn, así que una subida
++  lenta desde el puerto no ocupa un trabajador.
++- **Rutas nuevas firmadas** (mismo `COTIZADOR_SECRETO`, misma ventana de 5 min, 503 sin secreto):
++  `GET /api/integracion/cotizador/foto?id=` y `POST /api/integracion/cotizador/foto-archivada`; las recepciones traen
++  `foto` y `problema` por renglón. Con sesión: `GET /api/compras/foto?id=` y `POST /api/compras/problema`.
++
++**Antes de encender la integración, revisa que nginx deje pasar al cotizador.** El cotizador (Apps Script) llama sin
++cookie y `drogheda.helgen.online.conf` pone `auth_request` en todo el `server`, también en `/api/integracion/`:
++
++```bash
++curl -s https://drogheda.helgen.online/api/integracion/inventario/items; echo
++#  {"error":"Firma inválida o vencida"…}  o  {…COTIZADOR_SECRETO…}  → bien: llega al backend, que revisa la firma
++#  {"ok":false,"sesion":false,"error":"Tu sesión terminó…"}           → nginx lo para antes: el cotizador no puede
++#                                                                      mandar avisos ni llevarse las fotos
++```
++
++Si sale lo segundo, falta en nginx un `location ^~ /api/integracion/` sin `auth_request` (la firma HMAC del backend
++hace de candado). **Es una decisión de seguridad de Leo:** no está en este cambio; mientras tanto el sitio funciona,
++las recepciones se guardan con sus fotos y nada se pierde, pero no viajan al cotizador.
++
++Verificación en el teléfono (claro y oscuro): Compras → una OC en camino → **Recibir…** → un renglón con «Tomar foto»,
++otro en 0, «Reportar problema» con foto → Recibir. La tarjeta muestra «foto», el problema y el renglón en 0 sigue en
++camino; en Inventario el envío de esa OC dice «Recibir en Compras».
++
++Si algo falla: `git revert` de los commits de la rama, `./scripts/deploy.sh` y
++`ssh -t leo@git.helgen.online 'sudo systemctl restart actas-hbox'`. Las columnas nuevas se quedan (el código anterior
++no las lee) y las fotos ya tomadas se quedan en `adjuntos/compras/`.
++
+ ## E · Problemas frecuentes
+ 
+ | Síntoma | Causa | Arreglo |
+ |---|---|---|
+ | *"La foto pesa demasiado"* con fotos normales | falta `client_max_body_size` | paso 4 |
++| Inventario dice «Este envío es la orden de compra OC-…: recíbelo en Compras» | a propósito desde el 29-oct: las compras se reciben con foto | botón «Recibir en Compras» (D5) |
++| El cotizador recibe `"sesion":false` en `/api/integracion/` | nginx pide sesión antes de que el backend revise la firma | D5, decisión de Leo |
+ | El nombre del técnico no se precarga | falta `X-Remote-User` | paso 4 |
+ | *"Ya existe un acta para esta serie"* en diagnóstico | backend viejo | paso 2 (`git pull` + restart) |
+ | Las fotos se ven rotas en el tablero | falta la carpeta `adjuntos` o su permiso | paso 3 |
+diff --git a/docs/inventario/fotos-devoluciones-29oct.md b/docs/inventario/fotos-devoluciones-29oct.md
+new file mode 100644
+index 0000000..2982665
+--- /dev/null
++++ b/docs/inventario/fotos-devoluciones-29oct.md
+@@ -0,0 +1,111 @@
++---
++title: "Recibir con foto y reportar problemas: devoluciones de compras"
++date: 2026-10-29
++tags: [project-drogheda, hbox, compras, inventario, cotizador, recepcion, devoluciones, portal]
++estado: construido y probado (147 pruebas del servidor + 61 de compras); se publica con el despliegue del 29-oct
++---
++
++# Recibir con foto y reportar problemas
++
++**29-oct-2026 · v1.0 · Claude (CTO/CSO), del pedido de Leo del 29-oct (retroalimentación de los usuarios).**
++Completa [el flujo de compras del 28-oct](flujo-compras-28oct.md) en el paso 7 (recibir) y agrega lo que pasa
++cuando el material llega mal. Del lado del cotizador es el incremento 5 de CAPRI; esta página es lo que cambia para
++el equipo en el centro de mando.
++
++!!! warning "Desde hoy, «Recibir» pide foto"
++    Cada renglón que llegó lleva **una foto**. Sin foto no se recibe. La foto es la prueba de qué llegó y en qué
++    estado: con ella compras puede reclamarle al proveedor.
++
++## Al recibir, paso por paso
++
++Lo hace **el responsable del sitio** (Alán · ICAVE, Jesús Honorato · TIMSA, Miguel · EIT, Antonio · LCT,
++Jesús Romero · Querétaro), desde el celular:
++
++1. Abre [Compras](../tableros/compras.md), busca la orden y dale **Recibir…** (con la cámara en el botón).
++2. En cada renglón anota **lo que llegó de verdad**. Si todavía no llega nada de ese renglón, déjalo en **0**: sigue
++   en camino y no pide foto.
++3. Toma **una foto por renglón** con **Tomar foto** (abre la cámara) o elígela con **Galería**. Que se vea el
++   material **y** su etiqueta o la cantidad (el bulto completo, no un detalle). La página la comprime sola antes de
++   mandarla: no gasta tus datos.
++4. Si algo llegó mal, abre **Reportar problema** en ese renglón (abajo).
++5. **Recibir.** El material entra al inventario del sitio, el pendiente de la orden se cierra si llegó todo, y el
++   cotizador se entera solo.
++
++Si te falta una foto, la página te dice de qué renglón y no manda nada hasta que esté completa (no se queda nada a
++medias).
++
++## Cuando algo llegó mal: «Reportar problema»
++
++| Qué pasó | Qué anotas | Foto |
++|---|---|---|
++| **Incorrecto** — llegó otra cosa (otra medida, otra marca, otro calibre) | cuántas piezas son las equivocadas | obligatoria |
++| **Dañado** — llegó roto, golpeado, mojado | cuántas están dañadas | obligatoria |
++| **Faltante** — llegó menos de lo que dice la orden | cuántas faltan (en «Llegó» pones lo que sí llegó) | no hace falta |
++| **Sobrante** — llegó de más | cuántas sobran (en «Llegó» no puedes pasar de lo pedido) | obligatoria |
++| **Otro** | cuántas y qué | obligatoria |
++
++El **comentario es obligatorio**: «el rollo llegó aplastado de una esquina», «mandaron calibre 12 en vez de 10».
++
++**¿Te diste cuenta después?** En la tarjeta de la orden, cada renglón recibido tiene **Reportar problema** durante
++**30 días**. Lo puede usar quien recibió, quien pidió o cualquiera del equipo que lo vea.
++
++## Qué hace compras con el problema
++
++El cotizador abre una **devolución `DEV-AAAA-NNNN`** y le avisa a compras por correo. Compras decide y lo que decida
++se ve aquí solo, en el renglón de la orden y en el inventario del sitio:
++
++| Decisión de compras | Qué pasa en el centro de mando |
++|---|---|
++| **Reponer** — el proveedor manda otra vez | Lo devuelto **sale del inventario** del sitio (movimiento «devolución al proveedor») y el renglón **vuelve a «en camino»** por esa cantidad. El pendiente de la orden **se reabre**: cuando llegue, se recibe igual, con foto. |
++| **Devolver al proveedor** — con nota de crédito o reembolso | Lo devuelto **sale del inventario** y el renglón **queda cerrado con faltante**. Si ya no se espera nada más, la orden queda recibida y su pendiente se cierra. |
++| **Cancelar renglón** — sin trámite con el proveedor | Igual que devolver: sale del inventario lo que se había contado y el renglón queda cerrado con faltante. |
++| **Conservar** — se acepta como llegó | Nada cambia. |
++
++Dos aclaraciones para que el inventario no se descuadre:
++
++- Un **faltante** nunca entró al inventario, así que al resolverlo **no sale nada**: con *Reponer* vuelve a venir en
++  camino; con *Devolver* o *Cancelar* el renglón se cierra con faltante.
++- Un **sobrante** tampoco se contó (al recibir no se acepta más de lo pedido). Si compras decide **conservarlo**,
++  registra tú la diferencia como **Entrada** en [Inventario](../tableros/inventario.md) con la `DEV` como referencia;
++  si lo regresan, no hay nada que mover.
++
++Si al devolver ya no hay en el sitio todo lo que se devuelve (por ejemplo, ya se instaló una parte), sale solo lo que
++hay y el renglón lo dice: hay que aclararlo con compras.
++
++## Dónde quedan las fotos
++
++- Se quedan **unos minutos en el servidor** del centro de mando. El cotizador las pasa a **Google Drive** (carpeta
++  privada *Compras/AAAA/<proyecto>/Recepciones*) en su siguiente consulta, y entonces se borran del servidor.
++- En la tarjeta de la orden, **«foto»** abre la foto: la del servidor mientras está ahí, la de Drive después (para
++  abrir la de Drive necesitas acceso a la carpeta).
++- Si la conexión con el cotizador está apagada, las fotos se quedan guardadas en el servidor hasta que se encienda:
++  no se pierden.
++
++## La otra puerta: Inventario
++
++Hasta el 28-oct un envío «en camino» de una orden de compra se podía recibir también desde la pestaña del sitio en
++[Inventario](../tableros/inventario.md). **Ya no:** ahí el botón dice **Recibir en Compras** y te lleva a la orden,
++porque es en Compras donde se toma la foto y se reporta el problema. Los envíos entre sitios (Manzanillo → Ensenada)
++se siguen recibiendo en Inventario como siempre.
++
++## Si algo falla
++
++| Lo que ves | Qué hacer |
++|---|---|
++| «No pude abrir esa foto (¿HEIC?)» | El iPhone guardó la foto en HEIC y el navegador no la lee: usa **Tomar foto** en vez de Galería. |
++| «Son demasiadas fotos para un solo envío» | Órdenes muy largas: recibe primero unos renglones (deja los demás en 0) y luego el resto. |
++| «Ese renglón ya tiene un problema reportado que el cotizador todavía no recoge» | Espera unos minutos (el cotizador consulta cada 15 min) y vuelve a reportar. |
++| Se fue la señal al dar Recibir | El diálogo se queda abierto con tus fotos: vuelve a dar **Recibir**. Un toque fuera del diálogo no lo cierra. |
++
++## Lo que se construyó
++
++- **Servidor** (`backend/compras.py`): foto por renglón obligatoria al recibir (todo o nada), problema por renglón,
++  fotos temporales en `adjuntos/compras/<OC>/`, las rutas firmadas con las que el cotizador baja cada foto y avisa
++  que ya la archivó (entonces se borra aquí), y el aviso `oc.devolucion` con el efecto de cada decisión en el
++  inventario y en el pendiente. Nunca guarda montos. Pruebas: `backend/tests-1029.sh` (147) y
++  `backend/tests-1028.sh` (61).
++- **Página [Compras](../tableros/compras.md)**: el diálogo de Recibir con un bloque por renglón (cantidad, foto,
++  problema), las fotos y devoluciones en cada renglón y «Reportar problema» después de recibir.
++- **[Inventario](../tableros/inventario.md)**: «Recibir en Compras» para los envíos que son de una orden de compra.
++
++Pasos del servidor para publicarlo: `DESPLIEGUE.md`, sección D5.
+diff --git a/docs/inventario/index.md b/docs/inventario/index.md
+index 0393017..14ce281 100644
+--- a/docs/inventario/index.md
++++ b/docs/inventario/index.md
+@@ -12,6 +12,8 @@ Qué hay **en cada sitio** —Querétaro (taller) y los cuatro puertos: ICAVE, T
+ 
+ **Compras (28-oct):** las órdenes de compra del cotizador llegan solas, en camino a su sitio, y se reciben en [Compras](../tableros/compras.md) o en la pestaña del sitio. El proceso completo, de quien pide el material a quien lo recibe: [el flujo acordado en la junta del 28-oct](flujo-compras-28oct.md) · [contrato con el cotizador](integracion-cotizador.md).
+ 
++**Recibir con foto (29-oct):** cada renglón que llega se recibe en Compras con **una foto**, y lo que llega mal se reporta ahí mismo («Reportar problema»); compras lo resuelve como devolución. Cómo funciona: [recibir con foto y devoluciones](fotos-devoluciones-29oct.md).
++
+ ## Qué hay aquí
+ 
+ | Página | Para qué |
+diff --git a/docs/tableros/compras.md b/docs/tableros/compras.md
+index f7ee867..266dfff 100644
+--- a/docs/tableros/compras.md
++++ b/docs/tableros/compras.md
+@@ -21,7 +21,7 @@ hide:
+     <li>Cuando el proveedor manda el material, la OC pasa a <b>En camino</b> y cada renglón aparece <b>en camino</b> en la pestaña de su sitio en <a href="/tableros/inventario/">Inventario</a>.</li>
+     <li>Cuando llega, <b>el responsable del sitio le da «Recibir»</b> con lo que llegó <b>de verdad</b> (puede ser menos de lo pedido) y <b>una foto de cada renglón que llegó</b> (obligatoria; «Tomar foto» o «Galería»). Eso da de alta el material en el inventario de ese sitio, cierra el pendiente de la OC si llegó todo, y el cotizador cierra la requisición solo. Un renglón que todavía no llega se deja en 0: sigue en camino.</li>
+     <li>¿Llegó algo <b>equivocado, dañado, de menos o de más</b>? En el renglón, <b>«Reportar problema»</b>: qué pasó, cuántas, un comentario y la foto del problema (salvo «Faltante»). También se puede reportar después, hasta 30 días. Compras recibe el aviso y decide en el cotizador: <b>reponer</b> (vuelve a «en camino»), <b>devolver al proveedor</b>, <b>cancelar el renglón</b> o <b>conservar</b>; lo que decida se ve aquí en el renglón y en el inventario del sitio.</li>
+-    <li>Las fotos se ven con <b>«foto»</b>. Se quedan en el servidor unos minutos, hasta que el cotizador las pasa a <b>Google Drive</b>; después la liga abre la de Drive.</li>
++    <li>Las fotos se ven con <b>«foto»</b>. Se quedan en el servidor unos minutos, hasta que el cotizador las pasa a <b>Google Drive</b>; después la liga abre la de Drive. Todo el proceso: <a href="/inventario/fotos-devoluciones-29oct/">recibir con foto y devoluciones</a>.</li>
+     <li>Un renglón <b>«por ligar»</b> es material que el cotizador mandó sin decir a qué ítem del inventario corresponde. Lígalo aquí y se va en camino en ese momento. Si es algo que no se cuenta en el inventario, recíbelo igual: se anota sin tocar existencias.</li>
+     <li>Cada OC abre <b>un pendiente</b> en su sitio, con el responsable del sitio y la fecha de entrega. No lo cierres a mano: se cierra cuando se recibe todo.</li>
+   </ol>
+diff --git a/mkdocs.yml b/mkdocs.yml
+index 00e2e65..63839bb 100644
+--- a/mkdocs.yml
++++ b/mkdocs.yml
+@@ -133,6 +133,7 @@ nav:
+           - Configuración: procedimientos/v5-configuracion-unidad.md
+           - Política de inventario: inventario/index.md
+           - Flujo de compras (28-oct): inventario/flujo-compras-28oct.md
++          - Recibir con foto y devoluciones (29-oct): inventario/fotos-devoluciones-29oct.md
+           - Compras y cotizador: inventario/integracion-cotizador.md
+           - Instrucciones al cotizador: inventario/integracion-cotizador-instrucciones.md
+       - Taller:
+-- 
+2.43.0
+
