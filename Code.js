@@ -267,6 +267,7 @@ const HOJAS_ADMIN = {
   // de entrega a "a" sus roles delegables (Aprobaciones, Compras) del día desde al día hasta (AAAA-MM-DD); estado Activa / Cancelada
   Delegaciones: { enc: ['id', 'de', 'a', 'desde', 'hasta', 'roles', 'estado', 'creo', 'creado', 'cancelo', 'motivo_cancelacion'],
     numeros: [] },
+  Soporte: { enc: ['id', 'fecha', 'correo', 'tipo', 'descripcion', 'pantalla', 'estado_correo', 'solicitud'], numeros: [] },
   Correos: { enc: ['fecha', 'para', 'asunto', 'tipo', 'folio', 'estado', 'error', 'actor'], numeros: [] },
   Anulaciones: { enc: ['fecha', 'correo', 'tipo', 'folio', 'motivo', 'cascada (JSON)', 'antes (JSON)'], numeros: [] },
   Bitacora: { enc: ['fecha', 'correo', 'accion', 'proyecto_folio', 'detalle', 'motivo'], numeros: [] },
@@ -8193,9 +8194,9 @@ function correoCodigo(nombre, codigo, para) {
 
 function modCorreos_() {
   return { nombre: 'Correos',
-    api: { solicitudCotizacion: solicitudCotizacion, pdfOrdenCompra: pdfOrdenCompra, listarCorreos: listarCorreos },
+    api: { solicitudCotizacion: solicitudCotizacion, pdfOrdenCompra: pdfOrdenCompra, listarCorreos: listarCorreos, reportarIncidenciaPortal: reportarIncidenciaPortal },
     // solicitudCotizacion guarda un PDF y una línea de Bitacora, pero no cambia ninguna colección que vea la interfaz
-    cambios: {}, solo: [], publicas: [], preparar: prepararCorreos_ };
+    cambios: { reportarIncidenciaPortal: [] }, solo: ['reportarIncidenciaPortal'], publicas: [], preparar: prepararCorreos_ };
 }
 
 /** Eventos de aviso (tipo de notificar_). Quién recibe cada uno lo decide el módulo de correos (tabla del spec, sección 5). */
@@ -18081,4 +18082,48 @@ function listarSolicitudesFechaPago() {
   exigirSuperAdmin_();
   const libro=libroComprasSiExiste_();
   return excepcionesFechaDeOrden_(libro,'').filter(x=>x.estado==='Pendiente').map(x=>Object.assign({},x,{reqFolio:buscarOrden_(libro,x.ocFolio).orden.reqFolio}));
+}
+
+
+/** Reporte de soporte: cuenta activa, registro privado e idempotencia por solicitud y usuario. */
+function reportarIncidenciaPortal(d) {
+  exigirAcceso_();
+  d = d || {};
+  const descripcion = String(d.descripcion || '').trim();
+  if (descripcion.length < 10 || descripcion.length > 3000) throw new Error('Describe el problema en 10 a 3000 caracteres.');
+  const tipo = ['acceso','error','datos','lento','sugerencia','otro'].indexOf(d.tipo) >= 0 ? d.tipo : 'otro';
+  const pantalla = String(d.pantalla || 'pend').replace(/[^a-z]/gi, '').slice(0,30);
+  const solicitud = String(d.idSolicitud || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0,80);
+  if (solicitud.length < 10) throw new Error('Actualiza la página e intenta de nuevo.');
+  const correo = String(VENDEDOR_.email || '').toLowerCase();
+  let hoja, fila, folio, repetido = false;
+  conCandado_(() => {
+    hoja = hojaAdmin_(libroAdmin_(), 'Soporte');
+    const filas = hoja.getDataRange().getValues();
+    const previa = filas.findIndex((r,i) => i > 0 && String(r[2]) === correo && String(r[7]) === solicitud);
+    if (previa > 0) { fila = previa + 1; folio = String(filas[previa][0]); repetido = true; return; }
+    const hoy = ahoraTexto_().slice(0,10);
+    if (filas.filter((r,i) => i > 0 && String(r[2]) === correo && String(r[1]).replace(/^'/,'').slice(0,10) === hoy).length >= 10)
+      throw new Error('Ya registraste 10 reportes hoy. Contacta directamente a facilities@helgen.tech.');
+    folio = 'SOP-' + Utilities.getUuid().replace(/-/g,'').slice(0,12).toUpperCase();
+    escribe_(hoja).appendRow([textoCelda(folio), textoCelda(ahoraTexto_()), textoCelda(correo), textoCelda(tipo),
+      textoCelda(descripcion), textoCelda(pantalla), 'Pendiente', textoCelda(solicitud)]);
+    fila = hoja.getLastRow();
+  });
+  if (repetido) return { folio: folio, repetido: true, correoEnviado: String(hoja.getRange(fila,7).getValue()) === 'Enviado' };
+  let enviado = false;
+  if (Number(MailApp.getRemainingDailyQuota()) > 0) {
+    // En caso de resultado incierto no reenviar automáticamente; el reporte queda para revisión.
+    escribe_(hoja).getRange(fila,7).setValue('Enviando');
+    try {
+      MailApp.sendEmail({to:'facilities@helgen.tech',subject:'[CAPRI soporte] '+folio+' · '+tipo,
+        body:'Reporte: '+folio+'\nCuenta: '+correo+'\nPantalla: '+pantalla+'\nTipo: '+tipo+'\n\n'+descripcion+
+          '\n\nAbrir CAPRI: https://capri.helgen.online/home/\nRegistro privado: Administración (datos), pestaña Soporte.',
+        name:'CAPRI · Soporte Helgen',replyTo:correo});
+      escribe_(hoja).getRange(fila,7).setValue('Enviado'); enviado = true;
+    } catch(e) { escribe_(hoja).getRange(fila,7).setValue('Revisar envío'); }
+  }
+  registrarCorreos_([{para:'facilities@helgen.tech',asunto:'[CAPRI soporte] '+folio,tipo:'soporte',folio:folio,
+    estado:enviado?'Enviado':'Sin enviar',error:enviado?'':'Revisar el reporte en Soporte; no se perdió.',actor:correo}]);
+  return { folio: folio, correoEnviado: enviado };
 }

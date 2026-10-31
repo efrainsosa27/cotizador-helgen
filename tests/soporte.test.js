@@ -1,0 +1,15 @@
+'use strict';
+const assert=require('assert');
+const A=require('./arnes')(process.argv[2]||'.',{});A.P.prepararCapri();
+const d={tipo:'error',descripcion:'No abre la pantalla de compras',pantalla:'com',idSolicitud:'soporte-prueba-001'};
+A.falla('ana','reportarIncidenciaPortal',[{...d,descripcion:'corto'}],/10 a 3000/);
+const r=A.ok('ana','reportarIncidenciaPortal',d);
+assert(r.folio.startsWith('SOP-'));assert(r.correoEnviado);
+assert.equal(A.correos.at(-1).to,'facilities@helgen.tech');
+assert(A.correos.at(-1).body.includes(d.descripcion));
+const n=A.correos.length;
+const repetido=A.ok('ana','reportarIncidenciaPortal',d);
+assert.equal(repetido.folio,r.folio);assert(repetido.repetido);assert.equal(A.correos.length,n);
+A.ok('obrero','reportarIncidenciaPortal',{...d,idSolicitud:'otro-soporte-001'});
+assert.equal(A.correos.length,n+1);
+console.log('✔ Soporte: validación, correo interceptado, idempotencia y cuenta activa sin rol especial');

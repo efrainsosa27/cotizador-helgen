@@ -180,8 +180,10 @@
     <!-- N (incremento 7): toda cuenta activa captura sus horas (mod-horas); el número = semanas de horas por aprobar -->
     <button id="tabHoras" class="oculto" onclick="verTab('horas')">Horas<span id="cntHoras" class="cuenta oculto"></span></button>
     <button id="tabAdmin" class="oculto" onclick="verTab('admin')">Administración</button>
-    <a id="lnkInventario" class="nav-externo oculto" href="https://drogheda.helgen.online/" target="_blank" rel="noopener noreferrer"
+    <a id="lnkInventario" class="nav-externo oculto" href="https://pm.helgen.online/drogheda/tableros/inventario/" target="_blank" rel="noopener noreferrer"
        title="Se abre en otra pestaña">Inventario (centro de mando) ↗</a>
+    <a class="nav-externo" href="https://pm.helgen.online/" target="_blank" rel="noopener noreferrer">Proyectos ↗</a>
+    <a class="nav-externo" href="https://monitor.helgen.dev/" target="_blank" rel="noopener noreferrer">Monitor ↗</a>
   </nav>
   <div id="usuario" class="usuario oculto">
     <span id="usuarioNombre"></span>
@@ -245,6 +247,21 @@
 
 <main>
   <div id="aviso" class="aviso"></div>
+  <details class="modulo" id="soportePortal" style="margin-bottom:12px">
+    <summary style="cursor:pointer;font-weight:600">Reportar un problema</summary>
+    <form onsubmit="enviarReportePortal(event)" style="margin-top:12px">
+      <label for="soporteTipo">Tipo</label><select id="soporteTipo"><option value="error">Error o pantalla rota</option><option value="datos">Datos incorrectos</option><option value="lento">Lentitud</option><option value="acceso">Acceso</option><option value="sugerencia">Sugerencia</option><option value="otro">Otro</option></select>
+      <label for="soporteDescripcion">¿Qué pasó y qué intentabas hacer?</label>
+      <textarea id="soporteDescripcion" minlength="10" maxlength="3000" rows="4" required placeholder="Incluye los pasos y el folio, si aplica. No pegues contraseñas, tokens ni datos de tarjetas."></textarea>
+      <p class="nota">Se guardará un reporte privado y se notificará a facilities@helgen.tech con tu cuenta y la pantalla actual.</p>
+      <button class="btn" id="soporteEnviar" type="submit">Enviar reporte</button><p id="soporteResultado" role="status"></p>
+    </form>
+  </details>
+  <details id="ayudaUso" class="modulo" style="margin-bottom:16px">
+    <summary style="cursor:pointer;font-weight:600">Cómo se usa · <span id="ayudaTitulo">Pendientes</span></summary>
+    <ol id="ayudaPasos" style="line-height:1.7;padding-left:24px"></ol>
+    <p class="nota">Solo verás las acciones de tus permisos. <a href="https://pm.helgen.online/" target="_blank" rel="noopener noreferrer">Portal de proyectos ↗</a> · <a href="https://monitor.helgen.dev/" target="_blank" rel="noopener noreferrer">Monitor ↗</a></p>
+  </details>
 
   <!-- ===== PENDIENTES: inicio para todos (incremento 4 · pantallas; lo llena el script mod-pantallas) ===== -->
   <section id="vistaPend">
@@ -3998,7 +4015,28 @@
   }
 
   // ---- UI ----
+  let SOPORTE_SOLICITUD = '';
+  function enviarReportePortal(event) {
+    event.preventDefault();
+    if (!SOPORTE_SOLICITUD) SOPORTE_SOLICITUD = crypto.randomUUID();
+    const boton = $('soporteEnviar'), salida = $('soporteResultado'); boton.disabled = true;
+    salida.textContent = 'Guardando reporte…';
+    google.script.run.withSuccessHandler(r => {
+      boton.disabled = false;
+      salida.textContent = 'Reporte ' + r.folio + ' guardado. ' + (r.correoEnviado ? 'Correo enviado a facilities@helgen.tech.' : 'El correo está pendiente de revisión; tu reporte quedó guardado.');
+      SOPORTE_SOLICITUD = ''; $('soporteDescripcion').value = '';
+    }).withFailureHandler(e => { boton.disabled = false; salida.textContent = e.message || String(e); })
+      .reportarIncidenciaPortal({tipo:$('soporteTipo').value,descripcion:$('soporteDescripcion').value,pantalla:TAB,idSolicitud:SOPORTE_SOLICITUD});
+  }
+  const AYUDAS_USO = {"pend": ["Pendientes", "Revisa lo que espera por ti; abre cada registro para continuar su proceso.", "Actualiza la lista después de guardar. Los contadores cambian según tus permisos."], "nueva": ["Nueva cotización", "Selecciona el cliente y, cuando corresponda, el proyecto. Agrega conceptos, cantidades y moneda.", "Revisa los importes y genera el PDF. El servidor recalcula los totales y asigna el folio."], "hist": ["Historial", "Busca por folio, cliente o proyecto y abre la cotización para consultar su PDF.", "Confirma la aceptación antes de continuar el contrato y la cobranza del proyecto."], "cat": ["Catálogo", "Busca productos y revisa sus descripciones y precios de referencia.", "Comprueba la moneda y el tipo de cambio antes de cotizar."], "req": ["Requisiciones", "Elige el proyecto y proveedor; agrega materiales, cantidades y la cotización del proveedor.", "Guarda la requisición para revisión. Quien solicita no autoriza su propia solicitud.", "Cuando llegue material, registra la recepción en el centro de proyectos con sus fotos; autorizar o pagar no incrementa por sí solo las existencias."], "ops": ["Aprobaciones", "Abre la solicitud, revisa el respaldo, proveedor, cantidades y costos.", "Autoriza o devuelve con una explicación. Una autorización genera la orden; no registra automáticamente un pago."], "com": ["Compras", "Selecciona el proyecto y abre la orden. Revisa proveedor, documentos y saldo antes de pagar.", "Registra el método real y el comprobante. Un crédito de financiera conserva la deuda con la financiera, aunque el proveedor ya haya cobrado.", "Completa los datos y vencimiento del crédito cuando estén confirmados. Las fechas excepcionales requieren el permiso correspondiente."], "cob": ["Cobranza y proyectos", "Selecciona el proyecto para consultar cotizaciones, contrato, etapas y cobros.", "Registra cada cobro con fecha y comprobante; revisa el saldo restante antes de guardar."], "gas": ["Gastos", "Elige proyecto, fecha y concepto; adjunta el ticket y revisa el importe.", "Envía a aprobación y consulta el estado. Aprobar un gasto y reembolsarlo son pasos distintos."], "horas": ["Horas y nómina", "Captura tus horas en la semana y proyecto correctos, revisa y envía a aprobación.", "El líder revisa las horas. Los datos de nómina requieren su permiso específico."], "rep": ["Reportes", "Selecciona el reporte y sus filtros de proyecto o fechas.", "Comprueba la fecha de corte y exporta CSV cuando necesites analizarlo. Solo aparecen los reportes de tus permisos."], "admin": ["Administración", "Elige permisos, delegaciones, proveedores o tarjetas según tu acceso.", "En proveedores completa datos y documentos faltantes antes del pago.", "Asigna permisos por función y revisa las fechas de las delegaciones. No guardes números completos ni códigos de seguridad de tarjetas."]};
+  function pintarAyudaUso(t) {
+    const a = AYUDAS_USO[t] || AYUDAS_USO.pend;
+    $('ayudaTitulo').textContent = a[0];
+    const lista = $('ayudaPasos'); lista.innerHTML = '';
+    a.slice(1).forEach(texto => { const li = document.createElement('li'); li.textContent = texto; lista.appendChild(li); });
+  }
   function verTab(t, recienCargado) {
+    pintarAyudaUso(t);
     TAB = t;
     $('vistaNueva').classList.toggle('oculto', t !== 'nueva');
     $('vistaHist').classList.toggle('oculto', t !== 'hist');
